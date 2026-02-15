@@ -1,65 +1,137 @@
-import Image from "next/image";
+import { PageHeader } from "@/components/layout/PageHeader";
+import { TaskCard, type TaskCardData } from "@/components/tasks/TaskCard";
 
-export default function Home() {
+const topThreeTasks: TaskCardData[] = [
+  {
+    id: "task-1",
+    title: "Lock intake extraction schema for service desk emails",
+    estimatedMinutes: 60,
+    dueAt: "2026-02-16",
+    status: "Next",
+    blocker: false,
+    implementationName: "Service Desk Automation",
+  },
+  {
+    id: "task-2",
+    title: "Review API route contracts with backend handoff notes",
+    estimatedMinutes: 45,
+    dueAt: "2026-02-16",
+    status: "Next",
+    blocker: false,
+    implementationName: "Mission Control Core",
+  },
+  {
+    id: "task-3",
+    title: "Draft leadership update copy for payroll rollout",
+    estimatedMinutes: 30,
+    dueAt: "2026-02-17",
+    status: "Scheduled",
+    blocker: true,
+    implementationName: "Payroll Modernization",
+  },
+];
+
+const dueSoonTasks: TaskCardData[] = [
+  {
+    id: "task-4",
+    title: "Validate triage defaults against latest SQL migration",
+    estimatedMinutes: 30,
+    dueAt: "2026-02-16",
+    status: "Scheduled",
+    blocker: false,
+    implementationName: "Mission Control Core",
+  },
+  {
+    id: "task-5",
+    title: "Confirm training docs are linked in implementation detail",
+    estimatedMinutes: 15,
+    dueAt: "2026-02-17",
+    status: "Waiting",
+    blocker: false,
+    implementationName: "Payroll Modernization",
+  },
+];
+
+const waitingOn = [
+  { id: "wait-1", title: "Security review sign-off", owner: "InfoSec", followUpAt: "2026-02-18" },
+  { id: "wait-2", title: "Updated target date from vendor", owner: "Vendor PM", followUpAt: "2026-02-19" },
+];
+
+const needsReview = [
+  "New intake item tagged with two possible implementations",
+  "Missing estimate on high-priority ticket from Friday batch",
+];
+
+function formatDate(value: string): string {
+  return new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric" }).format(new Date(value));
+}
+
+export default function TodayPage() {
+  const today = new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date());
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="space-y-8">
+      <PageHeader
+        title="Today"
+        description="Daily operating view with top priorities, near-term due work, and review queue."
+        actions={<p className="rounded-full bg-panel-muted px-3 py-1.5 text-sm font-medium text-muted-foreground">{today}</p>}
+      />
+
+      <section className="space-y-3">
+        <h2 className="text-lg font-semibold text-foreground">Top 3 Today</h2>
+        <div className="grid gap-4 xl:grid-cols-3">
+          {topThreeTasks.map((task) => (
+            <TaskCard key={task.id} task={task} />
+          ))}
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-lg font-semibold text-foreground">Due Soon (48h)</h2>
+        <div className="grid gap-4 md:grid-cols-2">
+          {dueSoonTasks.map((task) => (
+            <TaskCard key={task.id} task={task} />
+          ))}
         </div>
-      </main>
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-2">
+        <article className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+          <h2 className="text-lg font-semibold text-foreground">Waiting On</h2>
+          <ul className="mt-4 space-y-3">
+            {waitingOn.map((item) => (
+              <li key={item.id} className="rounded-lg bg-panel-muted p-3 text-sm">
+                <p className="font-medium text-foreground">{item.title}</p>
+                <p className="mt-1 text-muted-foreground">
+                  {item.owner} · follow up {formatDate(item.followUpAt)}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </article>
+
+        <article className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+          <h2 className="text-lg font-semibold text-foreground">Needs Review</h2>
+          <ul className="mt-4 space-y-2 text-sm text-muted-foreground">
+            {needsReview.map((item) => (
+              <li key={item} className="rounded-lg bg-panel-muted px-3 py-2">
+                {item}
+              </li>
+            ))}
+          </ul>
+          <a
+            href="/triage"
+            className="mt-4 inline-flex rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:opacity-90"
+          >
+            Open Triage
+          </a>
+        </article>
+      </section>
     </div>
   );
 }
