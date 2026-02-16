@@ -110,3 +110,32 @@ export interface LlmExtraction {
   blocker: boolean;
   waiting_on: string | null;
 }
+
+// Task with joined implementation data (from API responses)
+export interface TaskWithImplementation extends Task {
+  implementation: { id: string; name: string } | null;
+}
+
+// Allowed fields for task updates via API
+export interface TaskUpdatePayload {
+  title?: string;
+  implementation_id?: string | null;
+  status?: TaskStatus;
+  task_type?: TaskType;
+  estimated_minutes?: number;
+  estimate_source?: EstimateSource;
+  due_at?: string | null;
+  needs_review?: boolean;
+  blocker?: boolean;
+  waiting_on?: string | null;
+  follow_up_at?: string | null;
+  pinned_excerpt?: string | null;
+}
+
+// Implementation summary for dropdowns
+export interface ImplementationSummary {
+  id: string;
+  name: string;
+  phase?: ImplPhase;
+  rag?: RagStatus;
+}

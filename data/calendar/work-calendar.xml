@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<SharingMessage xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://schemas.microsoft.com/sharing/2008">
+  <DataType>calendar</DataType>
+  <Initiator>
+    <Name>Bloomquist, Brent</Name>
+    <SmtpAddress>Bloomquist-Brent@CooperHealth.edu</SmtpAddress>
+    <EntryId>00000000DCA740C8C042101AB4B908002B2FE18201000000000000002F6F3D45786368616E67654C6162732F6F753D45786368616E67652041646D696E6973747261746976652047726F7570202846594449424F484632335350444C54292F636E3D526563697069656E74732F636E3D37383834633538623565343934643939613933646164643039393234343039302D38386532646564372D613300</EntryId>
+  </Initiator>
+  <Invitation>
+    <Providers>
+      <Provider Type="ms-exchange-publish" TargetRecipients="cooperagent14@gmail.com">
+        <BrowseUrl xmlns="http://schemas.microsoft.com/exchange/sharing/2008">https://outlook.office365.com/owa/calendar/79926ec383744d3d9494b47b1404fad7@CooperHealth.edu/6c042dee6f0b4cb7bc30b4b4d8c33b744243671100705916476/S-1-8-1206400395-3348772666-1499796865-175246129/reachcalendar.html</BrowseUrl>
+        <ICalUrl xmlns="http://schemas.microsoft.com/exchange/sharing/2008">https://outlook.office365.com/owa/calendar/79926ec383744d3d9494b47b1404fad7@CooperHealth.edu/6c042dee6f0b4cb7bc30b4b4d8c33b744243671100705916476/S-1-8-1206400395-3348772666-1499796865-175246129/reachcalendar.ics</ICalUrl>
+      </Provider>
+    </Providers>
+  </Invitation>
+</SharingMessage>

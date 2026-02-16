@@ -7,6 +7,7 @@ const navItems = [
   { href: "/", label: "Today", hint: "Daily operating view" },
   { href: "/triage", label: "Triage", hint: "Assign, estimate, schedule" },
   { href: "/implementations", label: "Implementations", hint: "Portfolio health and updates" },
+  { href: "/calendar", label: "Calendar", hint: "Imported schedule metadata" },
 ];
 
 function isActive(pathname: string, href: string): boolean {
@@ -23,7 +24,7 @@ export function Sidebar() {
   return (
     <>
       <nav className="fixed inset-x-4 bottom-4 z-20 rounded-xl border border-stroke bg-panel/95 p-2 shadow-lg backdrop-blur lg:hidden">
-        <ul className="grid grid-cols-3 gap-2">
+        <ul className="grid gap-2" style={{ gridTemplateColumns: `repeat(${navItems.length}, minmax(0, 1fr))` }}>
           {navItems.map((item) => {
             const active = isActive(pathname, item.href);
 
@@ -59,7 +60,7 @@ export function Sidebar() {
                 href={item.href}
                 className={`block rounded-xl border px-4 py-3 transition ${
                   active
-                    ? "border-accent/40 bg-accent-soft text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]"
+                    ? "border-accent/30 bg-accent-soft text-accent"
                     : "border-transparent bg-transparent text-muted-foreground hover:border-stroke hover:bg-panel-muted hover:text-foreground"
                 }`}
               >

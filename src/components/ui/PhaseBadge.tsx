@@ -5,14 +5,14 @@ interface PhaseBadgeProps {
 }
 
 const phaseStyles: Record<ImplPhase, string> = {
-  Intake: "bg-slate-100 text-slate-700",
-  Discovery: "bg-sky-100 text-sky-700",
-  Design: "bg-indigo-100 text-indigo-700",
-  Build: "bg-cyan-100 text-cyan-700",
-  Test: "bg-amber-100 text-amber-700",
-  Training: "bg-emerald-100 text-emerald-700",
-  GoLive: "bg-teal-100 text-teal-700",
-  Hypercare: "bg-rose-100 text-rose-700",
+  Intake: "bg-slate-500/15 text-slate-400",
+  Discovery: "bg-sky-500/15 text-sky-400",
+  Design: "bg-indigo-500/15 text-indigo-400",
+  Build: "bg-cyan-500/15 text-cyan-400",
+  Test: "bg-amber-500/15 text-amber-400",
+  Training: "bg-emerald-500/15 text-emerald-400",
+  GoLive: "bg-teal-500/15 text-teal-400",
+  Hypercare: "bg-rose-500/15 text-rose-400",
 };
 
 const phaseLabels: Record<ImplPhase, string> = {

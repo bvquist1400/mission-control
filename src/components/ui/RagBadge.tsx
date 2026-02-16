@@ -5,9 +5,9 @@ interface RagBadgeProps {
 }
 
 const badgeStyles: Record<RagStatus, string> = {
-  Green: "border-green-200 bg-green-50 text-green-700",
-  Yellow: "border-yellow-200 bg-yellow-50 text-yellow-700",
-  Red: "border-red-200 bg-red-50 text-red-700",
+  Green: "border-green-500/30 bg-green-500/15 text-green-400",
+  Yellow: "border-yellow-500/30 bg-yellow-500/15 text-yellow-400",
+  Red: "border-red-500/30 bg-red-500/15 text-red-400",
 };
 
 const dotStyles: Record<RagStatus, string> = {

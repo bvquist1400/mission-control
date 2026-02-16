@@ -261,8 +261,8 @@ function createFallbackExtraction(input: ExtractionInput): ExtractionResult {
   }
 
   // Try to match implementation from keywords
-  let implementationGuess: string | null = null;
-  let implementationConfidence = 0;
+  const implementationGuess: string | null = null;
+  const implementationConfidence = 0;
 
   // Check stakeholder mentions
   const stakeholders: string[] = [];

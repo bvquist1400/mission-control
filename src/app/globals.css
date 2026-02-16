@@ -1,14 +1,14 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f5f7f8;
-  --foreground: #121926;
-  --muted-foreground: #5f6a79;
-  --panel: #ffffff;
-  --panel-muted: #f0f3f6;
-  --stroke: #d9e1e8;
-  --accent: #0f766e;
-  --accent-soft: #d1f0ea;
+  --background: #0d1117;
+  --foreground: #e6edf3;
+  --muted-foreground: #7d8590;
+  --panel: #161b22;
+  --panel-muted: #21262d;
+  --stroke: #30363d;
+  --accent: #c41e3a;
+  --accent-soft: rgba(196, 30, 58, 0.15);
 }
 
 @theme inline {
@@ -32,8 +32,8 @@
 body {
   min-height: 100vh;
   background:
-    radial-gradient(circle at 12% 2%, #d7efe8 0%, transparent 30%),
-    radial-gradient(circle at 92% 14%, #f4ebdd 0%, transparent 26%),
+    radial-gradient(circle at 12% 2%, rgba(196, 30, 58, 0.06) 0%, transparent 30%),
+    radial-gradient(circle at 92% 14%, rgba(139, 92, 246, 0.04) 0%, transparent 26%),
     var(--background);
   color: var(--foreground);
   font-family: var(--font-sans);
@@ -44,5 +44,5 @@ a {
 }
 
 ::selection {
-  background: color-mix(in oklab, var(--accent) 30%, white);
+  background: color-mix(in oklab, var(--accent) 40%, black);
 }

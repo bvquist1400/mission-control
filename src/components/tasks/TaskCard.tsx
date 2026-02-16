@@ -1,10 +1,13 @@
 import type { TaskStatus } from "@/types/database";
 
+type DueState = "Overdue" | "Due Today" | "Due Soon";
+
 export interface TaskCardData {
   id: string;
   title: string;
   estimatedMinutes: number;
   dueAt: string | null;
+  dueState?: DueState | null;
   status: TaskStatus;
   blocker: boolean;
   implementationName?: string | null;
@@ -13,6 +16,12 @@ export interface TaskCardData {
 interface TaskCardProps {
   task: TaskCardData;
 }
+
+const dueStateStyles: Record<DueState, string> = {
+  Overdue: "border-red-200 bg-red-50 text-red-700",
+  "Due Today": "border-amber-200 bg-amber-50 text-amber-700",
+  "Due Soon": "border-slate-200 bg-slate-100 text-slate-700",
+};
 
 function formatDueDate(date: string | null): string {
   if (!date) {
@@ -31,7 +40,7 @@ export function TaskCard({ task }: TaskCardProps) {
       <div className="flex items-start justify-between gap-3">
         <h3 className="text-sm font-semibold leading-relaxed text-foreground">{task.title}</h3>
         {task.blocker ? (
-          <span className="shrink-0 rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-700">Blocker</span>
+          <span className="shrink-0 rounded-full bg-red-500/15 px-2 py-0.5 text-[11px] font-semibold text-red-400">Blocker</span>
         ) : null}
       </div>
 
@@ -42,7 +51,14 @@ export function TaskCard({ task }: TaskCardProps) {
         </div>
         <div className="flex items-center justify-between gap-3">
           <dt>Due</dt>
-          <dd className="font-semibold text-foreground">{formatDueDate(task.dueAt)}</dd>
+          <dd className="flex items-center gap-2 font-semibold text-foreground">
+            <span>{formatDueDate(task.dueAt)}</span>
+            {task.dueState ? (
+              <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${dueStateStyles[task.dueState]}`}>
+                {task.dueState}
+              </span>
+            ) : null}
+          </dd>
         </div>
         <div className="flex items-center justify-between gap-3">
           <dt>Status</dt>
