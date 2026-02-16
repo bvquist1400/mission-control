@@ -1,4 +1,7 @@
 import { Task, CapacityConfig, CapacityResult, RagStatus } from '@/types/database';
+import { DEFAULT_WORKDAY_CONFIG } from '@/lib/workday';
+
+export const CAPACITY_TIMEZONE = DEFAULT_WORKDAY_CONFIG.timezone;
 
 // Default capacity configuration from spec Section B
 export const DEFAULT_CAPACITY_CONFIG: CapacityConfig = {
@@ -29,7 +32,7 @@ export function calculateBufferMinutes(
  */
 export function calculateAvailableMinutes(
   focusTaskCount: number,
-  meetingMinutes: number = 0, // MVP: no calendar integration
+  meetingMinutes: number = 0,
   config: CapacityConfig = DEFAULT_CAPACITY_CONFIG
 ): number {
   const bufferMinutes = calculateBufferMinutes(focusTaskCount, config);

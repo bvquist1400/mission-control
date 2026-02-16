@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:calendar-sanitize": "node scripts/test-calendar-sanitizer.mjs",
+    "test:calendar-api": "node scripts/test-calendar-api-contract.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.8.0",

@@ -1,70 +1,121 @@
-import { NextRequest, NextResponse } from "next/server";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
-import { extractSharingLinks, filterUpcomingEvents, parseCalendarXml, parseIcsEvents } from "@/lib/calendar";
-
-const CALENDAR_RELATIVE_PATH = "data/calendar/work-calendar.xml";
+import { NextRequest, NextResponse } from 'next/server';
+import {
+  buildDayWindows,
+  buildSnapshotPayload,
+  calculateBusyStats,
+  computeDeltas,
+  enforceCalendarRetention,
+  ingestCalendarEvents,
+  mergeBusyBlocks,
+  normalizeRequestedRange,
+  parseEventPeople,
+  parseSnapshotPayload,
+} from '@/lib/calendar';
+import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
+import { DEFAULT_WORKDAY_CONFIG } from '@/lib/workday';
 
 export async function GET(request: NextRequest) {
   try {
-    const filePath = path.join(process.cwd(), CALENDAR_RELATIVE_PATH);
     const { searchParams } = new URL(request.url);
-    const daysAhead = Math.max(1, Math.min(90, Number.parseInt(searchParams.get("days") ?? "14", 10)));
-    const includeAll = searchParams.get("all") === "true";
+    const range = normalizeRequestedRange(searchParams.get('rangeStart'), searchParams.get('rangeEnd'));
 
-    let xml: string;
-    try {
-      xml = await readFile(filePath, "utf8");
-    } catch {
-      return NextResponse.json(
-        {
-          events: [],
-          source_path: CALENDAR_RELATIVE_PATH,
-          missing_file: true,
-          message: `Calendar XML not found at ${CALENDAR_RELATIVE_PATH}.`,
-        },
-        { status: 200 }
-      );
+    const auth = await requireAuthenticatedRoute(request);
+    if (auth.response || !auth.context) {
+      return auth.response as NextResponse;
+    }
+    const { supabase, userId } = auth.context;
+
+    await enforceCalendarRetention(supabase, userId);
+    const ingestResult = await ingestCalendarEvents(range, userId, supabase);
+    await enforceCalendarRetention(supabase, userId);
+
+    const rangeContext = buildDayWindows(range, DEFAULT_WORKDAY_CONFIG);
+
+    const { data: rows, error: rowsError } = await supabase
+      .from('calendar_events')
+      .select('external_event_id, start_at, end_at, title, with_display, body_scrubbed_preview, is_all_day, content_hash')
+      .eq('user_id', userId)
+      .gte('end_at', rangeContext.utcRangeStart)
+      .lt('start_at', rangeContext.utcRangeEndExclusive)
+      .order('start_at', { ascending: true });
+
+    if (rowsError) {
+      throw rowsError;
     }
 
-    const parsedEvents = parseCalendarXml(xml);
-    const sharingLinks = extractSharingLinks(xml);
+    // Allowed fields contract: never return raw body, URLs, emails, or provider-only sensitive fields.
+    const events = (rows || []).map((row) => ({
+      start_at: row.start_at,
+      end_at: row.end_at,
+      title: row.title,
+      with_display: parseEventPeople(row.with_display),
+      body_scrubbed_preview: row.body_scrubbed_preview,
+      is_all_day: row.is_all_day,
+      external_event_id: row.external_event_id,
+    }));
 
-    let source = "xml";
-    let events = parsedEvents;
-    let warning: string | null = null;
+    const busyBlocks = mergeBusyBlocks(events, rangeContext.windows);
+    const stats = calculateBusyStats(events, rangeContext.windows);
 
-    if (events.length === 0 && sharingLinks.ical_url) {
-      try {
-        const icsResponse = await fetch(sharingLinks.ical_url, { cache: "no-store" });
-        if (!icsResponse.ok) {
-          throw new Error(`ICal fetch failed with status ${icsResponse.status}`);
-        }
+    const currentSnapshot = buildSnapshotPayload(
+      (rows || []).map((row) => ({
+        external_event_id: row.external_event_id,
+        start_at: row.start_at,
+        end_at: row.end_at,
+        content_hash: row.content_hash,
+      }))
+    );
 
-        const icsText = await icsResponse.text();
-        events = parseIcsEvents(icsText);
-        source = "ics";
-      } catch {
-        warning = "Unable to fetch calendar feed from ICalUrl in the sharing XML.";
-      }
+    const { data: snapshotRows, error: snapshotError } = await supabase
+      .from('calendar_snapshots')
+      .select('payload_min')
+      .eq('user_id', userId)
+      .eq('range_start', range.rangeStart)
+      .eq('range_end', range.rangeEnd)
+      .order('captured_at', { ascending: false })
+      .limit(1);
+
+    if (snapshotError) {
+      throw snapshotError;
     }
 
-    const filteredEvents = includeAll ? events : filterUpcomingEvents(events, daysAhead);
+    const previousSnapshot = parseSnapshotPayload(snapshotRows?.[0]?.payload_min);
+    const changesSince = computeDeltas(previousSnapshot, currentSnapshot);
+
+    const { error: insertSnapshotError } = await supabase.from('calendar_snapshots').insert({
+      user_id: userId,
+      range_start: range.rangeStart,
+      range_end: range.rangeEnd,
+      payload_min: currentSnapshot,
+    });
+
+    if (insertSnapshotError) {
+      throw insertSnapshotError;
+    }
 
     return NextResponse.json({
-      events: filteredEvents,
-      source_path: CALENDAR_RELATIVE_PATH,
-      total_events: events.length,
-      displayed_events: filteredEvents.length,
-      filtered_days_ahead: includeAll ? null : daysAhead,
-      source,
-      ical_url: sharingLinks.ical_url,
-      browse_url: sharingLinks.browse_url,
-      warning,
-      missing_file: false,
+      rangeStart: range.rangeStart,
+      rangeEnd: range.rangeEnd,
+      source: ingestResult.source,
+      warning: ingestResult.warnings[0] ?? null,
+      warnings: ingestResult.warnings,
+      ingest: {
+        source: ingestResult.source,
+        ingestedCount: ingestResult.ingestedCount,
+        warningCount: ingestResult.warnings.length,
+      },
+      events,
+      busyBlocks,
+      stats,
+      changesSince,
+      generatedAt: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("Error loading calendar XML:", error);
-    return NextResponse.json({ error: "Failed to load calendar data" }, { status: 500 });
+    if (error instanceof Error && /range/i.test(error.message)) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+
+    console.error('Error serving calendar data:', error);
+    return NextResponse.json({ error: 'Failed to load calendar data' }, { status: 500 });
   }
 }

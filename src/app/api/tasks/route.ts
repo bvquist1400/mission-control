@@ -1,76 +1,51 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 
-const FALLBACK_USER_ID = '00000000-0000-0000-0000-000000000001';
-
-function getSupabaseClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!url || !key) {
-    throw new Error('Missing Supabase environment variables');
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
   }
 
-  return createClient(url, key);
+  return value.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean);
 }
 
-async function resolveUserId(
-  supabase: ReturnType<typeof getSupabaseClient>,
-  requestedUserId: unknown
-): Promise<string | null> {
-  if (typeof requestedUserId === 'string' && requestedUserId.trim().length > 0) {
-    return requestedUserId.trim();
+function asStringOrNull(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
   }
 
-  if (process.env.DEFAULT_USER_ID) {
-    return process.env.DEFAULT_USER_ID;
-  }
-
-  const tables = ['tasks', 'implementations', 'inbox_items'] as const;
-
-  for (const table of tables) {
-    const { data, error } = await supabase
-      .from(table)
-      .select('user_id')
-      .limit(1);
-
-    if (error) {
-      continue;
-    }
-
-    const existingUserId = data?.[0]?.user_id;
-    if (typeof existingUserId === 'string' && existingUserId.length > 0) {
-      return existingUserId;
-    }
-  }
-
-  return FALLBACK_USER_ID;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 // GET /api/tasks - List tasks with optional filters
 export async function GET(request: NextRequest) {
   try {
-    const supabase = getSupabaseClient();
+    const auth = await requireAuthenticatedRoute(request);
+    if (auth.response || !auth.context) {
+      return auth.response as NextResponse;
+    }
+
+    const { supabase, userId } = auth.context;
     const { searchParams } = new URL(request.url);
 
-    // Filter options
     const needsReview = searchParams.get('needs_review');
     const status = searchParams.get('status');
     const implementationId = searchParams.get('implementation_id');
-    const dueSoon = searchParams.get('due_soon'); // "true" for tasks due within 48h
-    const rawLimit = parseInt(searchParams.get('limit') || '100', 10);
-    const rawOffset = parseInt(searchParams.get('offset') || '0', 10);
+    const dueSoon = searchParams.get('due_soon');
+    const rawLimit = Number.parseInt(searchParams.get('limit') || '100', 10);
+    const rawOffset = Number.parseInt(searchParams.get('offset') || '0', 10);
     const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 500) : 100;
     const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
 
     let query = supabase
       .from('tasks')
       .select('*, implementation:implementations(id, name)')
+      .eq('user_id', userId)
       .order('priority_score', { ascending: false })
       .order('id', { ascending: true })
       .range(offset, offset + limit - 1);
 
-    // Apply filters
     if (needsReview === 'true') {
       query = query.eq('needs_review', true);
     }
@@ -92,7 +67,6 @@ export async function GET(request: NextRequest) {
         .neq('status', 'Done');
     }
 
-    // Exclude done tasks by default unless explicitly requested
     if (searchParams.get('include_done') !== 'true') {
       query = query.neq('status', 'Done');
     }
@@ -113,36 +87,50 @@ export async function GET(request: NextRequest) {
 // POST /api/tasks - Create a new task
 export async function POST(request: NextRequest) {
   try {
-    const supabase = getSupabaseClient();
-    const body = await request.json();
-
-    // Validate required fields
-    if (!body.title) {
-      return NextResponse.json(
-        { error: 'title is required' },
-        { status: 400 }
-      );
+    const auth = await requireAuthenticatedRoute(request);
+    if (auth.response || !auth.context) {
+      return auth.response as NextResponse;
     }
 
-    const userId = await resolveUserId(supabase, body.user_id);
+    const { supabase, userId } = auth.context;
+    const body = (await request.json()) as Record<string, unknown>;
+
+    if (typeof body.title !== 'string' || body.title.trim().length === 0) {
+      return NextResponse.json({ error: 'title is required' }, { status: 400 });
+    }
+
+    const implementationId = asStringOrNull(body.implementation_id);
+    if (implementationId) {
+      const { data: implementation, error: implementationError } = await supabase
+        .from('implementations')
+        .select('id')
+        .eq('id', implementationId)
+        .eq('user_id', userId)
+        .single();
+
+      if (implementationError || !implementation) {
+        return NextResponse.json({ error: 'implementation_id is invalid' }, { status: 400 });
+      }
+    }
+
     const { data, error } = await supabase
       .from('tasks')
       .insert({
         user_id: userId,
-        title: body.title,
-        implementation_id: body.implementation_id || null,
-        status: body.status || 'Next',
-        task_type: body.task_type || 'Admin',
-        priority_score: body.priority_score ?? 50,
-        estimated_minutes: body.estimated_minutes ?? 30,
-        estimate_source: body.estimate_source || 'default',
-        due_at: body.due_at || null,
-        needs_review: body.needs_review ?? false,
-        blocker: body.blocker ?? false,
-        waiting_on: body.waiting_on || null,
-        stakeholder_mentions: body.stakeholder_mentions || [],
-        source_type: body.source_type || 'Manual',
-        source_url: body.source_url || null,
+        title: body.title.trim(),
+        implementation_id: implementationId,
+        status: asStringOrNull(body.status) || 'Next',
+        task_type: asStringOrNull(body.task_type) || 'Admin',
+        priority_score: typeof body.priority_score === 'number' ? body.priority_score : 50,
+        estimated_minutes: typeof body.estimated_minutes === 'number' ? body.estimated_minutes : 30,
+        estimate_source: asStringOrNull(body.estimate_source) || 'default',
+        due_at: asStringOrNull(body.due_at),
+        needs_review: typeof body.needs_review === 'boolean' ? body.needs_review : false,
+        blocker: typeof body.blocker === 'boolean' ? body.blocker : false,
+        waiting_on: asStringOrNull(body.waiting_on),
+        stakeholder_mentions: toStringArray(body.stakeholder_mentions),
+        source_type: asStringOrNull(body.source_type) || 'Manual',
+        source_url: asStringOrNull(body.source_url),
       })
       .select('*, implementation:implementations(id, name)')
       .single();

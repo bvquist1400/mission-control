@@ -1,16 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-
-function getSupabaseClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!url || !key) {
-    throw new Error('Missing Supabase environment variables');
-  }
-
-  return createClient(url, key);
-}
+import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 
 // GET /api/tasks/[id]/checklist - Get checklist items for a task
 export async function GET(
@@ -18,13 +7,19 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const auth = await requireAuthenticatedRoute(request);
+    if (auth.response || !auth.context) {
+      return auth.response as NextResponse;
+    }
+
+    const { supabase, userId } = auth.context;
     const { id } = await params;
-    const supabase = getSupabaseClient();
 
     const { data, error } = await supabase
       .from('task_checklist_items')
       .select('*')
       .eq('task_id', id)
+      .eq('user_id', userId)
       .order('sort_order', { ascending: true });
 
     if (error) {
@@ -44,45 +39,52 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await params;
-    const body = await request.json();
-    const supabase = getSupabaseClient();
+    const auth = await requireAuthenticatedRoute(request);
+    if (auth.response || !auth.context) {
+      return auth.response as NextResponse;
+    }
 
-    // Validate required fields
-    if (!body.text || typeof body.text !== 'string') {
+    const { supabase, userId } = auth.context;
+    const { id } = await params;
+    const body = (await request.json()) as Record<string, unknown>;
+
+    if (typeof body.text !== 'string' || body.text.trim().length === 0) {
       return NextResponse.json({ error: 'text is required' }, { status: 400 });
     }
 
-    // Get the task to verify it exists and get user_id
     const { data: task, error: taskError } = await supabase
       .from('tasks')
-      .select('user_id')
+      .select('id')
       .eq('id', id)
+      .eq('user_id', userId)
       .single();
 
     if (taskError || !task) {
       return NextResponse.json({ error: 'Task not found' }, { status: 404 });
     }
 
-    // Get max sort_order for this task
-    const { data: maxItem } = await supabase
+    const { data: maxItems, error: maxError } = await supabase
       .from('task_checklist_items')
       .select('sort_order')
       .eq('task_id', id)
+      .eq('user_id', userId)
       .order('sort_order', { ascending: false })
-      .limit(1)
-      .single();
+      .limit(1);
 
-    const nextSortOrder = (maxItem?.sort_order ?? -1) + 1;
+    if (maxError) {
+      throw maxError;
+    }
+
+    const nextSortOrder = (maxItems?.[0]?.sort_order ?? -1) + 1;
 
     const { data, error } = await supabase
       .from('task_checklist_items')
       .insert({
         task_id: id,
-        user_id: task.user_id,
-        text: body.text,
-        is_done: body.is_done ?? false,
-        sort_order: body.sort_order ?? nextSortOrder,
+        user_id: userId,
+        text: body.text.trim(),
+        is_done: typeof body.is_done === 'boolean' ? body.is_done : false,
+        sort_order: typeof body.sort_order === 'number' ? body.sort_order : nextSortOrder,
       })
       .select()
       .single();
@@ -104,11 +106,15 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await params;
-    const body = await request.json();
-    const supabase = getSupabaseClient();
+    const auth = await requireAuthenticatedRoute(request);
+    if (auth.response || !auth.context) {
+      return auth.response as NextResponse;
+    }
 
-    // Expect { items: [{ id, is_done?, text?, sort_order? }] }
+    const { supabase, userId } = auth.context;
+    const { id } = await params;
+    const body = (await request.json()) as { items?: Array<Record<string, unknown>> };
+
     if (!body.items || !Array.isArray(body.items)) {
       return NextResponse.json({ error: 'items array is required' }, { status: 400 });
     }
@@ -116,20 +122,26 @@ export async function PATCH(
     const results = [];
 
     for (const item of body.items) {
-      if (!item.id) continue;
+      const itemId = typeof item.id === 'string' ? item.id : null;
+      if (!itemId) {
+        continue;
+      }
 
       const updates: Record<string, unknown> = {};
-      if ('is_done' in item) updates.is_done = item.is_done;
-      if ('text' in item) updates.text = item.text;
-      if ('sort_order' in item) updates.sort_order = item.sort_order;
+      if ('is_done' in item && typeof item.is_done === 'boolean') updates.is_done = item.is_done;
+      if ('text' in item && typeof item.text === 'string') updates.text = item.text.trim();
+      if ('sort_order' in item && typeof item.sort_order === 'number') updates.sort_order = item.sort_order;
 
-      if (Object.keys(updates).length === 0) continue;
+      if (Object.keys(updates).length === 0) {
+        continue;
+      }
 
       const { data, error } = await supabase
         .from('task_checklist_items')
         .update(updates)
-        .eq('id', item.id)
-        .eq('task_id', id) // Ensure item belongs to this task
+        .eq('id', itemId)
+        .eq('task_id', id)
+        .eq('user_id', userId)
         .select()
         .single();
 
@@ -146,23 +158,39 @@ export async function PATCH(
 }
 
 // DELETE /api/tasks/[id]/checklist - Delete a checklist item
-export async function DELETE(request: NextRequest) {
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
   try {
+    const auth = await requireAuthenticatedRoute(request);
+    if (auth.response || !auth.context) {
+      return auth.response as NextResponse;
+    }
+
+    const { supabase, userId } = auth.context;
+    const { id } = await params;
     const { searchParams } = new URL(request.url);
     const itemId = searchParams.get('itemId');
-    const supabase = getSupabaseClient();
 
     if (!itemId) {
       return NextResponse.json({ error: 'itemId query param required' }, { status: 400 });
     }
 
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('task_checklist_items')
       .delete()
-      .eq('id', itemId);
+      .eq('id', itemId)
+      .eq('task_id', id)
+      .eq('user_id', userId)
+      .select('id');
 
     if (error) {
       throw error;
+    }
+
+    if (!data || data.length === 0) {
+      return NextResponse.json({ error: 'Checklist item not found' }, { status: 404 });
     }
 
     return NextResponse.json({ success: true });

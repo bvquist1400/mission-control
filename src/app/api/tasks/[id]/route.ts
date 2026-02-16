@@ -1,17 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
 import { recalculateTaskPriority } from '@/lib/priority';
+import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 
-// Create Supabase client with service role for API routes
-function getSupabaseClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!url || !key) {
-    throw new Error('Missing Supabase environment variables');
+function asStringOrNull(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
   }
 
-  return createClient(url, key);
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 // GET /api/tasks/[id] - Get a single task
@@ -20,13 +17,19 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const auth = await requireAuthenticatedRoute(request);
+    if (auth.response || !auth.context) {
+      return auth.response as NextResponse;
+    }
+
+    const { supabase, userId } = auth.context;
     const { id } = await params;
-    const supabase = getSupabaseClient();
 
     const { data, error } = await supabase
       .from('tasks')
       .select('*, implementation:implementations(id, name)')
       .eq('id', id)
+      .eq('user_id', userId)
       .single();
 
     if (error) {
@@ -49,11 +52,15 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await params;
-    const body = await request.json();
-    const supabase = getSupabaseClient();
+    const auth = await requireAuthenticatedRoute(request);
+    if (auth.response || !auth.context) {
+      return auth.response as NextResponse;
+    }
 
-    // Allowed fields for update
+    const { supabase, userId } = auth.context;
+    const { id } = await params;
+    const body = (await request.json()) as Record<string, unknown>;
+
     const allowedFields = [
       'title',
       'implementation_id',
@@ -69,11 +76,19 @@ export async function PATCH(
       'pinned_excerpt',
     ];
 
-    // Filter to only allowed fields
     const updates: Record<string, unknown> = {};
     for (const field of allowedFields) {
-      if (field in body) {
-        updates[field] = body[field];
+      if (!(field in body)) {
+        continue;
+      }
+
+      const value = body[field];
+      if (field === 'implementation_id') {
+        updates[field] = asStringOrNull(value);
+      } else if (field === 'title' && typeof value === 'string') {
+        updates[field] = value.trim();
+      } else {
+        updates[field] = value;
       }
     }
 
@@ -81,28 +96,41 @@ export async function PATCH(
       return NextResponse.json({ error: 'No valid fields to update' }, { status: 400 });
     }
 
-    // If status, due_at, or stakeholder_mentions changed, recalculate priority
-    const needsPriorityRecalc =
-      'status' in updates || 'due_at' in updates;
+    const implementationId = updates.implementation_id;
+    if (typeof implementationId === 'string') {
+      const { data: implementation, error: implementationError } = await supabase
+        .from('implementations')
+        .select('id')
+        .eq('id', implementationId)
+        .eq('user_id', userId)
+        .single();
+
+      if (implementationError || !implementation) {
+        return NextResponse.json({ error: 'implementation_id is invalid' }, { status: 400 });
+      }
+    }
+
+    const needsPriorityRecalc = 'status' in updates || 'due_at' in updates;
 
     if (needsPriorityRecalc) {
-      // Fetch current task to get all fields needed for priority calc
       const { data: currentTask, error: fetchError } = await supabase
         .from('tasks')
         .select('*')
         .eq('id', id)
+        .eq('user_id', userId)
         .single();
 
       if (fetchError) {
+        if (fetchError.code === 'PGRST116') {
+          return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+        }
         throw fetchError;
       }
 
-      // Merge updates with current task and recalculate
       const mergedTask = { ...currentTask, ...updates };
       updates.priority_score = recalculateTaskPriority(mergedTask);
     }
 
-    // If estimate changed manually, update source
     if ('estimated_minutes' in updates && !('estimate_source' in updates)) {
       updates.estimate_source = 'manual';
     }
@@ -111,6 +139,7 @@ export async function PATCH(
       .from('tasks')
       .update(updates)
       .eq('id', id)
+      .eq('user_id', userId)
       .select('*, implementation:implementations(id, name)')
       .single();
 
@@ -134,13 +163,27 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await params;
-    const supabase = getSupabaseClient();
+    const auth = await requireAuthenticatedRoute(request);
+    if (auth.response || !auth.context) {
+      return auth.response as NextResponse;
+    }
 
-    const { error } = await supabase.from('tasks').delete().eq('id', id);
+    const { supabase, userId } = auth.context;
+    const { id } = await params;
+
+    const { data, error } = await supabase
+      .from('tasks')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', userId)
+      .select('id');
 
     if (error) {
       throw error;
+    }
+
+    if (!data || data.length === 0) {
+      return NextResponse.json({ error: 'Task not found' }, { status: 404 });
     }
 
     return NextResponse.json({ success: true });

@@ -139,3 +139,35 @@ export interface ImplementationSummary {
   phase?: ImplPhase;
   rag?: RagStatus;
 }
+
+// Task summary for implementation detail
+export interface TaskSummary {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  estimated_minutes: number;
+  due_at: string | null;
+  blocker: boolean;
+  priority_score?: number;
+  updated_at?: string;
+}
+
+// Implementation detail with related data
+export interface ImplementationDetail extends Implementation {
+  blockers_count: number;
+  open_tasks: TaskSummary[];
+  recent_done_tasks: TaskSummary[];
+}
+
+// Allowed fields for implementation updates via API
+export interface ImplementationUpdatePayload {
+  name?: string;
+  phase?: ImplPhase;
+  rag?: RagStatus;
+  target_date?: string | null;
+  status_summary?: string;
+  next_milestone?: string;
+  next_milestone_date?: string | null;
+  stakeholders?: string[];
+  keywords?: string[];
+}

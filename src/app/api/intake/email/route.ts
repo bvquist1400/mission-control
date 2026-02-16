@@ -1,57 +1,35 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { SupabaseClient } from '@supabase/supabase-js';
 import { createHash } from 'crypto';
 import { extractTaskMetadata } from '@/lib/extraction';
 import {
   calculatePriorityBoosts,
   calculateFinalPriorityScore,
 } from '@/lib/priority';
-
-function getSupabaseClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!url || !key) {
-    throw new Error('Missing Supabase environment variables');
-  }
-
-  return createClient(url, key);
-}
+import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 
 interface EmailIntakePayload {
-  // Required fields
   subject: string;
   from_email: string;
-  received_at: string; // ISO timestamp
+  received_at: string;
 
-  // Optional fields
   from_name?: string;
-  message_id?: string; // For dedupe
-  source_url?: string; // Link to original email
-  body_snippet?: string; // Transient, not stored
-
-  // Single-user MVP: pass user_id directly
-  user_id: string;
+  message_id?: string;
+  source_url?: string;
+  body_snippet?: string;
 }
 
-/**
- * Generate dedupe key from message ID or email metadata
- */
-function generateDedupeKey(payload: EmailIntakePayload): string {
+function generateDedupeKey(payload: EmailIntakePayload, userId: string): string {
   if (payload.message_id) {
-    return createHash('sha256').update(payload.message_id).digest('hex');
+    return createHash('sha256').update(`${userId}|${payload.message_id}`).digest('hex');
   }
 
-  // Fallback: hash of subject + sender + timestamp
-  const key = `${payload.subject}|${payload.from_email}|${payload.received_at}`;
+  const key = `${userId}|${payload.subject}|${payload.from_email}|${payload.received_at}`;
   return createHash('sha256').update(key).digest('hex');
 }
 
-/**
- * Log an ingestion event
- */
 async function logIngestionEvent(
-  supabase: ReturnType<typeof getSupabaseClient>,
+  supabase: SupabaseClient,
   userId: string,
   inboxItemId: string | null,
   stage: string,
@@ -73,31 +51,36 @@ async function logIngestionEvent(
 
 // POST /api/intake/email - Process incoming Action Intake email
 export async function POST(request: NextRequest) {
-  const supabase = getSupabaseClient();
+  const auth = await requireAuthenticatedRoute(request);
+  if (auth.response || !auth.context) {
+    return auth.response as NextResponse;
+  }
+
+  const { supabase, userId } = auth.context;
   let inboxItemId: string | null = null;
 
   try {
-    const payload: EmailIntakePayload = await request.json();
+    const payload = (await request.json()) as EmailIntakePayload;
 
-    // Validate required fields
-    if (!payload.subject || !payload.from_email || !payload.received_at || !payload.user_id) {
+    if (!payload.subject || !payload.from_email || !payload.received_at) {
       return NextResponse.json(
-        { error: 'Missing required fields: subject, from_email, received_at, user_id' },
+        { error: 'Missing required fields: subject, from_email, received_at' },
         { status: 400 }
       );
     }
 
-    const userId = payload.user_id;
+    const dedupeKey = generateDedupeKey(payload, userId);
 
-    // Step 1: Generate dedupe key
-    const dedupeKey = generateDedupeKey(payload);
-
-    // Step 2: Check for duplicate
-    const { data: existing } = await supabase
+    const { data: existing, error: existingError } = await supabase
       .from('inbox_items')
       .select('id')
+      .eq('user_id', userId)
       .eq('dedupe_key', dedupeKey)
-      .single();
+      .maybeSingle();
+
+    if (existingError) {
+      throw existingError;
+    }
 
     if (existing) {
       await logIngestionEvent(supabase, userId, existing.id, 'deduped', true, 'Duplicate email ignored');
@@ -107,7 +90,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Step 3: Insert inbox_item (metadata only)
     const { data: inboxItem, error: insertError } = await supabase
       .from('inbox_items')
       .insert({
@@ -133,7 +115,6 @@ export async function POST(request: NextRequest) {
     inboxItemId = inboxItem.id;
     await logIngestionEvent(supabase, userId, inboxItemId, 'received', true);
 
-    // Step 4: Fetch implementations for LLM context
     const { data: implementations } = await supabase
       .from('implementations')
       .select('name, keywords')
@@ -145,7 +126,6 @@ export async function POST(request: NextRequest) {
       implementationKeywords[i.name] = i.keywords || [];
     });
 
-    // Step 5: Run LLM extraction
     let extractionResult;
     try {
       extractionResult = await extractTaskMetadata({
@@ -153,7 +133,7 @@ export async function POST(request: NextRequest) {
         from_name: payload.from_name || null,
         from_email: payload.from_email,
         received_at: payload.received_at,
-        body_snippet: payload.body_snippet || '', // Transient, not stored
+        body_snippet: payload.body_snippet || '',
         implementation_names: implementationNames,
         implementation_keywords: implementationKeywords,
       });
@@ -163,7 +143,6 @@ export async function POST(request: NextRequest) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       await logIngestionEvent(supabase, userId, inboxItemId, 'extracted', false, errorMessage);
 
-      // Update inbox_item with error
       await supabase
         .from('inbox_items')
         .update({ processing_error: errorMessage })
@@ -177,7 +156,6 @@ export async function POST(request: NextRequest) {
 
     const { extraction, model, confidence } = extractionResult;
 
-    // Step 6: Update inbox_item with extraction results
     await supabase
       .from('inbox_items')
       .update({
@@ -188,7 +166,6 @@ export async function POST(request: NextRequest) {
       })
       .eq('id', inboxItemId);
 
-    // Step 7: Find implementation ID if guessed
     let implementationId: string | null = null;
     if (extraction.implementation_guess && extraction.implementation_confidence >= 0.7) {
       const { data: impl } = await supabase
@@ -201,16 +178,14 @@ export async function POST(request: NextRequest) {
       implementationId = impl?.id || null;
     }
 
-    // Step 8: Calculate final priority with boosts
     const boosts = calculatePriorityBoosts(
       extraction.stakeholder_mentions,
       extraction.due_guess_iso,
       extraction.title,
-      'Next' // New tasks start as Next
+      'Next'
     );
     const finalPriority = calculateFinalPriorityScore(extraction.priority_score, boosts);
 
-    // Step 9: Create task
     const { data: task, error: taskError } = await supabase
       .from('tasks')
       .insert({
@@ -240,7 +215,6 @@ export async function POST(request: NextRequest) {
 
     await logIngestionEvent(supabase, userId, inboxItemId, 'task_created', true, `Task ID: ${task.id}`);
 
-    // Step 10: Create checklist items
     if (extraction.suggested_checklist.length > 0) {
       const checklistItems = extraction.suggested_checklist.map((text: string, index: number) => ({
         user_id: userId,
@@ -278,7 +252,7 @@ export async function POST(request: NextRequest) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
     if (inboxItemId) {
-      await logIngestionEvent(supabase, '', inboxItemId, 'error', false, errorMessage);
+      await logIngestionEvent(supabase, userId, inboxItemId, 'error', false, errorMessage);
     }
 
     return NextResponse.json({ error: 'Internal server error', detail: errorMessage }, { status: 500 });

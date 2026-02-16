@@ -1,49 +1,95 @@
-"use client";
+'use client';
 
-import { useEffect, useMemo, useState } from "react";
-import { PageHeader } from "@/components/layout/PageHeader";
+import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import { PageHeader } from '@/components/layout/PageHeader';
 
 interface CalendarEvent {
-  id: string;
+  start_at: string;
+  end_at: string;
   title: string;
-  start_at: string | null;
-  end_at: string | null;
-  location: string | null;
-  start_raw: string | null;
-  end_raw: string | null;
-  source_tag: string;
+  with_display: string[];
+  body_scrubbed_preview: string | null;
+  is_all_day: boolean;
+  external_event_id: string;
+}
+
+interface BusyBlock {
+  start_at: string;
+  end_at: string;
 }
 
 interface CalendarResponse {
-  events: CalendarEvent[];
-  source_path: string;
-  total_events: number;
-  displayed_events: number;
-  filtered_days_ahead: number | null;
-  source: "xml" | "ics";
-  ical_url: string | null;
-  browse_url: string | null;
+  rangeStart: string;
+  rangeEnd: string;
+  generatedAt: string;
+  source: 'local' | 'ical' | 'none';
   warning: string | null;
-  missing_file: boolean;
-  message?: string;
+  warnings: string[];
+  ingest: {
+    source: 'local' | 'ical' | 'none';
+    ingestedCount: number;
+    warningCount: number;
+  };
+  events: CalendarEvent[];
+  busyBlocks: BusyBlock[];
+  stats: {
+    busyMinutes: number;
+    blocks: number;
+    largestFocusBlockMinutes: number;
+  };
+  changesSince: {
+    added: Array<{ external_event_id: string; start_at: string; end_at: string }>;
+    removed: Array<{ external_event_id: string; start_at: string; end_at: string }>;
+    changed: Array<{
+      external_event_id: string;
+      previous_start_at: string;
+      previous_end_at: string;
+      start_at: string;
+      end_at: string;
+      timeChanged: boolean;
+      contentChanged: boolean;
+    }>;
+  };
 }
 
-function formatDateTime(value: string | null): string {
-  if (!value) {
-    return "Unknown";
-  }
-
+function formatDateTime(value: string): string {
   const timestamp = Date.parse(value);
   if (Number.isNaN(timestamp)) {
     return value;
   }
 
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
   }).format(new Date(timestamp));
+}
+
+function formatMinutes(value: number): string {
+  const hours = Math.floor(value / 60);
+  const minutes = value % 60;
+
+  if (hours === 0) {
+    return `${minutes}m`;
+  }
+
+  if (minutes === 0) {
+    return `${hours}h`;
+  }
+
+  return `${hours}h ${minutes}m`;
+}
+
+function toDateString(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function addDays(dateString: string, days: number): string {
+  const date = new Date(`${dateString}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return toDateString(date);
 }
 
 function LoadingSkeleton() {
@@ -62,7 +108,8 @@ function LoadingSkeleton() {
 export default function CalendarPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showAll, setShowAll] = useState(false);
+  const [authRequired, setAuthRequired] = useState(false);
+  const [daysAhead, setDaysAhead] = useState(7);
   const [data, setData] = useState<CalendarResponse | null>(null);
 
   useEffect(() => {
@@ -71,11 +118,26 @@ export default function CalendarPage() {
     async function loadCalendar() {
       setLoading(true);
       setError(null);
+      setAuthRequired(false);
+
+      const today = toDateString(new Date());
+      const rangeStart = today;
+      const rangeEnd = addDays(today, daysAhead);
 
       try {
-        const response = await fetch(`/api/calendar?days=30${showAll ? "&all=true" : ""}`, { cache: "no-store" });
+        const response = await fetch(`/api/calendar?rangeStart=${rangeStart}&rangeEnd=${rangeEnd}`, { cache: 'no-store' });
+
+        if (response.status === 401) {
+          if (isMounted) {
+            setAuthRequired(true);
+            setData(null);
+          }
+          return;
+        }
+
         if (!response.ok) {
-          throw new Error("Failed to fetch calendar");
+          const failure = (await response.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(failure?.error ?? 'Failed to fetch calendar');
         }
 
         const payload = (await response.json()) as CalendarResponse;
@@ -84,7 +146,7 @@ export default function CalendarPage() {
         }
       } catch (loadError) {
         if (isMounted) {
-          setError(loadError instanceof Error ? loadError.message : "Failed to load calendar");
+          setError(loadError instanceof Error ? loadError.message : 'Failed to load calendar');
         }
       } finally {
         if (isMounted) {
@@ -98,23 +160,19 @@ export default function CalendarPage() {
     return () => {
       isMounted = false;
     };
-  }, [showAll]);
+  }, [daysAhead]);
 
   const subtitle = useMemo(() => {
+    if (authRequired) {
+      return 'Sign in to load your private calendar events.';
+    }
+
     if (!data) {
-      return "Import and view calendar metadata from an XML file in the repo.";
+      return 'Secure, sanitized calendar context for daily briefs.';
     }
 
-    if (data.missing_file) {
-      return `No file found yet at ${data.source_path}.`;
-    }
-
-    if (data.filtered_days_ahead) {
-      return `Showing ${data.displayed_events} of ${data.total_events} events within ${data.filtered_days_ahead} days.`;
-    }
-
-    return `Showing all ${data.displayed_events} parsed events.`;
-  }, [data]);
+    return `Showing ${data.events.length} events from ${data.rangeStart} to ${data.rangeEnd}.`;
+  }, [authRequired, data]);
 
   return (
     <div className="space-y-6">
@@ -124,43 +182,27 @@ export default function CalendarPage() {
         actions={
           <button
             type="button"
-            onClick={() => setShowAll((current) => !current)}
+            onClick={() => setDaysAhead((current) => (current === 7 ? 14 : 7))}
             className="rounded-lg border border-stroke bg-panel px-3 py-1.5 text-sm font-medium text-muted-foreground transition hover:bg-panel-muted hover:text-foreground"
           >
-            {showAll ? "Show 30 Days" : "Show All"}
+            {daysAhead === 7 ? 'Show 14 Days' : 'Show 7 Days'}
           </button>
         }
       />
 
-      <section className="rounded-card border border-stroke bg-panel p-4 text-sm text-muted-foreground">
-        <p className="font-semibold text-foreground">Calendar file path</p>
-        <p className="mt-1">
-          Put your XML at <code className="rounded bg-panel-muted px-1.5 py-0.5 text-xs">data/calendar/work-calendar.xml</code>
-        </p>
-        {data?.source ? (
-          <p className="mt-2 text-xs">
-            Source mode: <span className="font-semibold text-foreground">{data.source.toUpperCase()}</span>
+      {authRequired ? (
+        <section className="rounded-card border border-stroke bg-panel p-6">
+          <p className="text-base font-semibold text-foreground">Authentication required</p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Calendar access requires a signed-in Supabase session.
           </p>
-        ) : null}
-        {data?.ical_url ? (
-          <p className="mt-2 text-xs">
-            ICal URL detected.{" "}
-            <a
-              href={data.ical_url}
-              target="_blank"
-              rel="noreferrer"
-              className="font-semibold text-accent underline underline-offset-2"
-            >
-              Open feed
-            </a>
-          </p>
-        ) : null}
-      </section>
-
-      {data?.warning ? (
-        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700" role="alert">
-          {data.warning}
-        </p>
+          <Link
+            href="/login?next=%2Fcalendar"
+            className="mt-4 inline-flex rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90"
+          >
+            Sign in with magic link
+          </Link>
+        </section>
       ) : null}
 
       {error ? (
@@ -169,49 +211,85 @@ export default function CalendarPage() {
         </p>
       ) : null}
 
+      {data?.warning ? (
+        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800" role="alert">
+          {data.warning}
+        </p>
+      ) : null}
+
       {loading ? <LoadingSkeleton /> : null}
 
-      {!loading && data?.missing_file ? (
-        <div className="rounded-card border border-dashed border-stroke bg-panel p-8 text-center">
-          <p className="text-lg font-semibold text-foreground">No calendar file yet</p>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Add your XML file at <code className="rounded bg-panel-muted px-1.5 py-0.5 text-xs">data/calendar/work-calendar.xml</code> and refresh this page.
-          </p>
-        </div>
-      ) : null}
+      {!loading && data ? (
+        <>
+          <section className="grid gap-3 sm:grid-cols-4">
+            <article className="rounded-card border border-stroke bg-panel p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Busy time</p>
+              <p className="mt-2 text-xl font-semibold text-foreground">{formatMinutes(data.stats.busyMinutes)}</p>
+            </article>
+            <article className="rounded-card border border-stroke bg-panel p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Busy blocks</p>
+              <p className="mt-2 text-xl font-semibold text-foreground">{data.stats.blocks}</p>
+            </article>
+            <article className="rounded-card border border-stroke bg-panel p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Largest focus block</p>
+              <p className="mt-2 text-xl font-semibold text-foreground">{formatMinutes(data.stats.largestFocusBlockMinutes)}</p>
+            </article>
+            <article className="rounded-card border border-stroke bg-panel p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Ingested events</p>
+              <p className="mt-2 text-xl font-semibold text-foreground">{data.ingest.ingestedCount}</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Source {data.ingest.source.toUpperCase()}
+                {data.ingest.warningCount > 0 ? ` • ${data.ingest.warningCount} warning(s)` : ''}
+              </p>
+            </article>
+          </section>
 
-      {!loading && data && !data.missing_file && data.events.length === 0 ? (
-        <div className="rounded-card border border-stroke bg-panel p-8 text-center">
-          <p className="text-lg font-semibold text-foreground">No events parsed</p>
-          <p className="mt-2 text-sm text-muted-foreground">
-            The XML file was loaded, but no recognizable event entries were found.
-          </p>
-        </div>
-      ) : null}
+          <section className="rounded-card border border-stroke bg-panel p-4 text-sm text-muted-foreground">
+            <p className="font-semibold text-foreground">Delta since previous snapshot</p>
+            <p className="mt-1 text-xs">Source: {data.source.toUpperCase()}</p>
+            <p className="mt-1">
+              Added: <span className="font-semibold text-foreground">{data.changesSince.added.length}</span> | Removed:{' '}
+              <span className="font-semibold text-foreground">{data.changesSince.removed.length}</span> | Changed:{' '}
+              <span className="font-semibold text-foreground">{data.changesSince.changed.length}</span>
+            </p>
+            <p className="mt-1 text-xs">Last refreshed {formatDateTime(data.generatedAt)}.</p>
+          </section>
 
-      {!loading && data && data.events.length > 0 ? (
-        <section className="overflow-hidden rounded-card border border-stroke bg-panel">
-          <div className="grid grid-cols-[1.6fr_1.2fr_1.2fr_1fr] gap-3 border-b border-stroke px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            <span>Event</span>
-            <span>Start</span>
-            <span>End</span>
-            <span>Location</span>
-          </div>
+          {data.events.length === 0 ? (
+            <div className="rounded-card border border-stroke bg-panel p-8 text-center">
+              <p className="text-lg font-semibold text-foreground">No events in range</p>
+              <p className="mt-2 text-sm text-muted-foreground">Try a broader range or verify your calendar source settings.</p>
+            </div>
+          ) : (
+            <section className="overflow-hidden rounded-card border border-stroke bg-panel">
+              <div className="grid grid-cols-[1.5fr_1fr_1fr_2fr] gap-3 border-b border-stroke px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                <span>Event</span>
+                <span>With</span>
+                <span>Time</span>
+                <span>Agenda Preview</span>
+              </div>
 
-          <ul className="divide-y divide-stroke">
-            {data.events.map((event) => (
-              <li key={event.id} className="grid grid-cols-[1.6fr_1.2fr_1.2fr_1fr] gap-3 px-4 py-3 text-sm">
-                <div>
-                  <p className="font-semibold text-foreground">{event.title}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">Source: &lt;{event.source_tag}&gt;</p>
-                </div>
-                <span className="text-muted-foreground">{formatDateTime(event.start_at ?? event.start_raw)}</span>
-                <span className="text-muted-foreground">{formatDateTime(event.end_at ?? event.end_raw)}</span>
-                <span className="text-muted-foreground">{event.location ?? "—"}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
+              <ul className="divide-y divide-stroke">
+                {data.events.map((event) => (
+                  <li key={`${event.external_event_id}-${event.start_at}`} className="grid grid-cols-[1.5fr_1fr_1fr_2fr] gap-3 px-4 py-3 text-sm">
+                    <div>
+                      <p className="font-semibold text-foreground">{event.title}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">{event.is_all_day ? 'All day' : 'Timed event'}</p>
+                    </div>
+
+                    <span className="text-muted-foreground">{event.with_display.length > 0 ? event.with_display.join(', ') : '—'}</span>
+
+                    <span className="text-muted-foreground">
+                      {formatDateTime(event.start_at)} - {formatDateTime(event.end_at)}
+                    </span>
+
+                    <span className="text-muted-foreground">{event.body_scrubbed_preview ?? '—'}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </>
       ) : null}
     </div>
   );

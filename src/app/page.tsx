@@ -25,6 +25,12 @@ interface TodayData {
   capacity: CapacityResult;
 }
 
+interface CalendarStatsResponse {
+  stats?: {
+    busyMinutes?: number;
+  };
+}
+
 function taskToCardData(task: TaskWithImplementation, dueState?: TaskCardData["dueState"]): TaskCardData {
   return {
     id: task.id,
@@ -41,6 +47,10 @@ function taskToCardData(task: TaskWithImplementation, dueState?: TaskCardData["d
 async function fetchTaskPage(params: Record<string, string>): Promise<TaskWithImplementation[]> {
   const searchParams = new URLSearchParams(params);
   const response = await fetch(`/api/tasks?${searchParams.toString()}`, { cache: "no-store" });
+
+  if (response.status === 401) {
+    throw new Error("Authentication required. Sign in at /login.");
+  }
 
   if (!response.ok) {
     throw new Error("Failed to fetch tasks");
@@ -72,6 +82,32 @@ async function fetchAllTaskPages(baseParams: Record<string, string>): Promise<Ta
   return allTasks;
 }
 
+function toDateString(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+async function fetchTodayMeetingMinutes(): Promise<number> {
+  const today = toDateString(new Date());
+  const response = await fetch(`/api/calendar?rangeStart=${today}&rangeEnd=${today}`, { cache: "no-store" });
+
+  if (response.status === 401) {
+    throw new Error("Authentication required. Sign in at /login.");
+  }
+
+  if (!response.ok) {
+    return 0;
+  }
+
+  const payload = (await response.json()) as CalendarStatsResponse;
+  const meetingMinutes = payload.stats?.busyMinutes;
+
+  if (typeof meetingMinutes !== "number" || !Number.isFinite(meetingMinutes) || meetingMinutes < 0) {
+    return 0;
+  }
+
+  return meetingMinutes;
+}
+
 function getDueState(dueAt: string | null, now: Date): TaskCardData["dueState"] {
   if (!dueAt) {
     return null;
@@ -92,9 +128,10 @@ function getDueState(dueAt: string | null, now: Date): TaskCardData["dueState"] 
 }
 
 async function fetchTodayData(): Promise<TodayData> {
-  const [allTasks, needsReviewTasks] = await Promise.all([
+  const [allTasks, needsReviewTasks, meetingMinutes] = await Promise.all([
     fetchAllTaskPages({}),
     fetchAllTaskPages({ needs_review: "true" }),
+    fetchTodayMeetingMinutes().catch(() => 0),
   ]);
 
   // Sort by priority_score descending for top 3
@@ -146,7 +183,7 @@ async function fetchTodayData(): Promise<TodayData> {
     ...t,
     stakeholder_mentions: t.stakeholder_mentions || [],
   }));
-  const capacity = calculateCapacity(tasksForCapacity, new Set(topThree.map((t) => t.id)));
+  const capacity = calculateCapacity(tasksForCapacity, new Set(topThree.map((t) => t.id)), meetingMinutes);
 
   return {
     topThree,

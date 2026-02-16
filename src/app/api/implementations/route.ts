@@ -1,49 +1,50 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 
-function getSupabaseClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!url || !key) {
-    throw new Error('Missing Supabase environment variables');
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
   }
 
-  return createClient(url, key);
+  return value.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean);
 }
 
 // GET /api/implementations - List all implementations
 export async function GET(request: NextRequest) {
   try {
-    const supabase = getSupabaseClient();
+    const auth = await requireAuthenticatedRoute(request);
+    if (auth.response || !auth.context) {
+      return auth.response as NextResponse;
+    }
+
+    const { supabase, userId } = auth.context;
     const { searchParams } = new URL(request.url);
 
     const withStats = searchParams.get('with_stats') === 'true';
 
     if (withStats) {
-      // Fetch implementations with blocker counts and next action
       const { data: implementations, error } = await supabase
         .from('implementations')
         .select('*')
+        .eq('user_id', userId)
         .order('name');
 
       if (error) throw error;
 
-      // Fetch blocker counts and next actions for each
       const enriched = await Promise.all(
         (implementations || []).map(async (impl) => {
-          // Get blocker count
           const { count: blockersCount } = await supabase
             .from('tasks')
             .select('*', { count: 'exact', head: true })
+            .eq('user_id', userId)
             .eq('implementation_id', impl.id)
             .eq('blocker', true)
             .neq('status', 'Done');
 
-          // Get next action (highest priority open task)
           const { data: nextAction } = await supabase
             .from('tasks')
             .select('id, title')
+            .eq('user_id', userId)
             .eq('implementation_id', impl.id)
             .neq('status', 'Done')
             .order('priority_score', { ascending: false })
@@ -61,10 +62,10 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(enriched);
     }
 
-    // Simple list without stats
     const { data, error } = await supabase
       .from('implementations')
       .select('id, name, phase, rag')
+      .eq('user_id', userId)
       .order('name');
 
     if (error) throw error;
@@ -79,29 +80,31 @@ export async function GET(request: NextRequest) {
 // POST /api/implementations - Create a new implementation
 export async function POST(request: NextRequest) {
   try {
-    const supabase = getSupabaseClient();
-    const body = await request.json();
+    const auth = await requireAuthenticatedRoute(request);
+    if (auth.response || !auth.context) {
+      return auth.response as NextResponse;
+    }
 
-    if (!body.name || !body.user_id) {
-      return NextResponse.json(
-        { error: 'name and user_id are required' },
-        { status: 400 }
-      );
+    const { supabase, userId } = auth.context;
+    const body = (await request.json()) as Record<string, unknown>;
+
+    if (typeof body.name !== 'string' || body.name.trim().length === 0) {
+      return NextResponse.json({ error: 'name is required' }, { status: 400 });
     }
 
     const { data, error } = await supabase
       .from('implementations')
       .insert({
-        user_id: body.user_id,
-        name: body.name,
-        phase: body.phase || 'Intake',
-        rag: body.rag || 'Green',
-        target_date: body.target_date || null,
-        status_summary: body.status_summary || '',
-        next_milestone: body.next_milestone || '',
-        next_milestone_date: body.next_milestone_date || null,
-        stakeholders: body.stakeholders || [],
-        keywords: body.keywords || [],
+        user_id: userId,
+        name: body.name.trim(),
+        phase: typeof body.phase === 'string' ? body.phase : 'Intake',
+        rag: typeof body.rag === 'string' ? body.rag : 'Green',
+        target_date: typeof body.target_date === 'string' ? body.target_date : null,
+        status_summary: typeof body.status_summary === 'string' ? body.status_summary : '',
+        next_milestone: typeof body.next_milestone === 'string' ? body.next_milestone : '',
+        next_milestone_date: typeof body.next_milestone_date === 'string' ? body.next_milestone_date : null,
+        stakeholders: toStringArray(body.stakeholders),
+        keywords: toStringArray(body.keywords),
       })
       .select()
       .single();

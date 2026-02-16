@@ -7,6 +7,9 @@ import type { ImplementationSummary, TaskStatus, TaskUpdatePayload, TaskWithImpl
 
 async function fetchTriageTasks(): Promise<TaskWithImplementation[]> {
   const response = await fetch("/api/tasks?needs_review=true", { cache: "no-store" });
+  if (response.status === 401) {
+    throw new Error("Authentication required. Sign in at /login.");
+  }
   if (!response.ok) {
     throw new Error("Failed to fetch triage tasks");
   }
@@ -15,6 +18,9 @@ async function fetchTriageTasks(): Promise<TaskWithImplementation[]> {
 
 async function fetchImplementations(): Promise<ImplementationSummary[]> {
   const response = await fetch("/api/implementations", { cache: "no-store" });
+  if (response.status === 401) {
+    throw new Error("Authentication required. Sign in at /login.");
+  }
   if (!response.ok) {
     throw new Error("Failed to fetch implementations");
   }
