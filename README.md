@@ -55,6 +55,8 @@ Apply Supabase SQL migrations from `supabase/migrations/`:
 
 - `001_initial_schema.sql`
 - `002_calendar_schema.sql`
+- `003_task_comments_dependencies.sql`
+- `004_add_task_type_task.sql`
 
 ## Validation
 

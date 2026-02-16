@@ -21,6 +21,7 @@ interface ExtractionResult {
 
 // Default time estimates by task type
 const DEFAULT_ESTIMATES: Record<TaskType, number> = {
+  Task: 30,
   Ticket: 30,
   MeetingPrep: 60,
   FollowUp: 30,
@@ -41,7 +42,7 @@ Return ONLY valid JSON with this exact schema:
 {
   "title": "string (verb phrase, e.g., 'Review module design for X')",
   "suggested_checklist": ["string array of action items"],
-  "task_type": "Ticket|MeetingPrep|FollowUp|Admin|Build",
+  "task_type": "Task|Ticket|MeetingPrep|FollowUp|Admin|Build",
   "estimated_minutes": 15|30|60|90|120,
   "due_guess_iso": "YYYY-MM-DD or null",
   "due_confidence": 0.0-1.0,
@@ -86,7 +87,7 @@ function parseExtractionResponse(responseText: string): LlmExtraction {
   const parsed = JSON.parse(jsonMatch[0]);
 
   // Validate and normalize the response
-  const taskType = ['Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build'].includes(parsed.task_type)
+  const taskType = ['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build'].includes(parsed.task_type)
     ? parsed.task_type
     : 'Admin';
 

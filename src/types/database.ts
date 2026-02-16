@@ -1,5 +1,6 @@
 export type TaskStatus = "Next" | "Scheduled" | "Waiting" | "Done";
-export type TaskType = "Ticket" | "MeetingPrep" | "FollowUp" | "Admin" | "Build";
+export type TaskType = "Task" | "Ticket" | "MeetingPrep" | "FollowUp" | "Admin" | "Build";
+export type CommentSource = "manual" | "system" | "llm";
 export type ImplPhase =
   | "Intake"
   | "Discovery"
@@ -69,6 +70,42 @@ export interface TaskChecklistItem {
   text: string;
   is_done: boolean;
   sort_order: number;
+}
+
+export interface TaskComment {
+  id: string;
+  user_id: string;
+  task_id: string;
+  content: string;
+  source: CommentSource;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskDependency {
+  id: string;
+  user_id: string;
+  blocker_task_id: string;
+  blocked_task_id: string;
+  created_at: string;
+}
+
+// Dependency with joined task info for display
+export interface TaskDependencyWithTask extends TaskDependency {
+  blocker_task?: {
+    id: string;
+    title: string;
+    status: TaskStatus;
+    blocker: boolean;
+    implementation?: { id: string; name: string } | null;
+  };
+  blocked_task?: {
+    id: string;
+    title: string;
+    status: TaskStatus;
+    blocker: boolean;
+    implementation?: { id: string; name: string } | null;
+  };
 }
 
 export interface CapacityConfig {

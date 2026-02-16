@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { recalculateTaskPriority } from '@/lib/priority';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
+import type { TaskType } from '@/types/database';
+
+const VALID_TASK_TYPES: TaskType[] = ['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build'];
+
+function isValidTaskType(value: string): value is TaskType {
+  return VALID_TASK_TYPES.includes(value as TaskType);
+}
 
 function asStringOrNull(value: unknown): string | null {
   if (typeof value !== 'string') {
@@ -85,6 +92,8 @@ export async function PATCH(
       const value = body[field];
       if (field === 'implementation_id') {
         updates[field] = asStringOrNull(value);
+      } else if (field === 'waiting_on') {
+        updates[field] = asStringOrNull(value);
       } else if (field === 'title' && typeof value === 'string') {
         updates[field] = value.trim();
       } else {
@@ -94,6 +103,20 @@ export async function PATCH(
 
     if (Object.keys(updates).length === 0) {
       return NextResponse.json({ error: 'No valid fields to update' }, { status: 400 });
+    }
+
+    if ('title' in updates && (typeof updates.title !== 'string' || updates.title.length === 0)) {
+      return NextResponse.json({ error: 'title cannot be empty' }, { status: 400 });
+    }
+
+    if ('task_type' in updates) {
+      const taskType = updates.task_type;
+      if (typeof taskType !== 'string' || !isValidTaskType(taskType)) {
+        return NextResponse.json(
+          { error: `Invalid task_type. Must be one of: ${VALID_TASK_TYPES.join(', ')}` },
+          { status: 400 }
+        );
+      }
     }
 
     const implementationId = updates.implementation_id;

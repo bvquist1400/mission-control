@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 
 const navItems = [
   { href: "/", label: "Today", hint: "Daily operating view" },
+  { href: "/backlog", label: "Backlog", hint: "All tasks with filters and edits" },
   { href: "/triage", label: "Triage", hint: "Assign, estimate, schedule" },
   { href: "/implementations", label: "Implementations", hint: "Portfolio health and updates" },
   { href: "/calendar", label: "Calendar", hint: "Imported schedule metadata" },

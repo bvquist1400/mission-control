@@ -1,5 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
+import type { TaskStatus, TaskType, EstimateSource } from '@/types/database';
+
+const VALID_STATUSES: TaskStatus[] = ['Next', 'Scheduled', 'Waiting', 'Done'];
+const VALID_TASK_TYPES: TaskType[] = ['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build'];
+const VALID_ESTIMATE_SOURCES: EstimateSource[] = ['default', 'llm', 'manual'];
+
+function isValidStatus(value: string): value is TaskStatus {
+  return VALID_STATUSES.includes(value as TaskStatus);
+}
+
+function isValidTaskType(value: string): value is TaskType {
+  return VALID_TASK_TYPES.includes(value as TaskType);
+}
+
+function isValidEstimateSource(value: string): value is EstimateSource {
+  return VALID_ESTIMATE_SOURCES.includes(value as EstimateSource);
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
 
 function toStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) {
@@ -99,6 +120,53 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'title is required' }, { status: 400 });
     }
 
+    // Validate status if provided
+    const statusInput = asStringOrNull(body.status);
+    let status: TaskStatus = 'Next';
+    if (statusInput) {
+      if (!isValidStatus(statusInput)) {
+        return NextResponse.json(
+          { error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}` },
+          { status: 400 }
+        );
+      }
+      status = statusInput;
+    }
+
+    // Validate task_type if provided
+    const taskTypeInput = asStringOrNull(body.task_type);
+    let taskType: TaskType = 'Admin';
+    if (taskTypeInput) {
+      if (!isValidTaskType(taskTypeInput)) {
+        return NextResponse.json(
+          { error: `Invalid task_type. Must be one of: ${VALID_TASK_TYPES.join(', ')}` },
+          { status: 400 }
+        );
+      }
+      taskType = taskTypeInput;
+    }
+
+    // Validate estimate_source if provided
+    const estimateSourceInput = asStringOrNull(body.estimate_source);
+    let estimateSource: EstimateSource = 'default';
+    if (estimateSourceInput) {
+      if (!isValidEstimateSource(estimateSourceInput)) {
+        return NextResponse.json(
+          { error: `Invalid estimate_source. Must be one of: ${VALID_ESTIMATE_SOURCES.join(', ')}` },
+          { status: 400 }
+        );
+      }
+      estimateSource = estimateSourceInput;
+    }
+
+    // Validate and clamp numeric values
+    const priorityScore = typeof body.priority_score === 'number'
+      ? clampNumber(Math.round(body.priority_score), 0, 100)
+      : 50;
+    const estimatedMinutes = typeof body.estimated_minutes === 'number'
+      ? clampNumber(Math.round(body.estimated_minutes), 1, 480)
+      : 30;
+
     const implementationId = asStringOrNull(body.implementation_id);
     if (implementationId) {
       const { data: implementation, error: implementationError } = await supabase
@@ -113,17 +181,32 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Validate blocked_by_task_id if provided (for creating with dependency)
+    const blockedByTaskId = asStringOrNull(body.blocked_by_task_id);
+    if (blockedByTaskId) {
+      const { data: blockerTask, error: blockerError } = await supabase
+        .from('tasks')
+        .select('id')
+        .eq('id', blockedByTaskId)
+        .eq('user_id', userId)
+        .single();
+
+      if (blockerError || !blockerTask) {
+        return NextResponse.json({ error: 'blocked_by_task_id is invalid' }, { status: 400 });
+      }
+    }
+
     const { data, error } = await supabase
       .from('tasks')
       .insert({
         user_id: userId,
         title: body.title.trim(),
         implementation_id: implementationId,
-        status: asStringOrNull(body.status) || 'Next',
-        task_type: asStringOrNull(body.task_type) || 'Admin',
-        priority_score: typeof body.priority_score === 'number' ? body.priority_score : 50,
-        estimated_minutes: typeof body.estimated_minutes === 'number' ? body.estimated_minutes : 30,
-        estimate_source: asStringOrNull(body.estimate_source) || 'default',
+        status,
+        task_type: taskType,
+        priority_score: priorityScore,
+        estimated_minutes: estimatedMinutes,
+        estimate_source: estimateSource,
         due_at: asStringOrNull(body.due_at),
         needs_review: typeof body.needs_review === 'boolean' ? body.needs_review : false,
         blocker: typeof body.blocker === 'boolean' ? body.blocker : false,
@@ -137,6 +220,26 @@ export async function POST(request: NextRequest) {
 
     if (error) {
       throw error;
+    }
+
+    // Create dependency if blocked_by_task_id was provided
+    if (blockedByTaskId && data) {
+      await supabase.from('task_dependencies').insert({
+        user_id: userId,
+        blocker_task_id: blockedByTaskId,
+        blocked_task_id: data.id,
+      });
+    }
+
+    // Create initial comment if provided (useful for "blocked - reason" workflow)
+    const initialComment = asStringOrNull(body.initial_comment);
+    if (initialComment && data) {
+      await supabase.from('task_comments').insert({
+        user_id: userId,
+        task_id: data.id,
+        content: initialComment,
+        source: 'manual',
+      });
     }
 
     return NextResponse.json(data, { status: 201 });
