@@ -41,6 +41,13 @@ Primary variables are defined in `.env.example`.
 - `PLANNER_ENABLE_CRITICAL_EXCEPTION=false`
 - `PLANNER_CRITICAL_EXCEPTION_THRESHOLD=90`
 
+### Focus directive API
+
+- `GET /api/focus`: returns current active focus directive (`active`) and optional fallback `note`
+- `POST /api/focus`: creates a focus directive (supports `implementation`, `stakeholder`, `task_type`, `query` scopes)
+- `PATCH /api/focus/:id`: updates an existing directive (including activation/deactivation)
+- `POST /api/focus/clear`: clears active directive(s) for the current user
+
 ## Calendar Privacy Model
 
 - Calendar exports in `data/calendar/` are ignored by git.

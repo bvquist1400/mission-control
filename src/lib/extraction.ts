@@ -38,17 +38,37 @@ ENTERPRISE-SAFETY RULES:
 - Extract only metadata: actions, checklist steps, IDs/URLs, due hints, stakeholders.
 - If unsure, set confidence low and set needs_review=true.
 
+EMAIL PARSING RULES:
+- Emails may be FORWARDED. Look for "From:", "Sent:", or "---Original Message---" in the body to find the ORIGINAL sender.
+- If subject starts with "Fw:" or "Fwd:", parse the original subject from the forwarded content.
+- Ignore email signatures, confidentiality disclaimers, and boilerplate footers.
+
+SERVICENOW TICKET RULES:
+- Extract the ticket ID (e.g., IMS0101522, INC0012345).
+- Use the "Short description:" field as the BASIS for the title, NOT the subject line.
+- Title format: "[TICKET_ID] Short description summary" (e.g., "IMS0101522: Reset Epic login for Dr. Martinez")
+- The "Opened for:" field contains the requester - add them to stakeholder_mentions.
+- Generate checklist items SPECIFIC to the ticket's short description (e.g., for a login issue: "Verify user account status", "Reset credentials", "Confirm access restored").
+- If short description says "validation" or "test", set task_type to Admin and priority_score to 20 or lower.
+
+TASK TYPE HINTS:
+- ServiceNow Interactions/Incidents → Ticket (unless it's validation/test → Admin)
+- "Please review" or approval requests → Task
+- Calendar invites or meeting prep → MeetingPrep
+- "Following up" or reminders → FollowUp
+- Routine admin (close ticket, validation) → Admin with LOW priority (20 or less)
+
 Return ONLY valid JSON with this exact schema:
 {
-  "title": "string (verb phrase, e.g., 'Review module design for X')",
-  "suggested_checklist": ["string array of action items"],
+  "title": "string (for tickets: '[ID]: brief description from Short description field', for others: verb phrase)",
+  "suggested_checklist": ["string array - SPECIFIC action items based on the actual request, not generic steps"],
   "task_type": "Task|Ticket|MeetingPrep|FollowUp|Admin|Build",
   "estimated_minutes": 15|30|60|90|120,
   "due_guess_iso": "YYYY-MM-DD or null",
   "due_confidence": 0.0-1.0,
   "implementation_guess": "string or null",
   "implementation_confidence": 0.0-1.0,
-  "stakeholder_mentions": ["string array"],
+  "stakeholder_mentions": ["string array - include original sender and any mentioned people"],
   "priority_score": 0-100,
   "needs_review": true|false,
   "blocker": true|false,
@@ -67,7 +87,7 @@ function buildExtractionPrompt(input: ExtractionInput): string {
 Subject: ${input.subject}
 From: ${input.from_name || 'Unknown'} <${input.from_email || 'unknown'}>
 Received: ${input.received_at}
-Body snippet (transient, do not quote): ${input.body_snippet.slice(0, 500)}
+Body snippet (transient, do not quote): ${input.body_snippet.slice(0, 2000)}
 
 Known implementations: ${input.implementation_names.join(', ') || 'None'}
 Known keywords per implementation:

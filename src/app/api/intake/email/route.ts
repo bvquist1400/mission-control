@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { SupabaseClient } from '@supabase/supabase-js';
+import { SupabaseClient, createClient } from '@supabase/supabase-js';
 import { createHash } from 'crypto';
 import { extractTaskMetadata } from '@/lib/extraction';
 import {
@@ -7,6 +7,39 @@ import {
   calculateFinalPriorityScore,
 } from '@/lib/priority';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
+
+// API key authentication for n8n/external integrations
+function validateApiKey(request: NextRequest): { valid: boolean; userId: string | null } {
+  const apiKey = request.headers.get('x-api-key');
+  const expectedKey = process.env.N8N_INTAKE_API_KEY;
+  const defaultUserId = process.env.DEFAULT_USER_ID;
+
+  if (!apiKey || !expectedKey) {
+    return { valid: false, userId: null };
+  }
+
+  // Constant-time comparison to prevent timing attacks
+  if (apiKey.length !== expectedKey.length) {
+    return { valid: false, userId: null };
+  }
+
+  let mismatch = 0;
+  for (let i = 0; i < apiKey.length; i++) {
+    mismatch |= apiKey.charCodeAt(i) ^ expectedKey.charCodeAt(i);
+  }
+
+  if (mismatch !== 0) {
+    return { valid: false, userId: null };
+  }
+
+  return { valid: true, userId: defaultUserId || null };
+}
+
+function createServiceClient(): SupabaseClient {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+  return createClient(supabaseUrl, serviceRoleKey);
+}
 
 interface EmailIntakePayload {
   subject: string;
@@ -50,13 +83,31 @@ async function logIngestionEvent(
 }
 
 // POST /api/intake/email - Process incoming Action Intake email
+// Supports two auth methods:
+// 1. Supabase session (browser auth)
+// 2. X-API-Key header (n8n/external integrations)
 export async function POST(request: NextRequest) {
+  let supabase: SupabaseClient;
+  let userId: string;
+
+  // Try session auth first
   const auth = await requireAuthenticatedRoute(request);
-  if (auth.response || !auth.context) {
-    return auth.response as NextResponse;
+  if (auth.context) {
+    supabase = auth.context.supabase;
+    userId = auth.context.userId;
+  } else {
+    // Fall back to API key auth for n8n
+    const apiKeyAuth = validateApiKey(request);
+    if (!apiKeyAuth.valid || !apiKeyAuth.userId) {
+      return NextResponse.json(
+        { error: 'Authentication required. Provide session cookie or X-API-Key header.' },
+        { status: 401 }
+      );
+    }
+    supabase = createServiceClient();
+    userId = apiKeyAuth.userId;
   }
 
-  const { supabase, userId } = auth.context;
   let inboxItemId: string | null = null;
 
   try {
@@ -168,12 +219,24 @@ export async function POST(request: NextRequest) {
 
     let implementationId: string | null = null;
     if (extraction.implementation_guess && extraction.implementation_confidence >= 0.7) {
-      const { data: impl } = await supabase
+      // First try exact match
+      let { data: impl } = await supabase
         .from('implementations')
-        .select('id')
+        .select('id, name')
         .eq('user_id', userId)
         .ilike('name', `%${extraction.implementation_guess}%`)
-        .single();
+        .maybeSingle();
+
+      // If no match, try reverse: check if guess contains any implementation name
+      if (!impl) {
+        const { data: allImpls } = await supabase
+          .from('implementations')
+          .select('id, name')
+          .eq('user_id', userId);
+
+        const guessLower = extraction.implementation_guess.toLowerCase();
+        impl = allImpls?.find((i) => guessLower.includes(i.name.toLowerCase())) || null;
+      }
 
       implementationId = impl?.id || null;
     }

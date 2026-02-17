@@ -3,7 +3,7 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 
 function normalizeNextPath(input: string | null): string {
   if (!input || !input.startsWith('/')) {
-    return '/calendar';
+    return '/';
   }
 
   return input;

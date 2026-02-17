@@ -43,6 +43,13 @@ a {
   color: inherit;
 }
 
+/* Native select popups can render on light OS menus; keep option text legible. */
+select option,
+select optgroup {
+  color: #111827;
+  background-color: #ffffff;
+}
+
 ::selection {
   background: color-mix(in oklab, var(--accent) 40%, black);
 }

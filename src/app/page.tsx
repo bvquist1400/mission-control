@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { TaskCard, type TaskCardData } from "@/components/tasks/TaskCard";
 import { CapacityMeter } from "@/components/today/CapacityMeter";
+import { FocusStatusBar } from "@/components/today/FocusStatusBar";
 import { PlannerCard } from "@/components/today/PlannerCard";
 import type { TaskWithImplementation, CapacityResult } from "@/types/database";
 import { calculateCapacity } from "@/lib/capacity";
@@ -239,6 +240,18 @@ export default function TodayPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [completingIds, setCompletingIds] = useState<Set<string>>(new Set());
+  const [, setActiveFocusDirectiveId] = useState<string | null>(null);
+  const [plannerReplanSignal, setPlannerReplanSignal] = useState(0);
+
+  const handleFocusDirectiveChange = useCallback((directiveId: string | null) => {
+    setActiveFocusDirectiveId((current) => {
+      if (current === directiveId) {
+        return current;
+      }
+      setPlannerReplanSignal((value) => value + 1);
+      return directiveId;
+    });
+  }, []);
 
   const today = new Intl.DateTimeFormat("en-US", {
     weekday: "long",
@@ -352,7 +365,9 @@ export default function TodayPage() {
         </div>
       )}
 
-      <PlannerCard />
+      <FocusStatusBar onDirectiveChange={handleFocusDirectiveChange} />
+
+      <PlannerCard replanSignal={plannerReplanSignal} />
 
       <section className="space-y-3">
         <h2 className="text-lg font-semibold text-foreground">Top 3 Today</h2>
