@@ -36,6 +36,11 @@ Primary variables are defined in `.env.example`.
 - `CALENDAR_STORE_BODY=false` (default privacy mode)
 - `ENABLE_CALENDAR_ENRICHMENT=false` (reserved)
 
+### Planner settings
+
+- `PLANNER_ENABLE_CRITICAL_EXCEPTION=false`
+- `PLANNER_CRITICAL_EXCEPTION_THRESHOLD=90`
+
 ## Calendar Privacy Model
 
 - Calendar exports in `data/calendar/` are ignored by git.
@@ -57,6 +62,7 @@ Apply Supabase SQL migrations from `supabase/migrations/`:
 - `002_calendar_schema.sql`
 - `003_task_comments_dependencies.sql`
 - `004_add_task_type_task.sql`
+- `005_focus_planner_brain.sql`
 
 ## Validation
 
@@ -65,6 +71,7 @@ Run checks:
 ```bash
 npm run lint
 npm run build
+npm run test:planner-scoring
 npm run test:calendar-sanitize
 ```
 

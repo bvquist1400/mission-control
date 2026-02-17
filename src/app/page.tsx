@@ -5,6 +5,7 @@ import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { TaskCard, type TaskCardData } from "@/components/tasks/TaskCard";
 import { CapacityMeter } from "@/components/today/CapacityMeter";
+import { PlannerCard } from "@/components/today/PlannerCard";
 import type { TaskWithImplementation, CapacityResult } from "@/types/database";
 import { calculateCapacity } from "@/lib/capacity";
 
@@ -350,6 +351,8 @@ export default function TodayPage() {
           {error}
         </div>
       )}
+
+      <PlannerCard />
 
       <section className="space-y-3">
         <h2 className="text-lg font-semibold text-foreground">Top 3 Today</h2>

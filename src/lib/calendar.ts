@@ -4,6 +4,47 @@ import path from 'node:path';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { DEFAULT_WORKDAY_CONFIG, WorkdayConfig } from '@/lib/workday';
 
+// Windows timezone names to IANA timezone names mapping
+// Microsoft Outlook/Exchange use Windows timezone IDs in ICS exports
+const WINDOWS_TO_IANA_TIMEZONE: Record<string, string> = {
+  'Eastern Standard Time': 'America/New_York',
+  'Central Standard Time': 'America/Chicago',
+  'Mountain Standard Time': 'America/Denver',
+  'Pacific Standard Time': 'America/Los_Angeles',
+  'Alaska Standard Time': 'America/Anchorage',
+  'Hawaiian Standard Time': 'Pacific/Honolulu',
+  'Atlantic Standard Time': 'America/Halifax',
+  'GMT Standard Time': 'Europe/London',
+  'W. Europe Standard Time': 'Europe/Berlin',
+  'Central European Standard Time': 'Europe/Warsaw',
+  'Romance Standard Time': 'Europe/Paris',
+  'Central Europe Standard Time': 'Europe/Budapest',
+  'E. Europe Standard Time': 'Europe/Chisinau',
+  'FLE Standard Time': 'Europe/Kiev',
+  'GTB Standard Time': 'Europe/Bucharest',
+  'Russian Standard Time': 'Europe/Moscow',
+  'India Standard Time': 'Asia/Kolkata',
+  'China Standard Time': 'Asia/Shanghai',
+  'Tokyo Standard Time': 'Asia/Tokyo',
+  'Korea Standard Time': 'Asia/Seoul',
+  'AUS Eastern Standard Time': 'Australia/Sydney',
+  'E. Australia Standard Time': 'Australia/Brisbane',
+  'Cen. Australia Standard Time': 'Australia/Adelaide',
+  'W. Australia Standard Time': 'Australia/Perth',
+  'New Zealand Standard Time': 'Pacific/Auckland',
+  'UTC': 'UTC',
+  'Coordinated Universal Time': 'UTC',
+};
+
+function normalizeTimezoneName(tzid: string): string {
+  // If it's already an IANA timezone, return as-is
+  if (tzid.includes('/') || tzid === 'UTC') {
+    return tzid;
+  }
+  // Map Windows timezone names to IANA
+  return WINDOWS_TO_IANA_TIMEZONE[tzid] ?? tzid;
+}
+
 export type CalendarSource = 'local' | 'ical' | 'none';
 
 export interface CalendarRangeInput {
@@ -400,7 +441,8 @@ function parseIcsDateTime(
   defaultTimeZone: string
 ): { iso: string | null; isAllDay: boolean } {
   const value = rawValue.trim();
-  const tzid = params.TZID || defaultTimeZone;
+  const rawTzid = params.TZID || defaultTimeZone;
+  const tzid = normalizeTimezoneName(rawTzid);
   const valueType = params.VALUE?.toUpperCase();
 
   if (valueType === 'DATE' || /^\d{8}$/.test(value)) {

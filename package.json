@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test:planner-scoring": "node --experimental-strip-types scripts/test-planner-scoring.mjs",
     "test:calendar-sanitize": "node scripts/test-calendar-sanitizer.mjs",
     "test:calendar-api": "node scripts/test-calendar-api-contract.mjs"
   },
