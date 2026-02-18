@@ -99,7 +99,7 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
   const [inlineRowActive, setInlineRowActive] = useState(false);
   const [inlineTitle, setInlineTitle] = useState("");
   const [inlineStatus, setInlineStatus] = useState<TaskStatus>("Backlog");
-  const [inlineEstimate, setInlineEstimate] = useState<number>(30);
+  const [inlineEstimate, setInlineEstimate] = useState<number>(15);
   const [addingTask, setAddingTask] = useState(false);
   const [inlineError, setInlineError] = useState<string | null>(null);
 
@@ -285,7 +285,7 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
 
       setInlineTitle("");
       setInlineStatus("Backlog");
-      setInlineEstimate(30);
+      setInlineEstimate(15);
       setInlineRowActive(false);
     } catch (err) {
       // Revert optimistic update
@@ -506,7 +506,7 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
             </select>
 
             <div className="flex gap-1">
-              {[15, 30, 60, 90].map((min) => (
+              {[5, 15, 30, 60, 90].map((min) => (
                 <button
                   key={min}
                   type="button"

@@ -12,6 +12,7 @@ export const LLM_PREFERENCE_FEATURES: LlmPreferenceFeature[] = [
   "global_default",
   "briefing_narrative",
   "intake_extraction",
+  "quick_capture",
 ];
 
 interface LlmModelCatalogDbRow {
@@ -134,6 +135,7 @@ export function preferenceListToMap(
     global_default: null,
     briefing_narrative: null,
     intake_extraction: null,
+    quick_capture: null,
   };
 
   for (const preference of preferences) {

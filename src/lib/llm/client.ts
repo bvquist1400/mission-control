@@ -74,6 +74,34 @@ const DEFAULT_MODEL_CANDIDATES: Record<LlmFeature, ResolvedLlmModel[]> = {
       source: "default",
     },
   ],
+  quick_capture: [
+    {
+      id: "default-openai-gpt-4o-mini",
+      provider: "openai",
+      model_id: "gpt-4o-mini",
+      display_name: "OpenAI GPT-4o mini (Default)",
+      input_price_per_1m_usd: null,
+      output_price_per_1m_usd: null,
+      pricing_tier: "standard",
+      enabled: true,
+      pricing_is_placeholder: true,
+      sort_order: 0,
+      source: "default",
+    },
+    {
+      id: "default-anthropic-claude-3-haiku-20240307",
+      provider: "anthropic",
+      model_id: "claude-3-haiku-20240307",
+      display_name: "Anthropic Claude 3 Haiku (Default)",
+      input_price_per_1m_usd: null,
+      output_price_per_1m_usd: null,
+      pricing_tier: null,
+      enabled: true,
+      pricing_is_placeholder: true,
+      sort_order: 1,
+      source: "default",
+    },
+  ],
 };
 
 function getProviderApiKey(provider: LlmProvider): string | null {

@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type LlmProvider = "openai" | "anthropic";
-export type LlmFeature = "briefing_narrative" | "intake_extraction";
+export type LlmFeature = "briefing_narrative" | "intake_extraction" | "quick_capture";
 export type LlmPreferenceFeature = LlmFeature | "global_default";
 export type LlmPricingTier = "standard" | "flex" | "priority";
 export type LlmStatus = "success" | "error" | "timeout" | "cache_hit" | "skipped_unconfigured";

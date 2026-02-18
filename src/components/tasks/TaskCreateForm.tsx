@@ -51,14 +51,19 @@ const TASK_TYPES: { value: TaskType; label: string }[] = [
   { value: "Build", label: "Build" },
 ];
 
-function createInitialDraft(defaultNeedsReview: boolean): TaskDraft {
+function findAdminImplId(implementations: ImplementationSummary[]): string {
+  const match = implementations.find((impl) => impl.name.toLowerCase() === "admin");
+  return match?.id ?? "";
+}
+
+function createInitialDraft(defaultNeedsReview: boolean, implementations: ImplementationSummary[]): TaskDraft {
   return {
     title: "",
-    implementationId: "",
+    implementationId: findAdminImplId(implementations),
     estimatedMinutes: 30,
     dueDate: "",
     status: "Backlog",
-    taskType: "Admin",
+    taskType: "Task",
     blocker: false,
     sendToTriage: defaultNeedsReview,
     waitingOn: "",
@@ -96,7 +101,7 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
   const [isOpen, setIsOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useState<TaskDraft>(() => createInitialDraft(defaultNeedsReview));
+  const [draft, setDraft] = useState<TaskDraft>(() => createInitialDraft(defaultNeedsReview, implementations));
 
   // Quick Capture state
   const [activeTab, setActiveTab] = useState<ActiveTab>("manual");
@@ -145,7 +150,7 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
 
       const createdTask = (await response.json()) as TaskWithImplementation;
       onTaskCreated?.(createdTask);
-      setDraft(createInitialDraft(defaultNeedsReview));
+      setDraft(createInitialDraft(defaultNeedsReview, implementations));
       setIsOpen(false);
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : "Failed to create task");
@@ -381,8 +386,11 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
                 <label className="space-y-1">
                   <span className={labelClass}>Due Date</span>
                   <input
-                    type="date"
+                    type={draft.dueDate ? "date" : "text"}
                     value={draft.dueDate}
+                    placeholder="mm/dd/yyyy"
+                    onFocus={(e) => { e.currentTarget.type = "date"; }}
+                    onBlur={(e) => { if (!e.currentTarget.value) e.currentTarget.type = "text"; }}
                     onChange={(event) => setDraft((current) => ({ ...current, dueDate: event.target.value }))}
                     disabled={isCreating}
                     className={selectClass}
@@ -466,7 +474,7 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
                     type="button"
                     onClick={() => {
                       setError(null);
-                      setDraft(createInitialDraft(defaultNeedsReview));
+                      setDraft(createInitialDraft(defaultNeedsReview, implementations));
                       setIsOpen(false);
                     }}
                     disabled={isCreating}
@@ -606,8 +614,11 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
                     <label className="space-y-1">
                       <span className={labelClass}>Due Date</span>
                       <input
-                        type="date"
+                        type={qcDraft.dueDate ? "date" : "text"}
                         value={qcDraft.dueDate}
+                        placeholder="mm/dd/yyyy"
+                        onFocus={(e) => { e.currentTarget.type = "date"; }}
+                        onBlur={(e) => { if (!e.currentTarget.value) e.currentTarget.type = "text"; }}
                         onChange={(e) => setQcDraft((c) => ({ ...c, dueDate: e.target.value }))}
                         disabled={isCreating}
                         className={selectClass}

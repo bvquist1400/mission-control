@@ -23,7 +23,7 @@ interface ExtractionResult {
 }
 
 // Default time estimates by task type
-const DEFAULT_ESTIMATES: Record<TaskType, number> = {
+export const DEFAULT_ESTIMATES: Record<TaskType, number> = {
   Task: 30,
   Ticket: 30,
   MeetingPrep: 60,
