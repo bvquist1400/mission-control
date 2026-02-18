@@ -16,6 +16,17 @@ interface CatalogModel {
   input_price_per_1m_usd: number | null;
   output_price_per_1m_usd: number | null;
   pricing_tier: "standard" | "flex" | "priority" | null;
+  sort_order: number;
+}
+
+interface CatalogModelDraft {
+  displayName: string;
+  enabled: boolean;
+  inputPricePer1mUsd: string;
+  outputPricePer1mUsd: string;
+  pricingTier: "standard" | "flex" | "priority" | "";
+  pricingIsPlaceholder: boolean;
+  sortOrder: string;
 }
 
 interface ModelsResponse {
@@ -98,6 +109,32 @@ function sourceLabel(source: "feature_override" | "global_default" | "default" |
   return "n/a";
 }
 
+function toCatalogDraft(model: CatalogModel): CatalogModelDraft {
+  return {
+    displayName: model.display_name,
+    enabled: model.enabled,
+    inputPricePer1mUsd:
+      model.input_price_per_1m_usd === null ? "" : String(model.input_price_per_1m_usd),
+    outputPricePer1mUsd:
+      model.output_price_per_1m_usd === null ? "" : String(model.output_price_per_1m_usd),
+    pricingTier: model.pricing_tier ?? "",
+    pricingIsPlaceholder: model.pricing_is_placeholder,
+    sortOrder: String(model.sort_order),
+  };
+}
+
+function parsePriceInput(value: string, label: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${label} must be blank or a non-negative number`);
+  }
+  return parsed;
+}
+
 export default function LlmEvaluationPage() {
   const [fromDate, setFromDate] = useState(getDaysAgoIso(29));
   const [toDate, setToDate] = useState(getTodayIso());
@@ -107,6 +144,8 @@ export default function LlmEvaluationPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [savingFeature, setSavingFeature] = useState<PreferenceFeature | null>(null);
+  const [catalogDrafts, setCatalogDrafts] = useState<Record<string, CatalogModelDraft>>({});
+  const [savingCatalogModelId, setSavingCatalogModelId] = useState<string | null>(null);
 
   const enabledModels = useMemo(
     () => (modelsPayload?.models || []).filter((model) => model.enabled),
@@ -151,6 +190,15 @@ export default function LlmEvaluationPage() {
     loadData();
   }, [loadData]);
 
+  useEffect(() => {
+    const models = modelsPayload?.models || [];
+    const nextDrafts: Record<string, CatalogModelDraft> = {};
+    for (const model of models) {
+      nextDrafts[model.id] = toCatalogDraft(model);
+    }
+    setCatalogDrafts(nextDrafts);
+  }, [modelsPayload]);
+
   const updatePreference = useCallback(
     async (preferenceFeature: PreferenceFeature, modelId: string | null) => {
       setSavingFeature(preferenceFeature);
@@ -184,6 +232,78 @@ export default function LlmEvaluationPage() {
     }
     return modelsPayload.preferences[featureName] || "__none__";
   };
+
+  const updateCatalogDraft = (modelId: string, updates: Partial<CatalogModelDraft>) => {
+    setCatalogDrafts((prev) => {
+      const current = prev[modelId];
+      if (!current) {
+        return prev;
+      }
+      return {
+        ...prev,
+        [modelId]: {
+          ...current,
+          ...updates,
+        },
+      };
+    });
+  };
+
+  const saveCatalogModel = useCallback(
+    async (modelId: string) => {
+      const draft = catalogDrafts[modelId];
+      if (!draft) {
+        return;
+      }
+
+      const parsedSortOrder = Number(draft.sortOrder.trim());
+      if (!Number.isInteger(parsedSortOrder)) {
+        setError("Sort order must be an integer");
+        return;
+      }
+
+      let inputPrice: number | null;
+      let outputPrice: number | null;
+      try {
+        inputPrice = parsePriceInput(draft.inputPricePer1mUsd, "Input price");
+        outputPrice = parsePriceInput(draft.outputPricePer1mUsd, "Output price");
+      } catch (parseError) {
+        setError(parseError instanceof Error ? parseError.message : "Invalid pricing values");
+        return;
+      }
+
+      setSavingCatalogModelId(modelId);
+      setError(null);
+
+      try {
+        const response = await fetch(`/api/llm/models/catalog/${modelId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            displayName: draft.displayName.trim(),
+            enabled: draft.enabled,
+            inputPricePer1mUsd: inputPrice,
+            outputPricePer1mUsd: outputPrice,
+            pricingTier: draft.pricingTier === "" ? null : draft.pricingTier,
+            pricingIsPlaceholder: draft.pricingIsPlaceholder,
+            sortOrder: parsedSortOrder,
+          }),
+        });
+
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => ({}))) as { error?: string };
+          throw new Error(payload.error || "Failed to update model catalog row");
+        }
+
+        await loadData();
+      } catch (saveError) {
+        setError(saveError instanceof Error ? saveError.message : "Failed to update model catalog row");
+      } finally {
+        setSavingCatalogModelId(null);
+      }
+    },
+    [catalogDrafts, loadData]
+  );
 
   return (
     <div className="space-y-6">
@@ -269,6 +389,147 @@ export default function LlmEvaluationPage() {
             </p>
           </div>
         </div>
+      </section>
+
+      <section className="rounded-lg border border-stroke bg-panel p-4">
+        <h2 className="mb-1 text-sm font-semibold text-foreground">Catalog Editor</h2>
+        <p className="mb-3 text-xs text-muted-foreground">
+          Update names, enabled choices, pricing, and tier values. Save each row after editing.
+        </p>
+        {!modelsPayload || modelsPayload.models.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No catalog models found.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="border-b border-stroke text-left text-xs uppercase text-muted-foreground">
+                  <th className="px-2 py-2">Provider</th>
+                  <th className="px-2 py-2">Model ID</th>
+                  <th className="px-2 py-2">Display name</th>
+                  <th className="px-2 py-2">Enabled</th>
+                  <th className="px-2 py-2">Input $/1M</th>
+                  <th className="px-2 py-2">Output $/1M</th>
+                  <th className="px-2 py-2">Tier</th>
+                  <th className="px-2 py-2">Placeholder</th>
+                  <th className="px-2 py-2">Sort</th>
+                  <th className="px-2 py-2">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {modelsPayload.models.map((model) => {
+                  const draft = catalogDrafts[model.id] ?? toCatalogDraft(model);
+                  const isSaving = savingCatalogModelId === model.id;
+                  return (
+                    <tr key={model.id} className="border-b border-stroke/70">
+                      <td className="px-2 py-2 text-foreground">{model.provider}</td>
+                      <td className="px-2 py-2 text-foreground">{model.model_id}</td>
+                      <td className="px-2 py-2">
+                        <input
+                          type="text"
+                          value={draft.displayName}
+                          onChange={(event) =>
+                            updateCatalogDraft(model.id, { displayName: event.target.value })
+                          }
+                          disabled={isSaving}
+                          className="w-56 rounded border border-stroke bg-panel-muted px-2 py-1 text-xs text-foreground"
+                        />
+                      </td>
+                      <td className="px-2 py-2">
+                        <input
+                          type="checkbox"
+                          checked={draft.enabled}
+                          onChange={(event) =>
+                            updateCatalogDraft(model.id, { enabled: event.target.checked })
+                          }
+                          disabled={isSaving}
+                        />
+                      </td>
+                      <td className="px-2 py-2">
+                        <input
+                          type="text"
+                          value={draft.inputPricePer1mUsd}
+                          onChange={(event) =>
+                            updateCatalogDraft(model.id, {
+                              inputPricePer1mUsd: event.target.value,
+                            })
+                          }
+                          disabled={isSaving}
+                          placeholder="null"
+                          className="w-24 rounded border border-stroke bg-panel-muted px-2 py-1 text-xs text-foreground"
+                        />
+                      </td>
+                      <td className="px-2 py-2">
+                        <input
+                          type="text"
+                          value={draft.outputPricePer1mUsd}
+                          onChange={(event) =>
+                            updateCatalogDraft(model.id, {
+                              outputPricePer1mUsd: event.target.value,
+                            })
+                          }
+                          disabled={isSaving}
+                          placeholder="null"
+                          className="w-24 rounded border border-stroke bg-panel-muted px-2 py-1 text-xs text-foreground"
+                        />
+                      </td>
+                      <td className="px-2 py-2">
+                        <select
+                          value={draft.pricingTier}
+                          onChange={(event) =>
+                            updateCatalogDraft(model.id, {
+                              pricingTier: event.target.value as CatalogModelDraft["pricingTier"],
+                            })
+                          }
+                          disabled={isSaving}
+                          className="rounded border border-stroke bg-panel-muted px-2 py-1 text-xs text-foreground"
+                        >
+                          <option value="">None</option>
+                          <option value="standard">Standard</option>
+                          <option value="flex">Flex</option>
+                          <option value="priority">Priority</option>
+                        </select>
+                      </td>
+                      <td className="px-2 py-2">
+                        <input
+                          type="checkbox"
+                          checked={draft.pricingIsPlaceholder}
+                          onChange={(event) =>
+                            updateCatalogDraft(model.id, {
+                              pricingIsPlaceholder: event.target.checked,
+                            })
+                          }
+                          disabled={isSaving}
+                        />
+                      </td>
+                      <td className="px-2 py-2">
+                        <input
+                          type="text"
+                          value={draft.sortOrder}
+                          onChange={(event) =>
+                            updateCatalogDraft(model.id, {
+                              sortOrder: event.target.value,
+                            })
+                          }
+                          disabled={isSaving}
+                          className="w-16 rounded border border-stroke bg-panel-muted px-2 py-1 text-xs text-foreground"
+                        />
+                      </td>
+                      <td className="px-2 py-2">
+                        <button
+                          onClick={() => void saveCatalogModel(model.id)}
+                          disabled={isSaving}
+                          className="rounded border border-stroke px-2 py-1 text-xs text-muted-foreground hover:border-accent hover:text-accent disabled:opacity-50"
+                        >
+                          {isSaving ? "Saving..." : "Save"}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
 
       <section className="grid gap-3 rounded-lg border border-stroke bg-panel p-4 md:grid-cols-4">
