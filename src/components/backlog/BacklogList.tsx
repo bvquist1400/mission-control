@@ -108,14 +108,14 @@ async function fetchAllTaskPages(includeCompleted: boolean): Promise<TaskWithImp
 }
 
 async function fetchImplementations(): Promise<ImplementationSummary[]> {
-  const response = await fetch("/api/implementations", { cache: "no-store" });
+  const response = await fetch("/api/applications", { cache: "no-store" });
 
   if (response.status === 401) {
     throw new Error("Authentication required. Sign in at /login.");
   }
 
   if (!response.ok) {
-    throw new Error("Failed to fetch implementations");
+    throw new Error("Failed to fetch applications");
   }
 
   return response.json();
@@ -772,7 +772,7 @@ export function BacklogList() {
           </label>
 
           <label className="space-y-1">
-            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Implementation</span>
+            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Application</span>
             <select
               value={implementationFilter}
               onChange={(event) => setImplementationFilter(event.target.value as ImplementationFilter)}
@@ -833,7 +833,7 @@ export function BacklogList() {
                 <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground [&>th]:border-r [&>th]:border-solid [&>th]:border-stroke [&>th:last-child]:border-r-0">
                   <th className="w-10 px-2 py-3" />
                   <th className="min-w-[280px] px-3 py-3">Task</th>
-                  <th className="w-[160px] px-3 py-3">Implementation</th>
+                  <th className="w-[160px] px-3 py-3">Application</th>
                   <th className="w-[170px] px-3 py-3">Status</th>
                   <th className="w-[80px] px-3 py-3 text-center">Est (min)</th>
                   <th className="w-[120px] px-3 py-3">Due</th>

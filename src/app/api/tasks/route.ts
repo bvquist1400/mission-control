@@ -177,7 +177,7 @@ export async function POST(request: NextRequest) {
         .single();
 
       if (implementationError || !implementation) {
-        return NextResponse.json({ error: 'implementation_id is invalid' }, { status: 400 });
+        return NextResponse.json({ error: 'application is invalid (implementation_id)' }, { status: 400 });
       }
     }
 
@@ -214,6 +214,7 @@ export async function POST(request: NextRequest) {
         stakeholder_mentions: toStringArray(body.stakeholder_mentions),
         source_type: asStringOrNull(body.source_type) || 'Manual',
         source_url: asStringOrNull(body.source_url),
+        pinned_excerpt: asStringOrNull(body.pinned_excerpt),
       })
       .select('*, implementation:implementations(id, name)')
       .single();
@@ -240,6 +241,32 @@ export async function POST(request: NextRequest) {
         content: initialComment,
         source: 'manual',
       });
+    }
+
+    // Create initial checklist items if provided (from Quick Capture LLM extraction)
+    const initialChecklist = Array.isArray(body.initial_checklist)
+      ? (body.initial_checklist as unknown[])
+          .filter((item): item is string => typeof item === 'string')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
+
+    if (initialChecklist.length > 0 && data) {
+      const { error: checklistError } = await supabase
+        .from('task_checklist_items')
+        .insert(
+          initialChecklist.map((text, index) => ({
+            user_id: userId,
+            task_id: data.id,
+            text,
+            is_done: false,
+            sort_order: index,
+          }))
+        );
+
+      if (checklistError) {
+        console.error('Failed to create initial checklist items:', checklistError);
+      }
     }
 
     return NextResponse.json(data, { status: 201 });

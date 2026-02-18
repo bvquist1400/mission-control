@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Mission Control",
-  description: "Personal operations dashboard for Today, Backlog, Triage, and Implementations.",
+  description: "Personal operations dashboard for Today, Backlog, Triage, and Applications.",
 };
 
 export default function RootLayout({

@@ -144,7 +144,7 @@ export async function PATCH(
         .single();
 
       if (implementationError || !implementation) {
-        return NextResponse.json({ error: 'implementation_id is invalid' }, { status: 400 });
+        return NextResponse.json({ error: 'application is invalid (implementation_id)' }, { status: 400 });
       }
     }
 

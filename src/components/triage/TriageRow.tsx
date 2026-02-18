@@ -40,7 +40,7 @@ export function TriageRow({ task, implementations, isSaving = false, onUpdate, o
 
       <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         <label className="space-y-1">
-          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Implementation</span>
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Application</span>
           <select
             value={task.implementation_id ?? ""}
             onChange={(event) =>

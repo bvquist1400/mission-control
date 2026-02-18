@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import type { ImplementationDetail as ImplementationDetailType, ImplementationUpdatePayload, StatusUpdate, TaskSummary } from "@/types/database";
+import type { ImplementationDetail as ImplementationDetailType, ImplementationUpdatePayload, StatusUpdate, TaskStatus, TaskSummary } from "@/types/database";
 import { PhaseBadge } from "@/components/ui/PhaseBadge";
 import { RagBadge } from "@/components/ui/RagBadge";
 import { PhaseSelector } from "@/components/ui/PhaseSelector";
@@ -13,15 +13,15 @@ interface ImplementationDetailProps {
 }
 
 async function fetchImplementation(id: string): Promise<ImplementationDetailType> {
-  const response = await fetch(`/api/implementations/${id}`, { cache: "no-store" });
+  const response = await fetch(`/api/applications/${id}`, { cache: "no-store" });
   if (!response.ok) {
-    throw new Error("Failed to fetch implementation");
+    throw new Error("Failed to fetch application");
   }
   return response.json();
 }
 
 async function fetchStatusUpdates(id: string): Promise<StatusUpdate[]> {
-  const response = await fetch(`/api/implementations/${id}/copy-update?limit=10`, { cache: "no-store" });
+  const response = await fetch(`/api/applications/${id}/copy-update?limit=10`, { cache: "no-store" });
   if (!response.ok) {
     throw new Error("Failed to fetch status updates");
   }
@@ -95,6 +95,14 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
   const [newStatusText, setNewStatusText] = useState("");
   const [addingStatus, setAddingStatus] = useState(false);
 
+  // Inline task creation state
+  const [inlineRowActive, setInlineRowActive] = useState(false);
+  const [inlineTitle, setInlineTitle] = useState("");
+  const [inlineStatus, setInlineStatus] = useState<TaskStatus>("Backlog");
+  const [inlineEstimate, setInlineEstimate] = useState<number>(30);
+  const [addingTask, setAddingTask] = useState(false);
+  const [inlineError, setInlineError] = useState<string | null>(null);
+
   useEffect(() => {
     let isMounted = true;
 
@@ -133,7 +141,7 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
     setImpl({ ...impl, ...updates });
 
     try {
-      const response = await fetch(`/api/implementations/${id}`, {
+      const response = await fetch(`/api/applications/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(updates),
@@ -162,7 +170,7 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
 
     try {
       // Generate copy update which also saves to log
-      const response = await fetch(`/api/implementations/${id}/copy-update`, {
+      const response = await fetch(`/api/applications/${id}/copy-update`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ saveToLog: true }),
@@ -190,7 +198,7 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
     if (!impl) return;
 
     try {
-      const response = await fetch(`/api/implementations/${id}/copy-update`, {
+      const response = await fetch(`/api/applications/${id}/copy-update`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ saveToLog: true }),
@@ -209,14 +217,107 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
     }
   }
 
+  async function handleInlineTaskAdd() {
+    const title = inlineTitle.trim();
+    if (!title) return;
+
+    setAddingTask(true);
+    setInlineError(null);
+
+    const tempId = `temp-${Date.now()}`;
+    const tempTask: TaskSummary = {
+      id: tempId,
+      title,
+      status: inlineStatus,
+      estimated_minutes: inlineEstimate,
+      due_at: null,
+      blocker: false,
+    };
+
+    // Optimistic update
+    setImpl((current) =>
+      current ? { ...current, open_tasks: [...current.open_tasks, tempTask] } : current
+    );
+
+    try {
+      const response = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          implementation_id: id,
+          status: inlineStatus,
+          estimated_minutes: inlineEstimate,
+          estimate_source: "manual",
+          task_type: "Task",
+          source_type: "Manual",
+          needs_review: false,
+          blocker: false,
+        }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({ error: "Create failed" }));
+        throw new Error(typeof data.error === "string" ? data.error : "Create failed");
+      }
+
+      const newTask = await response.json();
+
+      // Replace temp task with real task from API
+      setImpl((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          open_tasks: current.open_tasks.map((t) =>
+            t.id === tempId
+              ? {
+                  id: newTask.id,
+                  title: newTask.title,
+                  status: newTask.status,
+                  estimated_minutes: newTask.estimated_minutes,
+                  due_at: newTask.due_at,
+                  blocker: newTask.blocker,
+                }
+              : t
+          ),
+        };
+      });
+
+      setInlineTitle("");
+      setInlineStatus("Backlog");
+      setInlineEstimate(30);
+      setInlineRowActive(false);
+    } catch (err) {
+      // Revert optimistic update
+      setImpl((current) =>
+        current ? { ...current, open_tasks: current.open_tasks.filter((t) => t.id !== tempId) } : current
+      );
+      setInlineError(err instanceof Error ? err.message : "Failed to create task");
+    } finally {
+      setAddingTask(false);
+    }
+  }
+
+  function handleInlineTitleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      handleInlineTaskAdd();
+    }
+    if (event.key === "Escape") {
+      setInlineRowActive(false);
+      setInlineTitle("");
+      setInlineError(null);
+    }
+  }
+
   if (loading) return <LoadingSkeleton />;
 
   if (error && !impl) {
     return (
       <div className="rounded-card border border-red-200 bg-red-50 p-5 text-center">
         <p className="text-sm text-red-700">{error}</p>
-        <Link href="/implementations" className="mt-3 inline-block text-sm font-medium text-accent hover:underline">
-          Back to Implementations
+        <Link href="/applications" className="mt-3 inline-block text-sm font-medium text-accent hover:underline">
+          Back to Applications
         </Link>
       </div>
     );
@@ -377,7 +478,87 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
             ))}
           </ul>
         ) : (
-          <p className="mt-3 text-sm text-muted-foreground">No open tasks for this implementation.</p>
+          <p className="mt-3 text-sm text-muted-foreground">No open tasks for this application.</p>
+        )}
+
+        {/* Inline add row */}
+        {inlineRowActive ? (
+          <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-accent/40 bg-panel-muted px-3 py-2">
+            <input
+              autoFocus
+              value={inlineTitle}
+              onChange={(e) => setInlineTitle(e.target.value)}
+              onKeyDown={handleInlineTitleKeyDown}
+              placeholder="Task title..."
+              disabled={addingTask}
+              className="min-w-0 flex-1 rounded border-0 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-60"
+            />
+
+            <select
+              value={inlineStatus}
+              onChange={(e) => setInlineStatus(e.target.value as TaskStatus)}
+              disabled={addingTask}
+              className="rounded border border-stroke bg-panel px-2 py-1 text-xs text-foreground outline-none focus:border-accent disabled:opacity-60"
+            >
+              {(["Backlog", "Planned", "In Progress", "Blocked/Waiting"] as TaskStatus[]).map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+
+            <div className="flex gap-1">
+              {[15, 30, 60, 90].map((min) => (
+                <button
+                  key={min}
+                  type="button"
+                  onClick={() => setInlineEstimate(min)}
+                  disabled={addingTask}
+                  className={`rounded px-2 py-1 text-xs font-medium transition ${
+                    inlineEstimate === min
+                      ? "bg-accent text-white"
+                      : "border border-stroke bg-panel text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {min}m
+                </button>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={handleInlineTaskAdd}
+              disabled={addingTask || !inlineTitle.trim()}
+              className="rounded bg-accent px-3 py-1 text-xs font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {addingTask ? "Adding..." : "Add"}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setInlineRowActive(false);
+                setInlineTitle("");
+                setInlineError(null);
+              }}
+              disabled={addingTask}
+              className="rounded border border-stroke bg-panel px-3 py-1 text-xs font-medium text-muted-foreground transition hover:text-foreground disabled:opacity-60"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setInlineRowActive(true)}
+            className="mt-2 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground transition hover:bg-panel-muted hover:text-foreground"
+          >
+            <span className="text-base leading-none">+</span>
+            <span>Add task</span>
+          </button>
+        )}
+
+        {inlineError && (
+          <p className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-400" role="alert">
+            {inlineError}
+          </p>
         )}
 
         {impl.recent_done_tasks.length > 0 && (

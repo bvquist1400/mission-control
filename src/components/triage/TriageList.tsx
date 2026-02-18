@@ -17,12 +17,12 @@ async function fetchTriageTasks(): Promise<TaskWithImplementation[]> {
 }
 
 async function fetchImplementations(): Promise<ImplementationSummary[]> {
-  const response = await fetch("/api/implementations", { cache: "no-store" });
+  const response = await fetch("/api/applications", { cache: "no-store" });
   if (response.status === 401) {
     throw new Error("Authentication required. Sign in at /login.");
   }
   if (!response.ok) {
-    throw new Error("Failed to fetch implementations");
+    throw new Error("Failed to fetch applications");
   }
   return response.json();
 }

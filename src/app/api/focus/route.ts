@@ -252,12 +252,12 @@ export async function POST(request: NextRequest) {
 
     if (scopeType === 'implementation') {
       if (!scopeId) {
-        return NextResponse.json({ error: 'scope_id is required for implementation scope' }, { status: 400 });
+        return NextResponse.json({ error: 'scope_id is required for application scope' }, { status: 400 });
       }
 
       const implementationOwned = await ensureImplementationOwnership(supabase, userId, scopeId);
       if (!implementationOwned) {
-        return NextResponse.json({ error: 'scope_id must reference one of your implementations' }, { status: 400 });
+        return NextResponse.json({ error: 'scope_id must reference one of your applications' }, { status: 400 });
       }
 
       normalizedScopeId = scopeId;

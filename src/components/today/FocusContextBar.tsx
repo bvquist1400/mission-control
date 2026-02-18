@@ -61,7 +61,7 @@ interface DirectiveDraft {
 type LoadMode = "initial" | "refresh" | "silent";
 
 const SCOPE_OPTIONS: Array<{ value: DirectiveScopeType; label: string }> = [
-  { value: "implementation", label: "Implementation" },
+  { value: "implementation", label: "Application" },
   { value: "stakeholder", label: "Stakeholder" },
   { value: "task_type", label: "Task Type" },
   { value: "query", label: "Query" },
@@ -155,10 +155,10 @@ function formatScopeLabel(directive: FocusDirective, implementationNames: Map<st
   switch (directive.scope_type) {
     case "implementation": {
       if (!directive.scope_id) {
-        return "Implementation focus";
+        return "Application focus";
       }
 
-      return implementationNames.get(directive.scope_id) ?? "Implementation focus";
+      return implementationNames.get(directive.scope_id) ?? "Application focus";
     }
     case "stakeholder":
       return directive.scope_value ? `Stakeholder: ${directive.scope_value}` : "Stakeholder focus";
@@ -255,14 +255,14 @@ async function clearFocus(): Promise<FocusClearResponse> {
 }
 
 async function fetchImplementations(): Promise<ImplementationOption[]> {
-  const response = await fetch("/api/implementations", { cache: "no-store" });
+  const response = await fetch("/api/applications", { cache: "no-store" });
 
   if (response.status === 401) {
     throw new Error("Authentication required. Sign in at /login.");
   }
 
   if (!response.ok) {
-    throw new Error("Failed to fetch implementations");
+    throw new Error("Failed to fetch applications");
   }
 
   const data = (await response.json()) as Array<{ id?: string; name?: string }>;
@@ -380,7 +380,7 @@ export function FocusContextBar({ onDirectiveChange }: FocusContextBarProps) {
       }
 
       if (draft.scopeType === "implementation" && !draft.scopeId) {
-        setError("Select an implementation scope");
+        setError("Select an application scope");
         return;
       }
 
@@ -640,14 +640,14 @@ export function FocusContextBar({ onDirectiveChange }: FocusContextBarProps) {
 
                 {draft.scopeType === "implementation" ? (
                   <label className="block space-y-1">
-                    <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Implementation</span>
+                    <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Application</span>
                     <select
                       value={draft.scopeId}
                       onChange={(event) => setDraft((current) => ({ ...current, scopeId: event.target.value }))}
                       disabled={creating}
                       className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      <option value="">Select implementation</option>
+                      <option value="">Select application</option>
                       {implementations.map((implementation) => (
                         <option key={implementation.id} value={implementation.id}>
                           {implementation.name}

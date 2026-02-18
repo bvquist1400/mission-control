@@ -67,7 +67,7 @@ export function TaskCard({ task }: TaskCardProps) {
       </dl>
 
       {task.implementationName ? (
-        <p className="mt-4 rounded-md bg-panel-muted px-2.5 py-2 text-xs text-muted-foreground">Implementation: {task.implementationName}</p>
+        <p className="mt-4 rounded-md bg-panel-muted px-2.5 py-2 text-xs text-muted-foreground">Application: {task.implementationName}</p>
       ) : null}
     </article>
   );
