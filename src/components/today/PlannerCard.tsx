@@ -100,6 +100,29 @@ interface PlannerCardProps {
   replanSignal?: number;
 }
 
+const PLANNER_READ_TIMEOUT_MS = 12000;
+const PLANNER_REPLAN_TIMEOUT_MS = 20000;
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs: number
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("Planner request timed out");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function getDateInTimeZone(timeZone: string): string {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone,
@@ -190,7 +213,11 @@ function toErrorMessage(error: unknown, fallback: string): string {
 }
 
 async function fetchLatestPlan(date: string): Promise<PlannerGetResponse> {
-  const response = await fetch(`/api/planner/plan?date=${date}`, { cache: "no-store" });
+  const response = await fetchWithTimeout(
+    `/api/planner/plan?date=${date}`,
+    { cache: "no-store" },
+    PLANNER_READ_TIMEOUT_MS
+  );
 
   if (response.status === 401) {
     throw new Error("Authentication required. Sign in at /login.");
@@ -204,11 +231,15 @@ async function fetchLatestPlan(date: string): Promise<PlannerGetResponse> {
 }
 
 async function replan(date: string, mode: PlannerMode): Promise<PlannerPostResponse> {
-  const response = await fetch("/api/planner/plan", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ date, mode }),
-  });
+  const response = await fetchWithTimeout(
+    "/api/planner/plan",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ date, mode }),
+    },
+    PLANNER_REPLAN_TIMEOUT_MS
+  );
 
   if (response.status === 401) {
     throw new Error("Authentication required. Sign in at /login.");
@@ -233,10 +264,11 @@ export function PlannerCard({ replanSignal = 0 }: PlannerCardProps) {
   const [error, setError] = useState<string | null>(null);
   const hasLoadedOnce = useRef(false);
   const processedReplanSignal = useRef(0);
-  const latestOperationId = useRef(0);
+  const latestLoadOperationId = useRef(0);
+  const latestReplanOperationId = useRef(0);
 
   const loadPlan = useCallback(async (targetDate: string, initialLoad: boolean) => {
-    const operationId = ++latestOperationId.current;
+    const operationId = ++latestLoadOperationId.current;
     if (initialLoad) {
       setLoading(true);
     } else {
@@ -246,7 +278,7 @@ export function PlannerCard({ replanSignal = 0 }: PlannerCardProps) {
 
     try {
       const data = await fetchLatestPlan(targetDate);
-      if (operationId !== latestOperationId.current) return;
+      if (operationId !== latestLoadOperationId.current) return;
 
       setState({
         planDate: data.planDate,
@@ -258,10 +290,10 @@ export function PlannerCard({ replanSignal = 0 }: PlannerCardProps) {
         note: data.note ?? null,
       });
     } catch (loadError) {
-      if (operationId !== latestOperationId.current) return;
+      if (operationId !== latestLoadOperationId.current) return;
       setError(toErrorMessage(loadError, "Failed to load planner"));
     } finally {
-      if (operationId === latestOperationId.current) {
+      if (operationId === latestLoadOperationId.current) {
         if (initialLoad) {
           setLoading(false);
         } else {
@@ -279,13 +311,13 @@ export function PlannerCard({ replanSignal = 0 }: PlannerCardProps) {
     async (explicitDate?: string, explicitMode?: PlannerMode) => {
       const planDate = explicitDate ?? selectedDate;
       const replanMode = explicitMode ?? mode;
-      const operationId = ++latestOperationId.current;
+      const operationId = ++latestReplanOperationId.current;
       setReplanning(true);
       setError(null);
 
       try {
         const data = await replan(planDate, replanMode);
-        if (operationId !== latestOperationId.current) return;
+        if (operationId !== latestReplanOperationId.current) return;
 
         setState({
           planDate: data.planDate,
@@ -297,11 +329,10 @@ export function PlannerCard({ replanSignal = 0 }: PlannerCardProps) {
           note: data.note ?? null,
         });
       } catch (replanError) {
-        if (operationId !== latestOperationId.current) return;
+        if (operationId !== latestReplanOperationId.current) return;
         setError(toErrorMessage(replanError, "Failed to replan"));
       } finally {
-        if (operationId === latestOperationId.current) {
-          setLoading(false);
+        if (operationId === latestReplanOperationId.current) {
           setReplanning(false);
         }
       }

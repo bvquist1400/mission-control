@@ -10,6 +10,7 @@ const navItems = [
   { href: "/implementations", label: "Implementations", hint: "Portfolio health and updates" },
   { href: "/focus", label: "Focus", hint: "Planner directives" },
   { href: "/calendar", label: "Calendar", hint: "Imported schedule metadata" },
+  { href: "/llm", label: "LLM", hint: "Model and cost evaluation" },
 ];
 
 function isActive(pathname: string, href: string): boolean {

@@ -54,6 +54,8 @@ Primary variables are defined in `.env.example`.
 - Runtime calendar ingestion reads explicit source config only (no XML sharing URL discovery at runtime).
 - Stored data is sanitized and scoped by user with Supabase RLS.
 - `/api/calendar` returns only approved fields for brief generation and UI cards.
+- User-authored meeting context is stored separately (`calendar_event_context`) and merged into `/api/calendar` for planner use.
+- `PATCH /api/calendar` supports saving or clearing per-event `meeting_context` notes.
 
 ## Authentication
 
@@ -70,6 +72,7 @@ Apply Supabase SQL migrations from `supabase/migrations/`:
 - `003_task_comments_dependencies.sql`
 - `004_add_task_type_task.sql`
 - `005_focus_planner_brain.sql`
+- `006_calendar_event_context.sql`
 
 ## Validation
 

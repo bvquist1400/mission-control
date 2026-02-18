@@ -48,6 +48,38 @@ interface FocusDirectiveRow {
   reason: string | null;
 }
 
+type CalendarEventSource = 'local' | 'ical' | 'graph';
+
+interface UpcomingMeetingRow {
+  source: CalendarEventSource;
+  external_event_id: string;
+  start_at: string;
+  title: string;
+}
+
+interface MeetingContextRow {
+  source: CalendarEventSource;
+  external_event_id: string;
+  meeting_context: string;
+}
+
+interface MeetingContextSignal {
+  source: CalendarEventSource;
+  externalEventId: string;
+  title: string;
+  startAt: string;
+  startMs: number;
+  titleNormalized: string;
+  titleTokens: string[];
+  contextTokens: string[];
+}
+
+interface MeetingContextMatch {
+  boost: number;
+  meetingTitle: string;
+  meetingStartAt: string;
+}
+
 interface RankedTask {
   task: TaskRow;
   finalScore: number;
@@ -55,7 +87,9 @@ interface RankedTask {
   score: ReturnType<typeof calculatePlannerScore>;
   implementationMultiplier: number;
   directiveMultiplier: number;
-  fitBonus: number;
+  windowFitBonus: number;
+  meetingContextBoost: number;
+  meetingContextMatch: MeetingContextMatch | null;
   exceptionEligible: boolean;
 }
 
@@ -63,6 +97,10 @@ const PLANNER_SOURCE = 'planner_v1.1';
 const NEXT_WINDOW_MINUTES = 60;
 const MAX_QUEUE_ITEMS = 50;
 const MAX_EXCEPTIONS = 10;
+const UPCOMING_MEETING_CONTEXT_HORIZON_HOURS = 48;
+const MEETING_CONTEXT_MAX_BOOST = 14;
+const MEETING_PREP_MIN_TOKEN_OVERLAP = 2;
+const NON_MEETING_PREP_MIN_TOKEN_OVERLAP = 3;
 const HIGH_PRIORITY_STAKEHOLDERS = ['nancy', 'heath'];
 const WEIGHT_MULTIPLIER_TABLE = [0.6, 0.7, 0.8, 0.9, 0.95, 1.0, 1.1, 1.25, 1.4, 1.6, 1.8];
 const DIRECTIVE_STRENGTH_MULTIPLIERS: Record<DirectiveStrength, { match: number; nonMatch: number }> = {
@@ -70,6 +108,34 @@ const DIRECTIVE_STRENGTH_MULTIPLIERS: Record<DirectiveStrength, { match: number;
   strong: { match: 1.6, nonMatch: 0.85 },
   hard: { match: 2.0, nonMatch: 0.7 },
 };
+const MATCH_STOP_WORDS = new Set([
+  'a',
+  'an',
+  'and',
+  'are',
+  'at',
+  'for',
+  'from',
+  'in',
+  'is',
+  'of',
+  'on',
+  'or',
+  'the',
+  'to',
+  'with',
+  'weekly',
+  'daily',
+  'monthly',
+  'meeting',
+  'sync',
+  'call',
+  'review',
+  'agenda',
+  'prep',
+  'preparation',
+  'update',
+]);
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -115,6 +181,139 @@ function parseTimestampMs(value: string | null | undefined): number | null {
 
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function buildMeetingContextKey(source: CalendarEventSource, externalEventId: string): string {
+  return `${source}::${externalEventId}`;
+}
+
+function normalizeMatchText(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function tokenizeMatchText(value: string): string[] {
+  const normalized = normalizeMatchText(value);
+  if (!normalized) {
+    return [];
+  }
+
+  return normalized
+    .split(' ')
+    .filter((token) => token.length >= 3 && !MATCH_STOP_WORDS.has(token));
+}
+
+function countTokenOverlap(left: string[], right: string[]): number {
+  if (left.length === 0 || right.length === 0) {
+    return 0;
+  }
+
+  const rightSet = new Set(right);
+  let overlap = 0;
+  for (const token of left) {
+    if (rightSet.has(token)) {
+      overlap += 1;
+    }
+  }
+
+  return overlap;
+}
+
+function isMeetingPrepCandidate(task: TaskRow): boolean {
+  if (task.task_type?.toLowerCase() === 'meetingprep') {
+    return true;
+  }
+
+  return /meeting|agenda|prep|call|sync|review|brief/i.test(task.title);
+}
+
+function calculateMeetingContextBoost(hoursUntilMeeting: number, isMeetingPrepTask: boolean): number {
+  if (hoursUntilMeeting < -1 || hoursUntilMeeting > UPCOMING_MEETING_CONTEXT_HORIZON_HOURS) {
+    return 0;
+  }
+
+  let baseBoost = 0;
+  if (hoursUntilMeeting <= 4) {
+    baseBoost = 14;
+  } else if (hoursUntilMeeting <= 24) {
+    baseBoost = 12;
+  } else if (hoursUntilMeeting <= 48) {
+    baseBoost = 8;
+  }
+
+  const scaledBoost = isMeetingPrepTask ? baseBoost : Math.round(baseBoost * 0.5);
+  return Math.min(MEETING_CONTEXT_MAX_BOOST, scaledBoost);
+}
+
+function findMeetingContextMatch(
+  task: TaskRow,
+  meetingSignals: MeetingContextSignal[],
+  nowMs: number
+): MeetingContextMatch | null {
+  if (!isMeetingPrepCandidate(task) || meetingSignals.length === 0) {
+    return null;
+  }
+
+  const taskNormalized = normalizeMatchText(task.title);
+  const taskTokens = tokenizeMatchText(task.title);
+  const isMeetingPrepTask = task.task_type?.toLowerCase() === 'meetingprep';
+
+  let bestMatch: MeetingContextMatch | null = null;
+
+  for (const signal of meetingSignals) {
+    const strongTitleMatch =
+      taskNormalized.length >= 8 &&
+      signal.titleNormalized.length >= 8 &&
+      (taskNormalized.includes(signal.titleNormalized) || signal.titleNormalized.includes(taskNormalized));
+
+    const titleTokenOverlap = countTokenOverlap(taskTokens, signal.titleTokens);
+    const contextTokenOverlap = countTokenOverlap(taskTokens, signal.contextTokens);
+    const minOverlap = isMeetingPrepTask
+      ? MEETING_PREP_MIN_TOKEN_OVERLAP
+      : NON_MEETING_PREP_MIN_TOKEN_OVERLAP;
+
+    if (!strongTitleMatch && titleTokenOverlap < minOverlap && contextTokenOverlap < minOverlap) {
+      continue;
+    }
+
+    const hoursUntilMeeting = (signal.startMs - nowMs) / (60 * 60 * 1000);
+    const contextPrecisionBonus = contextTokenOverlap >= NON_MEETING_PREP_MIN_TOKEN_OVERLAP ? 2 : 0;
+    const boost = Math.min(
+      MEETING_CONTEXT_MAX_BOOST,
+      calculateMeetingContextBoost(hoursUntilMeeting, isMeetingPrepTask) + contextPrecisionBonus
+    );
+    if (boost <= 0) {
+      continue;
+    }
+
+    const candidate: MeetingContextMatch = {
+      boost,
+      meetingTitle: signal.title,
+      meetingStartAt: signal.startAt,
+    };
+
+    if (!bestMatch) {
+      bestMatch = candidate;
+      continue;
+    }
+
+    if (candidate.boost > bestMatch.boost) {
+      bestMatch = candidate;
+      continue;
+    }
+
+    const candidateStartMs = parseTimestampMs(candidate.meetingStartAt);
+    const bestStartMs = parseTimestampMs(bestMatch.meetingStartAt);
+    if (
+      candidate.boost === bestMatch.boost &&
+      candidateStartMs !== null &&
+      bestStartMs !== null &&
+      candidateStartMs < bestStartMs
+    ) {
+      bestMatch = candidate;
+    }
+  }
+
+  return bestMatch;
 }
 
 function isMissingRelationError(error: unknown): boolean {
@@ -222,6 +421,7 @@ function toRankedTask(
   nowMs: number,
   directive: FocusDirectiveRow | null,
   implementationWeights: Map<string, number>,
+  meetingSignals: MeetingContextSignal[],
   plannerConfig: PlannerConfig
 ): RankedTask {
   const stakeholderBoost = calculateStakeholderBoost(task.stakeholder_mentions);
@@ -231,7 +431,10 @@ function toRankedTask(
   const directiveMultiplier = getDirectiveMultiplier(directive, directiveMatched);
 
   const minutes = Number.isFinite(task.estimated_minutes) ? task.estimated_minutes : 30;
-  const fitBonus = minutes <= NEXT_WINDOW_MINUTES ? 5 : -10;
+  const windowFitBonus = minutes <= NEXT_WINDOW_MINUTES ? 5 : -10;
+  const meetingContextMatch = findMeetingContextMatch(task, meetingSignals, nowMs);
+  const meetingContextBoost = meetingContextMatch?.boost ?? 0;
+  const fitBonus = windowFitBonus + meetingContextBoost;
 
   const plannerTask: PlannerTaskLike = {
     priority_score: task.priority_score,
@@ -260,7 +463,9 @@ function toRankedTask(
     score,
     implementationMultiplier,
     directiveMultiplier,
-    fitBonus,
+    windowFitBonus,
+    meetingContextBoost,
+    meetingContextMatch,
     exceptionEligible,
   };
 }
@@ -292,8 +497,12 @@ function buildWhyLines(ranked: RankedTask, directive: FocusDirectiveRow | null):
     lines.push(`Status adjustment ${ranked.score.statusAdjust > 0 ? '+' : ''}${ranked.score.statusAdjust}`);
   }
 
-  if (ranked.fitBonus !== 0) {
-    lines.push(`Window fit ${ranked.fitBonus > 0 ? '+' : ''}${ranked.fitBonus}`);
+  if (ranked.meetingContextBoost > 0 && ranked.meetingContextMatch) {
+    lines.push(`Meeting context +${ranked.meetingContextBoost} (${ranked.meetingContextMatch.meetingTitle})`);
+  }
+
+  if (ranked.windowFitBonus !== 0) {
+    lines.push(`Window fit ${ranked.windowFitBonus > 0 ? '+' : ''}${ranked.windowFitBonus}`);
   }
 
   lines.push(`Implementation multiplier x${ranked.implementationMultiplier.toFixed(2)}`);
@@ -369,6 +578,94 @@ async function loadActiveDirective(
   }
 
   return isDirectiveCurrentlyActive(directive, nowMs) ? directive : null;
+}
+
+async function loadUpcomingMeetingContextSignals(
+  supabase: SupabaseClient,
+  userId: string,
+  nowMs: number
+): Promise<MeetingContextSignal[]> {
+  const nowIso = new Date(nowMs).toISOString();
+  const horizonIso = new Date(nowMs + UPCOMING_MEETING_CONTEXT_HORIZON_HOURS * 60 * 60 * 1000).toISOString();
+
+  const meetingsResult = await supabase
+    .from('calendar_events')
+    .select('source, external_event_id, start_at, title')
+    .eq('user_id', userId)
+    .gte('end_at', nowIso)
+    .lte('start_at', horizonIso)
+    .order('start_at', { ascending: true })
+    .limit(300);
+
+  if (meetingsResult.error) {
+    if (isMissingRelationError(meetingsResult.error)) {
+      return [];
+    }
+    throw meetingsResult.error;
+  }
+
+  const meetings = (meetingsResult.data || []) as UpcomingMeetingRow[];
+  if (meetings.length === 0) {
+    return [];
+  }
+
+  const externalEventIds = [...new Set(meetings.map((meeting) => meeting.external_event_id).filter(Boolean))];
+  if (externalEventIds.length === 0) {
+    return [];
+  }
+
+  const contextResult = await supabase
+    .from('calendar_event_context')
+    .select('source, external_event_id, meeting_context')
+    .eq('user_id', userId)
+    .in('external_event_id', externalEventIds);
+
+  if (contextResult.error) {
+    if (isMissingRelationError(contextResult.error)) {
+      return [];
+    }
+    throw contextResult.error;
+  }
+
+  const contextMap = new Map<string, string>();
+  for (const row of (contextResult.data || []) as MeetingContextRow[]) {
+    const trimmedContext = row.meeting_context?.trim();
+    if (!trimmedContext) {
+      continue;
+    }
+    contextMap.set(buildMeetingContextKey(row.source, row.external_event_id), trimmedContext);
+  }
+
+  if (contextMap.size === 0) {
+    return [];
+  }
+
+  const signals: MeetingContextSignal[] = [];
+  for (const meeting of meetings) {
+    const meetingContext = contextMap.get(buildMeetingContextKey(meeting.source, meeting.external_event_id));
+    if (!meetingContext) {
+      continue;
+    }
+
+    const startMs = parseTimestampMs(meeting.start_at);
+    if (startMs === null) {
+      continue;
+    }
+
+    const title = meeting.title?.trim() || 'Untitled Meeting';
+    signals.push({
+      source: meeting.source,
+      externalEventId: meeting.external_event_id,
+      title,
+      startAt: meeting.start_at,
+      startMs,
+      titleNormalized: normalizeMatchText(title),
+      titleTokens: tokenizeMatchText(title),
+      contextTokens: tokenizeMatchText(meetingContext),
+    });
+  }
+
+  return signals;
 }
 
 async function savePlanIfTableExists(
@@ -508,9 +805,12 @@ export async function POST(request: NextRequest) {
     const tasks = (tasksResult.data || []) as TaskRow[];
     const implementationWeights = await loadImplementationWeights(supabase, userId);
     const activeDirective = await loadActiveDirective(supabase, userId, nowMs);
+    const meetingContextSignals = await loadUpcomingMeetingContextSignals(supabase, userId, nowMs);
 
     const rankedTasks = tasks
-      .map((task) => toRankedTask(task, nowMs, activeDirective, implementationWeights, plannerConfig))
+      .map((task) =>
+        toRankedTask(task, nowMs, activeDirective, implementationWeights, meetingContextSignals, plannerConfig)
+      )
       .sort((a, b) => {
         if (a.finalScore !== b.finalScore) {
           return b.finalScore - a.finalScore;
@@ -559,6 +859,14 @@ export async function POST(request: NextRequest) {
         stalenessBoost: row.score.stalenessBoost,
         statusAdjust: row.score.statusAdjust,
         fitBonus: row.score.fitBonus,
+        windowFitBonus: row.windowFitBonus,
+        meetingContextBoost: row.meetingContextBoost,
+        meetingContextMeeting: row.meetingContextMatch
+          ? {
+              title: row.meetingContextMatch.meetingTitle,
+              start_at: row.meetingContextMatch.meetingStartAt,
+            }
+          : null,
         implementationMultiplier: row.implementationMultiplier,
         directiveMultiplier: row.directiveMultiplier,
         directiveMatched: row.directiveMatched,
@@ -608,6 +916,7 @@ export async function POST(request: NextRequest) {
       timezone: DEFAULT_WORKDAY_CONFIG.timezone,
       directiveId: activeDirective?.id ?? null,
       directiveStrength: activeDirective?.strength ?? null,
+      meetingContextSignalCount: meetingContextSignals.length,
       exceptions: plannerConfig.exceptions,
     };
 

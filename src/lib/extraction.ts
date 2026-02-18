@@ -1,9 +1,12 @@
-import { LlmExtraction, TaskType } from '@/types/database';
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { generateTextWithLlm } from "@/lib/llm";
+import { LlmExtraction, TaskType } from "@/types/database";
 
 // LLM Extraction service for processing Action Intake emails
-// Supports OpenAI and Anthropic APIs
 
 interface ExtractionInput {
+  supabase: SupabaseClient;
+  userId: string;
   subject: string;
   from_name: string | null;
   from_email: string | null;
@@ -80,18 +83,18 @@ Return ONLY valid JSON with this exact schema:
  */
 function buildExtractionPrompt(input: ExtractionInput): string {
   const keywordsText = Object.entries(input.implementation_keywords)
-    .map(([name, keywords]) => `${name}: ${keywords.join(', ')}`)
-    .join('\n');
+    .map(([name, keywords]) => `${name}: ${keywords.join(", ")}`)
+    .join("\n");
 
   return `INPUT:
 Subject: ${input.subject}
-From: ${input.from_name || 'Unknown'} <${input.from_email || 'unknown'}>
+From: ${input.from_name || "Unknown"} <${input.from_email || "unknown"}>
 Received: ${input.received_at}
 Body snippet (transient, do not quote): ${input.body_snippet.slice(0, 2000)}
 
-Known implementations: ${input.implementation_names.join(', ') || 'None'}
+Known implementations: ${input.implementation_names.join(", ") || "None"}
 Known keywords per implementation:
-${keywordsText || 'None'}`;
+${keywordsText || "None"}`;
 }
 
 /**
@@ -101,18 +104,18 @@ function parseExtractionResponse(responseText: string): LlmExtraction {
   // Try to extract JSON from the response
   const jsonMatch = responseText.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
-    throw new Error('No JSON found in response');
+    throw new Error("No JSON found in response");
   }
 
   const parsed = JSON.parse(jsonMatch[0]);
 
   // Validate and normalize the response
-  const taskType = ['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build'].includes(parsed.task_type)
+  const taskType = ["Task", "Ticket", "MeetingPrep", "FollowUp", "Admin", "Build"].includes(parsed.task_type)
     ? parsed.task_type
-    : 'Admin';
+    : "Admin";
 
   return {
-    title: String(parsed.title || 'Untitled task'),
+    title: String(parsed.title || "Untitled task"),
     suggested_checklist: Array.isArray(parsed.suggested_checklist)
       ? parsed.suggested_checklist.map(String)
       : [],
@@ -135,131 +138,41 @@ function parseExtractionResponse(responseText: string): LlmExtraction {
 }
 
 /**
- * Extract task metadata using OpenAI API
- */
-async function extractWithOpenAI(input: ExtractionInput): Promise<ExtractionResult> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY not configured');
-  }
-
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: buildExtractionPrompt(input) },
-      ],
-      temperature: 0.3,
-      max_tokens: 1000,
-    }),
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`OpenAI API error: ${error}`);
-  }
-
-  const data = await response.json();
-  const content = data.choices[0]?.message?.content;
-
-  if (!content) {
-    throw new Error('No content in OpenAI response');
-  }
-
-  const extraction = parseExtractionResponse(content);
-
-  // Calculate overall confidence based on individual confidences
-  const confidence = Math.min(
-    extraction.due_confidence > 0 ? extraction.due_confidence : 1,
-    extraction.implementation_confidence > 0 ? extraction.implementation_confidence : 1
-  );
-
-  return {
-    extraction,
-    model: 'gpt-4o-mini',
-    confidence: extraction.needs_review ? Math.min(confidence, 0.5) : confidence,
-  };
-}
-
-/**
- * Extract task metadata using Anthropic API
- */
-async function extractWithAnthropic(input: ExtractionInput): Promise<ExtractionResult> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    throw new Error('ANTHROPIC_API_KEY not configured');
-  }
-
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: 'claude-3-haiku-20240307',
-      max_tokens: 1000,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: buildExtractionPrompt(input) }],
-    }),
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Anthropic API error: ${error}`);
-  }
-
-  const data = await response.json();
-  const content = data.content[0]?.text;
-
-  if (!content) {
-    throw new Error('No content in Anthropic response');
-  }
-
-  const extraction = parseExtractionResponse(content);
-
-  const confidence = Math.min(
-    extraction.due_confidence > 0 ? extraction.due_confidence : 1,
-    extraction.implementation_confidence > 0 ? extraction.implementation_confidence : 1
-  );
-
-  return {
-    extraction,
-    model: 'claude-3-haiku-20240307',
-    confidence: extraction.needs_review ? Math.min(confidence, 0.5) : confidence,
-  };
-}
-
-/**
- * Main extraction function - tries available providers
+ * Main extraction function - uses the shared LLM provider layer with per-user model selection
  */
 export async function extractTaskMetadata(input: ExtractionInput): Promise<ExtractionResult> {
-  // Try OpenAI first, fall back to Anthropic
-  if (process.env.OPENAI_API_KEY) {
-    try {
-      return await extractWithOpenAI(input);
-    } catch (error) {
-      console.error('OpenAI extraction failed:', error);
-    }
-  }
+  try {
+    const generation = await generateTextWithLlm({
+      supabase: input.supabase,
+      userId: input.userId,
+      feature: "intake_extraction",
+      systemPrompt: SYSTEM_PROMPT,
+      userPrompt: buildExtractionPrompt(input),
+      temperature: 0.3,
+      maxTokens: 1000,
+      timeoutMs: 9000,
+    });
 
-  if (process.env.ANTHROPIC_API_KEY) {
-    try {
-      return await extractWithAnthropic(input);
-    } catch (error) {
-      console.error('Anthropic extraction failed:', error);
+    if (generation.text && generation.runMeta) {
+      const extraction = parseExtractionResponse(generation.text);
+
+      const confidence = Math.min(
+        extraction.due_confidence > 0 ? extraction.due_confidence : 1,
+        extraction.implementation_confidence > 0 ? extraction.implementation_confidence : 1
+      );
+
+      return {
+        extraction,
+        model: generation.runMeta.modelId,
+        confidence: extraction.needs_review ? Math.min(confidence, 0.5) : confidence,
+      };
     }
+  } catch (error) {
+    console.error("LLM extraction failed:", error);
   }
 
   // Fallback: Create basic extraction from subject line
-  console.warn('No LLM API available, using fallback extraction');
+  console.warn("No LLM extraction output available, using fallback extraction");
   return createFallbackExtraction(input);
 }
 
@@ -270,15 +183,15 @@ function createFallbackExtraction(input: ExtractionInput): ExtractionResult {
   const subject = input.subject;
 
   // Try to guess task type from subject
-  let taskType: TaskType = 'Admin';
+  let taskType: TaskType = "Admin";
   if (/ticket|incident|issue|bug/i.test(subject)) {
-    taskType = 'Ticket';
+    taskType = "Ticket";
   } else if (/meeting|agenda|review|call/i.test(subject)) {
-    taskType = 'MeetingPrep';
+    taskType = "MeetingPrep";
   } else if (/follow.?up|reminder|checking/i.test(subject)) {
-    taskType = 'FollowUp';
+    taskType = "FollowUp";
   } else if (/build|develop|implement|create/i.test(subject)) {
-    taskType = 'Build';
+    taskType = "Build";
   }
 
   // Try to match implementation from keywords
@@ -288,10 +201,10 @@ function createFallbackExtraction(input: ExtractionInput): ExtractionResult {
   // Check stakeholder mentions
   const stakeholders: string[] = [];
   if (/nancy/i.test(subject) || /nancy/i.test(input.body_snippet)) {
-    stakeholders.push('Nancy');
+    stakeholders.push("Nancy");
   }
   if (/heath/i.test(subject) || /heath/i.test(input.body_snippet)) {
-    stakeholders.push('Heath');
+    stakeholders.push("Heath");
   }
 
   return {
@@ -310,7 +223,7 @@ function createFallbackExtraction(input: ExtractionInput): ExtractionResult {
       blocker: false,
       waiting_on: null,
     },
-    model: 'fallback',
+    model: "fallback",
     confidence: 0.3,
   };
 }

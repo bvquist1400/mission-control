@@ -7,6 +7,7 @@ import { TaskCard, type TaskCardData } from "@/components/tasks/TaskCard";
 import { CapacityMeter } from "@/components/today/CapacityMeter";
 import { FocusStatusBar } from "@/components/today/FocusStatusBar";
 import { PlannerCard } from "@/components/today/PlannerCard";
+import { DailyBriefing } from "@/components/today/briefing";
 import type { TaskWithImplementation, CapacityResult } from "@/types/database";
 import { calculateCapacity } from "@/lib/capacity";
 
@@ -366,6 +367,8 @@ export default function TodayPage() {
       )}
 
       <FocusStatusBar onDirectiveChange={handleFocusDirectiveChange} />
+
+      <DailyBriefing replanSignal={plannerReplanSignal} />
 
       <PlannerCard replanSignal={plannerReplanSignal} />
 

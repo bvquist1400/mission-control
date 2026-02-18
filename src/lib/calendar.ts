@@ -60,6 +60,7 @@ export interface ApiCalendarEvent {
   body_scrubbed_preview: string | null;
   is_all_day: boolean;
   external_event_id: string;
+  meeting_context?: string | null;
 }
 
 export interface BusyBlock {

@@ -180,6 +180,8 @@ export async function POST(request: NextRequest) {
     let extractionResult;
     try {
       extractionResult = await extractTaskMetadata({
+        supabase,
+        userId,
         subject: payload.subject,
         from_name: payload.from_name || null,
         from_email: payload.from_email,

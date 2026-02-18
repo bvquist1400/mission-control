@@ -92,6 +92,7 @@ function assertEventContract(event) {
     'title',
     'with_display',
     'body_scrubbed_preview',
+    'meeting_context',
     'is_all_day',
     'external_event_id',
   ]);
@@ -106,6 +107,9 @@ function assertEventContract(event) {
   assert.equal(Array.isArray(event.with_display), true);
   assert.equal(typeof event.is_all_day, 'boolean');
   assert.equal(typeof event.external_event_id, 'string');
+  if (event.meeting_context !== null) {
+    assert.equal(typeof event.meeting_context, 'string');
+  }
 
   if (event.body_scrubbed_preview !== null) {
     assert.equal(typeof event.body_scrubbed_preview, 'string');
