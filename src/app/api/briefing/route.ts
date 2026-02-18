@@ -206,7 +206,7 @@ export async function GET(request: NextRequest) {
       }
       // Due today or high priority
       if (task.due_at && task.due_at <= todayEnd) return true;
-      if (task.priority_score >= 70 && task.status === "Next") return true;
+      if (task.priority_score >= 70 && (task.status === "Planned" || task.status === "In Progress")) return true;
       return false;
     });
 
@@ -223,7 +223,7 @@ export async function GET(request: NextRequest) {
     // Calculate capacity
     const topTaskIds = new Set(
       allTasks
-        .filter((t) => t.status !== "Done")
+        .filter((t) => t.status === "Planned" || t.status === "In Progress")
         .slice(0, 3)
         .map((t) => t.id)
     );

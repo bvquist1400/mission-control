@@ -1,4 +1,4 @@
-export type TaskStatus = "Next" | "Scheduled" | "Waiting" | "Done";
+export type TaskStatus = "Backlog" | "Planned" | "In Progress" | "Blocked/Waiting" | "Done";
 export type TaskType = "Task" | "Ticket" | "MeetingPrep" | "FollowUp" | "Admin" | "Build";
 export type CommentSource = "manual" | "system" | "llm";
 export type ImplPhase =

@@ -22,7 +22,7 @@ interface TaskDraft {
   waitingOn: string;
 }
 
-const NEW_TASK_STATUSES: TaskStatus[] = ["Next", "Scheduled", "Waiting"];
+const NEW_TASK_STATUSES: TaskStatus[] = ["Backlog", "Planned", "In Progress", "Blocked/Waiting"];
 const TASK_TYPES: { value: TaskType; label: string }[] = [
   { value: "Task", label: "Task" },
   { value: "Admin", label: "Admin" },
@@ -38,7 +38,7 @@ function createInitialDraft(defaultNeedsReview: boolean): TaskDraft {
     implementationId: "",
     estimatedMinutes: 30,
     dueDate: "",
-    status: "Next",
+    status: "Backlog",
     taskType: "Admin",
     blocker: false,
     sendToTriage: defaultNeedsReview,
@@ -64,7 +64,7 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
       return;
     }
 
-    if (draft.status === "Waiting" && !draft.waitingOn.trim()) {
+    if (draft.status === "Blocked/Waiting" && !draft.waitingOn.trim()) {
       setError("Please specify what this task is waiting on");
       return;
     }
@@ -86,7 +86,7 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
           blocker: draft.blocker,
           needs_review: draft.sendToTriage,
           task_type: draft.taskType,
-          waiting_on: draft.status === "Waiting" ? draft.waitingOn.trim() : null,
+          waiting_on: draft.status === "Blocked/Waiting" ? draft.waitingOn.trim() : null,
           source_type: "Manual",
         }),
       });
@@ -221,7 +221,7 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
             </label>
           </div>
 
-          {draft.status === "Waiting" && (
+          {draft.status === "Blocked/Waiting" && (
             <label className="block space-y-1">
               <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Waiting On</span>
               <input

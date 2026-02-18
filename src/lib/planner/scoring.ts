@@ -79,7 +79,7 @@ function isWaitingTask(task: PlannerTaskLike): boolean {
     return task.waiting;
   }
 
-  if (task.status === 'Waiting') {
+  if (task.status === 'Blocked/Waiting') {
     return true;
   }
 

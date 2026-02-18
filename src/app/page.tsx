@@ -139,7 +139,7 @@ async function fetchTodayData(): Promise<TodayData> {
 
   // Sort by priority_score descending for top 3
   const sortedByPriority = [...allTasks]
-    .filter((t) => t.status !== "Done" && t.status !== "Waiting")
+    .filter((t) => t.status === "Planned" || t.status === "In Progress")
     .sort((a, b) => b.priority_score - a.priority_score);
 
   const topThree = sortedByPriority.slice(0, 3).map((task) => taskToCardData(task));
@@ -171,9 +171,9 @@ async function fetchTodayData(): Promise<TodayData> {
     .slice(0, 6)
     .map((task) => taskToCardData(task, getDueState(task.due_at, now)));
 
-  // Waiting on: tasks with status "Waiting"
+  // Waiting on: tasks with status "Blocked/Waiting"
   const waitingOn: WaitingTask[] = allTasks
-    .filter((task) => task.status === "Waiting")
+    .filter((task) => task.status === "Blocked/Waiting")
     .map((task) => ({
       id: task.id,
       title: task.title,
@@ -420,7 +420,7 @@ export default function TodayPage() {
 
       <section className="grid gap-4 lg:grid-cols-2">
         <article className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
-          <h2 className="text-lg font-semibold text-foreground">Waiting On</h2>
+          <h2 className="text-lg font-semibold text-foreground">Blocked / Waiting</h2>
           {data.waitingOn.length === 0 ? (
             <p className="mt-4 text-sm text-muted-foreground">No tasks waiting on others.</p>
           ) : (

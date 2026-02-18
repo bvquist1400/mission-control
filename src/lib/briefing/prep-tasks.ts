@@ -200,7 +200,7 @@ export function findRolledOverTasks(
       // Was due today or earlier
       if (task.due_at && task.due_at <= todayEnd) return true;
       // Or has high priority and is actionable
-      if (task.priority_score >= 70 && task.status === "Next") return true;
+      if (task.priority_score >= 70 && (task.status === "Planned" || task.status === "In Progress")) return true;
       return false;
     })
     .map((task) => taskToSummary(task, task.implementation?.name))

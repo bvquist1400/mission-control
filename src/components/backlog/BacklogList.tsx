@@ -45,7 +45,7 @@ type StatusFilter = "All" | TaskStatus;
 type ReviewFilter = "All" | "Needs review" | "Ready";
 type ImplementationFilter = "All" | "Unassigned" | string;
 
-const STATUS_FILTER_OPTIONS: StatusFilter[] = ["All", "Next", "Scheduled", "Waiting", "Done"];
+const STATUS_FILTER_OPTIONS: StatusFilter[] = ["All", "Backlog", "Planned", "In Progress", "Blocked/Waiting", "Done"];
 const REVIEW_FILTER_OPTIONS: ReviewFilter[] = ["All", "Needs review", "Ready"];
 const TASK_TYPE_OPTIONS: Array<{ value: TaskType; label: string }> = [
   { value: "Task", label: "Task" },
@@ -329,7 +329,7 @@ function TaskMetaEditor({ task, isSaving, onUpdate }: TaskMetaEditorProps) {
               }
             }}
             disabled={isSaving}
-            placeholder={task.status === "Waiting" ? "Who or what is this waiting on?" : "Optional context"}
+            placeholder={task.status === "Blocked/Waiting" ? "Who or what is this waiting on?" : "Optional context"}
             className="w-full rounded border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
           />
         </label>
@@ -696,7 +696,7 @@ export function BacklogList() {
   }
 
   function handleToggleDone(task: TaskWithImplementation) {
-    const nextStatus: TaskStatus = task.status === "Done" ? "Next" : "Done";
+    const nextStatus: TaskStatus = task.status === "Done" ? "Backlog" : "Done";
     void updateTask(task.id, { status: nextStatus });
   }
 
@@ -834,7 +834,7 @@ export function BacklogList() {
                   <th className="w-10 px-2 py-3" />
                   <th className="min-w-[280px] px-3 py-3">Task</th>
                   <th className="w-[160px] px-3 py-3">Implementation</th>
-                  <th className="w-[100px] px-3 py-3">Status</th>
+                  <th className="w-[170px] px-3 py-3">Status</th>
                   <th className="w-[80px] px-3 py-3 text-center">Est (min)</th>
                   <th className="w-[120px] px-3 py-3">Due</th>
                   <th className="w-[80px] px-3 py-3 text-center">Type</th>
@@ -876,7 +876,7 @@ export function BacklogList() {
                         {/* Task title */}
                         <td className="min-w-[280px] px-3 py-2.5 align-middle">
                           <p className="text-sm font-medium text-foreground leading-tight">{task.title}</p>
-                          {task.status === "Waiting" && (
+                          {task.status === "Blocked/Waiting" && (
                             <p
                               className={`mt-1 text-xs ${
                                 task.waiting_on ? "text-amber-300" : "text-rose-400"
@@ -907,7 +907,7 @@ export function BacklogList() {
                         </td>
 
                         {/* Status */}
-                        <td className="w-[100px] px-3 py-2.5 align-middle">
+                        <td className="w-[170px] px-3 py-2.5 align-middle">
                           <StatusSelector
                             value={task.status}
                             onChange={(status) => {

@@ -247,7 +247,7 @@ export async function POST(request: NextRequest) {
       extraction.stakeholder_mentions,
       extraction.due_guess_iso,
       extraction.title,
-      'Next'
+      'Backlog'
     );
     const finalPriority = calculateFinalPriorityScore(extraction.priority_score, boosts);
 
@@ -257,7 +257,7 @@ export async function POST(request: NextRequest) {
         user_id: userId,
         title: extraction.title,
         implementation_id: implementationId,
-        status: 'Next',
+        status: 'Backlog',
         task_type: extraction.task_type,
         priority_score: finalPriority,
         estimated_minutes: extraction.estimated_minutes,

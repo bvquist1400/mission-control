@@ -72,10 +72,10 @@ export function calculateUrgencyBoost(text: string): number {
 
 /**
  * Calculate waiting penalty
- * If task status = Waiting: -20
+ * If task status = Blocked/Waiting: -20
  */
 export function calculateWaitingPenalty(status: string): number {
-  return status === 'Waiting' ? -20 : 0;
+  return status === 'Blocked/Waiting' ? -20 : 0;
 }
 
 /**
@@ -136,7 +136,7 @@ export function recalculateTaskPriority(task: Task, baseScore?: number): number 
  */
 export function getTopPriorityTasks(tasks: Task[], limit: number = 3): Task[] {
   return [...tasks]
-    .filter((t) => t.status !== 'Done' && t.status !== 'Waiting')
+    .filter((t) => t.status === 'Planned' || t.status === 'In Progress')
     .sort((a, b) => b.priority_score - a.priority_score)
     .slice(0, limit);
 }
@@ -162,11 +162,11 @@ export function getTasksDueSoon(tasks: Task[], hoursAhead: number = 48): Task[] 
 }
 
 /**
- * Get tasks in Waiting status
+ * Get tasks in Blocked/Waiting status
  */
 export function getWaitingTasks(tasks: Task[]): Task[] {
   return tasks
-    .filter((t) => t.status === 'Waiting')
+    .filter((t) => t.status === 'Blocked/Waiting')
     .sort((a, b) => {
       // Sort by follow_up_at if available, otherwise by created_at
       const aDate = a.follow_up_at || a.created_at;

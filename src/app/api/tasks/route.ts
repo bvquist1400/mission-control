@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import type { TaskStatus, TaskType, EstimateSource } from '@/types/database';
 
-const VALID_STATUSES: TaskStatus[] = ['Next', 'Scheduled', 'Waiting', 'Done'];
+const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Done'];
 const VALID_TASK_TYPES: TaskType[] = ['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build'];
 const VALID_ESTIMATE_SOURCES: EstimateSource[] = ['default', 'llm', 'manual'];
 
@@ -122,7 +122,7 @@ export async function POST(request: NextRequest) {
 
     // Validate status if provided
     const statusInput = asStringOrNull(body.status);
-    let status: TaskStatus = 'Next';
+    let status: TaskStatus = 'Backlog';
     if (statusInput) {
       if (!isValidStatus(statusInput)) {
         return NextResponse.json(

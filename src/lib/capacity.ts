@@ -109,14 +109,14 @@ export function calculateCapacity(
   meetingMinutes: number = 0,
   config: CapacityConfig = DEFAULT_CAPACITY_CONFIG
 ): CapacityResult {
-  // Count focus tasks (non-waiting, non-done tasks for today)
+  // Count focus tasks (planned/in-progress tasks for today)
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const tomorrow = new Date(today);
   tomorrow.setDate(tomorrow.getDate() + 1);
 
   const focusTasks = tasks.filter((task) => {
-    if (task.status === 'Done' || task.status === 'Waiting') return false;
+    if (task.status !== 'Planned' && task.status !== 'In Progress') return false;
     if (topTaskIds.has(task.id)) return true;
     if (task.due_at) {
       const dueDate = new Date(task.due_at);
@@ -188,7 +188,9 @@ export function calculateWeekCapacity(
 
   for (const [dateStr, tasks] of tasksByDay) {
     // For weekly view, use top 3 from each day's tasks
-    const sortedTasks = [...tasks].sort((a, b) => b.priority_score - a.priority_score);
+    const sortedTasks = [...tasks]
+      .filter((task) => task.status === 'Planned' || task.status === 'In Progress')
+      .sort((a, b) => b.priority_score - a.priority_score);
     const topTaskIds = new Set(sortedTasks.slice(0, 3).map((t) => t.id));
 
     results.set(dateStr, calculateCapacity(tasks, topTaskIds, 0, config));

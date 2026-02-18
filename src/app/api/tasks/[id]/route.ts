@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { recalculateTaskPriority } from '@/lib/priority';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
-import type { TaskType } from '@/types/database';
+import type { TaskStatus, TaskType } from '@/types/database';
 
+const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Done'];
 const VALID_TASK_TYPES: TaskType[] = ['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build'];
+
+function isValidStatus(value: string): value is TaskStatus {
+  return VALID_STATUSES.includes(value as TaskStatus);
+}
 
 function isValidTaskType(value: string): value is TaskType {
   return VALID_TASK_TYPES.includes(value as TaskType);
@@ -107,6 +112,16 @@ export async function PATCH(
 
     if ('title' in updates && (typeof updates.title !== 'string' || updates.title.length === 0)) {
       return NextResponse.json({ error: 'title cannot be empty' }, { status: 400 });
+    }
+
+    if ('status' in updates) {
+      const status = updates.status;
+      if (typeof status !== 'string' || !isValidStatus(status)) {
+        return NextResponse.json(
+          { error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}` },
+          { status: 400 }
+        );
+      }
     }
 
     if ('task_type' in updates) {
