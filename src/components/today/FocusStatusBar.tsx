@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
 interface FocusDirective {
@@ -18,6 +18,9 @@ interface FocusStatusBarProps {
 export function FocusStatusBar({ onDirectiveChange }: FocusStatusBarProps) {
   const [active, setActive] = useState<FocusDirective | null>(null);
   const [loading, setLoading] = useState(true);
+  const lastDirectiveIdRef = useRef<string | null>(null);
+  const onDirectiveChangeRef = useRef(onDirectiveChange);
+  onDirectiveChangeRef.current = onDirectiveChange;
 
   useEffect(() => {
     async function loadFocus() {
@@ -25,8 +28,13 @@ export function FocusStatusBar({ onDirectiveChange }: FocusStatusBarProps) {
         const response = await fetch("/api/focus", { cache: "no-store" });
         if (response.ok) {
           const data = await response.json();
-          setActive(data.active ?? null);
-          onDirectiveChange?.(data.active?.id ?? null);
+          const nextActive = data.active ?? null;
+          const nextDirectiveId = nextActive?.id ?? null;
+          setActive(nextActive);
+          if (lastDirectiveIdRef.current !== nextDirectiveId) {
+            lastDirectiveIdRef.current = nextDirectiveId;
+            onDirectiveChangeRef.current?.(nextDirectiveId);
+          }
         }
       } catch {
         // Silently fail - focus is optional
@@ -35,7 +43,7 @@ export function FocusStatusBar({ onDirectiveChange }: FocusStatusBarProps) {
       }
     }
     loadFocus();
-  }, [onDirectiveChange]);
+  }, []);
 
   if (loading) {
     return null;

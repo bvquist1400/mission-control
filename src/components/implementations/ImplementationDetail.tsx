@@ -163,25 +163,31 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
   }
 
   async function addStatusUpdate() {
-    if (!impl || !newStatusText.trim()) return;
+    const note = newStatusText.trim();
+    if (!impl || !note) return;
 
     setAddingStatus(true);
     setError(null);
 
     try {
-      // Generate copy update which also saves to log
+      // Generate copy update, save the typed note to history, and copy the snippet.
       const response = await fetch(`/api/applications/${id}/copy-update`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ saveToLog: true }),
+        body: JSON.stringify({ saveToLog: true, note }),
       });
 
       if (!response.ok) {
         throw new Error("Failed to save status update");
       }
 
+      const data = (await response.json().catch(() => null)) as { snippet?: string } | null;
+      if (typeof data?.snippet === "string" && data.snippet.length > 0) {
+        await navigator.clipboard.writeText(data.snippet);
+      }
+
       // Update status_summary field
-      await updateField({ status_summary: newStatusText.trim() });
+      await updateField({ status_summary: note });
 
       // Refresh status updates
       const updatesData = await fetchStatusUpdates(id);

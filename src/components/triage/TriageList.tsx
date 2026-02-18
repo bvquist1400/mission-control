@@ -156,6 +156,10 @@ export function TriageList() {
   }
 
   async function dismissTask(taskId: string): Promise<void> {
+    if (!confirm("Dismiss this task from triage?")) {
+      return;
+    }
+
     const previousTasks = tasks;
     markSaving(taskId);
     setError(null);

@@ -44,7 +44,9 @@ export function CapacityMeter({ capacity }: CapacityMeterProps) {
   return (
     <div className="relative">
       <button
+        type="button"
         onClick={() => setIsExpanded(!isExpanded)}
+        aria-label={isExpanded ? "Hide capacity breakdown" : "Show capacity breakdown"}
         className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium transition hover:opacity-80 ${colors.bg} ${colors.border} ${colors.text}`}
         title="Click to see capacity breakdown"
       >

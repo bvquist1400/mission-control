@@ -59,6 +59,10 @@ export async function POST(
       return NextResponse.json({ error: 'content is required' }, { status: 400 });
     }
 
+    if (body.content.length > 5000) {
+      return NextResponse.json({ error: 'content must be 5000 characters or fewer' }, { status: 400 });
+    }
+
     // Validate source if provided
     let source: CommentSource = 'manual';
     if (typeof body.source === 'string') {

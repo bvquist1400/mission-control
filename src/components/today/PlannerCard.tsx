@@ -62,8 +62,8 @@ interface PlannerPlanRecord {
   status: "proposed" | "applied" | "dismissed";
   source: string;
   created_at: string;
-  plan_json: PlannerPlanJson;
-  reasons_json: Record<string, PlannerReasonEntry>;
+  plan_json: unknown;
+  reasons_json: unknown;
 }
 
 interface PlannerGetResponse {
@@ -77,8 +77,8 @@ interface PlannerPostResponse {
   planDate: string;
   mode: PlannerMode;
   source: string;
-  plan_json: PlannerPlanJson;
-  reasons_json: Record<string, PlannerReasonEntry>;
+  plan_json: unknown;
+  reasons_json: unknown;
   note?: string;
   persisted?: {
     saved: boolean;
@@ -97,11 +97,41 @@ interface PlannerViewState {
 }
 
 interface PlannerCardProps {
-  replanSignal?: number;
+  autoReplanKey?: string | null;
+  onAutoReplanHandled?: (key: string) => void;
 }
 
 const PLANNER_READ_TIMEOUT_MS = 12000;
 const PLANNER_REPLAN_TIMEOUT_MS = 20000;
+const AUTO_REPLAN_DEBOUNCE_MS = 350;
+const AUTO_REPLAN_COOLDOWN_MS = 8000;
+const AUTO_REPLAN_STORAGE_KEY = "mc:planner:last-auto-replan-key";
+let lastAutoReplanKeyHandled: string | null = null;
+let lastAutoReplanAtMs = 0;
+
+function readLastAutoReplanKey(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    return window.sessionStorage.getItem(AUTO_REPLAN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeLastAutoReplanKey(value: string): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.sessionStorage.setItem(AUTO_REPLAN_STORAGE_KEY, value);
+  } catch {
+    // Ignore sessionStorage failures.
+  }
+}
 
 async function fetchWithTimeout(
   input: RequestInfo | URL,
@@ -212,6 +242,146 @@ function toErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function normalizePlanStatus(value: unknown): PlannerViewState["status"] {
+  return value === "proposed" || value === "applied" || value === "dismissed" ? value : "unsaved";
+}
+
+function normalizeNowNext(raw: unknown): PlannerNowNext | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+
+  const taskId = typeof raw.taskId === "string" ? raw.taskId : typeof raw.task_id === "string" ? raw.task_id : null;
+  if (!taskId) {
+    return null;
+  }
+
+  return {
+    taskId,
+    title: typeof raw.title === "string" ? raw.title : undefined,
+    suggestedMinutes: typeof raw.suggestedMinutes === "number" ? raw.suggestedMinutes : 30,
+    mode: typeof raw.mode === "string" ? raw.mode : "deep",
+  };
+}
+
+function normalizePlanJson(raw: unknown): PlannerPlanJson | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+
+  const next3Raw = Array.isArray(raw.next3) ? raw.next3 : Array.isArray(raw.next_3) ? raw.next_3 : [];
+  const queueRaw = Array.isArray(raw.queue) ? raw.queue : [];
+  const exceptionsRaw = Array.isArray(raw.exceptions) ? raw.exceptions : [];
+  const windowsRaw = Array.isArray(raw.windows) ? raw.windows : [];
+
+  const nowNext = normalizeNowNext(raw.nowNext ?? raw.now_next);
+  const next3: PlannerNextItem[] = [];
+  for (const item of next3Raw) {
+    if (!isRecord(item)) {
+      continue;
+    }
+    const taskId = typeof item.taskId === "string" ? item.taskId : typeof item.task_id === "string" ? item.task_id : null;
+    if (!taskId) {
+      continue;
+    }
+    next3.push({
+      taskId,
+      title: typeof item.title === "string" ? item.title : undefined,
+    });
+  }
+
+  const queue: PlannerQueueItem[] = [];
+  for (let index = 0; index < queueRaw.length; index += 1) {
+    const item = queueRaw[index];
+    if (!isRecord(item)) {
+      continue;
+    }
+    const taskId = typeof item.taskId === "string" ? item.taskId : typeof item.task_id === "string" ? item.task_id : null;
+    if (!taskId) {
+      continue;
+    }
+    queue.push({
+      taskId,
+      rank: typeof item.rank === "number" ? item.rank : index + 1,
+      score: typeof item.score === "number" ? item.score : 0,
+      title: typeof item.title === "string" ? item.title : undefined,
+    });
+  }
+
+  const exceptions: PlannerExceptionItem[] = [];
+  for (const item of exceptionsRaw) {
+    if (!isRecord(item)) {
+      continue;
+    }
+    const taskId = typeof item.taskId === "string" ? item.taskId : typeof item.task_id === "string" ? item.task_id : null;
+    if (!taskId) {
+      continue;
+    }
+    exceptions.push({
+      taskId,
+      score: typeof item.score === "number" ? item.score : undefined,
+      title: typeof item.title === "string" ? item.title : undefined,
+      reason: typeof item.reason === "string" ? item.reason : undefined,
+    });
+  }
+
+  const windows: PlannerWindow[] = [];
+  for (const item of windowsRaw) {
+    if (!isRecord(item)) {
+      continue;
+    }
+    windows.push({
+      minutes: typeof item.minutes === "number" ? item.minutes : undefined,
+      source: typeof item.source === "string" ? item.source : undefined,
+    });
+  }
+
+  if (!nowNext && next3.length === 0 && queue.length === 0 && exceptions.length === 0 && windows.length === 0) {
+    return null;
+  }
+
+  return {
+    nowNext,
+    next3,
+    queue,
+    exceptions,
+    windows,
+  };
+}
+
+function normalizeReasons(raw: unknown): Record<string, PlannerReasonEntry> {
+  if (!isRecord(raw)) {
+    return {};
+  }
+
+  const result: Record<string, PlannerReasonEntry> = {};
+  for (const [taskId, entry] of Object.entries(raw)) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+
+    result[taskId] = {
+      finalScore: typeof entry.finalScore === "number" ? entry.finalScore : undefined,
+      why: Array.isArray(entry.why) ? entry.why.filter((line): line is string => typeof line === "string") : undefined,
+      directiveMatched: typeof entry.directiveMatched === "boolean" ? entry.directiveMatched : undefined,
+      directiveMultiplier: typeof entry.directiveMultiplier === "number" ? entry.directiveMultiplier : undefined,
+      implementationMultiplier:
+        typeof entry.implementationMultiplier === "number" ? entry.implementationMultiplier : undefined,
+      urgencyBoost: typeof entry.urgencyBoost === "number" ? entry.urgencyBoost : undefined,
+      stakeholderBoost: typeof entry.stakeholderBoost === "number" ? entry.stakeholderBoost : undefined,
+      stalenessBoost: typeof entry.stalenessBoost === "number" ? entry.stalenessBoost : undefined,
+      statusAdjust: typeof entry.statusAdjust === "number" ? entry.statusAdjust : undefined,
+      fitBonus: typeof entry.fitBonus === "number" ? entry.fitBonus : undefined,
+    };
+  }
+
+  return result;
+}
+
 async function fetchLatestPlan(date: string): Promise<PlannerGetResponse> {
   const response = await fetchWithTimeout(
     `/api/planner/plan?date=${date}`,
@@ -253,7 +423,7 @@ async function replan(date: string, mode: PlannerMode): Promise<PlannerPostRespo
   return data;
 }
 
-export function PlannerCard({ replanSignal = 0 }: PlannerCardProps) {
+export function PlannerCard({ autoReplanKey = null, onAutoReplanHandled }: PlannerCardProps) {
   const dateInEt = useMemo(() => getDateInTimeZone("America/New_York"), []);
   const [selectedDate, setSelectedDate] = useState(dateInEt);
   const [mode, setMode] = useState<PlannerMode>("today");
@@ -263,9 +433,12 @@ export function PlannerCard({ replanSignal = 0 }: PlannerCardProps) {
   const [replanning, setReplanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const hasLoadedOnce = useRef(false);
-  const processedReplanSignal = useRef(0);
   const latestLoadOperationId = useRef(0);
   const latestReplanOperationId = useRef(0);
+  const processedAutoReplanKey = useRef<string | null>(null);
+  const autoReplanTimerRef = useRef<number | null>(null);
+  const onAutoReplanHandledRef = useRef(onAutoReplanHandled);
+  onAutoReplanHandledRef.current = onAutoReplanHandled;
 
   const loadPlan = useCallback(async (targetDate: string, initialLoad: boolean) => {
     const operationId = ++latestLoadOperationId.current;
@@ -282,23 +455,20 @@ export function PlannerCard({ replanSignal = 0 }: PlannerCardProps) {
 
       setState({
         planDate: data.planDate,
-        source: data.plan?.source ?? data.source,
-        status: data.plan?.status ?? "unsaved",
-        generatedAt: data.plan?.created_at ?? null,
-        plan: data.plan?.plan_json ?? null,
-        reasons: data.plan?.reasons_json ?? {},
-        note: data.note ?? null,
+        source: typeof data.plan?.source === "string" ? data.plan.source : data.source,
+        status: normalizePlanStatus(data.plan?.status),
+        generatedAt: typeof data.plan?.created_at === "string" ? data.plan.created_at : null,
+        plan: normalizePlanJson(data.plan?.plan_json),
+        reasons: normalizeReasons(data.plan?.reasons_json),
+        note: typeof data.note === "string" ? data.note : null,
       });
     } catch (loadError) {
       if (operationId !== latestLoadOperationId.current) return;
       setError(toErrorMessage(loadError, "Failed to load planner"));
     } finally {
       if (operationId === latestLoadOperationId.current) {
-        if (initialLoad) {
-          setLoading(false);
-        } else {
-          setRefreshing(false);
-        }
+        setLoading(false);
+        setRefreshing(false);
       }
     }
   }, []);
@@ -324,9 +494,9 @@ export function PlannerCard({ replanSignal = 0 }: PlannerCardProps) {
           source: data.source,
           status: data.persisted?.saved ? "proposed" : "unsaved",
           generatedAt: new Date().toISOString(),
-          plan: data.plan_json,
-          reasons: data.reasons_json,
-          note: data.note ?? null,
+          plan: normalizePlanJson(data.plan_json),
+          reasons: normalizeReasons(data.reasons_json),
+          note: typeof data.note === "string" ? data.note : null,
         });
       } catch (replanError) {
         if (operationId !== latestReplanOperationId.current) return;
@@ -340,6 +510,9 @@ export function PlannerCard({ replanSignal = 0 }: PlannerCardProps) {
     [mode, selectedDate]
   );
 
+  const handleReplanRef = useRef(handleReplan);
+  handleReplanRef.current = handleReplan;
+
   useEffect(() => {
     const initialLoad = !hasLoadedOnce.current;
     hasLoadedOnce.current = true;
@@ -347,15 +520,47 @@ export function PlannerCard({ replanSignal = 0 }: PlannerCardProps) {
   }, [loadPlan, selectedDate]);
 
   useEffect(() => {
-    if (replanSignal <= 0 || processedReplanSignal.current === replanSignal) {
+    return () => {
+      if (autoReplanTimerRef.current !== null) {
+        window.clearTimeout(autoReplanTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (
+      !autoReplanKey ||
+      autoReplanKey === processedAutoReplanKey.current ||
+      autoReplanKey === lastAutoReplanKeyHandled ||
+      autoReplanKey === readLastAutoReplanKey()
+    ) {
       return;
     }
 
-    processedReplanSignal.current = replanSignal;
-    void handleReplan();
-  }, [handleReplan, replanSignal]);
+    // Mark this key as processed immediately to prevent re-entry
+    // on subsequent renders (from replanning state changes, etc.)
+    processedAutoReplanKey.current = autoReplanKey;
 
-  const queuePreview = state?.plan?.queue.slice(0, 8) ?? [];
+    const now = Date.now();
+    const cooldownRemaining = Math.max(0, AUTO_REPLAN_COOLDOWN_MS - (now - lastAutoReplanAtMs));
+    const delayMs = Math.max(AUTO_REPLAN_DEBOUNCE_MS, cooldownRemaining);
+
+    if (autoReplanTimerRef.current !== null) {
+      window.clearTimeout(autoReplanTimerRef.current);
+    }
+
+    const capturedKey = autoReplanKey;
+    autoReplanTimerRef.current = window.setTimeout(() => {
+      lastAutoReplanKeyHandled = capturedKey;
+      lastAutoReplanAtMs = Date.now();
+      writeLastAutoReplanKey(capturedKey);
+      autoReplanTimerRef.current = null;
+      onAutoReplanHandledRef.current?.(capturedKey);
+      void handleReplanRef.current();
+    }, delayMs);
+  }, [autoReplanKey]);
+
+  const queuePreview = state?.plan?.queue?.slice(0, 8) ?? [];
   const nextThree = state?.plan?.next3 ?? [];
   const exceptions = state?.plan?.exceptions ?? [];
   const windows = state?.plan?.windows ?? [];
@@ -399,7 +604,7 @@ export function PlannerCard({ replanSignal = 0 }: PlannerCardProps) {
         <div>
           <h2 className="text-lg font-semibold text-foreground">Plans</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Directive-aware recommendations for now, next, and exceptions (v1.2 UI).
+            Directive-aware recommendations for now, next, and exceptions.
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <span>{state?.planDate ? `Plan date ${state.planDate}` : `Plan date ${selectedDate}`}</span>
@@ -447,6 +652,7 @@ export function PlannerCard({ replanSignal = 0 }: PlannerCardProps) {
             type="button"
             onClick={() => void handleRefresh()}
             disabled={loading || refreshing || replanning}
+            aria-label="Refresh plan"
             className="rounded-lg border border-stroke px-3 py-2 text-sm font-semibold text-foreground transition hover:bg-panel-muted disabled:cursor-not-allowed disabled:opacity-60"
           >
             {refreshing ? "Refreshing..." : "Refresh"}
@@ -456,6 +662,7 @@ export function PlannerCard({ replanSignal = 0 }: PlannerCardProps) {
             type="button"
             onClick={() => void handleReplan()}
             disabled={loading || refreshing || replanning}
+            aria-label="Generate new plan"
             className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {replanning ? "Replanning..." : "Replan"}

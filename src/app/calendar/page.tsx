@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { PageHeader } from '@/components/layout/PageHeader';
+import { localDateString } from '@/components/utils/dates';
 
 interface CalendarEvent {
   start_at: string;
@@ -83,14 +84,10 @@ function formatMinutes(value: number): string {
   return `${hours}h ${minutes}m`;
 }
 
-function toDateString(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
-
 function addDays(dateString: string, days: number): string {
   const date = new Date(`${dateString}T00:00:00.000Z`);
   date.setUTCDate(date.getUTCDate() + days);
-  return toDateString(date);
+  return localDateString(date);
 }
 
 function LoadingSkeleton() {
@@ -131,7 +128,7 @@ export default function CalendarPage() {
       setError(null);
       setAuthRequired(false);
 
-      const today = toDateString(new Date());
+      const today = localDateString();
       const rangeStart = today;
       const rangeEnd = addDays(today, daysAhead);
 
@@ -361,6 +358,9 @@ export default function CalendarPage() {
             </div>
           ) : (
             <section className="overflow-x-auto rounded-card border border-stroke bg-panel">
+              <p className="border-b border-stroke px-4 py-2 text-[11px] font-medium text-muted-foreground sm:hidden">
+                Scroll for more &rarr;
+              </p>
               <div className="grid min-w-[1050px] grid-cols-[1.35fr_1fr_1fr_1.4fr_1.8fr] gap-3 border-b border-stroke px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 <span>Event</span>
                 <span>With</span>

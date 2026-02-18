@@ -78,15 +78,16 @@ export async function POST(
 
     const snippet = generateStatusSnippet(implementation, blockerTitles);
 
-    const body = (await request.json().catch(() => ({}))) as { saveToLog?: boolean };
+    const body = (await request.json().catch(() => ({}))) as { saveToLog?: boolean; note?: string };
     const saveToLog = body.saveToLog !== false;
+    const userNote = typeof body.note === 'string' ? body.note.trim() : '';
 
     if (saveToLog) {
       const { error: insertError } = await supabase.from('status_updates').insert({
         user_id: userId,
         implementation_id: id,
-        update_text: snippet,
-        created_by: 'Assistant',
+        update_text: userNote || snippet,
+        created_by: userNote ? 'Brent' : 'Assistant',
         related_task_ids: relatedTaskIds,
       });
 

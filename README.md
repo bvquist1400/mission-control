@@ -8,11 +8,7 @@ Mission Control is a Next.js + Supabase app for daily operations, triage, implem
    ```bash
    npm install
    ```
-2. Create local env:
-   ```bash
-   cp .env.example .env.local
-   ```
-3. Fill in Supabase keys and optional provider keys in `.env.local`.
+2. Create `.env.local` with your Supabase keys and optional provider keys (see Environment Variables below).
 4. Run the app:
    ```bash
    npm run dev
@@ -20,7 +16,7 @@ Mission Control is a Next.js + Supabase app for daily operations, triage, implem
 
 ## Environment Variables
 
-Primary variables are defined in `.env.example`.
+Required: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`. Optional: `DEFAULT_USER_ID`, `LLM_ADMIN_USER_ID`, and the settings below.
 
 ### Calendar settings
 
@@ -73,6 +69,24 @@ Apply Supabase SQL migrations from `supabase/migrations/`:
 - `004_add_task_type_task.sql`
 - `005_focus_planner_brain.sql`
 - `006_calendar_event_context.sql`
+- `007_llm_model_eval.sql` — LLM model catalog, user preferences, and usage telemetry
+- `008_task_status_workflow.sql` — Renames task status enum values (Next->Backlog, Scheduled->Planned, Waiting->Blocked/Waiting) and adds In Progress
+- `009_add_quick_capture_feature.sql` — Adds `quick_capture` to LLM feature CHECK constraints
+- `010_missing_rls_policies.sql` — Adds missing RLS policies for inbox_items and status_updates
+
+### Task status values
+
+After migration 008, the valid `task_status` enum values are:
+
+`Backlog` | `Planned` | `In Progress` | `Blocked/Waiting` | `Done`
+
+The old values (`Next`, `Scheduled`, `Waiting`) no longer exist.
+
+### LLM features
+
+Supported feature names for model preferences and usage tracking:
+
+`briefing_narrative` | `intake_extraction` | `quick_capture`
 
 ## Validation
 

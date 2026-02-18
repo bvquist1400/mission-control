@@ -102,6 +102,14 @@ export async function PATCH(
       'keywords',
     ];
 
+    if (typeof body.name === 'string' && body.name.length > 200) {
+      return NextResponse.json({ error: 'name must be 200 characters or fewer' }, { status: 400 });
+    }
+
+    if (typeof body.status_summary === 'string' && body.status_summary.length > 2000) {
+      return NextResponse.json({ error: 'status_summary must be 2000 characters or fewer' }, { status: 400 });
+    }
+
     const updates: Record<string, unknown> = {};
     for (const field of allowedFields) {
       if (!(field in body)) {

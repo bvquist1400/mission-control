@@ -7,7 +7,7 @@ export interface WorkdayConfig {
 export const DEFAULT_WORKDAY_CONFIG: WorkdayConfig = {
   timezone: 'America/New_York',
   focusWindowStartHour: 8,
-  focusWindowEndHour: 18,
+  focusWindowEndHour: 16.5,
 };
 
 export function getFocusWindowMinutes(config: WorkdayConfig = DEFAULT_WORKDAY_CONFIG): number {

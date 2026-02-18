@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { TaskCard, type TaskCardData } from "@/components/tasks/TaskCard";
@@ -8,6 +8,7 @@ import { CapacityMeter } from "@/components/today/CapacityMeter";
 import { FocusStatusBar } from "@/components/today/FocusStatusBar";
 import { PlannerCard } from "@/components/today/PlannerCard";
 import { DailyBriefing } from "@/components/today/briefing";
+import { localDateString } from "@/components/utils/dates";
 import type { TaskWithImplementation, CapacityResult } from "@/types/database";
 import { calculateCapacity } from "@/lib/capacity";
 
@@ -85,12 +86,8 @@ async function fetchAllTaskPages(baseParams: Record<string, string>): Promise<Ta
   return allTasks;
 }
 
-function toDateString(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
-
 async function fetchTodayMeetingMinutes(): Promise<number> {
-  const today = toDateString(new Date());
+  const today = localDateString();
   const response = await fetch(`/api/calendar?rangeStart=${today}&rangeEnd=${today}`, { cache: "no-store" });
 
   if (response.status === 401) {
@@ -241,17 +238,22 @@ export default function TodayPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [completingIds, setCompletingIds] = useState<Set<string>>(new Set());
-  const [, setActiveFocusDirectiveId] = useState<string | null>(null);
+  const activeFocusDirectiveIdRef = useRef<string | null>(null);
   const [plannerReplanSignal, setPlannerReplanSignal] = useState(0);
+  const [plannerAutoReplanKey, setPlannerAutoReplanKey] = useState<string | null>(null);
 
   const handleFocusDirectiveChange = useCallback((directiveId: string | null) => {
-    setActiveFocusDirectiveId((current) => {
-      if (current === directiveId) {
-        return current;
-      }
-      setPlannerReplanSignal((value) => value + 1);
-      return directiveId;
-    });
+    if (activeFocusDirectiveIdRef.current === directiveId) {
+      return;
+    }
+
+    activeFocusDirectiveIdRef.current = directiveId;
+    setPlannerReplanSignal((value) => value + 1);
+    setPlannerAutoReplanKey(directiveId ? `focus:${directiveId}` : null);
+  }, []);
+
+  const handlePlannerAutoReplanHandled = useCallback((handledKey: string) => {
+    setPlannerAutoReplanKey((current) => (current === handledKey ? null : current));
   }, []);
 
   const today = new Intl.DateTimeFormat("en-US", {
@@ -293,6 +295,7 @@ export default function TodayPage() {
 
   async function handleQuickComplete(taskId: string) {
     if (!data) return;
+    if (!confirm("Mark as done?")) return;
 
     const previousData = data;
     setCompletingIds((prev) => new Set(prev).add(taskId));
@@ -370,7 +373,7 @@ export default function TodayPage() {
 
       <DailyBriefing replanSignal={plannerReplanSignal} />
 
-      <PlannerCard replanSignal={plannerReplanSignal} />
+      <PlannerCard autoReplanKey={plannerAutoReplanKey} onAutoReplanHandled={handlePlannerAutoReplanHandled} />
 
       <section className="space-y-3">
         <h2 className="text-lg font-semibold text-foreground">Top 3 Today</h2>
@@ -384,6 +387,7 @@ export default function TodayPage() {
                 <button
                   onClick={() => handleQuickComplete(task.id)}
                   disabled={completingIds.has(task.id)}
+                  aria-label="Mark task complete"
                   className="absolute right-3 top-3 rounded-md bg-green-500/15 px-2 py-1 text-xs font-medium text-green-400 transition hover:bg-green-500/25 disabled:opacity-50"
                   title="Mark as done"
                 >
@@ -407,6 +411,7 @@ export default function TodayPage() {
                 <button
                   onClick={() => handleQuickComplete(task.id)}
                   disabled={completingIds.has(task.id)}
+                  aria-label="Mark task complete"
                   className="absolute right-3 top-3 rounded-md bg-green-500/15 px-2 py-1 text-xs font-medium text-green-400 transition hover:bg-green-500/25 disabled:opacity-50"
                   title="Mark as done"
                 >

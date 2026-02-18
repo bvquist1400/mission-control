@@ -33,6 +33,7 @@ interface TaskRow {
   stakeholder_mentions: string[] | null;
   task_type: string | null;
   updated_at: string;
+  pinned_excerpt: string | null;
 }
 
 interface FocusDirectiveRow {
@@ -409,8 +410,22 @@ function matchesDirective(task: TaskRow, directive: FocusDirectiveRow | null): b
 
       return task.task_type.toLowerCase() === scope;
     }
-    case 'query':
+    case 'query': {
+      const query = directive.scope_value?.trim().toLowerCase();
+      if (!query) {
+        return false;
+      }
+
+      if (task.title.toLowerCase().includes(query)) {
+        return true;
+      }
+
+      if (task.pinned_excerpt?.toLowerCase().includes(query)) {
+        return true;
+      }
+
       return false;
+    }
     default:
       return false;
   }
@@ -792,7 +807,7 @@ export async function POST(request: NextRequest) {
     const tasksResult = await supabase
       .from('tasks')
       .select(
-        'id, title, implementation_id, priority_score, due_at, follow_up_at, waiting_on, blocker, status, estimated_minutes, stakeholder_mentions, task_type, updated_at'
+        'id, title, implementation_id, priority_score, due_at, follow_up_at, waiting_on, blocker, status, estimated_minutes, stakeholder_mentions, task_type, updated_at, pinned_excerpt'
       )
       .eq('user_id', userId)
       .neq('status', 'Done')
@@ -807,7 +822,7 @@ export async function POST(request: NextRequest) {
     const activeDirective = await loadActiveDirective(supabase, userId, nowMs);
     const meetingContextSignals = await loadUpcomingMeetingContextSignals(supabase, userId, nowMs);
 
-    const rankedTasks = tasks
+    const allRankedTasks = tasks
       .map((task) =>
         toRankedTask(task, nowMs, activeDirective, implementationWeights, meetingContextSignals, plannerConfig)
       )
@@ -823,6 +838,15 @@ export async function POST(request: NextRequest) {
 
         return a.task.title.localeCompare(b.task.title);
       });
+
+    // "now" mode: only tasks estimated <= 60 min and not Blocked/Waiting
+    const rankedTasks = mode === 'now'
+      ? allRankedTasks.filter(
+          (row) =>
+            row.task.estimated_minutes <= NEXT_WINDOW_MINUTES &&
+            row.task.status !== 'Blocked/Waiting'
+        )
+      : allRankedTasks;
 
     const fitRanked = rankedTasks.filter((row) => row.task.estimated_minutes <= NEXT_WINDOW_MINUTES);
     const nowNextTask = fitRanked[0] ?? rankedTasks[0] ?? null;

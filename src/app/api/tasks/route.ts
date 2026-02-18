@@ -120,6 +120,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'title is required' }, { status: 400 });
     }
 
+    if (body.title.length > 500) {
+      return NextResponse.json({ error: 'title must be 500 characters or fewer' }, { status: 400 });
+    }
+
+    if (typeof body.pinned_excerpt === 'string' && body.pinned_excerpt.length > 2000) {
+      return NextResponse.json({ error: 'pinned_excerpt must be 2000 characters or fewer' }, { status: 400 });
+    }
+
     // Validate status if provided
     const statusInput = asStringOrNull(body.status);
     let status: TaskStatus = 'Backlog';

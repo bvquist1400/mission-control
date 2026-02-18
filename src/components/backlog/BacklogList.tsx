@@ -5,6 +5,7 @@ import { TaskCreateForm } from "@/components/tasks/TaskCreateForm";
 import { TaskComments } from "@/components/tasks/TaskComments";
 import { TaskDependencies } from "@/components/tasks/TaskDependencies";
 import { StatusSelector } from "@/components/ui/StatusSelector";
+import { localDateString } from "@/components/utils/dates";
 import type {
   ImplementationSummary,
   TaskChecklistItem,
@@ -66,7 +67,7 @@ function toDateInputValue(isoString: string | null): string {
 
 function dateToIso(dateString: string): string {
   const date = new Date(`${dateString}T23:59:59`);
-  return date.toISOString();
+  return `${localDateString(date)}T23:59:59.000Z`;
 }
 
 async function fetchTaskPage(params: Record<string, string>): Promise<TaskWithImplementation[]> {
@@ -532,11 +533,14 @@ export function BacklogList() {
     });
 
     try {
-      await fetch(`/api/tasks/${taskId}/checklist`, {
+      const response = await fetch(`/api/tasks/${taskId}/checklist`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ items: [{ id: item.id, is_done: !item.is_done }] }),
       });
+      if (!response.ok) {
+        throw new Error("Failed to update checklist");
+      }
     } catch {
       // Revert on error
       setTaskDetailsById((current) => {
@@ -590,6 +594,10 @@ export function BacklogList() {
   }, []);
 
   const handleDeleteChecklistItem = useCallback(async (taskId: string, itemId: string) => {
+    if (!confirm("Delete checklist item?")) {
+      return;
+    }
+
     // Optimistic update
     setTaskDetailsById((current) => {
       const details = current[taskId];
@@ -827,8 +835,11 @@ export function BacklogList() {
         <EmptyState />
       ) : (
         <section className="overflow-hidden rounded-card border border-stroke bg-panel shadow-sm">
+          <p className="border-b border-stroke px-4 py-2 text-[11px] font-medium text-muted-foreground sm:hidden">
+            Scroll for more &rarr;
+          </p>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1200px]">
+            <table className="w-full min-w-[1100px]">
               <thead className="border-b-2 border-stroke bg-panel-muted">
                 <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground [&>th]:border-r [&>th]:border-solid [&>th]:border-stroke [&>th:last-child]:border-r-0">
                   <th className="w-10 px-2 py-3" />
@@ -852,12 +863,16 @@ export function BacklogList() {
 
                   return (
                     <Fragment key={task.id}>
-                      <tr className={`border-b border-solid border-stroke [&>td]:border-r [&>td]:border-solid [&>td]:border-stroke [&>td:last-child]:border-r-0 ${isSaving ? "opacity-70" : ""} ${isExpanded ? "bg-accent/10" : "hover:bg-panel-muted/40"}`}>
+                      <tr
+                        id={`task-${task.id}`}
+                        className={`border-b border-solid border-stroke [&>td]:border-r [&>td]:border-solid [&>td]:border-stroke [&>td:last-child]:border-r-0 ${isSaving ? "opacity-70" : ""} ${isExpanded ? "bg-accent/10" : "hover:bg-panel-muted/40"}`}
+                      >
                         {/* Expand button */}
                         <td className="w-10 px-2 py-2.5 align-middle text-center">
                           <button
                             type="button"
                             onClick={() => void toggleExpanded(task.id)}
+                            aria-label={isExpanded ? "Collapse task details" : "Expand task details"}
                             className="inline-flex h-7 w-7 items-center justify-center rounded border border-stroke bg-panel-muted text-foreground transition hover:bg-accent hover:text-white hover:border-accent"
                             title={isExpanded ? "Collapse" : "Expand"}
                           >

@@ -1,7 +1,6 @@
 'use client';
 
 import { FormEvent, Suspense, useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { createSupabaseBrowserClient } from '@/lib/supabase';

@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { EstimateButtons } from "@/components/ui/EstimateButtons";
+import { localDateString } from "@/components/utils/dates";
 import type { ImplementationSummary, LlmExtraction, TaskStatus, TaskType, TaskWithImplementation } from "@/types/database";
 
 interface TaskCreateFormProps {
@@ -90,7 +91,7 @@ function createInitialQcDraft(): QuickCaptureDraft {
 
 function dateToIso(dateString: string): string {
   const date = new Date(`${dateString}T23:59:59`);
-  return date.toISOString();
+  return `${localDateString(date)}T23:59:59.000Z`;
 }
 
 const inputClass = "w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60";
@@ -157,7 +158,7 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
     } finally {
       setIsCreating(false);
     }
-  }, [draft, defaultNeedsReview, onTaskCreated]);
+  }, [draft, defaultNeedsReview, implementations, onTaskCreated]);
 
   async function createTask(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -182,7 +183,7 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
         throw new Error(typeof data.error === "string" ? data.error : "Parse failed");
       }
 
-      const { extraction } = (await response.json()) as { extraction: LlmExtraction; model: string };
+      const { extraction } = (await response.json()) as { extraction: LlmExtraction };
 
       // Try to match implementation_guess to an ID
       let matchedImplId = "";

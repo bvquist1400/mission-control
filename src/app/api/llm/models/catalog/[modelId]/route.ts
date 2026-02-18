@@ -47,6 +47,11 @@ export async function PATCH(
     return auth.response as NextResponse;
   }
 
+  const adminUserId = process.env.LLM_ADMIN_USER_ID || process.env.DEFAULT_USER_ID;
+  if (!adminUserId || auth.context.userId !== adminUserId) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   const serviceClient = createSupabaseServiceClient();
   if (!serviceClient) {
     return NextResponse.json(
