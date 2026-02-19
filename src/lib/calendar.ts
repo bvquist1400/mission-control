@@ -144,12 +144,74 @@ interface DateParts {
   day: number;
 }
 
+interface IcsDateTimeParts {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+}
+
+interface ParsedIcsDateTimeValue {
+  iso: string | null;
+  isAllDay: boolean;
+  tzid: string;
+  localParts: IcsDateTimeParts | null;
+}
+
+type RecurrenceFrequency = 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY';
+
+interface RecurrenceByDayToken {
+  weekday: number;
+  ordinal: number | null;
+}
+
+interface ParsedRecurrenceRule {
+  freq: RecurrenceFrequency;
+  interval: number;
+  untilIso: string | null;
+  count: number | null;
+  byDay: RecurrenceByDayToken[];
+  byMonthDay: number[];
+  byMonth: number[];
+  weekStart: number;
+}
+
+interface RecurrenceExpansionWindow {
+  utcRangeStart: string;
+  utcRangeEndExclusive: string;
+}
+
+interface ParsedRecurringEventDefinition {
+  event: ParsedCalendarEvent;
+  uid: string | null;
+  recurrenceIdIso: string | null;
+  recurrenceRule: ParsedRecurrenceRule | null;
+  exdateIsos: string[];
+  rdateIsos: string[];
+  startLocal: IcsDateTimeParts | null;
+  startTimeZone: string;
+}
+
 const DATE_ONLY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 const URL_REGEX = /\bhttps?:\/\/\S+|\bwww\.[^\s]+/gi;
 const MAILTO_REGEX = /\bmailto:[^\s]+/gi;
 const EMAIL_REGEX = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
 const PHONE_REGEX = /\+?\d[\d().\s-]{7,}\d/g;
 const LONG_NUMERIC_ID_REGEX = /\b\d{6,}\b/g;
+const DAY_MS = 86400000;
+const WEEK_MS = 7 * DAY_MS;
+const MAX_RECURRENCE_OCCURRENCES = 2000;
+const WEEKDAY_TO_INDEX: Record<string, number> = {
+  SU: 0,
+  MO: 1,
+  TU: 2,
+  WE: 3,
+  TH: 4,
+  FR: 5,
+  SA: 6,
+};
 
 const JOIN_BLOCK_KEYWORDS = [
   'join microsoft teams meeting',
@@ -440,7 +502,7 @@ function parseIcsDateTime(
   rawValue: string,
   params: Record<string, string>,
   defaultTimeZone: string
-): { iso: string | null; isAllDay: boolean } {
+): ParsedIcsDateTimeValue {
   const value = rawValue.trim();
   const rawTzid = params.TZID || defaultTimeZone;
   const tzid = normalizeTimezoneName(rawTzid);
@@ -453,15 +515,37 @@ function parseIcsDateTime(
 
     try {
       const utc = zonedDateTimeToUtc(year, month, day, 0, 0, 0, tzid);
-      return { iso: utc.toISOString(), isAllDay: true };
+      return {
+        iso: utc.toISOString(),
+        isAllDay: true,
+        tzid,
+        localParts: { year, month, day, hour: 0, minute: 0, second: 0 },
+      };
     } catch {
-      return { iso: new Date(Date.UTC(year, month - 1, day)).toISOString(), isAllDay: true };
+      return {
+        iso: new Date(Date.UTC(year, month - 1, day)).toISOString(),
+        isAllDay: true,
+        tzid,
+        localParts: { year, month, day, hour: 0, minute: 0, second: 0 },
+      };
     }
   }
 
   if (/^\d{8}T\d{6}Z$/i.test(value)) {
     const iso = `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}T${value.slice(9, 11)}:${value.slice(11, 13)}:${value.slice(13, 15)}Z`;
-    return { iso: new Date(iso).toISOString(), isAllDay: false };
+    return {
+      iso: new Date(iso).toISOString(),
+      isAllDay: false,
+      tzid: 'UTC',
+      localParts: {
+        year: Number.parseInt(value.slice(0, 4), 10),
+        month: Number.parseInt(value.slice(4, 6), 10),
+        day: Number.parseInt(value.slice(6, 8), 10),
+        hour: Number.parseInt(value.slice(9, 11), 10),
+        minute: Number.parseInt(value.slice(11, 13), 10),
+        second: Number.parseInt(value.slice(13, 15), 10),
+      },
+    };
   }
 
   if (/^\d{8}T\d{6}$/i.test(value)) {
@@ -474,19 +558,31 @@ function parseIcsDateTime(
 
     try {
       const utc = zonedDateTimeToUtc(year, month, day, hour, minute, second, tzid);
-      return { iso: utc.toISOString(), isAllDay: false };
+      return {
+        iso: utc.toISOString(),
+        isAllDay: false,
+        tzid,
+        localParts: { year, month, day, hour, minute, second },
+      };
     } catch {
       const fallback = Date.parse(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}Z`);
-      return Number.isNaN(fallback) ? { iso: null, isAllDay: false } : { iso: new Date(fallback).toISOString(), isAllDay: false };
+      return Number.isNaN(fallback)
+        ? { iso: null, isAllDay: false, tzid, localParts: { year, month, day, hour, minute, second } }
+        : {
+            iso: new Date(fallback).toISOString(),
+            isAllDay: false,
+            tzid,
+            localParts: { year, month, day, hour, minute, second },
+          };
     }
   }
 
   const parsed = Date.parse(value);
   if (Number.isNaN(parsed)) {
-    return { iso: null, isAllDay: false };
+    return { iso: null, isAllDay: false, tzid, localParts: null };
   }
 
-  return { iso: new Date(parsed).toISOString(), isAllDay: false };
+  return { iso: new Date(parsed).toISOString(), isAllDay: false, tzid, localParts: null };
 }
 
 function parseIcsProperty(line: string): ParsedIcsProperty | null {
@@ -592,10 +688,455 @@ function buildExternalEventId(
   return hashSha256(`${normalizeTitle(title)}::${startAt}::${endAt}`);
 }
 
-function parseIcsEvents(ics: string, defaultTimeZone: string, bodyMaxChars: number): ParsedCalendarEvent[] {
+function parseIcsDateList(rawValue: string, params: Record<string, string>, defaultTimeZone: string): string[] {
+  const parsed: string[] = [];
+
+  for (const value of rawValue.split(',').map((item) => item.trim()).filter(Boolean)) {
+    const resolved = parseIcsDateTime(value, params, defaultTimeZone).iso;
+    if (!resolved) {
+      continue;
+    }
+    parsed.push(normalizeDateIso(resolved));
+  }
+
+  return parsed;
+}
+
+function parseByDayToken(rawToken: string): RecurrenceByDayToken | null {
+  const match = /^([+-]?\d{1,2})?([A-Z]{2})$/i.exec(rawToken.trim());
+  if (!match) {
+    return null;
+  }
+
+  const weekday = WEEKDAY_TO_INDEX[match[2].toUpperCase()];
+  if (weekday === undefined) {
+    return null;
+  }
+
+  if (!match[1]) {
+    return { weekday, ordinal: null };
+  }
+
+  const parsedOrdinal = Number.parseInt(match[1], 10);
+  if (!Number.isFinite(parsedOrdinal) || parsedOrdinal === 0) {
+    return null;
+  }
+
+  return { weekday, ordinal: parsedOrdinal };
+}
+
+function parseRecurrenceRule(rawRule: string, defaultTimeZone: string): ParsedRecurrenceRule | null {
+  const values: Record<string, string> = {};
+
+  for (const token of rawRule.split(';')) {
+    const separatorIndex = token.indexOf('=');
+    if (separatorIndex <= 0) {
+      continue;
+    }
+
+    const key = token.slice(0, separatorIndex).trim().toUpperCase();
+    const value = token.slice(separatorIndex + 1).trim();
+    if (!key || !value) {
+      continue;
+    }
+    values[key] = value;
+  }
+
+  const freq = values.FREQ?.toUpperCase() as RecurrenceFrequency | undefined;
+  if (!freq || !['DAILY', 'WEEKLY', 'MONTHLY', 'YEARLY'].includes(freq)) {
+    return null;
+  }
+
+  const parsedInterval = Number.parseInt(values.INTERVAL ?? '1', 10);
+  const interval = Number.isFinite(parsedInterval) && parsedInterval > 0 ? parsedInterval : 1;
+
+  const untilIso = values.UNTIL
+    ? parseIcsDateTime(values.UNTIL, {}, defaultTimeZone).iso
+    : null;
+
+  const parsedCount = values.COUNT ? Number.parseInt(values.COUNT, 10) : Number.NaN;
+  const count = Number.isFinite(parsedCount) && parsedCount > 0 ? parsedCount : null;
+
+  const byDay = values.BYDAY
+    ? values.BYDAY
+        .split(',')
+        .map((token) => parseByDayToken(token))
+        .filter((token): token is RecurrenceByDayToken => token !== null)
+    : [];
+
+  const byMonthDay = values.BYMONTHDAY
+    ? values.BYMONTHDAY
+        .split(',')
+        .map((token) => Number.parseInt(token, 10))
+        .filter((token) => Number.isFinite(token) && token !== 0)
+    : [];
+
+  const byMonth = values.BYMONTH
+    ? values.BYMONTH
+        .split(',')
+        .map((token) => Number.parseInt(token, 10))
+        .filter((token) => Number.isFinite(token) && token >= 1 && token <= 12)
+    : [];
+
+  const weekStart =
+    WEEKDAY_TO_INDEX[values.WKST?.toUpperCase() ?? 'MO'] ?? WEEKDAY_TO_INDEX.MO;
+
+  return {
+    freq,
+    interval,
+    untilIso,
+    count,
+    byDay,
+    byMonthDay,
+    byMonth,
+    weekStart,
+  };
+}
+
+function getDatePartsInTimeZone(date: Date, timeZone: string): DateParts {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const values: Record<string, string> = {};
+
+  for (const part of formatter.formatToParts(date)) {
+    if (part.type === 'literal') {
+      continue;
+    }
+    values[part.type] = part.value;
+  }
+
+  return {
+    year: Number.parseInt(values.year, 10),
+    month: Number.parseInt(values.month, 10),
+    day: Number.parseInt(values.day, 10),
+  };
+}
+
+function getDayMs(year: number, month: number, day: number): number {
+  return Date.UTC(year, month - 1, day);
+}
+
+function getDaysInMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function getWeekStartMs(dayMs: number, weekStart: number): number {
+  const weekday = new Date(dayMs).getUTCDay();
+  const diff = (weekday - weekStart + 7) % 7;
+  return dayMs - diff * DAY_MS;
+}
+
+function matchesByMonthDay(year: number, month: number, day: number, byMonthDay: number[]): boolean {
+  if (byMonthDay.length === 0) {
+    return true;
+  }
+
+  const daysInMonth = getDaysInMonth(year, month);
+  return byMonthDay.some((token) => {
+    if (token > 0) {
+      return day === token;
+    }
+
+    const normalized = daysInMonth + token + 1;
+    return normalized >= 1 && day === normalized;
+  });
+}
+
+function matchesMonthlyByDay(year: number, month: number, day: number, byDay: RecurrenceByDayToken[]): boolean {
+  if (byDay.length === 0) {
+    return true;
+  }
+
+  const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+  const daysInMonth = getDaysInMonth(year, month);
+  const firstWeekday = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
+  const lastWeekday = new Date(Date.UTC(year, month - 1, daysInMonth)).getUTCDay();
+
+  for (const token of byDay) {
+    if (token.weekday !== weekday) {
+      continue;
+    }
+
+    if (token.ordinal === null) {
+      return true;
+    }
+
+    if (token.ordinal > 0) {
+      const firstMatchDay = 1 + ((token.weekday - firstWeekday + 7) % 7);
+      const targetDay = firstMatchDay + (token.ordinal - 1) * 7;
+      if (targetDay === day && targetDay <= daysInMonth) {
+        return true;
+      }
+      continue;
+    }
+
+    const lastMatchDay = daysInMonth - ((lastWeekday - token.weekday + 7) % 7);
+    const targetDay = lastMatchDay + (token.ordinal + 1) * 7;
+    if (targetDay === day && targetDay >= 1) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function matchesWeekdayToken(weekday: number, byDay: RecurrenceByDayToken[]): boolean {
+  if (byDay.length === 0) {
+    return true;
+  }
+
+  return byDay.some((token) => token.weekday === weekday);
+}
+
+function matchesRecurringLocalDate(
+  year: number,
+  month: number,
+  day: number,
+  startLocal: IcsDateTimeParts,
+  rule: ParsedRecurrenceRule
+): boolean {
+  const candidateDayMs = getDayMs(year, month, day);
+  const startDayMs = getDayMs(startLocal.year, startLocal.month, startLocal.day);
+
+  if (candidateDayMs < startDayMs) {
+    return false;
+  }
+
+  if (rule.byMonth.length > 0 && !rule.byMonth.includes(month)) {
+    return false;
+  }
+
+  const weekday = new Date(candidateDayMs).getUTCDay();
+
+  switch (rule.freq) {
+    case 'DAILY': {
+      const diffDays = Math.floor((candidateDayMs - startDayMs) / DAY_MS);
+      if (diffDays % rule.interval !== 0) {
+        return false;
+      }
+      if (!matchesWeekdayToken(weekday, rule.byDay)) {
+        return false;
+      }
+      return matchesByMonthDay(year, month, day, rule.byMonthDay);
+    }
+    case 'WEEKLY': {
+      const startWeekMs = getWeekStartMs(startDayMs, rule.weekStart);
+      const candidateWeekMs = getWeekStartMs(candidateDayMs, rule.weekStart);
+      const diffWeeks = Math.floor((candidateWeekMs - startWeekMs) / WEEK_MS);
+      if (diffWeeks < 0 || diffWeeks % rule.interval !== 0) {
+        return false;
+      }
+
+      const weeklyByDay = rule.byDay.length > 0
+        ? rule.byDay
+        : [{ weekday: new Date(startDayMs).getUTCDay(), ordinal: null }];
+      if (!matchesWeekdayToken(weekday, weeklyByDay)) {
+        return false;
+      }
+      return matchesByMonthDay(year, month, day, rule.byMonthDay);
+    }
+    case 'MONTHLY': {
+      const diffMonths = (year - startLocal.year) * 12 + (month - startLocal.month);
+      if (diffMonths < 0 || diffMonths % rule.interval !== 0) {
+        return false;
+      }
+
+      if (rule.byMonthDay.length > 0) {
+        return matchesByMonthDay(year, month, day, rule.byMonthDay);
+      }
+
+      if (rule.byDay.length > 0) {
+        return matchesMonthlyByDay(year, month, day, rule.byDay);
+      }
+
+      return day === startLocal.day;
+    }
+    case 'YEARLY': {
+      const diffYears = year - startLocal.year;
+      if (diffYears < 0 || diffYears % rule.interval !== 0) {
+        return false;
+      }
+
+      const allowedMonths = rule.byMonth.length > 0 ? rule.byMonth : [startLocal.month];
+      if (!allowedMonths.includes(month)) {
+        return false;
+      }
+
+      if (rule.byMonthDay.length > 0) {
+        return matchesByMonthDay(year, month, day, rule.byMonthDay);
+      }
+
+      if (rule.byDay.length > 0) {
+        const hasOrdinals = rule.byDay.some((token) => token.ordinal !== null);
+        return hasOrdinals
+          ? matchesMonthlyByDay(year, month, day, rule.byDay)
+          : matchesWeekdayToken(weekday, rule.byDay);
+      }
+
+      return day === startLocal.day;
+    }
+    default:
+      return false;
+  }
+}
+
+function buildRecurrenceKey(uid: string, recurrenceIso: string): string {
+  return `${uid.trim()}::${normalizeDateIso(recurrenceIso)}`;
+}
+
+function expandRecurringEvent(
+  definition: ParsedRecurringEventDefinition,
+  expansionWindow: RecurrenceExpansionWindow,
+  overriddenRecurrenceKeys: Set<string>
+): ParsedCalendarEvent[] {
+  const event = definition.event;
+  const startMs = Date.parse(event.start_at);
+  const endMs = Date.parse(event.end_at);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+    return [event];
+  }
+
+  let durationMs = endMs - startMs;
+  if (durationMs <= 0) {
+    durationMs = event.is_all_day ? DAY_MS : 30 * 60000;
+  }
+
+  const rangeStartMs = Date.parse(expansionWindow.utcRangeStart);
+  const rangeEndMs = Date.parse(expansionWindow.utcRangeEndExclusive);
+  const rule = definition.recurrenceRule;
+  const occurrenceStarts = new Set<string>();
+  const emittedKeys = new Set<string>();
+  const exdateSet = new Set(definition.exdateIsos.map((iso) => normalizeDateIso(iso)));
+  const expanded: ParsedCalendarEvent[] = [];
+
+  const pushOccurrence = (occurrenceIso: string) => {
+    const normalizedStart = normalizeDateIso(occurrenceIso);
+    if (occurrenceStarts.has(normalizedStart)) {
+      return;
+    }
+    occurrenceStarts.add(normalizedStart);
+
+    if (exdateSet.has(normalizedStart)) {
+      return;
+    }
+
+    if (definition.uid && overriddenRecurrenceKeys.has(buildRecurrenceKey(definition.uid, normalizedStart))) {
+      return;
+    }
+
+    const occurrenceStartMs = Date.parse(normalizedStart);
+    if (!Number.isFinite(occurrenceStartMs)) {
+      return;
+    }
+
+    const occurrenceEndIso = new Date(occurrenceStartMs + durationMs).toISOString();
+    if (!overlapsRange(normalizedStart, occurrenceEndIso, expansionWindow.utcRangeStart, expansionWindow.utcRangeEndExclusive)) {
+      return;
+    }
+
+    const externalEventId = buildExternalEventId(
+      definition.uid,
+      normalizedStart,
+      event.title,
+      normalizedStart,
+      occurrenceEndIso
+    );
+    const dedupeKey = `${externalEventId}::${normalizedStart}`;
+    if (emittedKeys.has(dedupeKey)) {
+      return;
+    }
+    emittedKeys.add(dedupeKey);
+
+    expanded.push({
+      ...event,
+      external_event_id: externalEventId,
+      start_at: normalizedStart,
+      end_at: occurrenceEndIso,
+    });
+  };
+
+  if (rule && definition.startLocal) {
+    const untilMs = rule.untilIso ? Date.parse(rule.untilIso) : Number.NaN;
+    const effectiveRangeStartMs = rule.count
+      ? startMs
+      : Math.max(startMs, rangeStartMs - Math.max(durationMs, DAY_MS));
+    let effectiveRangeEndMs = rangeEndMs + DAY_MS;
+    if (Number.isFinite(untilMs)) {
+      effectiveRangeEndMs = Math.min(effectiveRangeEndMs, untilMs + DAY_MS);
+    }
+
+    if (effectiveRangeEndMs >= effectiveRangeStartMs) {
+      const startParts = getDatePartsInTimeZone(new Date(effectiveRangeStartMs), definition.startTimeZone);
+      const endParts = getDatePartsInTimeZone(new Date(effectiveRangeEndMs), definition.startTimeZone);
+      let cursorDayMs = getDayMs(startParts.year, startParts.month, startParts.day);
+      const endDayMs = getDayMs(endParts.year, endParts.month, endParts.day);
+      let matchedOccurrences = 0;
+
+      while (cursorDayMs <= endDayMs && matchedOccurrences < MAX_RECURRENCE_OCCURRENCES) {
+        const cursorDate = new Date(cursorDayMs);
+        const year = cursorDate.getUTCFullYear();
+        const month = cursorDate.getUTCMonth() + 1;
+        const day = cursorDate.getUTCDate();
+
+        if (matchesRecurringLocalDate(year, month, day, definition.startLocal, rule)) {
+          const occurrenceStart = zonedDateTimeToUtc(
+            year,
+            month,
+            day,
+            definition.startLocal.hour,
+            definition.startLocal.minute,
+            definition.startLocal.second,
+            definition.startTimeZone
+          );
+          const occurrenceStartMs = occurrenceStart.getTime();
+
+          if (occurrenceStartMs >= startMs) {
+            if (Number.isFinite(untilMs) && occurrenceStartMs > untilMs) {
+              break;
+            }
+
+            matchedOccurrences += 1;
+            if (!rule.count || matchedOccurrences <= rule.count) {
+              pushOccurrence(occurrenceStart.toISOString());
+            }
+
+            if (rule.count && matchedOccurrences >= rule.count) {
+              break;
+            }
+          }
+        }
+
+        cursorDayMs += DAY_MS;
+      }
+    }
+  } else {
+    pushOccurrence(event.start_at);
+  }
+
+  for (const rdateIso of definition.rdateIsos) {
+    pushOccurrence(rdateIso);
+  }
+
+  if (expanded.length === 0 && (!rule || !definition.startLocal)) {
+    expanded.push(event);
+  }
+
+  return expanded;
+}
+
+function parseIcsEvents(
+  ics: string,
+  defaultTimeZone: string,
+  bodyMaxChars: number,
+  expansionWindow: RecurrenceExpansionWindow | null = null
+): ParsedCalendarEvent[] {
   const unfolded = unfoldIcs(ics);
   const eventRegex = /BEGIN:VEVENT\s*([\s\S]*?)\s*END:VEVENT/gi;
-  const parsedEvents: ParsedCalendarEvent[] = [];
+  const definitions: ParsedRecurringEventDefinition[] = [];
 
   let match: RegExpExecArray | null = eventRegex.exec(unfolded);
   while (match) {
@@ -607,7 +1148,11 @@ function parseIcsEvents(ics: string, defaultTimeZone: string, bodyMaxChars: numb
     let dtEnd: ParsedIcsProperty | null = null;
     let description: ParsedIcsProperty | null = null;
     let uid: string | null = null;
-    let recurrenceId: string | null = null;
+    let recurrenceIdIso: string | null = null;
+    let recurrenceRule: ParsedRecurrenceRule | null = null;
+    let status: string | null = null;
+    const exdateIsos: string[] = [];
+    const rdateIsos: string[] = [];
     let organizer: ParsedIcsProperty | null = null;
     const attendeeDisplays: string[] = [];
 
@@ -641,9 +1186,21 @@ function parseIcsEvents(ics: string, defaultTimeZone: string, bodyMaxChars: numb
           break;
         case 'RECURRENCE-ID': {
           const recurrence = parseIcsDateTime(property.value, property.params, defaultTimeZone).iso;
-          recurrenceId = recurrence ?? unfoldIcsEscapes(property.value).trim();
+          recurrenceIdIso = recurrence ?? unfoldIcsEscapes(property.value).trim();
           break;
         }
+        case 'RRULE':
+          recurrenceRule = recurrenceRule ?? parseRecurrenceRule(unfoldIcsEscapes(property.value), defaultTimeZone);
+          break;
+        case 'EXDATE':
+          exdateIsos.push(...parseIcsDateList(property.value, property.params, defaultTimeZone));
+          break;
+        case 'RDATE':
+          rdateIsos.push(...parseIcsDateList(property.value, property.params, defaultTimeZone));
+          break;
+        case 'STATUS':
+          status = unfoldIcsEscapes(property.value).trim().toUpperCase();
+          break;
         case 'ORGANIZER':
           organizer = organizer ?? property;
           break;
@@ -659,6 +1216,11 @@ function parseIcsEvents(ics: string, defaultTimeZone: string, bodyMaxChars: numb
       }
     }
 
+    if (status === 'CANCELLED') {
+      match = eventRegex.exec(unfolded);
+      continue;
+    }
+
     if (!dtStart) {
       match = eventRegex.exec(unfolded);
       continue;
@@ -672,7 +1234,12 @@ function parseIcsEvents(ics: string, defaultTimeZone: string, bodyMaxChars: numb
 
     const parsedEnd = dtEnd
       ? parseIcsDateTime(dtEnd.value, dtEnd.params, defaultTimeZone)
-      : { iso: null, isAllDay: parsedStart.isAllDay };
+      : {
+          iso: null,
+          isAllDay: parsedStart.isAllDay,
+          tzid: parsedStart.tzid,
+          localParts: null,
+        };
 
     let endIso = parsedEnd.iso;
 
@@ -701,23 +1268,59 @@ function parseIcsEvents(ics: string, defaultTimeZone: string, bodyMaxChars: numb
     const sanitizedBody = description ? sanitizeBody(description.value, bodyMaxChars) : '';
     const bodyScrubbed = sanitizedBody.length > 0 ? sanitizedBody : null;
 
-    parsedEvents.push({
-      external_event_id: buildExternalEventId(uid, recurrenceId, title, parsedStart.iso, endIso),
-      start_at: normalizeDateIso(parsedStart.iso),
-      end_at: normalizeDateIso(endIso),
-      is_all_day: parsedStart.isAllDay || parsedEnd.isAllDay,
-      title,
-      organizer_display: organizerDisplay,
-      with_display: withDisplay,
-      sanitized_body: bodyScrubbed,
-      body_scrubbed_preview: buildBodyPreview(bodyScrubbed),
-      content_hash: buildContentHash(title, withDisplay, bodyScrubbed),
+    definitions.push({
+      event: {
+        external_event_id: buildExternalEventId(uid, recurrenceIdIso, title, parsedStart.iso, endIso),
+        start_at: normalizeDateIso(parsedStart.iso),
+        end_at: normalizeDateIso(endIso),
+        is_all_day: parsedStart.isAllDay || parsedEnd.isAllDay,
+        title,
+        organizer_display: organizerDisplay,
+        with_display: withDisplay,
+        sanitized_body: bodyScrubbed,
+        body_scrubbed_preview: buildBodyPreview(bodyScrubbed),
+        content_hash: buildContentHash(title, withDisplay, bodyScrubbed),
+      },
+      uid,
+      recurrenceIdIso,
+      recurrenceRule,
+      exdateIsos: [...new Set(exdateIsos.map((iso) => normalizeDateIso(iso)))],
+      rdateIsos: [...new Set(rdateIsos.map((iso) => normalizeDateIso(iso)))],
+      startLocal: parsedStart.localParts,
+      startTimeZone: parsedStart.tzid || defaultTimeZone,
     });
 
     match = eventRegex.exec(unfolded);
   }
 
-  return parsedEvents.sort((a, b) => Date.parse(a.start_at) - Date.parse(b.start_at));
+  const overriddenRecurrenceKeys = new Set<string>();
+  for (const definition of definitions) {
+    if (!definition.uid || !definition.recurrenceIdIso) {
+      continue;
+    }
+    overriddenRecurrenceKeys.add(buildRecurrenceKey(definition.uid, definition.recurrenceIdIso));
+  }
+
+  const parsedEvents: ParsedCalendarEvent[] = [];
+  for (const definition of definitions) {
+    const hasRecurrencePattern = Boolean(definition.recurrenceRule) || definition.rdateIsos.length > 0;
+    if (definition.recurrenceIdIso || !hasRecurrencePattern || !expansionWindow) {
+      parsedEvents.push(definition.event);
+      continue;
+    }
+
+    parsedEvents.push(...expandRecurringEvent(definition, expansionWindow, overriddenRecurrenceKeys));
+  }
+
+  const deduped = new Map<string, ParsedCalendarEvent>();
+  for (const event of parsedEvents) {
+    const eventKey = `${event.external_event_id}::${normalizeDateIso(event.start_at)}`;
+    if (!deduped.has(eventKey)) {
+      deduped.set(eventKey, event);
+    }
+  }
+
+  return [...deduped.values()].sort((a, b) => Date.parse(a.start_at) - Date.parse(b.start_at));
 }
 
 function overlapsRange(startIso: string, endIso: string, utcRangeStart: string, utcRangeEndExclusive: string): boolean {
@@ -1141,13 +1744,20 @@ export async function ingestCalendarEvents(
     return { source: config.source, ingestedCount: 0, warnings };
   }
 
-  const parsedEvents = parseIcsEvents(loadResult.ics, DEFAULT_WORKDAY_CONFIG.timezone, config.bodyMaxChars);
+  const rangeContext = buildDayWindows(range, DEFAULT_WORKDAY_CONFIG);
+  const parsedEvents = parseIcsEvents(
+    loadResult.ics,
+    DEFAULT_WORKDAY_CONFIG.timezone,
+    config.bodyMaxChars,
+    {
+      utcRangeStart: rangeContext.utcRangeStart,
+      utcRangeEndExclusive: rangeContext.utcRangeEndExclusive,
+    }
+  );
   if (parsedEvents.length === 0) {
     warnings.push('ICS loaded successfully, but no events could be parsed.');
     return { source: config.source, ingestedCount: 0, warnings };
   }
-
-  const rangeContext = buildDayWindows(range, DEFAULT_WORKDAY_CONFIG);
 
   const eventsInRange = parsedEvents.filter((event) =>
     overlapsRange(event.start_at, event.end_at, rangeContext.utcRangeStart, rangeContext.utcRangeEndExclusive)
