@@ -128,9 +128,8 @@ function getDueState(dueAt: string | null, now: Date): TaskCardData["dueState"] 
 }
 
 async function fetchTodayData(): Promise<TodayData> {
-  const [allTasks, needsReviewTasks, meetingMinutes] = await Promise.all([
+  const [allTasks, meetingMinutes] = await Promise.all([
     fetchAllTaskPages({}),
-    fetchAllTaskPages({ needs_review: "true" }),
     fetchTodayMeetingMinutes().catch(() => 0),
   ]);
 
@@ -189,7 +188,7 @@ async function fetchTodayData(): Promise<TodayData> {
     topThree,
     dueSoon,
     waitingOn,
-    needsReviewCount: needsReviewTasks.length,
+    needsReviewCount: allTasks.filter((t) => t.needs_review).length,
     capacity,
   };
 }
@@ -318,38 +317,6 @@ export default function TodayPage() {
     }
   }
 
-  if (loading) {
-    return (
-      <div className="space-y-8">
-        <PageHeader
-          title="Today"
-          description="Daily operating view with top priorities, near-term due work, and review queue."
-          actions={<p className="rounded-full bg-panel-muted px-3 py-1.5 text-sm font-medium text-muted-foreground">{today}</p>}
-        />
-        <LoadingSkeleton />
-      </div>
-    );
-  }
-
-  if (error && !data) {
-    return (
-      <div className="space-y-8">
-        <PageHeader
-          title="Today"
-          description="Daily operating view with top priorities, near-term due work, and review queue."
-          actions={<p className="rounded-full bg-panel-muted px-3 py-1.5 text-sm font-medium text-muted-foreground">{today}</p>}
-        />
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
-          {error}
-        </div>
-      </div>
-    );
-  }
-
-  if (!data) {
-    return null;
-  }
-
   return (
     <div className="space-y-8">
       <PageHeader
@@ -357,7 +324,7 @@ export default function TodayPage() {
         description="Daily operating view with top priorities, near-term due work, and review queue."
         actions={
           <div className="flex items-center gap-4">
-            <CapacityMeter capacity={data.capacity} />
+            {data && <CapacityMeter capacity={data.capacity} />}
             <p className="rounded-full bg-panel-muted px-3 py-1.5 text-sm font-medium text-muted-foreground">{today}</p>
           </div>
         }
@@ -375,95 +342,101 @@ export default function TodayPage() {
 
       <PlannerCard autoReplanKey={plannerAutoReplanKey} onAutoReplanHandled={handlePlannerAutoReplanHandled} />
 
-      <section className="space-y-3">
-        <h2 className="text-lg font-semibold text-foreground">Top 3 Today</h2>
-        {data.topThree.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No tasks scheduled.</p>
-        ) : (
-          <div className="grid gap-4 xl:grid-cols-3">
-            {data.topThree.map((task) => (
-              <div key={task.id} className="relative">
-                <TaskCard task={task} />
-                <button
-                  onClick={() => handleQuickComplete(task.id)}
-                  disabled={completingIds.has(task.id)}
-                  aria-label="Mark task complete"
-                  className="absolute right-3 top-3 rounded-md bg-green-500/15 px-2 py-1 text-xs font-medium text-green-400 transition hover:bg-green-500/25 disabled:opacity-50"
-                  title="Mark as done"
-                >
-                  {completingIds.has(task.id) ? "..." : "✓ Done"}
-                </button>
+      {loading ? (
+        <LoadingSkeleton />
+      ) : data ? (
+        <>
+          <section className="space-y-3">
+            <h2 className="text-lg font-semibold text-foreground">Top 3 Today</h2>
+            {data.topThree.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No tasks scheduled.</p>
+            ) : (
+              <div className="grid gap-4 xl:grid-cols-3">
+                {data.topThree.map((task) => (
+                  <div key={task.id} className="relative">
+                    <TaskCard task={task} />
+                    <button
+                      onClick={() => handleQuickComplete(task.id)}
+                      disabled={completingIds.has(task.id)}
+                      aria-label="Mark task complete"
+                      className="absolute right-3 top-3 rounded-md bg-green-500/15 px-2 py-1 text-xs font-medium text-green-400 transition hover:bg-green-500/25 disabled:opacity-50"
+                      title="Mark as done"
+                    >
+                      {completingIds.has(task.id) ? "..." : "✓ Done"}
+                    </button>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        )}
-      </section>
+            )}
+          </section>
 
-      <section className="space-y-3">
-        <h2 className="text-lg font-semibold text-foreground">Due Soon (48h)</h2>
-        {data.dueSoon.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Nothing due in the next 48 hours.</p>
-        ) : (
-          <div className="grid gap-4 md:grid-cols-2">
-            {data.dueSoon.map((task) => (
-              <div key={task.id} className="relative">
-                <TaskCard task={task} />
-                <button
-                  onClick={() => handleQuickComplete(task.id)}
-                  disabled={completingIds.has(task.id)}
-                  aria-label="Mark task complete"
-                  className="absolute right-3 top-3 rounded-md bg-green-500/15 px-2 py-1 text-xs font-medium text-green-400 transition hover:bg-green-500/25 disabled:opacity-50"
-                  title="Mark as done"
-                >
-                  {completingIds.has(task.id) ? "..." : "✓ Done"}
-                </button>
+          <section className="space-y-3">
+            <h2 className="text-lg font-semibold text-foreground">Due Soon (48h)</h2>
+            {data.dueSoon.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Nothing due in the next 48 hours.</p>
+            ) : (
+              <div className="grid gap-4 md:grid-cols-2">
+                {data.dueSoon.map((task) => (
+                  <div key={task.id} className="relative">
+                    <TaskCard task={task} />
+                    <button
+                      onClick={() => handleQuickComplete(task.id)}
+                      disabled={completingIds.has(task.id)}
+                      aria-label="Mark task complete"
+                      className="absolute right-3 top-3 rounded-md bg-green-500/15 px-2 py-1 text-xs font-medium text-green-400 transition hover:bg-green-500/25 disabled:opacity-50"
+                      title="Mark as done"
+                    >
+                      {completingIds.has(task.id) ? "..." : "✓ Done"}
+                    </button>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        )}
-      </section>
+            )}
+          </section>
 
-      <section className="grid gap-4 lg:grid-cols-2">
-        <article className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
-          <h2 className="text-lg font-semibold text-foreground">Blocked / Waiting</h2>
-          {data.waitingOn.length === 0 ? (
-            <p className="mt-4 text-sm text-muted-foreground">No tasks waiting on others.</p>
-          ) : (
-            <ul className="mt-4 space-y-3">
-              {data.waitingOn.map((item) => (
-                <li key={item.id} className="rounded-lg bg-panel-muted p-3 text-sm">
-                  <p className="font-medium text-foreground">{item.title}</p>
-                  <p className="mt-1 text-muted-foreground">
-                    {item.waitingOn}
-                    {item.followUpAt ? ` · follow up ${formatDate(item.followUpAt)}` : ""}
+          <section className="grid gap-4 lg:grid-cols-2">
+            <article className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+              <h2 className="text-lg font-semibold text-foreground">Blocked / Waiting</h2>
+              {data.waitingOn.length === 0 ? (
+                <p className="mt-4 text-sm text-muted-foreground">No tasks waiting on others.</p>
+              ) : (
+                <ul className="mt-4 space-y-3">
+                  {data.waitingOn.map((item) => (
+                    <li key={item.id} className="rounded-lg bg-panel-muted p-3 text-sm">
+                      <p className="font-medium text-foreground">{item.title}</p>
+                      <p className="mt-1 text-muted-foreground">
+                        {item.waitingOn}
+                        {item.followUpAt ? ` · follow up ${formatDate(item.followUpAt)}` : ""}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </article>
+
+            <article className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+              <h2 className="text-lg font-semibold text-foreground">Needs Review</h2>
+              {data.needsReviewCount === 0 ? (
+                <div className="mt-4">
+                  <p className="text-sm text-muted-foreground">All caught up! No tasks need review.</p>
+                </div>
+              ) : (
+                <div className="mt-4">
+                  <p className="text-sm text-muted-foreground">
+                    {data.needsReviewCount} {data.needsReviewCount === 1 ? "task needs" : "tasks need"} review in triage.
                   </p>
-                </li>
-              ))}
-            </ul>
-          )}
-        </article>
-
-        <article className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
-          <h2 className="text-lg font-semibold text-foreground">Needs Review</h2>
-          {data.needsReviewCount === 0 ? (
-            <div className="mt-4">
-              <p className="text-sm text-muted-foreground">All caught up! No tasks need review.</p>
-            </div>
-          ) : (
-            <div className="mt-4">
-              <p className="text-sm text-muted-foreground">
-                {data.needsReviewCount} {data.needsReviewCount === 1 ? "task needs" : "tasks need"} review in triage.
-              </p>
-              <Link
-                href="/triage"
-                className="mt-4 inline-flex rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:opacity-90"
-              >
-                Open Triage ({data.needsReviewCount})
-              </Link>
-            </div>
-          )}
-        </article>
-      </section>
+                  <Link
+                    href="/triage"
+                    className="mt-4 inline-flex rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:opacity-90"
+                  >
+                    Open Triage ({data.needsReviewCount})
+                  </Link>
+                </div>
+              )}
+            </article>
+          </section>
+        </>
+      ) : null}
     </div>
   );
 }
