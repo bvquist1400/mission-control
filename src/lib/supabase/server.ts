@@ -1,6 +1,27 @@
 import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
-import { SupabaseClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
+
+/**
+ * Creates a Supabase client using the service role key.
+ * Bypasses RLS — use only for trusted server-side operations (e.g. API key auth).
+ * All queries must still filter by user_id to maintain data isolation.
+ */
+export function createSupabaseAdminClient(): SupabaseClient {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error('Missing Supabase service role environment variables');
+  }
+
+  return createClient(supabaseUrl, serviceRoleKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  });
+}
 
 export async function createSupabaseServerClient(): Promise<SupabaseClient> {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;

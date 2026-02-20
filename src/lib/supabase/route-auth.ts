@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { SupabaseClient, User } from '@supabase/supabase-js';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase/server';
 
 export interface AuthenticatedRouteContext {
   supabase: SupabaseClient;
@@ -8,9 +8,65 @@ export interface AuthenticatedRouteContext {
   userId: string;
 }
 
+/**
+ * Authenticates a route request via either:
+ *  1. X-Mission-Control-Key header (API key auth for Claude / external callers)
+ *  2. Authorization: Bearer <token> header (Supabase JWT)
+ *  3. Supabase session cookie (browser auth)
+ */
 export async function requireAuthenticatedRoute(
   request: NextRequest
 ): Promise<{ context: AuthenticatedRouteContext | null; response: NextResponse | null }> {
+
+  // --- API Key Auth ---
+  const apiKey = request.headers.get('x-mission-control-key');
+  const validApiKey = process.env.MISSION_CONTROL_API_KEY;
+  const apiUserId = process.env.MISSION_CONTROL_USER_ID;
+
+  if (apiKey) {
+    if (!validApiKey || !apiUserId) {
+      return {
+        context: null,
+        response: NextResponse.json(
+          { error: 'API key auth is not configured on this server' },
+          { status: 503 }
+        ),
+      };
+    }
+
+    if (apiKey !== validApiKey) {
+      return {
+        context: null,
+        response: NextResponse.json({ error: 'Invalid API key' }, { status: 401 }),
+      };
+    }
+
+    const supabase = createSupabaseAdminClient();
+
+    // Fetch the actual user object so the context shape is consistent
+    const { data: userData, error: userError } = await supabase.auth.admin.getUserById(apiUserId);
+
+    if (userError || !userData?.user) {
+      return {
+        context: null,
+        response: NextResponse.json(
+          { error: 'API key user not found — check MISSION_CONTROL_USER_ID env var' },
+          { status: 401 }
+        ),
+      };
+    }
+
+    return {
+      context: {
+        supabase,
+        user: userData.user,
+        userId: apiUserId,
+      },
+      response: null,
+    };
+  }
+
+  // --- Standard Supabase Auth (Bearer token or cookie) ---
   const supabase = await createSupabaseServerClient();
 
   const authHeader = request.headers.get('authorization');
