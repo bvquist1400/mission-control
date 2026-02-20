@@ -75,6 +75,7 @@ export async function PATCH(
 
     const allowedFields = [
       'title',
+      'description',
       'implementation_id',
       'status',
       'task_type',
@@ -99,6 +100,8 @@ export async function PATCH(
         updates[field] = asStringOrNull(value);
       } else if (field === 'waiting_on') {
         updates[field] = asStringOrNull(value);
+      } else if (field === 'description') {
+        updates[field] = asStringOrNull(value);
       } else if (field === 'title' && typeof value === 'string') {
         updates[field] = value.trim();
       } else {
@@ -112,6 +115,10 @@ export async function PATCH(
 
     if ('title' in updates && (typeof updates.title !== 'string' || updates.title.length === 0)) {
       return NextResponse.json({ error: 'title cannot be empty' }, { status: 400 });
+    }
+
+    if ('description' in updates && typeof updates.description === 'string' && updates.description.length > 8000) {
+      return NextResponse.json({ error: 'description must be 8000 characters or fewer' }, { status: 400 });
     }
 
     if ('status' in updates) {

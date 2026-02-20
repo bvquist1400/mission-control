@@ -19,6 +19,7 @@ export interface Task {
   id: string;
   user_id: string;
   title: string;
+  description: string | null;
   implementation_id: string | null;
   status: TaskStatus;
   task_type: TaskType;
@@ -198,6 +199,7 @@ export interface TaskWithImplementation extends Task {
 // Allowed fields for task updates via API
 export interface TaskUpdatePayload {
   title?: string;
+  description?: string | null;
   implementation_id?: string | null;
   status?: TaskStatus;
   task_type?: TaskType;

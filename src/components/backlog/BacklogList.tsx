@@ -239,15 +239,21 @@ interface TaskMetaEditorProps {
 
 function TaskMetaEditor({ task, isSaving, onUpdate }: TaskMetaEditorProps) {
   const [titleDraft, setTitleDraft] = useState(task.title);
+  const [descriptionDraft, setDescriptionDraft] = useState(task.description ?? "");
   const [taskTypeDraft, setTaskTypeDraft] = useState<TaskType>(task.task_type);
   const [waitingOnDraft, setWaitingOnDraft] = useState(task.waiting_on ?? "");
 
   const normalizedTitle = titleDraft.trim();
+  const normalizedDescription = descriptionDraft.trim();
   const normalizedWaitingOn = waitingOnDraft.trim();
   const nextWaitingOn = normalizedWaitingOn.length > 0 ? normalizedWaitingOn : null;
+  const nextDescription = normalizedDescription.length > 0 ? normalizedDescription : null;
 
   const hasChanges =
-    normalizedTitle !== task.title || taskTypeDraft !== task.task_type || nextWaitingOn !== task.waiting_on;
+    normalizedTitle !== task.title
+    || taskTypeDraft !== task.task_type
+    || nextWaitingOn !== task.waiting_on
+    || nextDescription !== task.description;
   const canSave = normalizedTitle.length > 0 && hasChanges && !isSaving;
 
   function saveEdits() {
@@ -264,6 +270,9 @@ function TaskMetaEditor({ task, isSaving, onUpdate }: TaskMetaEditorProps) {
     }
     if (nextWaitingOn !== task.waiting_on) {
       updates.waiting_on = nextWaitingOn;
+    }
+    if (nextDescription !== task.description) {
+      updates.description = nextDescription;
     }
 
     if (Object.keys(updates).length > 0) {
@@ -335,6 +344,18 @@ function TaskMetaEditor({ task, isSaving, onUpdate }: TaskMetaEditorProps) {
           />
         </label>
       </div>
+
+      <label className="mt-3 block space-y-1">
+        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Description</span>
+        <textarea
+          value={descriptionDraft}
+          onChange={(event) => setDescriptionDraft(event.target.value)}
+          disabled={isSaving}
+          rows={4}
+          placeholder="Add context, links, and detailed notes for this task..."
+          className="w-full resize-y rounded border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
+        />
+      </label>
     </section>
   );
 }
@@ -713,7 +734,11 @@ export function BacklogList() {
 
     return tasks
       .filter((task) => {
-        if (normalizedSearch && !task.title.toLowerCase().includes(normalizedSearch)) {
+        if (
+          normalizedSearch
+          && !task.title.toLowerCase().includes(normalizedSearch)
+          && !(task.description ?? "").toLowerCase().includes(normalizedSearch)
+        ) {
           return false;
         }
 
@@ -759,7 +784,7 @@ export function BacklogList() {
             <input
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search task title"
+              placeholder="Search title or description"
               className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
             />
           </label>
@@ -891,6 +916,9 @@ export function BacklogList() {
                         {/* Task title */}
                         <td className="min-w-[280px] px-3 py-2.5 align-middle">
                           <p className="text-sm font-medium text-foreground leading-tight">{task.title}</p>
+                          {task.description && (
+                            <p className="mt-1 truncate text-xs text-muted-foreground">{task.description}</p>
+                          )}
                           {task.status === "Blocked/Waiting" && (
                             <p
                               className={`mt-1 text-xs ${

@@ -124,6 +124,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'title must be 500 characters or fewer' }, { status: 400 });
     }
 
+    if (typeof body.description === 'string' && body.description.length > 8000) {
+      return NextResponse.json({ error: 'description must be 8000 characters or fewer' }, { status: 400 });
+    }
+
     if (typeof body.pinned_excerpt === 'string' && body.pinned_excerpt.length > 2000) {
       return NextResponse.json({ error: 'pinned_excerpt must be 2000 characters or fewer' }, { status: 400 });
     }
@@ -209,6 +213,7 @@ export async function POST(request: NextRequest) {
       .insert({
         user_id: userId,
         title: body.title.trim(),
+        description: asStringOrNull(body.description),
         implementation_id: implementationId,
         status,
         task_type: taskType,

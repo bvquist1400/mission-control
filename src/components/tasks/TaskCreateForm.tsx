@@ -13,6 +13,7 @@ interface TaskCreateFormProps {
 
 interface TaskDraft {
   title: string;
+  description: string;
   implementationId: string;
   estimatedMinutes: number;
   dueDate: string;
@@ -29,6 +30,7 @@ type ParseState = "idle" | "parsing" | "parsed" | "error";
 interface QuickCaptureDraft {
   rawText: string;
   title: string;
+  description: string;
   implementationId: string;
   estimatedMinutes: number;
   dueDate: string;
@@ -62,6 +64,7 @@ function findAdminImplId(implementations: ImplementationSummary[]): string {
 function createInitialDraft(defaultNeedsReview: boolean, implementations: ImplementationSummary[]): TaskDraft {
   return {
     title: "",
+    description: "",
     implementationId: findAdminImplId(implementations),
     estimatedMinutes: 30,
     dueDate: "",
@@ -77,6 +80,7 @@ function createInitialQcDraft(): QuickCaptureDraft {
   return {
     rawText: "",
     title: "",
+    description: "",
     implementationId: "",
     estimatedMinutes: 30,
     dueDate: "",
@@ -162,6 +166,7 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title,
+          description: draft.description.trim() || null,
           implementation_id: draft.implementationId || null,
           estimated_minutes: draft.estimatedMinutes,
           estimate_source: "manual",
@@ -236,6 +241,7 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
       setQcDraft((current) => ({
         ...current,
         title: extraction.title,
+        description: current.rawText.trim().slice(0, 8000),
         taskType: extraction.task_type,
         estimatedMinutes: extraction.estimated_minutes,
         dueDate: extraction.due_guess_iso ?? "",
@@ -281,6 +287,7 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
 
     try {
       const basePayload = {
+        description: qcDraft.description.trim() || null,
         implementation_id: qcDraft.implementationId || null,
         estimated_minutes: qcDraft.estimatedMinutes,
         estimate_source: "llm",
@@ -423,6 +430,18 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
                   placeholder="What needs to get done?"
                   disabled={isCreating}
                   className={inputClass}
+                />
+              </label>
+
+              <label className="block space-y-1">
+                <span className={labelClass}>Description</span>
+                <textarea
+                  value={draft.description}
+                  onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))}
+                  placeholder="Optional context, notes, links, and details..."
+                  rows={4}
+                  disabled={isCreating}
+                  className={`${inputClass} resize-y`}
                 />
               </label>
 
@@ -618,6 +637,18 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
                       onChange={(e) => setQcDraft((c) => ({ ...c, title: e.target.value }))}
                       disabled={isCreating}
                       className={inputClass}
+                    />
+                  </label>
+
+                  <label className="block space-y-1">
+                    <span className={labelClass}>Description</span>
+                    <textarea
+                      value={qcDraft.description}
+                      onChange={(e) => setQcDraft((c) => ({ ...c, description: e.target.value }))}
+                      placeholder="Context for this task (auto-filled from pasted text)."
+                      rows={4}
+                      disabled={isCreating}
+                      className={`${inputClass} resize-y`}
                     />
                   </label>
 
