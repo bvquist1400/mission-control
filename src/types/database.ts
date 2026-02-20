@@ -1,6 +1,8 @@
 export type TaskStatus = "Backlog" | "Planned" | "In Progress" | "Blocked/Waiting" | "Done";
 export type TaskType = "Task" | "Ticket" | "MeetingPrep" | "FollowUp" | "Admin" | "Build";
 export type CommentSource = "manual" | "system" | "llm";
+export type CommitmentStatus = "Open" | "Done" | "Dropped";
+export type CommitmentDirection = "ours" | "theirs";
 export type ImplPhase =
   | "Intake"
   | "Discovery"
@@ -129,6 +131,45 @@ export interface CapacityResult {
   required_minutes: number;
   rag: RagStatus;
   breakdown: CapacityBreakdown;
+}
+
+export interface Stakeholder {
+  id: string;
+  user_id: string;
+  name: string;
+  email: string | null;
+  role: string | null;
+  organization: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Commitment {
+  id: string;
+  user_id: string;
+  stakeholder_id: string;
+  task_id: string | null;
+  title: string;
+  direction: CommitmentDirection;
+  status: CommitmentStatus;
+  due_at: string | null;
+  done_at: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CommitmentWithStakeholder extends Commitment {
+  stakeholder: { id: string; name: string } | null;
+}
+
+export interface CommitmentWithTask extends Commitment {
+  task: { id: string; title: string; status: TaskStatus } | null;
+}
+
+export interface StakeholderWithCounts extends Stakeholder {
+  open_commitments_count: number;
 }
 
 // LLM Extraction JSON schema (stored in inbox_items.llm_extraction_json)

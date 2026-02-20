@@ -9,6 +9,7 @@ const navItems = [
   { href: "/backlog", label: "Backlog", hint: "All tasks with filters and edits" },
   { href: "/triage", label: "Triage", hint: "Assign, estimate, schedule" },
   { href: "/applications", label: "Applications", hint: "Portfolio health and updates" },
+  { href: "/stakeholders", label: "Stakeholders", hint: "People and commitments" },
   { href: "/focus", label: "Focus", hint: "Planner directives" },
   { href: "/calendar", label: "Calendar", hint: "Imported schedule metadata" },
   { href: "/llm", label: "LLM", hint: "Model and cost evaluation" },
