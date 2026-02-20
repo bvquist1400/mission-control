@@ -175,6 +175,7 @@ export interface StakeholderWithCounts extends Stakeholder {
 // LLM Extraction JSON schema (stored in inbox_items.llm_extraction_json)
 export interface LlmExtraction {
   title: string;
+  suggested_tasks: string[];
   suggested_checklist: string[];
   task_type: TaskType;
   estimated_minutes: number;

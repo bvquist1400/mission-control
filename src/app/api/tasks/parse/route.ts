@@ -14,6 +14,8 @@ ENTERPRISE-SAFETY RULES:
 PARSING RULES:
 - Extract the most actionable title as a verb phrase (e.g. "Fix login issue for Dr. Martinez").
 - If the text contains a ticket ID (e.g. IMS0101522, INC0012345), prefix the title with it.
+- If the input is a list of independent action items, extract those into suggested_tasks (one task title per item) and keep suggested_checklist empty.
+- If the input is a single task with multiple steps, keep suggested_tasks empty and generate checklist items in suggested_checklist.
 - Generate checklist items SPECIFIC to the described work — not generic steps.
 - Infer task_type from the nature of the work (see hints below).
 - If a due date or deadline is mentioned, extract it. Otherwise null.
@@ -30,6 +32,7 @@ TASK TYPE HINTS:
 Return ONLY valid JSON with this exact schema:
 {
   "title": "string — verb phrase, max ~80 chars",
+  "suggested_tasks": ["string array — independent task titles when input is a multi-item list; otherwise []"],
   "suggested_checklist": ["string array — SPECIFIC action items, 2–6 items"],
   "task_type": "Task|Ticket|MeetingPrep|FollowUp|Admin|Build",
   "estimated_minutes": 15|30|60|90|120,

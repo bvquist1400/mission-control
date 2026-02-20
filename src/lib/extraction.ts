@@ -116,6 +116,9 @@ function parseExtractionResponse(responseText: string): LlmExtraction {
 
   return {
     title: String(parsed.title || "Untitled task"),
+    suggested_tasks: Array.isArray(parsed.suggested_tasks)
+      ? parsed.suggested_tasks.map(String)
+      : [],
     suggested_checklist: Array.isArray(parsed.suggested_checklist)
       ? parsed.suggested_checklist.map(String)
       : [],
@@ -210,6 +213,7 @@ function createFallbackExtraction(input: ExtractionInput): ExtractionResult {
   return {
     extraction: {
       title: subject,
+      suggested_tasks: [],
       suggested_checklist: [],
       task_type: taskType,
       estimated_minutes: DEFAULT_ESTIMATES[taskType],

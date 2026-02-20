@@ -37,7 +37,9 @@ interface QuickCaptureDraft {
   blocker: boolean;
   sendToTriage: boolean;
   waitingOn: string;
+  suggestedTasks: string[];
   suggestedChecklist: string[];
+  createAsSeparateTasks: boolean;
   needsReview: boolean;
   pinnedExcerpt: string;
 }
@@ -83,7 +85,9 @@ function createInitialQcDraft(): QuickCaptureDraft {
     blocker: false,
     sendToTriage: true,
     waitingOn: "",
+    suggestedTasks: [],
     suggestedChecklist: [],
+    createAsSeparateTasks: false,
     needsReview: true,
     pinnedExcerpt: "",
   };
@@ -92,6 +96,33 @@ function createInitialQcDraft(): QuickCaptureDraft {
 function dateToIso(dateString: string): string {
   const date = new Date(`${dateString}T23:59:59`);
   return `${localDateString(date)}T23:59:59.000Z`;
+}
+
+function normalizeTaskTitles(items: string[]): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+
+  for (const item of items) {
+    const cleaned = item.trim().replace(/\s+/g, " ");
+    if (!cleaned) continue;
+    const key = cleaned.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(cleaned);
+  }
+
+  return normalized.slice(0, 20);
+}
+
+function extractBulletedTaskCandidates(rawText: string): string[] {
+  const candidates = rawText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.match(/^(?:[-*•]|\d+[.)]|\[(?: |x|X)\])\s+(.+)$/)?.[1] ?? "")
+    .filter(Boolean);
+
+  return normalizeTaskTitles(candidates);
 }
 
 const inputClass = "w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60";
@@ -195,6 +226,13 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
         if (match) matchedImplId = match.id;
       }
 
+      const suggestedTasks = normalizeTaskTitles(
+        extraction.suggested_tasks.length > 0
+          ? extraction.suggested_tasks
+          : extractBulletedTaskCandidates(qcDraft.rawText)
+      );
+      const createAsSeparateTasks = suggestedTasks.length > 1;
+
       setQcDraft((current) => ({
         ...current,
         title: extraction.title,
@@ -205,7 +243,9 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
         sendToTriage: extraction.needs_review,
         needsReview: extraction.needs_review,
         waitingOn: extraction.waiting_on ?? "",
-        suggestedChecklist: extraction.suggested_checklist,
+        suggestedTasks,
+        suggestedChecklist: createAsSeparateTasks ? [] : extraction.suggested_checklist,
+        createAsSeparateTasks,
         pinnedExcerpt: current.rawText.slice(0, 500),
         implementationId: matchedImplId,
       }));
@@ -219,9 +259,16 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
 
   // Quick Capture: submit handler
   const handleQcSubmit = useCallback(async () => {
+    const splitTaskTitles = qcDraft.createAsSeparateTasks
+      ? normalizeTaskTitles(qcDraft.suggestedTasks)
+      : [];
     const title = qcDraft.title.trim();
-    if (!title) {
+    if (!qcDraft.createAsSeparateTasks && !title) {
       setError("Task title is required");
+      return;
+    }
+    if (qcDraft.createAsSeparateTasks && splitTaskTitles.length === 0) {
+      setError("Add at least one task to create");
       return;
     }
     if (qcDraft.status === "Blocked/Waiting" && !qcDraft.waitingOn.trim()) {
@@ -233,38 +280,65 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
     setError(null);
 
     try {
-      const response = await fetch("/api/tasks", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title,
-          implementation_id: qcDraft.implementationId || null,
-          estimated_minutes: qcDraft.estimatedMinutes,
-          estimate_source: "llm",
-          due_at: qcDraft.dueDate ? dateToIso(qcDraft.dueDate) : null,
-          status: qcDraft.status,
-          blocker: qcDraft.blocker,
-          needs_review: qcDraft.sendToTriage,
-          task_type: qcDraft.taskType,
-          waiting_on: qcDraft.status === "Blocked/Waiting" ? qcDraft.waitingOn.trim() : null,
-          source_type: "Manual",
-          pinned_excerpt: qcDraft.pinnedExcerpt || null,
-          initial_checklist: qcDraft.suggestedChecklist,
-        }),
-      });
+      const basePayload = {
+        implementation_id: qcDraft.implementationId || null,
+        estimated_minutes: qcDraft.estimatedMinutes,
+        estimate_source: "llm",
+        due_at: qcDraft.dueDate ? dateToIso(qcDraft.dueDate) : null,
+        status: qcDraft.status,
+        blocker: qcDraft.blocker,
+        needs_review: qcDraft.sendToTriage,
+        task_type: qcDraft.taskType,
+        waiting_on: qcDraft.status === "Blocked/Waiting" ? qcDraft.waitingOn.trim() : null,
+        source_type: "Manual",
+        pinned_excerpt: qcDraft.pinnedExcerpt || null,
+      };
 
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({ error: "Create failed" }));
-        throw new Error(typeof data.error === "string" ? data.error : "Create failed");
+      if (qcDraft.createAsSeparateTasks) {
+        for (const taskTitle of splitTaskTitles) {
+          const response = await fetch("/api/tasks", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ...basePayload,
+              title: taskTitle,
+            }),
+          });
+
+          if (!response.ok) {
+            const data = await response.json().catch(() => ({ error: "Create failed" }));
+            const message = typeof data.error === "string" ? data.error : "Create failed";
+            throw new Error(`Failed to create "${taskTitle}": ${message}`);
+          }
+
+          const createdTask = (await response.json()) as TaskWithImplementation;
+          onTaskCreated?.(createdTask);
+        }
+      } else {
+        const response = await fetch("/api/tasks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...basePayload,
+            title,
+            initial_checklist: qcDraft.suggestedChecklist,
+          }),
+        });
+
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({ error: "Create failed" }));
+          throw new Error(typeof data.error === "string" ? data.error : "Create failed");
+        }
+
+        const createdTask = (await response.json()) as TaskWithImplementation;
+        onTaskCreated?.(createdTask);
       }
 
-      const createdTask = (await response.json()) as TaskWithImplementation;
-      onTaskCreated?.(createdTask);
       setQcDraft(createInitialQcDraft());
       setParseState("idle");
       setIsOpen(false);
     } catch (createError) {
-      setError(createError instanceof Error ? createError.message : "Failed to create task");
+      setError(createError instanceof Error ? createError.message : "Failed to create task(s)");
     } finally {
       setIsCreating(false);
     }
@@ -288,6 +362,8 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [isOpen, handleSubmit, handleQcSubmit, activeTab, parseState]);
+
+  const splitTaskCount = normalizeTaskTitles(qcDraft.suggestedTasks).length;
 
   return (
     <section className="rounded-card border border-stroke bg-panel p-4 shadow-sm">
@@ -545,8 +621,57 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
                     />
                   </label>
 
-                  {/* Suggested Checklist — editable list */}
-                  {qcDraft.suggestedChecklist.length > 0 && (
+                  {qcDraft.suggestedTasks.length > 1 && (
+                    <label className="flex items-center gap-2 rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground">
+                      <input
+                        type="checkbox"
+                        checked={qcDraft.createAsSeparateTasks}
+                        onChange={(e) => setQcDraft((c) => ({ ...c, createAsSeparateTasks: e.target.checked }))}
+                        disabled={isCreating}
+                        className="h-4 w-4 accent-accent"
+                      />
+                      Create each action item as a separate task ({splitTaskCount})
+                    </label>
+                  )}
+
+                  {qcDraft.createAsSeparateTasks && qcDraft.suggestedTasks.length > 0 && (
+                    <div className="space-y-1">
+                      <span className={labelClass}>Suggested Tasks</span>
+                      <ul className="space-y-1">
+                        {qcDraft.suggestedTasks.map((item, idx) => (
+                          <li key={idx} className="flex items-center gap-2">
+                            <input
+                              value={item}
+                              onChange={(e) => {
+                                const updated = [...qcDraft.suggestedTasks];
+                                updated[idx] = e.target.value;
+                                setQcDraft((c) => ({ ...c, suggestedTasks: updated }));
+                              }}
+                              disabled={isCreating}
+                              className={`flex-1 ${inputClass} !py-1.5`}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setQcDraft((c) => ({
+                                  ...c,
+                                  suggestedTasks: c.suggestedTasks.filter((_, i) => i !== idx),
+                                }));
+                              }}
+                              disabled={isCreating}
+                              className="text-xs text-muted-foreground hover:text-red-400 disabled:opacity-60"
+                              aria-label="Remove task item"
+                            >
+                              Remove
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Suggested Checklist — editable list for single-task captures */}
+                  {!qcDraft.createAsSeparateTasks && qcDraft.suggestedChecklist.length > 0 && (
                     <div className="space-y-1">
                       <span className={labelClass}>Suggested Subtasks</span>
                       <ul className="space-y-1">
@@ -715,7 +840,11 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
                         disabled={isCreating}
                         className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        {isCreating ? "Creating..." : "Create Task"}
+                        {isCreating
+                          ? "Creating..."
+                          : qcDraft.createAsSeparateTasks
+                            ? `Create ${splitTaskCount} Tasks`
+                            : "Create Task"}
                       </button>
                     </div>
                   </div>
