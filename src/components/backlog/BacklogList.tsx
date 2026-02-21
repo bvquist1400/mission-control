@@ -7,7 +7,9 @@ import { TaskDependencies } from "@/components/tasks/TaskDependencies";
 import { StatusSelector } from "@/components/ui/StatusSelector";
 import { localDateString } from "@/components/utils/dates";
 import type {
+  CommitmentSummary,
   ImplementationSummary,
+  TaskDependencySummary,
   TaskChecklistItem,
   TaskComment,
   TaskStatus,
@@ -16,28 +18,10 @@ import type {
   TaskWithImplementation,
 } from "@/types/database";
 
-interface DependencyTask {
-  id: string;
-  title: string;
-  status: TaskStatus;
-  blocker: boolean;
-  implementation?: { id: string; name: string } | null;
-}
-
-interface Dependency {
-  id: string;
-  blocker_task_id: string;
-  blocked_task_id: string;
-  created_at: string;
-  blocker_task?: DependencyTask;
-  blocked_task?: DependencyTask;
-}
-
 interface TaskDetailData {
   comments: TaskComment[];
   checklist: TaskChecklistItem[];
-  blockedBy: Dependency[];
-  blocking: Dependency[];
+  dependencies: TaskDependencySummary[];
 }
 
 const TASKS_PAGE_SIZE = 200;
@@ -122,6 +106,20 @@ async function fetchImplementations(): Promise<ImplementationSummary[]> {
   return response.json();
 }
 
+async function fetchCommitments(): Promise<CommitmentSummary[]> {
+  const response = await fetch("/api/commitments?include_done=true", { cache: "no-store" });
+
+  if (response.status === 401) {
+    throw new Error("Authentication required. Sign in at /login.");
+  }
+
+  if (!response.ok) {
+    throw new Error("Failed to fetch commitments");
+  }
+
+  return response.json();
+}
+
 async function fetchTaskDetails(taskId: string): Promise<TaskDetailData> {
   const [commentsRes, checklistRes, dependenciesRes] = await Promise.all([
     fetch(`/api/tasks/${taskId}/comments`, { cache: "no-store" }),
@@ -131,14 +129,39 @@ async function fetchTaskDetails(taskId: string): Promise<TaskDetailData> {
 
   const comments = commentsRes.ok ? await commentsRes.json() : [];
   const checklist = checklistRes.ok ? await checklistRes.json() : [];
-  const dependencies = dependenciesRes.ok ? await dependenciesRes.json() : { blocked_by: [], blocking: [] };
+  const dependencies = dependenciesRes.ok ? await dependenciesRes.json() : { dependencies: [] };
 
   return {
     comments,
     checklist,
-    blockedBy: dependencies.blocked_by,
-    blocking: dependencies.blocking,
+    dependencies: Array.isArray(dependencies.dependencies) ? dependencies.dependencies : [],
   };
+}
+
+function getUnresolvedDependencies(task: TaskWithImplementation): TaskDependencySummary[] {
+  return (task.dependencies || []).filter((dependency) => dependency.unresolved);
+}
+
+function getDependencyWaitingLabel(task: TaskWithImplementation): string | null {
+  const unresolvedDependencies = getUnresolvedDependencies(task);
+  if (unresolvedDependencies.length === 0) {
+    return null;
+  }
+
+  const [first] = unresolvedDependencies;
+  if (!first) {
+    return null;
+  }
+
+  if (unresolvedDependencies.length === 1) {
+    return first.title;
+  }
+
+  return `${first.title} +${unresolvedDependencies.length - 1} more`;
+}
+
+function getDependencyBlockedState(dependencies: TaskDependencySummary[]): boolean {
+  return dependencies.some((dependency) => dependency.unresolved);
 }
 
 function LoadingSkeleton() {
@@ -363,6 +386,7 @@ function TaskMetaEditor({ task, isSaving, onUpdate }: TaskMetaEditorProps) {
 export function BacklogList() {
   const [tasks, setTasks] = useState<TaskWithImplementation[]>([]);
   const [implementations, setImplementations] = useState<ImplementationSummary[]>([]);
+  const [commitments, setCommitments] = useState<CommitmentSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [savingIds, setSavingIds] = useState<Record<string, number>>({});
@@ -386,9 +410,10 @@ export function BacklogList() {
       setError(null);
 
       try {
-        const [taskData, implementationData] = await Promise.all([
+        const [taskData, implementationData, commitmentData] = await Promise.all([
           fetchAllTaskPages(includeCompleted),
           fetchImplementations(),
+          fetchCommitments(),
         ]);
 
         if (!isMounted) {
@@ -397,6 +422,7 @@ export function BacklogList() {
 
         setTasks(taskData);
         setImplementations(implementationData);
+        setCommitments(commitmentData);
         setExpandedTaskId(null);
         setTaskDetailsById({});
         setLoadingDetailIds({});
@@ -420,6 +446,45 @@ export function BacklogList() {
     };
   }, [includeCompleted]);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    async function refreshData() {
+      try {
+        const [taskData, commitmentData] = await Promise.all([
+          fetchAllTaskPages(includeCompleted),
+          fetchCommitments(),
+        ]);
+
+        if (!isMounted) {
+          return;
+        }
+
+        setTasks(taskData);
+        setCommitments(commitmentData);
+
+        if (expandedTaskId) {
+          const details = await fetchTaskDetails(expandedTaskId);
+          if (!isMounted) {
+            return;
+          }
+          setTaskDetailsById((current) => ({ ...current, [expandedTaskId]: details }));
+        }
+      } catch {
+        // Non-blocking refresh.
+      }
+    }
+
+    const intervalId = window.setInterval(() => {
+      void refreshData();
+    }, 15000);
+
+    return () => {
+      isMounted = false;
+      window.clearInterval(intervalId);
+    };
+  }, [expandedTaskId, includeCompleted]);
+
   // Toggle expanded panel and load details
   const toggleExpanded = useCallback(async (taskId: string) => {
     if (expandedTaskId === taskId) {
@@ -442,7 +507,7 @@ export function BacklogList() {
       // Silently fail - panel will show empty state for this task
       setTaskDetailsById((current) => ({
         ...current,
-        [taskId]: { comments: [], checklist: [], blockedBy: [], blocking: [] },
+        [taskId]: { comments: [], checklist: [], dependencies: [] },
       }));
     } finally {
       setLoadingDetailIds((current) => {
@@ -502,7 +567,7 @@ export function BacklogList() {
     });
   }, []);
 
-  const handleDependencyAdded = useCallback((taskId: string, dependency: Dependency) => {
+  const handleDependencyAdded = useCallback((taskId: string, dependency: TaskDependencySummary) => {
     setTaskDetailsById((current) => {
       const details = current[taskId];
       if (!details) {
@@ -511,9 +576,24 @@ export function BacklogList() {
 
       return {
         ...current,
-        [taskId]: { ...details, blockedBy: [...details.blockedBy, dependency] },
+        [taskId]: { ...details, dependencies: [...details.dependencies, dependency] },
       };
     });
+
+    setTasks((current) =>
+      current.map((task) => {
+        if (task.id !== taskId) {
+          return task;
+        }
+
+        const nextDependencies = [...(task.dependencies || []), dependency];
+        return {
+          ...task,
+          dependencies: nextDependencies,
+          dependency_blocked: getDependencyBlockedState(nextDependencies),
+        };
+      })
+    );
   }, []);
 
   const handleDependencyRemoved = useCallback((taskId: string, dependencyId: string) => {
@@ -527,11 +607,25 @@ export function BacklogList() {
         ...current,
         [taskId]: {
           ...details,
-          blockedBy: details.blockedBy.filter((dependency) => dependency.id !== dependencyId),
-          blocking: details.blocking.filter((dependency) => dependency.id !== dependencyId),
+          dependencies: details.dependencies.filter((dependency) => dependency.id !== dependencyId),
         },
       };
     });
+
+    setTasks((current) =>
+      current.map((task) => {
+        if (task.id !== taskId) {
+          return task;
+        }
+
+        const nextDependencies = (task.dependencies || []).filter((dependency) => dependency.id !== dependencyId);
+        return {
+          ...task,
+          dependencies: nextDependencies,
+          dependency_blocked: getDependencyBlockedState(nextDependencies),
+        };
+      })
+    );
   }, []);
 
   const handleChecklistToggle = useCallback(async (taskId: string, item: TaskChecklistItem) => {
@@ -708,7 +802,17 @@ export function BacklogList() {
       }
 
       const updatedTask = (await response.json()) as TaskWithImplementation;
-      setTasks((current) => current.map((task) => (task.id === taskId ? updatedTask : task)));
+      setTasks((current) =>
+        current.map((task) =>
+          task.id === taskId
+            ? {
+                ...updatedTask,
+                dependencies: task.dependencies || [],
+                dependency_blocked: task.dependency_blocked ?? false,
+              }
+            : task
+        )
+      );
     } catch (updateError) {
       if (previousTask) {
         setTasks((current) => current.map((task) => (task.id === taskId ? previousTask : task)));
@@ -720,7 +824,7 @@ export function BacklogList() {
   }
 
   function handleTaskCreated(task: TaskWithImplementation) {
-    setTasks((current) => [task, ...current]);
+    setTasks((current) => [{ ...task, dependencies: [], dependency_blocked: false }, ...current]);
     setError(null);
   }
 
@@ -885,6 +989,7 @@ export function BacklogList() {
                   const isExpanded = expandedTaskId === task.id;
                   const details = taskDetailsById[task.id];
                   const isLoadingDetails = Boolean(loadingDetailIds[task.id]);
+                  const dependencyWaitingLabel = getDependencyWaitingLabel(task);
 
                   return (
                     <Fragment key={task.id}>
@@ -916,15 +1021,37 @@ export function BacklogList() {
                         {/* Task title */}
                         <td className="w-[320px] max-w-[320px] px-3 py-2.5 align-middle">
                           <p className="text-sm font-medium leading-tight text-foreground break-words">{task.title}</p>
+                          {task.implementation?.phase === "Sundown" && (
+                            <p className="mt-1 inline-flex rounded bg-orange-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-orange-300">
+                              Sundown implementation
+                            </p>
+                          )}
                           {task.description && (
                             <p className="mt-1 text-xs text-muted-foreground break-all whitespace-normal">{task.description}</p>
                           )}
-                          {task.status === "Blocked/Waiting" && (
+                          {dependencyWaitingLabel && (
                             <p
-                              className={`mt-1 text-xs break-words ${
-                                task.waiting_on ? "text-amber-300" : "text-rose-400"
-                              }`}
+                              className="mt-1 flex items-start gap-1.5 text-xs text-muted-foreground break-words"
                             >
+                              <svg
+                                className="mt-0.5 h-3 w-3 shrink-0"
+                                viewBox="0 0 20 20"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth={1.8}
+                                aria-hidden="true"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  d="M8 7l-2.5 2.5a2.5 2.5 0 003.5 3.5L11 11m1-2l2.5-2.5a2.5 2.5 0 10-3.5-3.5L9 5"
+                                />
+                              </svg>
+                              <span>Waiting on: {dependencyWaitingLabel}</span>
+                            </p>
+                          )}
+                          {!dependencyWaitingLabel && task.status === "Blocked/Waiting" && (
+                            <p className={`mt-1 text-xs break-words ${task.waiting_on ? "text-amber-300" : "text-rose-400"}`}>
                               {task.waiting_on ? `Waiting on: ${task.waiting_on}` : "Waiting on: not set"}
                             </p>
                           )}
@@ -1110,9 +1237,9 @@ export function BacklogList() {
 
                                   <TaskDependencies
                                     taskId={task.id}
-                                    blockedBy={details.blockedBy}
-                                    blocking={details.blocking}
+                                    dependencies={details.dependencies}
                                     availableTasks={tasks}
+                                    availableCommitments={commitments}
                                     onDependencyAdded={(dependency) => handleDependencyAdded(task.id, dependency)}
                                     onDependencyRemoved={(dependencyId) =>
                                       handleDependencyRemoved(task.id, dependencyId)

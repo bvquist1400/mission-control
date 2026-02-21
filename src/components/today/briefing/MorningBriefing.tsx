@@ -24,6 +24,7 @@ interface MorningBriefingProps {
 export function MorningBriefing({ calendar, tasks, capacity }: MorningBriefingProps) {
   // Get top tasks to recommend
   const topTasks = tasks.remaining.slice(0, 4);
+  const sundownTasks = tasks.remaining.filter((task) => task.implementation_phase === "Sundown");
 
   return (
     <div className="space-y-4">
@@ -75,6 +76,11 @@ export function MorningBriefing({ calendar, tasks, capacity }: MorningBriefingPr
                 {topTasks[0].implementation_name && (
                   <span className="ml-2 text-xs">({topTasks[0].implementation_name})</span>
                 )}
+                {topTasks[0].implementation_phase === "Sundown" && (
+                  <span className="ml-2 rounded bg-orange-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-orange-300">
+                    Sundown
+                  </span>
+                )}
               </p>
             </div>
           )}
@@ -99,6 +105,22 @@ export function MorningBriefing({ calendar, tasks, capacity }: MorningBriefingPr
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {sundownTasks.length > 0 && (
+        <div className="rounded-lg border border-orange-500/30 bg-orange-500/5 p-4">
+          <h3 className="mb-2 text-sm font-semibold text-orange-300">Sundown Watch</h3>
+          <ul className="space-y-1.5">
+            {sundownTasks.slice(0, 4).map((task) => (
+              <li key={task.id} className="flex items-center justify-between gap-2">
+                <Link href={`/tasks/${task.id}`} className="truncate text-sm text-foreground hover:text-accent">
+                  {task.title}
+                </Link>
+                <span className="shrink-0 text-xs text-muted-foreground">{task.estimated_minutes}m</span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
     </div>

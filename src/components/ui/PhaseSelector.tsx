@@ -2,7 +2,18 @@
 
 import type { ImplPhase } from "@/types/database";
 
-const phases: ImplPhase[] = ["Intake", "Discovery", "Design", "Build", "Test", "Training", "GoLive", "Hypercare"];
+const phases: ImplPhase[] = [
+  "Intake",
+  "Discovery",
+  "Design",
+  "Build",
+  "Test",
+  "Training",
+  "GoLive",
+  "Hypercare",
+  "Steady State",
+  "Sundown",
+];
 
 const phaseLabels: Record<ImplPhase, string> = {
   Intake: "Intake",
@@ -13,6 +24,8 @@ const phaseLabels: Record<ImplPhase, string> = {
   Training: "Training",
   GoLive: "Go-Live",
   Hypercare: "Hypercare",
+  "Steady State": "Steady State",
+  Sundown: "Sundown",
 };
 
 interface PhaseSelectorProps {

@@ -41,6 +41,8 @@ function taskToSummary(task: TaskWithImplementation): TaskSummary {
     blocker: task.blocker,
     waiting_on: task.waiting_on,
     implementation_name: task.implementation?.name ?? null,
+    implementation_phase: task.implementation?.phase ?? null,
+    implementation_rag: task.implementation?.rag ?? null,
   };
 }
 
@@ -152,7 +154,7 @@ async function fetchCalendarData(
 async function fetchTasks(supabase: SupabaseClient, userId: string): Promise<TaskWithImplementation[]> {
   const { data, error } = await supabase
     .from("tasks")
-    .select("*, implementation:implementations(id, name)")
+    .select("*, implementation:implementations(id, name, phase, rag)")
     .eq("user_id", userId)
     .order("priority_score", { ascending: false });
 
@@ -271,7 +273,9 @@ export async function GET(request: NextRequest) {
       // Convert tasks to TaskInput format for prep task functions
       const tasksForPrepAnalysis: TaskInput[] = allTasks.map((t) => ({
         ...t,
-        implementation: t.implementation ? { name: t.implementation.name } : null,
+        implementation: t.implementation
+          ? { name: t.implementation.name, phase: t.implementation.phase ?? null, rag: t.implementation.rag ?? null }
+          : null,
       }));
 
       const prepTasks = identifyPrepTasks(

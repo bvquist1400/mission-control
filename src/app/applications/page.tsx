@@ -200,6 +200,9 @@ export default function ImplementationsPage() {
     }
   }
 
+  const sundownImplementations = implementations.filter((implementation) => implementation.phase === "Sundown");
+  const activeImplementations = implementations.filter((implementation) => implementation.phase !== "Sundown");
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -325,19 +328,51 @@ export default function ImplementationsPage() {
       ) : implementations.length === 0 ? (
         <EmptyState />
       ) : (
-        <section className="grid gap-4 xl:grid-cols-2">
-          {implementations.map((implementation) => (
-            <div key={implementation.id} className="space-y-2">
-              <ImplementationCard implementation={implementation} onCopyUpdate={handleCopyUpdate} />
-              <Link
-                href={`/applications/${implementation.id}`}
-                className="inline-flex rounded-lg border border-stroke bg-panel px-3 py-1.5 text-xs font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground"
-              >
-                Open details
-              </Link>
-            </div>
-          ))}
-        </section>
+        <div className="space-y-6">
+          {activeImplementations.length > 0 && (
+            <section>
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-foreground">Active Portfolio</h2>
+                <span className="text-xs text-muted-foreground">{activeImplementations.length} applications</span>
+              </div>
+              <div className="grid gap-4 xl:grid-cols-2">
+                {activeImplementations.map((implementation) => (
+                  <div key={implementation.id} className="space-y-2">
+                    <ImplementationCard implementation={implementation} onCopyUpdate={handleCopyUpdate} />
+                    <Link
+                      href={`/applications/${implementation.id}`}
+                      className="inline-flex rounded-lg border border-stroke bg-panel px-3 py-1.5 text-xs font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground"
+                    >
+                      Open details
+                    </Link>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {sundownImplementations.length > 0 && (
+            <section className="rounded-card border border-orange-500/30 bg-orange-500/5 p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-orange-300">Sundown Track</h2>
+                <span className="text-xs text-orange-200/80">{sundownImplementations.length} applications</span>
+              </div>
+              <div className="grid gap-4 xl:grid-cols-2">
+                {sundownImplementations.map((implementation) => (
+                  <div key={implementation.id} className="space-y-2">
+                    <ImplementationCard implementation={implementation} onCopyUpdate={handleCopyUpdate} />
+                    <Link
+                      href={`/applications/${implementation.id}`}
+                      className="inline-flex rounded-lg border border-orange-400/40 bg-panel px-3 py-1.5 text-xs font-semibold text-orange-200 transition hover:bg-panel-muted"
+                    >
+                      Open details
+                    </Link>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+        </div>
       )}
     </div>
   );

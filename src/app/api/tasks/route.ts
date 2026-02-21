@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
+import { fetchTaskDependencySummaries } from '@/lib/task-dependencies';
 import type { TaskStatus, TaskType, EstimateSource } from '@/types/database';
 
 const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Done'];
@@ -61,7 +62,7 @@ export async function GET(request: NextRequest) {
 
     let query = supabase
       .from('tasks')
-      .select('*, implementation:implementations(id, name)')
+      .select('*, implementation:implementations(id, name, phase, rag)')
       .eq('user_id', userId)
       .order('priority_score', { ascending: false })
       .order('id', { ascending: true })
@@ -98,7 +99,20 @@ export async function GET(request: NextRequest) {
       throw error;
     }
 
-    return NextResponse.json(data);
+    const tasks = data || [];
+    const taskIds = tasks.map((task) => task.id);
+    const dependencyMap = await fetchTaskDependencySummaries(supabase, userId, taskIds);
+
+    const enrichedTasks = tasks.map((task) => {
+      const dependencies = dependencyMap.get(task.id) || [];
+      return {
+        ...task,
+        dependencies,
+        dependency_blocked: dependencies.some((dependency) => dependency.unresolved),
+      };
+    });
+
+    return NextResponse.json(enrichedTasks);
   } catch (error) {
     console.error('Error fetching tasks:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
@@ -229,7 +243,7 @@ export async function POST(request: NextRequest) {
         source_url: asStringOrNull(body.source_url),
         pinned_excerpt: asStringOrNull(body.pinned_excerpt),
       })
-      .select('*, implementation:implementations(id, name)')
+      .select('*, implementation:implementations(id, name, phase, rag)')
       .single();
 
     if (error) {
@@ -240,8 +254,9 @@ export async function POST(request: NextRequest) {
     if (blockedByTaskId && data) {
       await supabase.from('task_dependencies').insert({
         user_id: userId,
-        blocker_task_id: blockedByTaskId,
-        blocked_task_id: data.id,
+        task_id: data.id,
+        depends_on_task_id: blockedByTaskId,
+        depends_on_commitment_id: null,
       });
     }
 

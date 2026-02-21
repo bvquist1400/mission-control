@@ -30,12 +30,19 @@ export function PrepTaskList({ tasks, title = "Prep Tasks", maxTasks = 5 }: Prep
           <li key={prepTask.task.id} className="flex items-start gap-2">
             <span className="mt-0.5 text-yellow-400">&#9889;</span>
             <div className="min-w-0 flex-1">
-              <Link
-                href={`/tasks/${prepTask.task.id}`}
-                className="block truncate text-sm font-medium text-foreground hover:text-accent"
-              >
-                {prepTask.task.title}
-              </Link>
+              <div className="flex items-center gap-1.5">
+                <Link
+                  href={`/tasks/${prepTask.task.id}`}
+                  className="block truncate text-sm font-medium text-foreground hover:text-accent"
+                >
+                  {prepTask.task.title}
+                </Link>
+                {prepTask.task.implementation_phase === "Sundown" && (
+                  <span className="rounded bg-orange-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-orange-300">
+                    Sundown
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-muted-foreground">
                 {prepTask.reason}
                 {prepTask.task.estimated_minutes > 0 && (
@@ -87,6 +94,11 @@ export function RolledOverList({ tasks, title = "Rolling Over" }: RolledOverList
             >
               {task.title}
             </Link>
+            {task.implementation_phase === "Sundown" && (
+              <span className="rounded bg-orange-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-orange-300">
+                Sundown
+              </span>
+            )}
             <span className="flex-shrink-0 text-xs text-muted-foreground">
               ({task.estimated_minutes} min)
             </span>

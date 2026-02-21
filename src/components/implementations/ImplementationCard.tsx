@@ -39,6 +39,7 @@ type CopyState = "idle" | "loading" | "copied" | "error";
 
 export function ImplementationCard({ implementation, onCopyUpdate }: ImplementationCardProps) {
   const [copyState, setCopyState] = useState<CopyState>("idle");
+  const isSundown = implementation.phase === "Sundown";
 
   async function handleCopyUpdate() {
     if (copyState === "loading") return;
@@ -81,7 +82,11 @@ export function ImplementationCard({ implementation, onCopyUpdate }: Implementat
   }[copyState];
 
   return (
-    <article className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+    <article
+      className={`rounded-card border p-5 shadow-sm ${
+        isSundown ? "border-orange-500/35 bg-orange-500/5" : "border-stroke bg-panel"
+      }`}
+    >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="text-base font-semibold text-foreground">{implementation.name}</h3>

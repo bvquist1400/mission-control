@@ -3,6 +3,8 @@ export type TaskType = "Task" | "Ticket" | "MeetingPrep" | "FollowUp" | "Admin" 
 export type CommentSource = "manual" | "system" | "llm";
 export type CommitmentStatus = "Open" | "Done" | "Dropped";
 export type CommitmentDirection = "ours" | "theirs";
+export type TaskDependencyType = "task" | "commitment";
+export type TaskDependencyStatus = TaskStatus | CommitmentStatus;
 export type ImplPhase =
   | "Intake"
   | "Discovery"
@@ -11,7 +13,9 @@ export type ImplPhase =
   | "Test"
   | "Training"
   | "GoLive"
-  | "Hypercare";
+  | "Hypercare"
+  | "Steady State"
+  | "Sundown";
 export type RagStatus = "Green" | "Yellow" | "Red";
 export type EstimateSource = "default" | "llm" | "manual";
 
@@ -88,27 +92,22 @@ export interface TaskComment {
 export interface TaskDependency {
   id: string;
   user_id: string;
-  blocker_task_id: string;
-  blocked_task_id: string;
+  task_id: string;
+  depends_on_task_id: string | null;
+  depends_on_commitment_id: string | null;
   created_at: string;
 }
 
-// Dependency with joined task info for display
-export interface TaskDependencyWithTask extends TaskDependency {
-  blocker_task?: {
-    id: string;
-    title: string;
-    status: TaskStatus;
-    blocker: boolean;
-    implementation?: { id: string; name: string } | null;
-  };
-  blocked_task?: {
-    id: string;
-    title: string;
-    status: TaskStatus;
-    blocker: boolean;
-    implementation?: { id: string; name: string } | null;
-  };
+export interface TaskDependencySummary {
+  id: string;
+  task_id: string;
+  depends_on_task_id: string | null;
+  depends_on_commitment_id: string | null;
+  type: TaskDependencyType;
+  title: string;
+  status: TaskDependencyStatus;
+  unresolved: boolean;
+  created_at: string;
 }
 
 export interface CapacityConfig {
@@ -165,6 +164,14 @@ export interface CommitmentWithStakeholder extends Commitment {
   stakeholder: { id: string; name: string } | null;
 }
 
+export interface CommitmentSummary {
+  id: string;
+  title: string;
+  status: CommitmentStatus;
+  due_at: string | null;
+  stakeholder: { id: string; name: string } | null;
+}
+
 export interface CommitmentWithTask extends Commitment {
   task: { id: string; title: string; status: TaskStatus } | null;
 }
@@ -193,7 +200,9 @@ export interface LlmExtraction {
 
 // Task with joined implementation data (from API responses)
 export interface TaskWithImplementation extends Task {
-  implementation: { id: string; name: string } | null;
+  implementation: { id: string; name: string; phase?: ImplPhase; rag?: RagStatus } | null;
+  dependencies?: TaskDependencySummary[];
+  dependency_blocked?: boolean;
 }
 
 // Allowed fields for task updates via API

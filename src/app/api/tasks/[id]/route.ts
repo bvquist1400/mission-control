@@ -39,7 +39,7 @@ export async function GET(
 
     const { data, error } = await supabase
       .from('tasks')
-      .select('*, implementation:implementations(id, name)')
+      .select('*, implementation:implementations(id, name, phase, rag)')
       .eq('id', id)
       .eq('user_id', userId)
       .single();
@@ -185,7 +185,7 @@ export async function PATCH(
       .update(updates)
       .eq('id', id)
       .eq('user_id', userId)
-      .select('*, implementation:implementations(id, name)')
+      .select('*, implementation:implementations(id, name, phase, rag)')
       .single();
 
     if (error) {

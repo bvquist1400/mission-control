@@ -325,7 +325,7 @@ function createMcpServer(): McpServer {
     'Create a new application/implementation.',
     {
       name: z.string().describe('Application name (required)'),
-      phase: z.enum(['Intake', 'Discovery', 'Design', 'Build', 'Test', 'Training', 'GoLive', 'Hypercare']).default('Intake'),
+      phase: z.enum(['Intake', 'Discovery', 'Design', 'Build', 'Test', 'Training', 'GoLive', 'Hypercare', 'Steady State', 'Sundown']).default('Intake'),
       rag: z.enum(['Green', 'Yellow', 'Red']).default('Green'),
       target_date: z.string().optional().describe('Target date (ISO)'),
       status_summary: z.string().optional(),
@@ -355,7 +355,7 @@ function createMcpServer(): McpServer {
     {
       application_id: z.string().describe('Application UUID'),
       name: z.string().optional(),
-      phase: z.enum(['Intake', 'Discovery', 'Design', 'Build', 'Test', 'Training', 'GoLive', 'Hypercare']).optional(),
+      phase: z.enum(['Intake', 'Discovery', 'Design', 'Build', 'Test', 'Training', 'GoLive', 'Hypercare', 'Steady State', 'Sundown']).optional(),
       rag: z.enum(['Green', 'Yellow', 'Red']).optional(),
       target_date: z.string().nullable().optional(),
       status_summary: z.string().optional(),

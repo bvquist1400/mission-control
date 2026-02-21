@@ -34,6 +34,7 @@ export function MiddayBriefing({ calendar, tasks, progress }: MiddayBriefingProp
 
   // Next task recommendation
   const nextTask = tasks.remaining[0];
+  const sundownCount = tasks.remaining.filter((task) => task.implementation_phase === "Sundown").length;
 
   return (
     <div className="space-y-4">
@@ -55,6 +56,11 @@ export function MiddayBriefing({ calendar, tasks, progress }: MiddayBriefingProp
             <span className="ml-2 text-xs font-normal text-muted-foreground">
               ({tasks.remaining.length} tasks)
             </span>
+            {sundownCount > 0 && (
+              <span className="ml-2 rounded bg-orange-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-orange-300">
+                {sundownCount} Sundown
+              </span>
+            )}
           </h3>
 
           {tasks.remaining.length === 0 ? (
@@ -70,6 +76,11 @@ export function MiddayBriefing({ calendar, tasks, progress }: MiddayBriefingProp
                   >
                     {task.title}
                   </Link>
+                  {task.implementation_phase === "Sundown" && (
+                    <span className="rounded bg-orange-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-orange-300">
+                      Sundown
+                    </span>
+                  )}
                   <span className="flex-shrink-0 text-xs text-muted-foreground">
                     {task.estimated_minutes}m
                   </span>

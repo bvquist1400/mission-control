@@ -7,6 +7,7 @@ import {
   type PlannerConfig,
   type PlannerTaskLike,
 } from '@/lib/planner';
+import { fetchDependencyBlockedTaskIds } from '@/lib/task-dependencies';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import { DEFAULT_WORKDAY_CONFIG } from '@/lib/workday';
 
@@ -34,6 +35,7 @@ interface TaskRow {
   task_type: string | null;
   updated_at: string;
   pinned_excerpt: string | null;
+  dependency_blocked?: boolean;
 }
 
 interface FocusDirectiveRow {
@@ -91,7 +93,15 @@ interface RankedTask {
   windowFitBonus: number;
   meetingContextBoost: number;
   meetingContextMatch: MeetingContextMatch | null;
+  dependencyBlocked: boolean;
+  steadyStatePenaltyApplied: boolean;
   exceptionEligible: boolean;
+}
+
+interface ImplementationSignal {
+  priorityWeight: number;
+  phase: string | null;
+  rag: string | null;
 }
 
 const PLANNER_SOURCE = 'planner_v1.1';
@@ -435,13 +445,23 @@ function toRankedTask(
   task: TaskRow,
   nowMs: number,
   directive: FocusDirectiveRow | null,
-  implementationWeights: Map<string, number>,
+  implementationSignals: Map<string, ImplementationSignal>,
   meetingSignals: MeetingContextSignal[],
   plannerConfig: PlannerConfig
 ): RankedTask {
   const stakeholderBoost = calculateStakeholderBoost(task.stakeholder_mentions);
-  const implementationWeight = task.implementation_id ? implementationWeights.get(task.implementation_id) ?? 5 : 5;
-  const implementationMultiplier = priorityWeightToMultiplier(implementationWeight);
+  const implementationSignal = task.implementation_id ? implementationSignals.get(task.implementation_id) : undefined;
+  const implementationWeight = implementationSignal?.priorityWeight ?? 5;
+  let implementationMultiplier = priorityWeightToMultiplier(implementationWeight);
+  const steadyStatePenaltyApplied =
+    implementationSignal?.phase === 'Steady State' &&
+    !task.blocker &&
+    implementationSignal.rag !== 'Red';
+
+  if (steadyStatePenaltyApplied) {
+    implementationMultiplier *= 0.75;
+  }
+
   const directiveMatched = matchesDirective(task, directive);
   const directiveMultiplier = getDirectiveMultiplier(directive, directiveMatched);
 
@@ -451,11 +471,13 @@ function toRankedTask(
   const meetingContextBoost = meetingContextMatch?.boost ?? 0;
   const fitBonus = windowFitBonus + meetingContextBoost;
 
+  const dependencyBlocked = Boolean(task.dependency_blocked);
   const plannerTask: PlannerTaskLike = {
     priority_score: task.priority_score,
     due_at: task.due_at,
     follow_up_at: task.follow_up_at,
     waiting_on: task.waiting_on,
+    blocked: task.blocker || dependencyBlocked,
     blocker: task.blocker,
     status: task.status,
     updated_at: task.updated_at,
@@ -481,6 +503,8 @@ function toRankedTask(
     windowFitBonus,
     meetingContextBoost,
     meetingContextMatch,
+    dependencyBlocked,
+    steadyStatePenaltyApplied,
     exceptionEligible,
   };
 }
@@ -512,6 +536,14 @@ function buildWhyLines(ranked: RankedTask, directive: FocusDirectiveRow | null):
     lines.push(`Status adjustment ${ranked.score.statusAdjust > 0 ? '+' : ''}${ranked.score.statusAdjust}`);
   }
 
+  if (ranked.dependencyBlocked) {
+    lines.push('Dependency blocked');
+  }
+
+  if (ranked.steadyStatePenaltyApplied) {
+    lines.push('Steady State deprioritized');
+  }
+
   if (ranked.meetingContextBoost > 0 && ranked.meetingContextMatch) {
     lines.push(`Meeting context +${ranked.meetingContextBoost} (${ranked.meetingContextMatch.meetingTitle})`);
   }
@@ -530,19 +562,23 @@ function getTaskSortDueTimestamp(task: TaskRow): number {
   return dueMs ?? Number.POSITIVE_INFINITY;
 }
 
-async function loadImplementationWeights(
+async function loadImplementationSignals(
   supabase: SupabaseClient,
   userId: string
-): Promise<Map<string, number>> {
+): Promise<Map<string, ImplementationSignal>> {
   const withWeight = await supabase
     .from('implementations')
-    .select('id, priority_weight')
+    .select('id, priority_weight, phase, rag')
     .eq('user_id', userId);
 
   if (!withWeight.error) {
-    const map = new Map<string, number>();
+    const map = new Map<string, ImplementationSignal>();
     for (const row of withWeight.data || []) {
-      map.set(row.id, Number.isFinite(row.priority_weight) ? row.priority_weight : 5);
+      map.set(row.id, {
+        priorityWeight: Number.isFinite(row.priority_weight) ? row.priority_weight : 5,
+        phase: typeof row.phase === 'string' ? row.phase : null,
+        rag: typeof row.rag === 'string' ? row.rag : null,
+      });
     }
     return map;
   }
@@ -553,16 +589,20 @@ async function loadImplementationWeights(
 
   const withoutWeight = await supabase
     .from('implementations')
-    .select('id')
+    .select('id, phase, rag')
     .eq('user_id', userId);
 
   if (withoutWeight.error) {
     throw withoutWeight.error;
   }
 
-  const map = new Map<string, number>();
+  const map = new Map<string, ImplementationSignal>();
   for (const row of withoutWeight.data || []) {
-    map.set(row.id, 5);
+    map.set(row.id, {
+      priorityWeight: 5,
+      phase: typeof row.phase === 'string' ? row.phase : null,
+      rag: typeof row.rag === 'string' ? row.rag : null,
+    });
   }
   return map;
 }
@@ -818,13 +858,22 @@ export async function POST(request: NextRequest) {
     }
 
     const tasks = (tasksResult.data || []) as TaskRow[];
-    const implementationWeights = await loadImplementationWeights(supabase, userId);
+    const dependencyBlockedTaskIds = await fetchDependencyBlockedTaskIds(
+      supabase,
+      userId,
+      tasks.map((task) => task.id)
+    );
+    const tasksWithDependencyState: TaskRow[] = tasks.map((task) => ({
+      ...task,
+      dependency_blocked: dependencyBlockedTaskIds.has(task.id),
+    }));
+    const implementationSignals = await loadImplementationSignals(supabase, userId);
     const activeDirective = await loadActiveDirective(supabase, userId, nowMs);
     const meetingContextSignals = await loadUpcomingMeetingContextSignals(supabase, userId, nowMs);
 
-    const allRankedTasks = tasks
+    const allRankedTasks = tasksWithDependencyState
       .map((task) =>
-        toRankedTask(task, nowMs, activeDirective, implementationWeights, meetingContextSignals, plannerConfig)
+        toRankedTask(task, nowMs, activeDirective, implementationSignals, meetingContextSignals, plannerConfig)
       )
       .sort((a, b) => {
         if (a.finalScore !== b.finalScore) {
@@ -840,13 +889,16 @@ export async function POST(request: NextRequest) {
       });
 
     // "now" mode: only tasks estimated <= 60 min and not Blocked/Waiting
-    const rankedTasks = mode === 'now'
+    const modeFilteredTasks = mode === 'now'
       ? allRankedTasks.filter(
           (row) =>
             row.task.estimated_minutes <= NEXT_WINDOW_MINUTES &&
             row.task.status !== 'Blocked/Waiting'
         )
       : allRankedTasks;
+    const dependencyReadyTasks = modeFilteredTasks.filter((row) => !row.dependencyBlocked);
+    const rankedTasks = dependencyReadyTasks.length > 0 ? dependencyReadyTasks : modeFilteredTasks;
+    const dependencyFallbackUsed = dependencyReadyTasks.length === 0 && modeFilteredTasks.length > 0;
 
     const fitRanked = rankedTasks.filter((row) => row.task.estimated_minutes <= NEXT_WINDOW_MINUTES);
     const nowNextTask = fitRanked[0] ?? rankedTasks[0] ?? null;
@@ -902,6 +954,7 @@ export async function POST(request: NextRequest) {
           source: PLANNER_SOURCE,
           mode,
           nextWindowMinutes: NEXT_WINDOW_MINUTES,
+          dependencyFallbackUsed,
           exceptions: plannerConfig.exceptions,
         },
       };
@@ -936,6 +989,8 @@ export async function POST(request: NextRequest) {
       planDate,
       mode,
       taskCount: tasks.length,
+      dependencyBlockedTaskCount: dependencyBlockedTaskIds.size,
+      dependencyFallbackUsed,
       nextWindowMinutes: NEXT_WINDOW_MINUTES,
       timezone: DEFAULT_WORKDAY_CONFIG.timezone,
       directiveId: activeDirective?.id ?? null,

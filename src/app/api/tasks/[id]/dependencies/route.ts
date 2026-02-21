@@ -1,8 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { fetchTaskDependenciesForTask } from '@/lib/task-dependencies';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
+import type { CommitmentStatus, TaskStatus } from '@/types/database';
+
+function asStringOrNull(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
 
 // GET /api/tasks/[id]/dependencies - Get dependencies for a task
-// Returns both: tasks blocking this one, and tasks this one blocks
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -16,58 +26,27 @@ export async function GET(
     const { supabase, userId } = auth.context;
     const { id } = await params;
 
-    // Get tasks that block this task (this task is blocked BY these)
-    const { data: blockedBy, error: blockedByError } = await supabase
-      .from('task_dependencies')
-      .select(`
-        id,
-        blocker_task_id,
-        blocked_task_id,
-        created_at,
-        blocker_task:tasks!task_dependencies_blocker_task_id_fkey(
-          id, title, status, blocker,
-          implementation:implementations(id, name)
-        )
-      `)
-      .eq('blocked_task_id', id)
-      .eq('user_id', userId);
+    const { data: task, error: taskError } = await supabase
+      .from('tasks')
+      .select('id')
+      .eq('id', id)
+      .eq('user_id', userId)
+      .single();
 
-    if (blockedByError) {
-      throw blockedByError;
+    if (taskError || !task) {
+      return NextResponse.json({ error: 'Task not found' }, { status: 404 });
     }
 
-    // Get tasks that this task blocks (these are blocked BY this task)
-    const { data: blocking, error: blockingError } = await supabase
-      .from('task_dependencies')
-      .select(`
-        id,
-        blocker_task_id,
-        blocked_task_id,
-        created_at,
-        blocked_task:tasks!task_dependencies_blocked_task_id_fkey(
-          id, title, status, blocker,
-          implementation:implementations(id, name)
-        )
-      `)
-      .eq('blocker_task_id', id)
-      .eq('user_id', userId);
+    const dependencies = await fetchTaskDependenciesForTask(supabase, userId, id);
 
-    if (blockingError) {
-      throw blockingError;
-    }
-
-    return NextResponse.json({
-      blocked_by: blockedBy || [],
-      blocking: blocking || [],
-    });
+    return NextResponse.json({ dependencies });
   } catch (error) {
     console.error('Error fetching dependencies:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
-// POST /api/tasks/[id]/dependencies - Add a dependency
-// This task will be blocked BY the specified blocker_task_id
+// POST /api/tasks/[id]/dependencies - Add a dependency (task or commitment)
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -82,92 +61,156 @@ export async function POST(
     const { id } = await params;
     const body = (await request.json()) as Record<string, unknown>;
 
-    if (typeof body.blocker_task_id !== 'string') {
-      return NextResponse.json({ error: 'blocker_task_id is required' }, { status: 400 });
-    }
-
-    const blockerTaskId = body.blocker_task_id;
-
-    // Prevent self-dependency
-    if (blockerTaskId === id) {
-      return NextResponse.json({ error: 'A task cannot block itself' }, { status: 400 });
-    }
-
-    // Verify both tasks exist and belong to user
-    const { data: tasks, error: tasksError } = await supabase
+    const { data: task, error: taskError } = await supabase
       .from('tasks')
       .select('id')
-      .eq('user_id', userId)
-      .in('id', [id, blockerTaskId]);
-
-    if (tasksError) {
-      throw tasksError;
-    }
-
-    if (!tasks || tasks.length !== 2) {
-      return NextResponse.json({ error: 'One or both tasks not found' }, { status: 404 });
-    }
-
-    // Check for existing dependency
-    const { data: existing } = await supabase
-      .from('task_dependencies')
-      .select('id')
-      .eq('blocker_task_id', blockerTaskId)
-      .eq('blocked_task_id', id)
+      .eq('id', id)
       .eq('user_id', userId)
       .single();
+
+    if (taskError || !task) {
+      return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+    }
+
+    const requestedType = asStringOrNull(body.type);
+    const dependsOnTaskId = asStringOrNull(body.depends_on_task_id ?? body.blocker_task_id);
+    const dependsOnCommitmentId = asStringOrNull(body.depends_on_commitment_id);
+
+    const providedTargetCount = Number(Boolean(dependsOnTaskId)) + Number(Boolean(dependsOnCommitmentId));
+    if (providedTargetCount !== 1) {
+      return NextResponse.json(
+        { error: 'Provide exactly one dependency target: depends_on_task_id or depends_on_commitment_id' },
+        { status: 400 }
+      );
+    }
+
+    let type: 'task' | 'commitment' | null = null;
+    if (requestedType === 'task' || requestedType === 'commitment') {
+      type = requestedType;
+    } else if (dependsOnTaskId) {
+      type = 'task';
+    } else if (dependsOnCommitmentId) {
+      type = 'commitment';
+    }
+
+    if (!type) {
+      return NextResponse.json({ error: 'type must be task or commitment' }, { status: 400 });
+    }
+
+    if (type === 'task' && !dependsOnTaskId) {
+      return NextResponse.json({ error: 'depends_on_task_id is required for task dependencies' }, { status: 400 });
+    }
+
+    if (type === 'commitment' && !dependsOnCommitmentId) {
+      return NextResponse.json(
+        { error: 'depends_on_commitment_id is required for commitment dependencies' },
+        { status: 400 }
+      );
+    }
+
+    let targetTitle = '';
+    let targetStatus: TaskStatus | CommitmentStatus = 'Done';
+
+    if (type === 'task' && dependsOnTaskId) {
+      if (dependsOnTaskId === id) {
+        return NextResponse.json({ error: 'A task cannot depend on itself' }, { status: 400 });
+      }
+
+      const { data: dependencyTask, error: dependencyTaskError } = await supabase
+        .from('tasks')
+        .select('id, title, status')
+        .eq('id', dependsOnTaskId)
+        .eq('user_id', userId)
+        .single();
+
+      if (dependencyTaskError || !dependencyTask) {
+        return NextResponse.json({ error: 'Dependency task not found' }, { status: 404 });
+      }
+
+      targetTitle = dependencyTask.title;
+      targetStatus = dependencyTask.status as TaskStatus;
+    }
+
+    if (type === 'commitment' && dependsOnCommitmentId) {
+      const { data: dependencyCommitment, error: dependencyCommitmentError } = await supabase
+        .from('commitments')
+        .select('id, title, status')
+        .eq('id', dependsOnCommitmentId)
+        .eq('user_id', userId)
+        .single();
+
+      if (dependencyCommitmentError || !dependencyCommitment) {
+        return NextResponse.json({ error: 'Dependency commitment not found' }, { status: 404 });
+      }
+
+      targetTitle = dependencyCommitment.title;
+      targetStatus = dependencyCommitment.status as CommitmentStatus;
+    }
+
+    let existingQuery = supabase
+      .from('task_dependencies')
+      .select('id')
+      .eq('task_id', id)
+      .eq('user_id', userId);
+
+    if (type === 'task') {
+      existingQuery = existingQuery.eq('depends_on_task_id', dependsOnTaskId).is('depends_on_commitment_id', null);
+    } else {
+      existingQuery = existingQuery.eq('depends_on_commitment_id', dependsOnCommitmentId).is('depends_on_task_id', null);
+    }
+
+    const { data: existing, error: existingError } = await existingQuery.maybeSingle();
+    if (existingError) {
+      throw existingError;
+    }
 
     if (existing) {
       return NextResponse.json({ error: 'Dependency already exists' }, { status: 409 });
-    }
-
-    // Check for circular dependency (would the blocker task be blocked by this task?)
-    const { data: circular } = await supabase
-      .from('task_dependencies')
-      .select('id')
-      .eq('blocker_task_id', id)
-      .eq('blocked_task_id', blockerTaskId)
-      .eq('user_id', userId)
-      .single();
-
-    if (circular) {
-      return NextResponse.json(
-        { error: 'Cannot create circular dependency' },
-        { status: 400 }
-      );
     }
 
     const { data, error } = await supabase
       .from('task_dependencies')
       .insert({
         user_id: userId,
-        blocker_task_id: blockerTaskId,
-        blocked_task_id: id,
+        task_id: id,
+        depends_on_task_id: type === 'task' ? dependsOnTaskId : null,
+        depends_on_commitment_id: type === 'commitment' ? dependsOnCommitmentId : null,
       })
-      .select(`
-        id,
-        blocker_task_id,
-        blocked_task_id,
-        created_at,
-        blocker_task:tasks!task_dependencies_blocker_task_id_fkey(
-          id, title, status, blocker,
-          implementation:implementations(id, name)
-        )
-      `)
+      .select('id, task_id, depends_on_task_id, depends_on_commitment_id, created_at')
       .single();
 
     if (error) {
       throw error;
     }
 
-    return NextResponse.json(data, { status: 201 });
+    const dependencies = await fetchTaskDependenciesForTask(supabase, userId, id);
+    const created = dependencies.find((dependency) => dependency.id === data.id);
+
+    if (created) {
+      return NextResponse.json(created, { status: 201 });
+    }
+
+    return NextResponse.json(
+      {
+        id: data.id,
+        task_id: id,
+        depends_on_task_id: type === 'task' ? dependsOnTaskId : null,
+        depends_on_commitment_id: type === 'commitment' ? dependsOnCommitmentId : null,
+        type,
+        title: targetTitle,
+        status: targetStatus,
+        unresolved: targetStatus !== 'Done',
+        created_at: data.created_at,
+      },
+      { status: 201 }
+    );
   } catch (error) {
     console.error('Error creating dependency:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
-// DELETE /api/tasks/[id]/dependencies - Remove a dependency
+// DELETE /api/tasks/[id]/dependencies?dependencyId=... - Legacy fallback route
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -187,13 +230,12 @@ export async function DELETE(
       return NextResponse.json({ error: 'dependencyId query param required' }, { status: 400 });
     }
 
-    // Verify the dependency involves this task (either as blocker or blocked)
     const { data, error } = await supabase
       .from('task_dependencies')
       .delete()
       .eq('id', dependencyId)
+      .eq('task_id', id)
       .eq('user_id', userId)
-      .or(`blocker_task_id.eq.${id},blocked_task_id.eq.${id}`)
       .select('id');
 
     if (error) {

@@ -3,7 +3,7 @@
  * Identifies tasks that should be worked on today to prepare for tomorrow
  */
 
-import type { Task, TaskType } from "@/types/database";
+import type { ImplPhase, RagStatus, Task, TaskType } from "@/types/database";
 import type { ApiCalendarEvent } from "@/lib/calendar";
 
 export interface PrepTask {
@@ -24,10 +24,14 @@ export interface TaskSummary {
   blocker: boolean;
   waiting_on: string | null;
   implementation_name?: string | null;
+  implementation_phase?: ImplPhase | null;
+  implementation_rag?: RagStatus | null;
 }
 
 /** Input type for prep task functions - compatible with TaskWithImplementation */
-export type TaskInput = Task & { implementation?: { name: string } | null };
+export type TaskInput = Task & {
+  implementation?: { name: string; phase?: ImplPhase | null; rag?: RagStatus | null } | null;
+};
 
 /**
  * Extract keywords from a string for matching
@@ -87,7 +91,9 @@ function formatEventTime(isoTime: string, timezone = "America/New_York"): string
  */
 export function taskToSummary(
   task: Task,
-  implementationName?: string | null
+  implementationName?: string | null,
+  implementationPhase?: ImplPhase | null,
+  implementationRag?: RagStatus | null
 ): TaskSummary {
   return {
     id: task.id,
@@ -100,6 +106,8 @@ export function taskToSummary(
     blocker: task.blocker,
     waiting_on: task.waiting_on,
     implementation_name: implementationName,
+    implementation_phase: implementationPhase ?? null,
+    implementation_rag: implementationRag ?? null,
   };
 }
 
@@ -137,7 +145,7 @@ export function identifyPrepTasks(
       );
 
       prepTasks.push({
-        task: taskToSummary(task, task.implementation?.name),
+        task: taskToSummary(task, task.implementation?.name, task.implementation?.phase, task.implementation?.rag),
         reason: matchingEvent
           ? `Prep for: ${matchingEvent.title} at ${formatEventTime(matchingEvent.start_at)}`
           : "Meeting preparation task",
@@ -154,7 +162,7 @@ export function identifyPrepTasks(
 
     if (matchingEvent) {
       prepTasks.push({
-        task: taskToSummary(task, task.implementation?.name),
+        task: taskToSummary(task, task.implementation?.name, task.implementation?.phase, task.implementation?.rag),
         reason: `Related to: ${matchingEvent.title} at ${formatEventTime(matchingEvent.start_at)}`,
         targetMeetingTitle: matchingEvent.title,
         targetMeetingTime: matchingEvent.start_at,
@@ -166,7 +174,7 @@ export function identifyPrepTasks(
     if (task.due_at && task.due_at >= tomorrowStart && task.due_at <= tomorrowEnd) {
       if (task.estimated_minutes >= 60) {
         prepTasks.push({
-          task: taskToSummary(task, task.implementation?.name),
+          task: taskToSummary(task, task.implementation?.name, task.implementation?.phase, task.implementation?.rag),
           reason: `Due tomorrow (${task.estimated_minutes} min) - consider starting today`,
         });
       }
@@ -203,7 +211,7 @@ export function findRolledOverTasks(
       if (task.priority_score >= 70 && (task.status === "Planned" || task.status === "In Progress")) return true;
       return false;
     })
-    .map((task) => taskToSummary(task, task.implementation?.name))
+    .map((task) => taskToSummary(task, task.implementation?.name, task.implementation?.phase, task.implementation?.rag))
     .sort((a, b) => (b.priority_score ?? 0) - (a.priority_score ?? 0));
 }
 
@@ -223,5 +231,5 @@ export function findCompletedTodayTasks(
       // Check if updated_at is today (assumes completion updates the timestamp)
       return task.updated_at >= todayStart && task.updated_at <= todayEnd;
     })
-    .map((task) => taskToSummary(task, task.implementation?.name));
+    .map((task) => taskToSummary(task, task.implementation?.name, task.implementation?.phase, task.implementation?.rag));
 }

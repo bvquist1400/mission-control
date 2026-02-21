@@ -13,6 +13,8 @@ const phaseStyles: Record<ImplPhase, string> = {
   Training: "bg-emerald-500/15 text-emerald-400",
   GoLive: "bg-teal-500/15 text-teal-400",
   Hypercare: "bg-rose-500/15 text-rose-400",
+  "Steady State": "bg-slate-500/20 text-slate-300",
+  Sundown: "bg-orange-500/15 text-orange-300",
 };
 
 const phaseLabels: Record<ImplPhase, string> = {
@@ -24,6 +26,8 @@ const phaseLabels: Record<ImplPhase, string> = {
   Training: "Training",
   GoLive: "Go-Live",
   Hypercare: "Hypercare",
+  "Steady State": "Steady State",
+  Sundown: "Sundown",
 };
 
 export function PhaseBadge({ phase }: PhaseBadgeProps) {
