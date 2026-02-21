@@ -868,7 +868,7 @@ export function BacklogList() {
               <thead className="border-b-2 border-stroke bg-panel-muted">
                 <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground [&>th]:border-r [&>th]:border-solid [&>th]:border-stroke [&>th:last-child]:border-r-0">
                   <th className="w-10 px-2 py-3" />
-                  <th className="min-w-[280px] px-3 py-3">Task</th>
+                  <th className="w-[320px] px-3 py-3">Task</th>
                   <th className="w-[160px] px-3 py-3">Application</th>
                   <th className="w-[170px] px-3 py-3">Status</th>
                   <th className="w-[80px] px-3 py-3 text-center">Est (min)</th>
@@ -914,14 +914,14 @@ export function BacklogList() {
                         </td>
 
                         {/* Task title */}
-                        <td className="min-w-[280px] px-3 py-2.5 align-middle">
-                          <p className="text-sm font-medium text-foreground leading-tight">{task.title}</p>
+                        <td className="w-[320px] max-w-[320px] px-3 py-2.5 align-middle">
+                          <p className="text-sm font-medium leading-tight text-foreground break-words">{task.title}</p>
                           {task.description && (
-                            <p className="mt-1 truncate text-xs text-muted-foreground">{task.description}</p>
+                            <p className="mt-1 text-xs text-muted-foreground break-all whitespace-normal">{task.description}</p>
                           )}
                           {task.status === "Blocked/Waiting" && (
                             <p
-                              className={`mt-1 text-xs ${
+                              className={`mt-1 text-xs break-words ${
                                 task.waiting_on ? "text-amber-300" : "text-rose-400"
                               }`}
                             >

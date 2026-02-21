@@ -117,10 +117,10 @@ function parseExtractionResponse(responseText: string): LlmExtraction {
   return {
     title: String(parsed.title || "Untitled task"),
     suggested_tasks: Array.isArray(parsed.suggested_tasks)
-      ? parsed.suggested_tasks.map(String)
+      ? parsed.suggested_tasks.map(String).map((item: string) => item.trim()).filter(Boolean)
       : [],
     suggested_checklist: Array.isArray(parsed.suggested_checklist)
-      ? parsed.suggested_checklist.map(String)
+      ? parsed.suggested_checklist.map(String).map((item: string) => item.trim()).filter(Boolean)
       : [],
     task_type: taskType as TaskType,
     estimated_minutes: [15, 30, 60, 90, 120].includes(parsed.estimated_minutes)

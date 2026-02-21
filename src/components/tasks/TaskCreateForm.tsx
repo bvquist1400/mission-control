@@ -27,6 +27,11 @@ interface TaskDraft {
 type ActiveTab = "manual" | "quick_capture";
 type ParseState = "idle" | "parsing" | "parsed" | "error";
 
+interface QuickCaptureTaskItem {
+  title: string;
+  description: string;
+}
+
 interface QuickCaptureDraft {
   rawText: string;
   title: string;
@@ -39,7 +44,7 @@ interface QuickCaptureDraft {
   blocker: boolean;
   sendToTriage: boolean;
   waitingOn: string;
-  suggestedTasks: string[];
+  suggestedTasks: QuickCaptureTaskItem[];
   suggestedChecklist: string[];
   createAsSeparateTasks: boolean;
   needsReview: boolean;
@@ -102,20 +107,72 @@ function dateToIso(dateString: string): string {
   return `${localDateString(date)}T23:59:59.000Z`;
 }
 
-function normalizeTaskTitles(items: string[]): string[] {
+function cleanText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function truncateWithEllipsis(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+
+  return `${value.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function toConciseTaskTitle(raw: string): string {
+  const cleaned = cleanText(raw)
+    .replace(/^(?:[-*•]|\d+[.)]|\[(?: |x|X)\])\s+/, "")
+    .replace(/[,:;.\-]+$/g, "")
+    .trim();
+
+  if (!cleaned) {
+    return "";
+  }
+
+  const firstSegment = cleaned.split(/(?:\s+[—-]\s+|[.;])/)[0]?.trim() ?? cleaned;
+  const firstClause = firstSegment.split(/\b(?:because|so that|while|after|before)\b/i)[0]?.trim() ?? firstSegment;
+  const base = firstClause.length >= 8 ? firstClause : firstSegment;
+  const limitedWords = base.split(/\s+/).slice(0, 14).join(" ");
+  const normalized = cleanText(limitedWords.replace(/[,:;.\-]+$/g, ""));
+
+  return truncateWithEllipsis(normalized || cleaned, 90);
+}
+
+function normalizeTaskItems(items: QuickCaptureTaskItem[]): QuickCaptureTaskItem[] {
   const seen = new Set<string>();
-  const normalized: string[] = [];
+  const normalized: QuickCaptureTaskItem[] = [];
 
   for (const item of items) {
-    const cleaned = item.trim().replace(/\s+/g, " ");
-    if (!cleaned) continue;
-    const key = cleaned.toLowerCase();
+    const rawTitle = cleanText(item.title);
+    const rawDescription = cleanText(item.description);
+    const title = rawTitle || toConciseTaskTitle(rawDescription);
+    const description = truncateWithEllipsis(rawDescription, 8000);
+    if (!title) continue;
+
+    const key = `${title.toLowerCase()}|${description.toLowerCase()}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    normalized.push(cleaned);
+    normalized.push({
+      title: truncateWithEllipsis(title, 90),
+      description,
+    });
   }
 
   return normalized.slice(0, 20);
+}
+
+function toTaskItems(rawItems: string[]): QuickCaptureTaskItem[] {
+  return normalizeTaskItems(
+    rawItems.map((item) => {
+      const description = cleanText(item);
+      const title = toConciseTaskTitle(description);
+      const hasDistinctDetails = description.length > title.length + 12;
+      return {
+        title,
+        description: hasDistinctDetails ? description : "",
+      };
+    })
+  );
 }
 
 function extractBulletedTaskCandidates(rawText: string): string[] {
@@ -126,7 +183,7 @@ function extractBulletedTaskCandidates(rawText: string): string[] {
     .map((line) => line.match(/^(?:[-*•]|\d+[.)]|\[(?: |x|X)\])\s+(.+)$/)?.[1] ?? "")
     .filter(Boolean);
 
-  return normalizeTaskTitles(candidates);
+  return candidates.map(cleanText).filter(Boolean);
 }
 
 const inputClass = "w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60";
@@ -231,11 +288,11 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
         if (match) matchedImplId = match.id;
       }
 
-      const suggestedTasks = normalizeTaskTitles(
-        extraction.suggested_tasks.length > 0
-          ? extraction.suggested_tasks
-          : extractBulletedTaskCandidates(qcDraft.rawText)
-      );
+      const bulletedCandidates = extractBulletedTaskCandidates(qcDraft.rawText);
+      const rawTaskCandidates = bulletedCandidates.length > 1
+        ? bulletedCandidates
+        : (extraction.suggested_tasks.length > 0 ? extraction.suggested_tasks : bulletedCandidates);
+      const suggestedTasks = toTaskItems(rawTaskCandidates);
       const createAsSeparateTasks = suggestedTasks.length > 1;
 
       setQcDraft((current) => ({
@@ -265,15 +322,15 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
 
   // Quick Capture: submit handler
   const handleQcSubmit = useCallback(async () => {
-    const splitTaskTitles = qcDraft.createAsSeparateTasks
-      ? normalizeTaskTitles(qcDraft.suggestedTasks)
+    const splitTaskItems = qcDraft.createAsSeparateTasks
+      ? normalizeTaskItems(qcDraft.suggestedTasks)
       : [];
     const title = qcDraft.title.trim();
     if (!qcDraft.createAsSeparateTasks && !title) {
       setError("Task title is required");
       return;
     }
-    if (qcDraft.createAsSeparateTasks && splitTaskTitles.length === 0) {
+    if (qcDraft.createAsSeparateTasks && splitTaskItems.length === 0) {
       setError("Add at least one task to create");
       return;
     }
@@ -287,7 +344,6 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
 
     try {
       const basePayload = {
-        description: qcDraft.description.trim() || null,
         implementation_id: qcDraft.implementationId || null,
         estimated_minutes: qcDraft.estimatedMinutes,
         estimate_source: "llm",
@@ -302,20 +358,21 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
       };
 
       if (qcDraft.createAsSeparateTasks) {
-        for (const taskTitle of splitTaskTitles) {
+        for (const taskItem of splitTaskItems) {
           const response = await fetch("/api/tasks", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               ...basePayload,
-              title: taskTitle,
+              title: taskItem.title,
+              description: taskItem.description || null,
             }),
           });
 
           if (!response.ok) {
             const data = await response.json().catch(() => ({ error: "Create failed" }));
             const message = typeof data.error === "string" ? data.error : "Create failed";
-            throw new Error(`Failed to create "${taskTitle}": ${message}`);
+            throw new Error(`Failed to create "${taskItem.title}": ${message}`);
           }
 
           const createdTask = (await response.json()) as TaskWithImplementation;
@@ -328,6 +385,7 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
           body: JSON.stringify({
             ...basePayload,
             title,
+            description: qcDraft.description.trim() || null,
             initial_checklist: qcDraft.suggestedChecklist,
           }),
         });
@@ -370,7 +428,7 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [isOpen, handleSubmit, handleQcSubmit, activeTab, parseState]);
 
-  const splitTaskCount = normalizeTaskTitles(qcDraft.suggestedTasks).length;
+  const splitTaskCount = normalizeTaskItems(qcDraft.suggestedTasks).length;
 
   return (
     <section className="rounded-card border border-stroke bg-panel p-4 shadow-sm">
@@ -667,34 +725,41 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
 
                   {qcDraft.createAsSeparateTasks && qcDraft.suggestedTasks.length > 0 && (
                     <div className="space-y-1">
-                      <span className={labelClass}>Suggested Tasks</span>
+                      <span className={labelClass}>Suggested Task Titles</span>
                       <ul className="space-y-1">
                         {qcDraft.suggestedTasks.map((item, idx) => (
-                          <li key={idx} className="flex items-center gap-2">
-                            <input
-                              value={item}
-                              onChange={(e) => {
-                                const updated = [...qcDraft.suggestedTasks];
-                                updated[idx] = e.target.value;
-                                setQcDraft((c) => ({ ...c, suggestedTasks: updated }));
-                              }}
-                              disabled={isCreating}
-                              className={`flex-1 ${inputClass} !py-1.5`}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setQcDraft((c) => ({
-                                  ...c,
-                                  suggestedTasks: c.suggestedTasks.filter((_, i) => i !== idx),
-                                }));
-                              }}
-                              disabled={isCreating}
-                              className="text-xs text-muted-foreground hover:text-red-400 disabled:opacity-60"
-                              aria-label="Remove task item"
-                            >
-                              Remove
-                            </button>
+                          <li key={idx} className="space-y-1 rounded-lg border border-stroke bg-panel-muted/40 p-2">
+                            <div className="flex items-center gap-2">
+                              <input
+                                value={item.title}
+                                onChange={(e) => {
+                                  const updated = [...qcDraft.suggestedTasks];
+                                  updated[idx] = { ...updated[idx], title: e.target.value };
+                                  setQcDraft((c) => ({ ...c, suggestedTasks: updated }));
+                                }}
+                                disabled={isCreating}
+                                className={`flex-1 ${inputClass} !py-1.5`}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setQcDraft((c) => ({
+                                    ...c,
+                                    suggestedTasks: c.suggestedTasks.filter((_, i) => i !== idx),
+                                  }));
+                                }}
+                                disabled={isCreating}
+                                className="text-xs text-muted-foreground hover:text-red-400 disabled:opacity-60"
+                                aria-label="Remove task item"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                            {item.description && (
+                              <p className="text-xs text-muted-foreground break-words">
+                                Context: {item.description}
+                              </p>
+                            )}
                           </li>
                         ))}
                       </ul>

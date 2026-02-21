@@ -15,6 +15,7 @@ PARSING RULES:
 - Extract the most actionable title as a verb phrase (e.g. "Fix login issue for Dr. Martinez").
 - If the text contains a ticket ID (e.g. IMS0101522, INC0012345), prefix the title with it.
 - If the input is a list of independent action items, extract those into suggested_tasks (one task title per item) and keep suggested_checklist empty.
+- Each suggested_tasks item must be a concise task title (verb phrase, max ~80 chars), not a full paragraph.
 - If the input is a single task with multiple steps, keep suggested_tasks empty and generate checklist items in suggested_checklist.
 - Generate checklist items SPECIFIC to the described work — not generic steps.
 - Infer task_type from the nature of the work (see hints below).
