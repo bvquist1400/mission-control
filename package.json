@@ -12,8 +12,10 @@
     "test:calendar-api": "node scripts/test-calendar-api-contract.mjs"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
     "@supabase/ssr": "^0.8.0",
     "@supabase/supabase-js": "^2.95.3",
+    "@vercel/mcp-adapter": "^0.3.2",
     "next": "16.1.6",
     "react": "19.2.3",
     "react-dom": "19.2.3"
