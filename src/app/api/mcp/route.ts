@@ -650,12 +650,68 @@ function createMcpServer(): McpServer {
   mcp.tool(
     'get_briefing_narrative',
     'Get an AI-generated prose summary of the current day.',
-    {},
-    async () => {
-      const res = await fetch('https://mission-control-orpin-chi.vercel.app/api/briefing/narrative', {
+    {
+      mode: z.enum(['morning', 'midday', 'eod', 'auto']).default('auto').describe('Briefing mode'),
+      date: z.string().optional().describe('ISO date (YYYY-MM-DD). Defaults to today ET.'),
+    },
+    async ({ mode, date }) => {
+      const briefingUrl = new URL('/api/briefing', 'https://mission-control-orpin-chi.vercel.app');
+      briefingUrl.searchParams.set('mode', mode);
+      if (date) briefingUrl.searchParams.set('date', date);
+
+      const briefingRes = await fetch(briefingUrl.toString(), {
         headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
       });
-      const data = await res.json();
+
+      if (!briefingRes.ok) {
+        const errorText = await briefingRes.text();
+        return {
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify({
+              error: 'Failed to fetch briefing for narrative generation',
+              status: briefingRes.status,
+              body: errorText,
+            }, null, 2),
+          }],
+        };
+      }
+
+      const briefing = await briefingRes.json();
+
+      const narrativeRes = await fetch('https://mission-control-orpin-chi.vercel.app/api/briefing/narrative', {
+        method: 'POST',
+        headers: {
+          'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY!,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ briefing }),
+      });
+
+      const payloadText = await narrativeRes.text();
+      if (!payloadText.trim()) {
+        return {
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify({
+              error: 'Narrative endpoint returned an empty response body',
+              status: narrativeRes.status,
+            }, null, 2),
+          }],
+        };
+      }
+
+      let data: unknown;
+      try {
+        data = JSON.parse(payloadText);
+      } catch {
+        data = {
+          error: 'Narrative endpoint returned non-JSON output',
+          status: narrativeRes.status,
+          body: payloadText,
+        };
+      }
+
       return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
     }
   );

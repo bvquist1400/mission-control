@@ -11,6 +11,45 @@ function asStringOrNull(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+// GET /api/stakeholders/[id]/commitments - List commitments for a stakeholder
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    const auth = await requireAuthenticatedRoute(request);
+    if (auth.response || !auth.context) {
+      return auth.response as NextResponse;
+    }
+
+    const { supabase, userId } = auth.context;
+    const { id: stakeholderId } = await params;
+
+    const { data: stakeholder, error: stakeholderError } = await supabase
+      .from('stakeholders')
+      .select('id')
+      .eq('id', stakeholderId)
+      .eq('user_id', userId)
+      .single();
+
+    if (stakeholderError || !stakeholder) {
+      return NextResponse.json({ error: 'Stakeholder not found' }, { status: 404 });
+    }
+
+    const { data, error } = await supabase
+      .from('commitments')
+      .select('*, task:tasks(id, title, status), stakeholder:stakeholders(id, name)')
+      .eq('user_id', userId)
+      .eq('stakeholder_id', stakeholderId)
+      .order('status', { ascending: true })
+      .order('due_at', { ascending: true, nullsFirst: false });
+
+    if (error) throw error;
+
+    return NextResponse.json(data || []);
+  } catch (error) {
+    console.error('Error fetching commitments by stakeholder:', error);
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  }
+}
+
 // POST /api/stakeholders/[id]/commitments - Create commitment for stakeholder
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
