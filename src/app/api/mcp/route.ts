@@ -15,11 +15,12 @@ function authenticate(request: Request): true | Response {
     });
   }
 
-  // Accept API key via X-Mission-Control-Key header OR Bearer token
+  // Accept API key via header, Bearer token, or ?key= query param
   const customKey = request.headers.get('x-mission-control-key');
   const authHeader = request.headers.get('authorization');
   const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
-  const apiKey = customKey || bearerToken;
+  const urlKey = new URL(request.url).searchParams.get('key');
+  const apiKey = customKey || bearerToken || urlKey;
 
   if (!apiKey || apiKey !== validApiKey) {
     return new Response(JSON.stringify({ error: 'Invalid or missing API key' }), {
