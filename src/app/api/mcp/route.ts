@@ -6,7 +6,6 @@ import { z } from 'zod';
 // Auth helper — validates API key before allowing MCP access
 // ---------------------------------------------------------------------------
 function authenticate(request: Request): true | Response {
-  const apiKey = request.headers.get('x-mission-control-key');
   const validApiKey = process.env.MISSION_CONTROL_API_KEY;
 
   if (!validApiKey) {
@@ -15,6 +14,12 @@ function authenticate(request: Request): true | Response {
       headers: { 'Content-Type': 'application/json' },
     });
   }
+
+  // Accept API key via X-Mission-Control-Key header OR Bearer token
+  const customKey = request.headers.get('x-mission-control-key');
+  const authHeader = request.headers.get('authorization');
+  const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+  const apiKey = customKey || bearerToken;
 
   if (!apiKey || apiKey !== validApiKey) {
     return new Response(JSON.stringify({ error: 'Invalid or missing API key' }), {
