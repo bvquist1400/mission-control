@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { TaskCreateForm } from "@/components/tasks/TaskCreateForm";
 import { TaskComments } from "@/components/tasks/TaskComments";
 import { TaskDependencies } from "@/components/tasks/TaskDependencies";
@@ -407,6 +408,7 @@ function TaskMetaEditor({ task, isSaving, onUpdate }: TaskMetaEditorProps) {
 }
 
 export function BacklogList() {
+  const searchParams = useSearchParams();
   const [tasks, setTasks] = useState<TaskWithImplementation[]>([]);
   const [implementations, setImplementations] = useState<ImplementationSummary[]>([]);
   const [commitments, setCommitments] = useState<CommitmentSummary[]>([]);
@@ -422,7 +424,7 @@ export function BacklogList() {
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null);
 
   // Expanded task panel state
-  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
+  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(() => searchParams.get("expand"));
   const [taskDetailsById, setTaskDetailsById] = useState<Record<string, TaskDetailData>>({});
   const [loadingDetailIds, setLoadingDetailIds] = useState<Record<string, boolean>>({});
 

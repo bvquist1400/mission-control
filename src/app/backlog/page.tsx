@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { BacklogList } from "@/components/backlog/BacklogList";
 
@@ -9,7 +10,9 @@ export default function BacklogPage() {
         description="Primary task hub for filtering, editing, and creating work across all statuses."
       />
 
-      <BacklogList />
+      <Suspense>
+        <BacklogList />
+      </Suspense>
     </div>
   );
 }

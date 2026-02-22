@@ -354,16 +354,18 @@ export default function TodayPage() {
             ) : (
               <div className="grid gap-4 xl:grid-cols-3">
                 {data.topThree.map((task) => (
-                  <div key={task.id} className="relative">
-                    <TaskCard task={task} />
+                  <div key={task.id} className="flex flex-col gap-2">
+                    <Link href={`/backlog?expand=${task.id}`} className="block">
+                      <TaskCard task={task} />
+                    </Link>
                     <button
                       onClick={() => handleQuickComplete(task.id)}
                       disabled={completingIds.has(task.id)}
                       aria-label="Mark task complete"
-                      className="absolute right-3 top-3 rounded-md bg-green-500/15 px-2 py-1 text-xs font-medium text-green-400 transition hover:bg-green-500/25 disabled:opacity-50"
+                      className="w-full rounded-md border border-green-500/30 bg-green-500/10 px-3 py-1.5 text-xs font-semibold text-green-400 transition hover:border-green-500/50 hover:bg-green-500/20 disabled:opacity-50"
                       title="Mark as done"
                     >
-                      {completingIds.has(task.id) ? "..." : "✓ Done"}
+                      {completingIds.has(task.id) ? "Marking done…" : "✓ Done"}
                     </button>
                   </div>
                 ))}
