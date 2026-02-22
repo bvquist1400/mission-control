@@ -363,6 +363,9 @@ function createMcpServer(): McpServer {
       next_milestone_date: z.string().nullable().optional(),
       stakeholders: z.array(z.string()).optional(),
       keywords: z.array(z.string()).optional(),
+      priority_weight: z.number().int().min(0).max(10).optional(),
+      priority_note: z.string().nullable().optional(),
+      portfolio_rank: z.number().int().min(1).optional(),
     },
     async ({ application_id, ...updates }) => {
       const res = await fetch(

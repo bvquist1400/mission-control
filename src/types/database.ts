@@ -50,6 +50,9 @@ export interface Implementation {
   name: string;
   phase: ImplPhase;
   rag: RagStatus;
+  priority_weight: number;
+  priority_note: string | null;
+  portfolio_rank: number;
   target_date: string | null;
   status_summary: string;
   next_milestone: string;
@@ -228,6 +231,7 @@ export interface ImplementationSummary {
   name: string;
   phase?: ImplPhase;
   rag?: RagStatus;
+  portfolio_rank?: number;
 }
 
 // Task summary for implementation detail
@@ -254,6 +258,9 @@ export interface ImplementationUpdatePayload {
   name?: string;
   phase?: ImplPhase;
   rag?: RagStatus;
+  priority_weight?: number;
+  priority_note?: string | null;
+  portfolio_rank?: number;
   target_date?: string | null;
   status_summary?: string;
   next_milestone?: string;

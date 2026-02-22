@@ -100,6 +100,9 @@ export async function PATCH(
       'next_milestone_date',
       'stakeholders',
       'keywords',
+      'priority_weight',
+      'priority_note',
+      'portfolio_rank',
     ];
 
     if (typeof body.name === 'string' && body.name.length > 200) {
@@ -108,6 +111,30 @@ export async function PATCH(
 
     if (typeof body.status_summary === 'string' && body.status_summary.length > 2000) {
       return NextResponse.json({ error: 'status_summary must be 2000 characters or fewer' }, { status: 400 });
+    }
+
+    if ('priority_note' in body && typeof body.priority_note === 'string' && body.priority_note.length > 2000) {
+      return NextResponse.json({ error: 'priority_note must be 2000 characters or fewer' }, { status: 400 });
+    }
+
+    if ('priority_weight' in body) {
+      const value = body.priority_weight;
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        return NextResponse.json({ error: 'priority_weight must be a number between 0 and 10' }, { status: 400 });
+      }
+      if (Math.round(value) < 0 || Math.round(value) > 10) {
+        return NextResponse.json({ error: 'priority_weight must be between 0 and 10' }, { status: 400 });
+      }
+    }
+
+    if ('portfolio_rank' in body) {
+      const value = body.portfolio_rank;
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        return NextResponse.json({ error: 'portfolio_rank must be a positive integer' }, { status: 400 });
+      }
+      if (Math.round(value) < 1) {
+        return NextResponse.json({ error: 'portfolio_rank must be a positive integer' }, { status: 400 });
+      }
     }
 
     const updates: Record<string, unknown> = {};
@@ -119,6 +146,10 @@ export async function PATCH(
       const value = body[field];
       if (field === 'name' && typeof value === 'string') {
         updates[field] = value.trim();
+      } else if (field === 'priority_weight' && typeof value === 'number') {
+        updates[field] = Math.max(0, Math.min(10, Math.round(value)));
+      } else if (field === 'portfolio_rank' && typeof value === 'number') {
+        updates[field] = Math.max(1, Math.round(value));
       } else if ((field === 'stakeholders' || field === 'keywords') && value !== undefined) {
         updates[field] = toStringArray(value);
       } else {
