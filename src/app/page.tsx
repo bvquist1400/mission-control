@@ -13,6 +13,7 @@ import type { TaskWithImplementation, CapacityResult } from "@/types/database";
 import { calculateCapacity } from "@/lib/capacity";
 
 const TASKS_PAGE_SIZE = 200;
+const DAILY_BRIEFING_ENABLED = process.env.NEXT_PUBLIC_ENABLE_DAILY_BRIEFING === "true";
 
 interface WaitingTask {
   id: string;
@@ -338,7 +339,7 @@ export default function TodayPage() {
 
       <FocusStatusBar onDirectiveChange={handleFocusDirectiveChange} />
 
-      <DailyBriefing replanSignal={plannerReplanSignal} />
+      {DAILY_BRIEFING_ENABLED ? <DailyBriefing replanSignal={plannerReplanSignal} /> : null}
 
       <PlannerCard autoReplanKey={plannerAutoReplanKey} onAutoReplanHandled={handlePlannerAutoReplanHandled} />
 
