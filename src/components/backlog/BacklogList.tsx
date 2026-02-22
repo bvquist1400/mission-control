@@ -29,6 +29,20 @@ const TASKS_PAGE_SIZE = 200;
 type StatusFilter = "All" | TaskStatus;
 type ReviewFilter = "All" | "Needs review" | "Ready";
 type ImplementationFilter = "All" | "Unassigned" | string;
+type SortDirection = "asc" | "desc";
+type SortField = "task" | "estimate" | "due" | "priority";
+
+interface SortConfig {
+  field: SortField;
+  direction: SortDirection;
+}
+
+const DEFAULT_SORT_DIRECTIONS: Record<SortField, SortDirection> = {
+  task: "asc",
+  estimate: "asc",
+  due: "asc",
+  priority: "desc",
+};
 
 const STATUS_FILTER_OPTIONS: StatusFilter[] = ["All", "Backlog", "Planned", "In Progress", "Blocked/Waiting", "Done"];
 const REVIEW_FILTER_OPTIONS: ReviewFilter[] = ["All", "Needs review", "Ready"];
@@ -162,6 +176,15 @@ function getDependencyWaitingLabel(task: TaskWithImplementation): string | null 
 
 function getDependencyBlockedState(dependencies: TaskDependencySummary[]): boolean {
   return dependencies.some((dependency) => dependency.unresolved);
+}
+
+function getDueTimestamp(task: TaskWithImplementation): number | null {
+  if (!task.due_at) {
+    return null;
+  }
+
+  const timestamp = new Date(task.due_at).getTime();
+  return Number.isNaN(timestamp) ? null : timestamp;
 }
 
 function LoadingSkeleton() {
@@ -396,6 +419,7 @@ export function BacklogList() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
   const [implementationFilter, setImplementationFilter] = useState<ImplementationFilter>("All");
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("All");
+  const [sortConfig, setSortConfig] = useState<SortConfig | null>(null);
 
   // Expanded task panel state
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
@@ -869,13 +893,84 @@ export function BacklogList() {
         return true;
       })
       .sort((a, b) => {
+        if (sortConfig) {
+          switch (sortConfig.field) {
+            case "task": {
+              const titleCompare = a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
+              if (titleCompare !== 0) {
+                return sortConfig.direction === "asc" ? titleCompare : -titleCompare;
+              }
+              break;
+            }
+            case "estimate": {
+              if (a.estimated_minutes !== b.estimated_minutes) {
+                return sortConfig.direction === "asc"
+                  ? a.estimated_minutes - b.estimated_minutes
+                  : b.estimated_minutes - a.estimated_minutes;
+              }
+              break;
+            }
+            case "due": {
+              const dueA = getDueTimestamp(a);
+              const dueB = getDueTimestamp(b);
+
+              if (dueA !== dueB) {
+                // Keep undated tasks at the bottom for both directions.
+                if (dueA === null) {
+                  return 1;
+                }
+                if (dueB === null) {
+                  return -1;
+                }
+
+                return sortConfig.direction === "asc" ? dueA - dueB : dueB - dueA;
+              }
+              break;
+            }
+            case "priority": {
+              if (a.priority_score !== b.priority_score) {
+                return sortConfig.direction === "asc"
+                  ? a.priority_score - b.priority_score
+                  : b.priority_score - a.priority_score;
+              }
+              break;
+            }
+            default:
+              break;
+          }
+        }
+
         if (a.priority_score !== b.priority_score) {
           return b.priority_score - a.priority_score;
         }
 
         return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
       });
-  }, [implementationFilter, reviewFilter, searchQuery, statusFilter, tasks]);
+  }, [implementationFilter, reviewFilter, searchQuery, sortConfig, statusFilter, tasks]);
+
+  function toggleSort(field: SortField) {
+    setSortConfig((current) => {
+      if (current?.field === field) {
+        return {
+          field,
+          direction: current.direction === "asc" ? "desc" : "asc",
+        };
+      }
+
+      return {
+        field,
+        direction: DEFAULT_SORT_DIRECTIONS[field],
+      };
+    });
+  }
+
+  function getSortDirection(field: SortField): SortDirection | null {
+    if (!sortConfig || sortConfig.field !== field) {
+      return null;
+    }
+
+    return sortConfig.direction;
+  }
 
   return (
     <div className="space-y-4">
@@ -972,13 +1067,89 @@ export function BacklogList() {
               <thead className="border-b-2 border-stroke bg-panel-muted">
                 <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground [&>th]:border-r [&>th]:border-solid [&>th]:border-stroke [&>th:last-child]:border-r-0">
                   <th className="w-10 px-2 py-3" />
-                  <th className="w-[320px] px-3 py-3">Task</th>
+                  <th className="w-[320px] px-3 py-3">
+                    <button
+                      type="button"
+                      onClick={() => toggleSort("task")}
+                      className="inline-flex items-center gap-1 text-left hover:text-foreground"
+                      title="Sort by task name"
+                    >
+                      <span>Task</span>
+                      <span aria-hidden="true" className="text-[10px] leading-none">
+                        {getSortDirection("task") === "asc" ? "↑" : getSortDirection("task") === "desc" ? "↓" : "↕"}
+                      </span>
+                      <span className="sr-only">
+                        {getSortDirection("task") === "asc"
+                          ? "Sorted by task name A to Z"
+                          : getSortDirection("task") === "desc"
+                            ? "Sorted by task name Z to A"
+                            : "Not sorted by task name"}
+                      </span>
+                    </button>
+                  </th>
                   <th className="w-[160px] px-3 py-3">Application</th>
                   <th className="w-[170px] px-3 py-3">Status</th>
-                  <th className="w-[80px] px-3 py-3 text-center">Est (min)</th>
-                  <th className="w-[120px] px-3 py-3">Due</th>
+                  <th className="w-[80px] px-3 py-3 text-center">
+                    <button
+                      type="button"
+                      onClick={() => toggleSort("estimate")}
+                      className="mx-auto inline-flex items-center gap-1 hover:text-foreground"
+                      title="Sort by estimate"
+                    >
+                      <span>Est (min)</span>
+                      <span aria-hidden="true" className="text-[10px] leading-none">
+                        {getSortDirection("estimate") === "asc" ? "↑" : getSortDirection("estimate") === "desc" ? "↓" : "↕"}
+                      </span>
+                      <span className="sr-only">
+                        {getSortDirection("estimate") === "asc"
+                          ? "Sorted by lowest estimate first"
+                          : getSortDirection("estimate") === "desc"
+                            ? "Sorted by highest estimate first"
+                            : "Not sorted by estimate"}
+                      </span>
+                    </button>
+                  </th>
+                  <th className="w-[120px] px-3 py-3">
+                    <button
+                      type="button"
+                      onClick={() => toggleSort("due")}
+                      className="inline-flex items-center gap-1 text-left hover:text-foreground"
+                      title="Sort by due date"
+                    >
+                      <span>Due</span>
+                      <span aria-hidden="true" className="text-[10px] leading-none">
+                        {getSortDirection("due") === "asc" ? "↑" : getSortDirection("due") === "desc" ? "↓" : "↕"}
+                      </span>
+                      <span className="sr-only">
+                        {getSortDirection("due") === "asc"
+                          ? "Sorted by soonest due date first"
+                          : getSortDirection("due") === "desc"
+                            ? "Sorted by farthest due date first"
+                            : "Not sorted by due date"}
+                      </span>
+                    </button>
+                  </th>
                   <th className="w-[80px] px-3 py-3 text-center">Type</th>
-                  <th className="w-[70px] px-3 py-3 text-center">Priority</th>
+                  <th className="w-[70px] px-3 py-3 text-center">
+                    <button
+                      type="button"
+                      onClick={() => toggleSort("priority")}
+                      className="mx-auto inline-flex items-center gap-1 hover:text-foreground"
+                      title="Sort by priority"
+                    >
+                      <span>Priority</span>
+                      <span aria-hidden="true" className="text-[10px] leading-none">
+                        {getSortDirection("priority") === "asc" ? "↑" : getSortDirection("priority") === "desc" ? "↓" : "↕"}
+                      </span>
+                      <span className="sr-only">
+                        {getSortDirection("priority") === "asc"
+                          ? "Sorted by lowest priority first"
+                          : getSortDirection("priority") === "desc"
+                            ? "Sorted by highest priority first"
+                            : "Not sorted by priority"}
+                      </span>
+                    </button>
+                  </th>
                   <th className="w-[60px] px-3 py-3 text-center">Flags</th>
                   <th className="w-[120px] px-3 py-3">Actions</th>
                 </tr>
