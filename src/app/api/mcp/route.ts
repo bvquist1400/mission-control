@@ -653,7 +653,7 @@ function createMcpServer(): McpServer {
   // ── SYNC TODAY TASKS ─────────────────────────────────────────────────
   mcp.tool(
     'sync_today',
-    'Promote selected tasks to Planned and demote non-selected Planned tasks unless pinned.',
+    'Promotes recommended tasks to Planned on the Today tab and demotes stale Planned tasks to Backlog. Call this at the end of every morning brief.',
     {
       task_ids: z.array(z.string()).min(1).max(20).describe('Task UUIDs to keep on Today'),
     },
