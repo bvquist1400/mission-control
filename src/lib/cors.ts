@@ -32,10 +32,15 @@ function appendVaryHeader(headers: Headers, value: string): void {
 
 export function getAllowedCorsOrigin(origin: string | null): string | null {
   if (!origin) {
-    return null;
+    return '*';
   }
 
-  return isAllowedClaudeOrigin(origin) ? origin : null;
+  const normalizedOrigin = origin.trim();
+  if (normalizedOrigin.length === 0 || normalizedOrigin.toLowerCase() === 'null') {
+    return '*';
+  }
+
+  return isAllowedClaudeOrigin(normalizedOrigin) ? normalizedOrigin : null;
 }
 
 export function applyCorsHeaders(headers: Headers, origin: string | null): void {
