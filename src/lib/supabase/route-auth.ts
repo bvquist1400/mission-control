@@ -1,11 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { SupabaseClient, User } from '@supabase/supabase-js';
 import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase/server';
+import { withCorsHeaders } from '@/lib/cors';
 
 export interface AuthenticatedRouteContext {
   supabase: SupabaseClient;
   user: User;
   userId: string;
+}
+
+function corsJson(request: NextRequest, body: unknown, init?: ResponseInit): NextResponse {
+  return withCorsHeaders(NextResponse.json(body, init), request);
 }
 
 /**
@@ -27,7 +32,8 @@ export async function requireAuthenticatedRoute(
     if (!validApiKey || !apiUserId) {
       return {
         context: null,
-        response: NextResponse.json(
+        response: corsJson(
+          request,
           { error: 'API key auth is not configured on this server' },
           { status: 503 }
         ),
@@ -37,7 +43,7 @@ export async function requireAuthenticatedRoute(
     if (apiKey !== validApiKey) {
       return {
         context: null,
-        response: NextResponse.json({ error: 'Invalid API key' }, { status: 401 }),
+        response: corsJson(request, { error: 'Invalid API key' }, { status: 401 }),
       };
     }
 
@@ -49,7 +55,8 @@ export async function requireAuthenticatedRoute(
     if (userError || !userData?.user) {
       return {
         context: null,
-        response: NextResponse.json(
+        response: corsJson(
+          request,
           { error: 'API key user not found — check MISSION_CONTROL_USER_ID env var' },
           { status: 401 }
         ),
@@ -82,7 +89,7 @@ export async function requireAuthenticatedRoute(
   if (error || !user) {
     return {
       context: null,
-      response: NextResponse.json({ error: 'Authentication required' }, { status: 401 }),
+      response: corsJson(request, { error: 'Authentication required' }, { status: 401 }),
     };
   }
 

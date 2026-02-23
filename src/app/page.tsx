@@ -1,19 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { TaskCard, type TaskCardData } from "@/components/tasks/TaskCard";
 import { CapacityMeter } from "@/components/today/CapacityMeter";
 import { FocusStatusBar } from "@/components/today/FocusStatusBar";
-import { PlannerCard } from "@/components/today/PlannerCard";
-import { DailyBriefing } from "@/components/today/briefing";
-import { localDateString } from "@/components/utils/dates";
 import type { TaskWithImplementation, CapacityResult } from "@/types/database";
 import { calculateCapacity } from "@/lib/capacity";
-
-const TASKS_PAGE_SIZE = 200;
-const DAILY_BRIEFING_ENABLED = process.env.NEXT_PUBLIC_ENABLE_DAILY_BRIEFING === "true";
 
 interface WaitingTask {
   id: string;
@@ -22,18 +16,33 @@ interface WaitingTask {
   followUpAt: string | null;
 }
 
+interface MeetingEvent {
+  title: string;
+  start: string;
+  end: string;
+  location: string | null;
+}
+
 interface TodayData {
   topThree: TaskCardData[];
   dueSoon: TaskCardData[];
   waitingOn: WaitingTask[];
   needsReviewCount: number;
   capacity: CapacityResult;
+  meetings: MeetingEvent[];
 }
 
-interface CalendarStatsResponse {
-  stats?: {
-    busyMinutes?: number;
-  };
+interface NeedsReviewCountResponse {
+  count?: number;
+}
+
+interface CalendarTodayResponse {
+  events?: MeetingEvent[];
+  busyMinutes?: number;
+}
+
+interface ApiErrorPayload {
+  error?: string;
 }
 
 function taskToCardData(task: TaskWithImplementation, dueState?: TaskCardData["dueState"]): TaskCardData {
@@ -49,64 +58,35 @@ function taskToCardData(task: TaskWithImplementation, dueState?: TaskCardData["d
   };
 }
 
-async function fetchTaskPage(params: Record<string, string>): Promise<TaskWithImplementation[]> {
-  const searchParams = new URLSearchParams(params);
-  const response = await fetch(`/api/tasks?${searchParams.toString()}`, { cache: "no-store" });
+async function fetchJson<T>(url: string, fallbackError: string): Promise<T> {
+  const response = await fetch(url, { cache: "no-store" });
 
   if (response.status === 401) {
     throw new Error("Authentication required. Sign in at /login.");
   }
 
+  const payload = (await response.json().catch(() => null)) as (ApiErrorPayload & Partial<T>) | null;
+
   if (!response.ok) {
-    throw new Error("Failed to fetch tasks");
-  }
-
-  return response.json();
-}
-
-async function fetchAllTaskPages(baseParams: Record<string, string>): Promise<TaskWithImplementation[]> {
-  const allTasks: TaskWithImplementation[] = [];
-  let offset = 0;
-
-  while (true) {
-    const page = await fetchTaskPage({
-      ...baseParams,
-      limit: String(TASKS_PAGE_SIZE),
-      offset: String(offset),
-    });
-
-    allTasks.push(...page);
-
-    if (page.length < TASKS_PAGE_SIZE) {
-      break;
+    if (payload && typeof payload.error === "string" && payload.error.trim().length > 0) {
+      throw new Error(payload.error);
     }
-
-    offset += TASKS_PAGE_SIZE;
+    throw new Error(fallbackError);
   }
 
-  return allTasks;
+  if (!payload) {
+    throw new Error(fallbackError);
+  }
+
+  return payload as T;
 }
 
-async function fetchTodayMeetingMinutes(): Promise<number> {
-  const today = localDateString();
-  const response = await fetch(`/api/calendar?rangeStart=${today}&rangeEnd=${today}`, { cache: "no-store" });
-
-  if (response.status === 401) {
-    throw new Error("Authentication required. Sign in at /login.");
-  }
-
-  if (!response.ok) {
+function normalizeBusyMinutes(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
     return 0;
   }
 
-  const payload = (await response.json()) as CalendarStatsResponse;
-  const meetingMinutes = payload.stats?.busyMinutes;
-
-  if (typeof meetingMinutes !== "number" || !Number.isFinite(meetingMinutes) || meetingMinutes < 0) {
-    return 0;
-  }
-
-  return meetingMinutes;
+  return value;
 }
 
 function getDueState(dueAt: string | null, now: Date): TaskCardData["dueState"] {
@@ -128,69 +108,56 @@ function getDueState(dueAt: string | null, now: Date): TaskCardData["dueState"] 
   return "Due Soon";
 }
 
+function dedupeTasksForCapacity(...groups: TaskWithImplementation[][]): TaskWithImplementation[] {
+  const byId = new Map<string, TaskWithImplementation>();
+
+  for (const group of groups) {
+    for (const task of group) {
+      if (!byId.has(task.id)) {
+        byId.set(task.id, task);
+      }
+    }
+  }
+
+  return Array.from(byId.values());
+}
+
 async function fetchTodayData(): Promise<TodayData> {
-  const [allTasks, meetingMinutes] = await Promise.all([
-    fetchAllTaskPages({}),
-    fetchTodayMeetingMinutes().catch(() => 0),
+  const [topThreeTasks, dueSoonTasks, waitingTasks, reviewCountPayload, calendarPayload] = await Promise.all([
+    fetchJson<TaskWithImplementation[]>("/api/tasks?view=top3", "Failed to fetch top priorities"),
+    fetchJson<TaskWithImplementation[]>("/api/tasks?view=due_soon&limit=30", "Failed to fetch due soon tasks"),
+    fetchJson<TaskWithImplementation[]>("/api/tasks?status=Blocked%2FWaiting", "Failed to fetch blocked tasks"),
+    fetchJson<NeedsReviewCountResponse>("/api/tasks?view=needs_review_count", "Failed to fetch review count"),
+    fetchJson<CalendarTodayResponse>("/api/calendar/today", "Failed to fetch today's meetings"),
   ]);
 
-  // Sort by priority_score descending for top 3
-  const sortedByPriority = [...allTasks]
-    .filter((t) => t.status === "Planned" || t.status === "In Progress")
-    .sort((a, b) => b.priority_score - a.priority_score);
-
-  const topThree = sortedByPriority.slice(0, 3).map((task) => taskToCardData(task));
-  const topThreeIds = new Set(topThree.map((t) => t.id));
-
-  // Due soon: tasks due within 48h + overdue, excluding top 3 and done tasks.
   const now = new Date();
-  const in48h = new Date(now.getTime() + 48 * 60 * 60 * 1000);
 
-  const dueSoon = allTasks
-    .filter((task) => {
-      if (task.status === "Done" || topThreeIds.has(task.id)) return false;
-      if (!task.due_at) return false;
-      const dueDate = new Date(task.due_at);
-      return dueDate <= in48h;
-    })
-    .sort((a, b) => {
-      const aDue = new Date(a.due_at!).getTime();
-      const bDue = new Date(b.due_at!).getTime();
-      const aOverdue = aDue < now.getTime();
-      const bOverdue = bDue < now.getTime();
-
-      if (aOverdue !== bOverdue) {
-        return aOverdue ? -1 : 1;
-      }
-
-      return aDue - bDue;
-    })
-    .slice(0, 6)
-    .map((task) => taskToCardData(task, getDueState(task.due_at, now)));
-
-  // Waiting on: tasks with status "Blocked/Waiting"
-  const waitingOn: WaitingTask[] = allTasks
-    .filter((task) => task.status === "Blocked/Waiting")
-    .map((task) => ({
-      id: task.id,
-      title: task.title,
-      waitingOn: task.waiting_on || "Unknown",
-      followUpAt: task.follow_up_at,
-    }));
-
-  // Calculate capacity
-  const tasksForCapacity = allTasks.map((t) => ({
-    ...t,
-    stakeholder_mentions: t.stakeholder_mentions || [],
+  const topThree = topThreeTasks.map((task) => taskToCardData(task));
+  const dueSoon = dueSoonTasks.slice(0, 6).map((task) => taskToCardData(task, getDueState(task.due_at, now)));
+  const waitingOn: WaitingTask[] = waitingTasks.map((task) => ({
+    id: task.id,
+    title: task.title,
+    waitingOn: task.waiting_on || "Unknown",
+    followUpAt: task.follow_up_at,
   }));
-  const capacity = calculateCapacity(tasksForCapacity, new Set(topThree.map((t) => t.id)), meetingMinutes);
+
+  const tasksForCapacity = dedupeTasksForCapacity(topThreeTasks, dueSoonTasks);
+  const topThreeIds = new Set(topThreeTasks.map((task) => task.id));
+  const meetingMinutes = normalizeBusyMinutes(calendarPayload.busyMinutes);
+  const capacity = calculateCapacity(tasksForCapacity, topThreeIds, meetingMinutes);
+
+  const meetings = (calendarPayload.events || [])
+    .filter((event) => typeof event.start === "string" && typeof event.end === "string")
+    .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
 
   return {
     topThree,
     dueSoon,
     waitingOn,
-    needsReviewCount: allTasks.filter((t) => t.needs_review).length,
+    needsReviewCount: typeof reviewCountPayload.count === "number" ? reviewCountPayload.count : 0,
     capacity,
+    meetings,
   };
 }
 
@@ -198,25 +165,33 @@ function formatDate(value: string): string {
   return new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric" }).format(new Date(value));
 }
 
+function formatMeetingTimeRange(start: string, end: string): string {
+  const startDate = new Date(start);
+  const endDate = new Date(end);
+
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+    return "Time unavailable";
+  }
+
+  return `${new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(startDate)} - ${new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(endDate)}`;
+}
+
 function LoadingSkeleton() {
   return (
-    <div className="space-y-8">
-      <div className="flex items-center justify-between">
-        <div className="h-8 w-32 animate-pulse rounded bg-panel-muted" />
-        <div className="h-8 w-48 animate-pulse rounded bg-panel-muted" />
-      </div>
-      <div className="grid gap-4 xl:grid-cols-3">
-        {[1, 2, 3].map((i) => (
-          <div key={i} className="animate-pulse rounded-card border border-stroke bg-panel p-4">
-            <div className="h-4 w-2/3 rounded bg-panel-muted" />
-            <div className="mt-4 space-y-2">
-              <div className="h-3 w-full rounded bg-panel-muted" />
-              <div className="h-3 w-full rounded bg-panel-muted" />
-              <div className="h-3 w-full rounded bg-panel-muted" />
-            </div>
+    <div className="space-y-6">
+      <div className="h-12 animate-pulse rounded bg-panel-muted" />
+      {[1, 2, 3, 4].map((i) => (
+        <div key={i} className="animate-pulse rounded-card border border-stroke bg-panel p-5">
+          <div className="h-4 w-40 rounded bg-panel-muted" />
+          <div className="mt-4 space-y-2">
+            <div className="h-3 w-full rounded bg-panel-muted" />
+            <div className="h-3 w-2/3 rounded bg-panel-muted" />
           </div>
-        ))}
-      </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -238,23 +213,6 @@ export default function TodayPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [completingIds, setCompletingIds] = useState<Set<string>>(new Set());
-  const activeFocusDirectiveIdRef = useRef<string | null>(null);
-  const [plannerReplanSignal, setPlannerReplanSignal] = useState(0);
-  const [plannerAutoReplanKey, setPlannerAutoReplanKey] = useState<string | null>(null);
-
-  const handleFocusDirectiveChange = useCallback((directiveId: string | null) => {
-    if (activeFocusDirectiveIdRef.current === directiveId) {
-      return;
-    }
-
-    activeFocusDirectiveIdRef.current = directiveId;
-    setPlannerReplanSignal((value) => value + 1);
-    setPlannerAutoReplanKey(directiveId ? `focus:${directiveId}` : null);
-  }, []);
-
-  const handlePlannerAutoReplanHandled = useCallback((handledKey: string) => {
-    setPlannerAutoReplanKey((current) => (current === handledKey ? null : current));
-  }, []);
 
   const today = new Intl.DateTimeFormat("en-US", {
     weekday: "long",
@@ -303,7 +261,6 @@ export default function TodayPage() {
 
     try {
       await markTaskDone(taskId);
-      // Reload data to get updated lists and capacity
       const todayData = await fetchTodayData();
       setData(todayData);
     } catch (err) {
@@ -322,9 +279,15 @@ export default function TodayPage() {
     <div className="space-y-8">
       <PageHeader
         title="Today"
-        description="Daily operating view with top priorities, near-term due work, and review queue."
+        description="Quick-view dashboard for meetings, priorities, and near-term execution risk."
         actions={
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
+            <Link
+              href="/planner"
+              className="rounded-full border border-stroke bg-panel px-3 py-1.5 text-sm font-medium text-muted-foreground transition hover:bg-panel-muted hover:text-foreground"
+            >
+              Open Planner
+            </Link>
             {data && <CapacityMeter capacity={data.capacity} />}
             <p className="rounded-full bg-panel-muted px-3 py-1.5 text-sm font-medium text-muted-foreground">{today}</p>
           </div>
@@ -337,16 +300,31 @@ export default function TodayPage() {
         </div>
       )}
 
-      <FocusStatusBar onDirectiveChange={handleFocusDirectiveChange} />
-
-      {DAILY_BRIEFING_ENABLED ? <DailyBriefing replanSignal={plannerReplanSignal} /> : null}
-
-      <PlannerCard autoReplanKey={plannerAutoReplanKey} onAutoReplanHandled={handlePlannerAutoReplanHandled} />
+      <FocusStatusBar />
 
       {loading ? (
         <LoadingSkeleton />
       ) : data ? (
         <>
+          <section className="space-y-3">
+            <h2 className="text-lg font-semibold text-foreground">Today&apos;s Meetings</h2>
+            <article className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+              {data.meetings.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No meetings on your calendar today.</p>
+              ) : (
+                <ul className="space-y-3">
+                  {data.meetings.map((event, index) => (
+                    <li key={`${event.start}-${event.title}-${index}`} className="rounded-lg bg-panel-muted p-3 text-sm">
+                      <p className="font-medium text-foreground">{event.title || "Untitled meeting"}</p>
+                      <p className="mt-1 text-muted-foreground">{formatMeetingTimeRange(event.start, event.end)}</p>
+                      {event.location ? <p className="mt-1 text-muted-foreground">{event.location}</p> : null}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </article>
+          </section>
+
           <section className="space-y-3">
             <h2 className="text-lg font-semibold text-foreground">Top 3 Today</h2>
             {data.topThree.length === 0 ? (
@@ -365,7 +343,7 @@ export default function TodayPage() {
                       className="w-full rounded-md border border-green-500/30 bg-green-500/10 px-3 py-1.5 text-xs font-semibold text-green-400 transition hover:border-green-500/50 hover:bg-green-500/20 disabled:opacity-50"
                       title="Mark as done"
                     >
-                      {completingIds.has(task.id) ? "Marking done…" : "✓ Done"}
+                      {completingIds.has(task.id) ? "Marking done..." : "✓ Done"}
                     </button>
                   </div>
                 ))}
@@ -381,7 +359,9 @@ export default function TodayPage() {
               <div className="grid gap-4 md:grid-cols-2">
                 {data.dueSoon.map((task) => (
                   <div key={task.id} className="relative">
-                    <TaskCard task={task} />
+                    <Link href={`/backlog?expand=${task.id}`} className="block">
+                      <TaskCard task={task} />
+                    </Link>
                     <button
                       onClick={() => handleQuickComplete(task.id)}
                       disabled={completingIds.has(task.id)}

@@ -11,6 +11,7 @@ const navItems = [
   { href: "/applications", label: "Applications", hint: "Portfolio health and updates" },
   { href: "/stakeholders", label: "Stakeholders", hint: "People and commitments" },
   { href: "/focus", label: "Focus", hint: "Planner directives" },
+  { href: "/planner", label: "Planner", hint: "Plan generation and refresh" },
   { href: "/calendar", label: "Calendar", hint: "Imported schedule metadata" },
   { href: "/llm", label: "LLM", hint: "Model and cost evaluation" },
 ];

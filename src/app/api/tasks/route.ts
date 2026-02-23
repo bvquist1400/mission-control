@@ -55,10 +55,83 @@ export async function GET(request: NextRequest) {
     const status = searchParams.get('status');
     const implementationId = searchParams.get('implementation_id');
     const dueSoon = searchParams.get('due_soon');
+    const view = searchParams.get('view');
     const rawLimit = Number.parseInt(searchParams.get('limit') || '100', 10);
     const rawOffset = Number.parseInt(searchParams.get('offset') || '0', 10);
     const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 500) : 100;
     const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
+
+    if (view === 'needs_review_count') {
+      const { count, error } = await supabase
+        .from('tasks')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', userId)
+        .eq('needs_review', true)
+        .neq('status', 'Done');
+
+      if (error) {
+        throw error;
+      }
+
+      return NextResponse.json({ count: count ?? 0 });
+    }
+
+    if (view === 'top3') {
+      const { data, error } = await supabase
+        .from('tasks')
+        .select('*, implementation:implementations(id, name, phase, rag)')
+        .eq('user_id', userId)
+        .in('status', ['Planned', 'In Progress'])
+        .order('priority_score', { ascending: false })
+        .order('id', { ascending: true })
+        .limit(3);
+
+      if (error) {
+        throw error;
+      }
+
+      return NextResponse.json(data || []);
+    }
+
+    if (view === 'due_soon') {
+      const now = new Date();
+      const in48h = new Date(now.getTime() + 48 * 60 * 60 * 1000);
+      const dueSoonLimit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 6;
+
+      const { data: topThreeIdsRows, error: topThreeIdsError } = await supabase
+        .from('tasks')
+        .select('id')
+        .eq('user_id', userId)
+        .in('status', ['Planned', 'In Progress'])
+        .order('priority_score', { ascending: false })
+        .order('id', { ascending: true })
+        .limit(3);
+
+      if (topThreeIdsError) {
+        throw topThreeIdsError;
+      }
+
+      const topThreeIds = new Set((topThreeIdsRows || []).map((row) => row.id));
+      const fetchLimit = Math.min(dueSoonLimit + topThreeIds.size, 100);
+
+      const { data, error } = await supabase
+        .from('tasks')
+        .select('*, implementation:implementations(id, name, phase, rag)')
+        .eq('user_id', userId)
+        .not('due_at', 'is', null)
+        .lte('due_at', in48h.toISOString())
+        .neq('status', 'Done')
+        .order('due_at', { ascending: true })
+        .order('id', { ascending: true })
+        .limit(fetchLimit);
+
+      if (error) {
+        throw error;
+      }
+
+      const filtered = (data || []).filter((task) => !topThreeIds.has(task.id)).slice(0, dueSoonLimit);
+      return NextResponse.json(filtered);
+    }
 
     let query = supabase
       .from('tasks')
