@@ -1,3 +1,4 @@
+import type { MouseEvent } from "react";
 import type { TaskStatus } from "@/types/database";
 
 type DueState = "Overdue" | "Due Today" | "Due Soon";
@@ -10,11 +11,14 @@ export interface TaskCardData {
   dueState?: DueState | null;
   status: TaskStatus;
   blocker: boolean;
+  pinned: boolean;
   implementationName?: string | null;
 }
 
 interface TaskCardProps {
   task: TaskCardData;
+  pinning?: boolean;
+  onTogglePinned?: (taskId: string, nextPinned: boolean) => void | Promise<void>;
 }
 
 const dueStateStyles: Record<DueState, string> = {
@@ -34,14 +38,66 @@ function formatDueDate(date: string | null): string {
   }).format(new Date(date));
 }
 
-export function TaskCard({ task }: TaskCardProps) {
+function PinIcon({ pinned }: { pinned: boolean }) {
   return (
-    <article className="rounded-card border border-stroke bg-panel p-4 shadow-sm transition-colors hover:border-foreground/20 hover:bg-panel-muted/50">
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      className="h-3.5 w-3.5"
+      fill={pinned ? "currentColor" : "none"}
+      stroke="currentColor"
+      strokeWidth={pinned ? 1.2 : 1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M8 4h8v2l-2.5 2.5V12l2 2v1h-3v5l-.5.5L11.5 20v-5h-3v-1l2-2V8.5L8 6V4Z" />
+    </svg>
+  );
+}
+
+export function TaskCard({ task, pinning = false, onTogglePinned }: TaskCardProps) {
+  function handlePinClick(event: MouseEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (!onTogglePinned || pinning) {
+      return;
+    }
+
+    void onTogglePinned(task.id, !task.pinned);
+  }
+
+  return (
+    <article
+      className={`rounded-card border border-stroke bg-panel p-4 shadow-sm transition-colors hover:border-foreground/20 hover:bg-panel-muted/50 ${
+        task.pinned ? "border-l-4 border-l-amber-400/80" : ""
+      }`}
+    >
       <div className="flex items-start gap-3">
         <h3 className="flex-1 text-sm font-semibold leading-relaxed text-foreground">{task.title}</h3>
-        {task.blocker ? (
-          <span className="shrink-0 rounded-full bg-red-500/15 px-2 py-0.5 text-[11px] font-semibold text-red-400">Blocker</span>
-        ) : null}
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={handlePinClick}
+            disabled={!onTogglePinned || pinning}
+            aria-label={task.pinned ? "Unpin task from Today" : "Pin task to Today"}
+            title="Pin to Today (protected from sync)"
+            className={`rounded-md border px-2 py-1 transition disabled:cursor-not-allowed disabled:opacity-60 ${
+              task.pinned
+                ? "border-amber-500/40 bg-amber-500/15 text-amber-300 hover:bg-amber-500/20"
+                : "border-stroke bg-panel text-muted-foreground hover:bg-panel-muted hover:text-foreground"
+            }`}
+          >
+            {pinning ? (
+              <span className="block h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+            ) : (
+              <PinIcon pinned={task.pinned} />
+            )}
+          </button>
+          {task.blocker ? (
+            <span className="shrink-0 rounded-full bg-red-500/15 px-2 py-0.5 text-[11px] font-semibold text-red-400">Blocker</span>
+          ) : null}
+        </div>
       </div>
 
       <dl className="mt-4 space-y-2 text-xs text-muted-foreground">

@@ -160,6 +160,7 @@ function createMcpServer(): McpServer {
       follow_up_at: z.string().nullable().optional(),
       implementation_id: z.string().nullable().optional(),
       pinned_excerpt: z.string().nullable().optional(),
+      pinned: z.boolean().optional(),
     },
     async ({ task_id, ...updates }) => {
       const res = await fetch(
@@ -643,6 +644,27 @@ function createMcpServer(): McpServer {
     async () => {
       const res = await fetch('https://mission-control-orpin-chi.vercel.app/api/planner/plan', {
         headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
+      });
+      const data = await res.json();
+      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+    }
+  );
+
+  // ── SYNC TODAY TASKS ─────────────────────────────────────────────────
+  mcp.tool(
+    'sync_today',
+    'Promote selected tasks to Planned and demote non-selected Planned tasks unless pinned.',
+    {
+      task_ids: z.array(z.string()).min(1).max(20).describe('Task UUIDs to keep on Today'),
+    },
+    async ({ task_ids }) => {
+      const res = await fetch('https://mission-control-orpin-chi.vercel.app/api/planner/sync-today', {
+        method: 'POST',
+        headers: {
+          'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY!,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ task_ids }),
       });
       const data = await res.json();
       return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };

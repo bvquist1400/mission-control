@@ -40,6 +40,7 @@ export interface Task {
   source_url: string | null;
   inbox_item_id: string | null;
   pinned_excerpt: string | null;
+  pinned: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -223,6 +224,7 @@ export interface TaskUpdatePayload {
   waiting_on?: string | null;
   follow_up_at?: string | null;
   pinned_excerpt?: string | null;
+  pinned?: boolean;
 }
 
 // Implementation summary for dropdowns

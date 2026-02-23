@@ -54,6 +54,7 @@ function taskToCardData(task: TaskWithImplementation, dueState?: TaskCardData["d
     dueState,
     status: task.status,
     blocker: task.blocker,
+    pinned: Boolean(task.pinned),
     implementationName: task.implementation?.name ?? null,
   };
 }
@@ -208,11 +209,32 @@ async function markTaskDone(taskId: string): Promise<void> {
   }
 }
 
+async function setTaskPinned(taskId: string, pinned: boolean): Promise<void> {
+  const response = await fetch(`/api/tasks/${taskId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pinned }),
+  });
+
+  if (!response.ok) {
+    throw new Error("Failed to update pinned state");
+  }
+}
+
+function applyPinnedState(data: TodayData, taskId: string, pinned: boolean): TodayData {
+  return {
+    ...data,
+    topThree: data.topThree.map((task) => (task.id === taskId ? { ...task, pinned } : task)),
+    dueSoon: data.dueSoon.map((task) => (task.id === taskId ? { ...task, pinned } : task)),
+  };
+}
+
 export default function TodayPage() {
   const [data, setData] = useState<TodayData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [completingIds, setCompletingIds] = useState<Set<string>>(new Set());
+  const [pinningIds, setPinningIds] = useState<Set<string>>(new Set());
 
   const today = new Intl.DateTimeFormat("en-US", {
     weekday: "long",
@@ -268,6 +290,28 @@ export default function TodayPage() {
       setError(err instanceof Error ? err.message : "Failed to complete task");
     } finally {
       setCompletingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(taskId);
+        return next;
+      });
+    }
+  }
+
+  async function handleTogglePinned(taskId: string, nextPinned: boolean) {
+    if (!data || pinningIds.has(taskId)) return;
+
+    const previousData = data;
+    setPinningIds((prev) => new Set(prev).add(taskId));
+    setError(null);
+    setData((prev) => (prev ? applyPinnedState(prev, taskId, nextPinned) : prev));
+
+    try {
+      await setTaskPinned(taskId, nextPinned);
+    } catch (err) {
+      setData(previousData);
+      setError(err instanceof Error ? err.message : "Failed to update pin state");
+    } finally {
+      setPinningIds((prev) => {
         const next = new Set(prev);
         next.delete(taskId);
         return next;
@@ -334,7 +378,11 @@ export default function TodayPage() {
                 {data.topThree.map((task) => (
                   <div key={task.id} className="flex flex-col gap-2">
                     <Link href={`/backlog?expand=${task.id}`} className="block">
-                      <TaskCard task={task} />
+                      <TaskCard
+                        task={task}
+                        pinning={pinningIds.has(task.id)}
+                        onTogglePinned={handleTogglePinned}
+                      />
                     </Link>
                     <button
                       onClick={() => handleQuickComplete(task.id)}
@@ -358,18 +406,22 @@ export default function TodayPage() {
             ) : (
               <div className="grid gap-4 md:grid-cols-2">
                 {data.dueSoon.map((task) => (
-                  <div key={task.id} className="relative">
+                  <div key={task.id} className="flex flex-col gap-2">
                     <Link href={`/backlog?expand=${task.id}`} className="block">
-                      <TaskCard task={task} />
+                      <TaskCard
+                        task={task}
+                        pinning={pinningIds.has(task.id)}
+                        onTogglePinned={handleTogglePinned}
+                      />
                     </Link>
                     <button
                       onClick={() => handleQuickComplete(task.id)}
                       disabled={completingIds.has(task.id)}
                       aria-label="Mark task complete"
-                      className="absolute right-3 top-3 rounded-md bg-green-500/15 px-2 py-1 text-xs font-medium text-green-400 transition hover:bg-green-500/25 disabled:opacity-50"
+                      className="w-full rounded-md border border-green-500/30 bg-green-500/10 px-3 py-1.5 text-xs font-semibold text-green-400 transition hover:border-green-500/50 hover:bg-green-500/20 disabled:opacity-50"
                       title="Mark as done"
                     >
-                      {completingIds.has(task.id) ? "..." : "✓ Done"}
+                      {completingIds.has(task.id) ? "Marking done..." : "✓ Done"}
                     </button>
                   </div>
                 ))}

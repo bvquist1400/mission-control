@@ -8,6 +8,7 @@ type PlannerMode = "today" | "now";
 interface PlannerNowNext {
   taskId: string;
   title?: string;
+  pinned?: boolean;
   suggestedMinutes: number;
   mode: "deep" | "shallow" | "prep" | string;
 }
@@ -15,6 +16,7 @@ interface PlannerNowNext {
 interface PlannerNextItem {
   taskId: string;
   title?: string;
+  pinned?: boolean;
 }
 
 interface PlannerQueueItem {
@@ -22,12 +24,14 @@ interface PlannerQueueItem {
   rank: number;
   score: number;
   title?: string;
+  pinned?: boolean;
 }
 
 interface PlannerExceptionItem {
   taskId: string;
   score?: number;
   title?: string;
+  pinned?: boolean;
   reason?: string;
 }
 
@@ -263,6 +267,7 @@ function normalizeNowNext(raw: unknown): PlannerNowNext | null {
   return {
     taskId,
     title: typeof raw.title === "string" ? raw.title : undefined,
+    pinned: typeof raw.pinned === "boolean" ? raw.pinned : undefined,
     suggestedMinutes: typeof raw.suggestedMinutes === "number" ? raw.suggestedMinutes : 30,
     mode: typeof raw.mode === "string" ? raw.mode : "deep",
   };
@@ -291,6 +296,7 @@ function normalizePlanJson(raw: unknown): PlannerPlanJson | null {
     next3.push({
       taskId,
       title: typeof item.title === "string" ? item.title : undefined,
+      pinned: typeof item.pinned === "boolean" ? item.pinned : undefined,
     });
   }
 
@@ -309,6 +315,7 @@ function normalizePlanJson(raw: unknown): PlannerPlanJson | null {
       rank: typeof item.rank === "number" ? item.rank : index + 1,
       score: typeof item.score === "number" ? item.score : 0,
       title: typeof item.title === "string" ? item.title : undefined,
+      pinned: typeof item.pinned === "boolean" ? item.pinned : undefined,
     });
   }
 
@@ -325,6 +332,7 @@ function normalizePlanJson(raw: unknown): PlannerPlanJson | null {
       taskId,
       score: typeof item.score === "number" ? item.score : undefined,
       title: typeof item.title === "string" ? item.title : undefined,
+      pinned: typeof item.pinned === "boolean" ? item.pinned : undefined,
       reason: typeof item.reason === "string" ? item.reason : undefined,
     });
   }
@@ -423,6 +431,73 @@ async function replan(date: string, mode: PlannerMode): Promise<PlannerPostRespo
   return data;
 }
 
+async function updateTaskPinned(taskId: string, pinned: boolean): Promise<void> {
+  const response = await fetch(`/api/tasks/${taskId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pinned }),
+  });
+
+  if (response.status === 401) {
+    throw new Error("Authentication required. Sign in at /login.");
+  }
+
+  const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+  if (!response.ok) {
+    throw new Error(payload?.error ?? "Failed to update pin state");
+  }
+}
+
+function pinAccentClass(pinned: boolean): string {
+  return pinned ? "border-l-2 border-l-amber-400/80 bg-amber-500/5 pl-2.5" : "";
+}
+
+function PinIcon({ pinned }: { pinned: boolean }) {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      className="h-3.5 w-3.5"
+      fill={pinned ? "currentColor" : "none"}
+      stroke="currentColor"
+      strokeWidth={pinned ? 1.2 : 1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M8 4h8v2l-2.5 2.5V12l2 2v1h-3v5l-.5.5L11.5 20v-5h-3v-1l2-2V8.5L8 6V4Z" />
+    </svg>
+  );
+}
+
+interface PinToggleButtonProps {
+  pinned: boolean;
+  busy: boolean;
+  onClick: () => void;
+}
+
+function PinToggleButton({ pinned, busy, onClick }: PinToggleButtonProps) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy}
+      aria-label={pinned ? "Unpin task from Today" : "Pin task to Today"}
+      title="Pin to Today (protected from sync)"
+      className={`rounded-md border px-2 py-1 transition disabled:cursor-not-allowed disabled:opacity-60 ${
+        pinned
+          ? "border-amber-500/40 bg-amber-500/15 text-amber-300 hover:bg-amber-500/20"
+          : "border-stroke bg-panel text-muted-foreground hover:bg-panel hover:text-foreground"
+      }`}
+    >
+      {busy ? (
+        <span className="block h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+      ) : (
+        <PinIcon pinned={pinned} />
+      )}
+    </button>
+  );
+}
+
 export function PlannerCard({ autoReplanKey = null, onAutoReplanHandled }: PlannerCardProps) {
   const dateInEt = useMemo(() => getDateInTimeZone("America/New_York"), []);
   const [selectedDate, setSelectedDate] = useState(dateInEt);
@@ -432,6 +507,8 @@ export function PlannerCard({ autoReplanKey = null, onAutoReplanHandled }: Plann
   const [refreshing, setRefreshing] = useState(false);
   const [replanning, setReplanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pinningIds, setPinningIds] = useState<Set<string>>(new Set());
+  const [pinnedOverrides, setPinnedOverrides] = useState<Record<string, boolean>>({});
   const hasLoadedOnce = useRef(false);
   const latestLoadOperationId = useRef(0);
   const latestReplanOperationId = useRef(0);
@@ -453,6 +530,7 @@ export function PlannerCard({ autoReplanKey = null, onAutoReplanHandled }: Plann
       const data = await fetchLatestPlan(targetDate);
       if (operationId !== latestLoadOperationId.current) return;
 
+      setPinnedOverrides({});
       setState({
         planDate: data.planDate,
         source: typeof data.plan?.source === "string" ? data.plan.source : data.source,
@@ -489,6 +567,7 @@ export function PlannerCard({ autoReplanKey = null, onAutoReplanHandled }: Plann
         const data = await replan(planDate, replanMode);
         if (operationId !== latestReplanOperationId.current) return;
 
+        setPinnedOverrides({});
         setState({
           planDate: data.planDate,
           source: data.source,
@@ -598,6 +677,51 @@ export function PlannerCard({ autoReplanKey = null, onAutoReplanHandled }: Plann
     return taskId;
   }
 
+  function taskPinned(taskId: string, fallback?: boolean): boolean {
+    if (Object.prototype.hasOwnProperty.call(pinnedOverrides, taskId)) {
+      return pinnedOverrides[taskId] ?? false;
+    }
+
+    return fallback ?? false;
+  }
+
+  const handleTogglePinned = useCallback(
+    async (taskId: string, currentPinned: boolean) => {
+      if (pinningIds.has(taskId)) {
+        return;
+      }
+
+      const hadExistingOverride = Object.prototype.hasOwnProperty.call(pinnedOverrides, taskId);
+      const previousOverrideValue = pinnedOverrides[taskId];
+      const nextPinned = !currentPinned;
+
+      setPinningIds((prev) => new Set(prev).add(taskId));
+      setPinnedOverrides((prev) => ({ ...prev, [taskId]: nextPinned }));
+
+      try {
+        await updateTaskPinned(taskId, nextPinned);
+      } catch (toggleError) {
+        setPinnedOverrides((prev) => {
+          const next = { ...prev };
+          if (hadExistingOverride) {
+            next[taskId] = previousOverrideValue;
+          } else {
+            delete next[taskId];
+          }
+          return next;
+        });
+        setError(toErrorMessage(toggleError, "Failed to update pin state"));
+      } finally {
+        setPinningIds((prev) => {
+          const next = new Set(prev);
+          next.delete(taskId);
+          return next;
+        });
+      }
+    },
+    [pinnedOverrides, pinningIds]
+  );
+
   return (
     <section className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -695,25 +819,37 @@ export function PlannerCard({ autoReplanKey = null, onAutoReplanHandled }: Plann
             {!nowNext ? (
               <p className="mt-2 text-sm text-muted-foreground">No recommendation yet.</p>
             ) : (
-              <div className="mt-2 space-y-2">
-                <p className="text-sm text-foreground">
-                  <Link className="font-semibold hover:underline" href={`/backlog#task-${nowNext.taskId}`}>
-                    {taskLabel(nowNext.taskId, nowNext.title)}
-                  </Link>
-                  {" · "}
-                  {nowNext.suggestedMinutes} min · {formatModeLabel(nowNext.mode)}
-                </p>
-                {typeof reasons[nowNext.taskId]?.finalScore === "number" ? (
-                  <p className="text-xs text-muted-foreground">Score {reasons[nowNext.taskId]?.finalScore?.toFixed(1)}</p>
-                ) : null}
-                {whyLines(reasons, nowNext.taskId, 3).length > 0 && (
-                  <ul className="space-y-1 text-xs text-muted-foreground">
-                    {whyLines(reasons, nowNext.taskId, 3).map((line) => (
-                      <li key={line}>{line}</li>
-                    ))}
-                  </ul>
-                )}
-              </div>
+              (() => {
+                const isPinned = taskPinned(nowNext.taskId, nowNext.pinned);
+                return (
+                  <div className={`mt-2 space-y-2 ${pinAccentClass(isPinned)}`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="min-w-0 text-sm text-foreground">
+                        <Link className="font-semibold hover:underline" href={`/backlog#task-${nowNext.taskId}`}>
+                          {taskLabel(nowNext.taskId, nowNext.title)}
+                        </Link>
+                        {" · "}
+                        {nowNext.suggestedMinutes} min · {formatModeLabel(nowNext.mode)}
+                      </p>
+                      <PinToggleButton
+                        pinned={isPinned}
+                        busy={pinningIds.has(nowNext.taskId)}
+                        onClick={() => void handleTogglePinned(nowNext.taskId, isPinned)}
+                      />
+                    </div>
+                    {typeof reasons[nowNext.taskId]?.finalScore === "number" ? (
+                      <p className="text-xs text-muted-foreground">Score {reasons[nowNext.taskId]?.finalScore?.toFixed(1)}</p>
+                    ) : null}
+                    {whyLines(reasons, nowNext.taskId, 3).length > 0 && (
+                      <ul className="space-y-1 text-xs text-muted-foreground">
+                        {whyLines(reasons, nowNext.taskId, 3).map((line) => (
+                          <li key={line}>{line}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                );
+              })()
             )}
           </article>
 
@@ -723,18 +859,28 @@ export function PlannerCard({ autoReplanKey = null, onAutoReplanHandled }: Plann
               <p className="mt-2 text-sm text-muted-foreground">No follow-on tasks.</p>
             ) : (
               <ul className="mt-2 space-y-2 text-sm">
-                {nextThree.map((item) => (
-                  <li key={item.taskId}>
-                    <p>
-                      <Link className="font-medium text-foreground hover:underline" href={`/backlog#task-${item.taskId}`}>
-                        {taskLabel(item.taskId, item.title)}
-                      </Link>
-                    </p>
-                    {whyLines(reasons, item.taskId, 1).length > 0 ? (
-                      <p className="text-xs text-muted-foreground">{whyLines(reasons, item.taskId, 1)[0]}</p>
-                    ) : null}
-                  </li>
-                ))}
+                {nextThree.map((item) => {
+                  const isPinned = taskPinned(item.taskId, item.pinned);
+                  return (
+                    <li key={item.taskId} className={pinAccentClass(isPinned)}>
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="min-w-0">
+                          <Link className="font-medium text-foreground hover:underline" href={`/backlog#task-${item.taskId}`}>
+                            {taskLabel(item.taskId, item.title)}
+                          </Link>
+                        </p>
+                        <PinToggleButton
+                          pinned={isPinned}
+                          busy={pinningIds.has(item.taskId)}
+                          onClick={() => void handleTogglePinned(item.taskId, isPinned)}
+                        />
+                      </div>
+                      {whyLines(reasons, item.taskId, 1).length > 0 ? (
+                        <p className="text-xs text-muted-foreground">{whyLines(reasons, item.taskId, 1)[0]}</p>
+                      ) : null}
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </article>
@@ -747,15 +893,23 @@ export function PlannerCard({ autoReplanKey = null, onAutoReplanHandled }: Plann
               <ul className="mt-2 space-y-2 text-sm">
                 {queuePreview.map((item) => {
                   const reason = reasons[item.taskId];
+                  const isPinned = taskPinned(item.taskId, item.pinned);
                   return (
-                    <li key={item.taskId}>
-                      <div className="flex items-center justify-between gap-3">
-                        <Link className="min-w-0 truncate font-medium text-foreground hover:underline" href={`/backlog#task-${item.taskId}`}>
-                          {displayTitle(item)}
-                        </Link>
-                        <span className="shrink-0 text-xs text-muted-foreground">
-                          #{item.rank} · {item.score.toFixed(1)}
-                        </span>
+                    <li key={item.taskId} className={pinAccentClass(isPinned)}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <Link className="block min-w-0 truncate font-medium text-foreground hover:underline" href={`/backlog#task-${item.taskId}`}>
+                            {displayTitle(item)}
+                          </Link>
+                          <span className="shrink-0 text-xs text-muted-foreground">
+                            #{item.rank} · {item.score.toFixed(1)}
+                          </span>
+                        </div>
+                        <PinToggleButton
+                          pinned={isPinned}
+                          busy={pinningIds.has(item.taskId)}
+                          onClick={() => void handleTogglePinned(item.taskId, isPinned)}
+                        />
                       </div>
                       <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                         {typeof reason?.directiveMatched === "boolean" ? (
@@ -776,17 +930,27 @@ export function PlannerCard({ autoReplanKey = null, onAutoReplanHandled }: Plann
               <p className="mt-2 text-sm text-muted-foreground">No exceptions right now.</p>
             ) : (
               <ul className="mt-2 space-y-2 text-sm">
-                {exceptions.map((item) => (
-                  <li key={item.taskId}>
-                    <p className="font-medium text-foreground">
-                      <Link className="hover:underline" href={`/backlog#task-${item.taskId}`}>
-                        {displayTitle(item)}
-                      </Link>
-                      {typeof item.score === "number" ? <span className="ml-2 text-xs text-muted-foreground">{item.score.toFixed(1)}</span> : null}
-                    </p>
-                    {item.reason ? <p className="text-xs text-muted-foreground">{item.reason}</p> : null}
-                  </li>
-                ))}
+                {exceptions.map((item) => {
+                  const isPinned = taskPinned(item.taskId, item.pinned);
+                  return (
+                    <li key={item.taskId} className={pinAccentClass(isPinned)}>
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="min-w-0 font-medium text-foreground">
+                          <Link className="hover:underline" href={`/backlog#task-${item.taskId}`}>
+                            {displayTitle(item)}
+                          </Link>
+                          {typeof item.score === "number" ? <span className="ml-2 text-xs text-muted-foreground">{item.score.toFixed(1)}</span> : null}
+                        </p>
+                        <PinToggleButton
+                          pinned={isPinned}
+                          busy={pinningIds.has(item.taskId)}
+                          onClick={() => void handleTogglePinned(item.taskId, isPinned)}
+                        />
+                      </div>
+                      {item.reason ? <p className="text-xs text-muted-foreground">{item.reason}</p> : null}
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </article>

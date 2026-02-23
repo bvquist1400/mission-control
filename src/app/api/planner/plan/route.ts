@@ -35,6 +35,7 @@ interface TaskRow {
   task_type: string | null;
   updated_at: string;
   pinned_excerpt: string | null;
+  pinned: boolean;
   dependency_blocked?: boolean;
 }
 
@@ -847,7 +848,7 @@ export async function POST(request: NextRequest) {
     const tasksResult = await supabase
       .from('tasks')
       .select(
-        'id, title, implementation_id, priority_score, due_at, follow_up_at, waiting_on, blocker, status, estimated_minutes, stakeholder_mentions, task_type, updated_at, pinned_excerpt'
+        'id, title, implementation_id, priority_score, due_at, follow_up_at, waiting_on, blocker, status, estimated_minutes, stakeholder_mentions, task_type, updated_at, pinned_excerpt, pinned'
       )
       .eq('user_id', userId)
       .neq('status', 'Done')
@@ -911,6 +912,7 @@ export async function POST(request: NextRequest) {
       rank: index + 1,
       score: row.finalScore,
       title: row.task.title,
+      pinned: row.task.pinned,
     }));
 
     const exceptions =
@@ -923,6 +925,7 @@ export async function POST(request: NextRequest) {
               taskId: row.task.id,
               score: row.finalScore,
               title: row.task.title,
+              pinned: row.task.pinned,
               reason: row.score.followUpDue && row.task.blocker ? 'Blocked and follow-up is due' : 'Due within 24 hours',
             }));
 
@@ -965,6 +968,7 @@ export async function POST(request: NextRequest) {
         ? {
             taskId: nowNextTask.task.id,
             suggestedMinutes: Math.min(nowNextTask.task.estimated_minutes, NEXT_WINDOW_MINUTES),
+            pinned: nowNextTask.task.pinned,
             mode:
               nowNextTask.task.estimated_minutes >= 45
                 ? 'deep'
@@ -973,7 +977,7 @@ export async function POST(request: NextRequest) {
                   : 'prep',
           }
         : null,
-      next3: next3.map((row) => ({ taskId: row.task.id })),
+      next3: next3.map((row) => ({ taskId: row.task.id, pinned: row.task.pinned })),
       queue,
       exceptions,
       windows: [

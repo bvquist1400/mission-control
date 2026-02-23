@@ -87,6 +87,7 @@ export async function PATCH(
       'waiting_on',
       'follow_up_at',
       'pinned_excerpt',
+      'pinned',
     ];
 
     const updates: Record<string, unknown> = {};
@@ -139,6 +140,10 @@ export async function PATCH(
           { status: 400 }
         );
       }
+    }
+
+    if ('pinned' in updates && typeof updates.pinned !== 'boolean') {
+      return NextResponse.json({ error: 'pinned must be a boolean' }, { status: 400 });
     }
 
     const implementationId = updates.implementation_id;
