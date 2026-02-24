@@ -3,7 +3,7 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Mission Control",
+  title: "Baseline",
   description: "Personal operations dashboard for Today, Backlog, Triage, and Applications.",
 };
 

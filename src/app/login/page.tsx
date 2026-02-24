@@ -146,7 +146,7 @@ function LoginContent() {
     <div className="space-y-6">
       <PageHeader
         title="Sign in"
-        description="Sign in to access Mission Control."
+        description="Sign in to access Baseline."
       />
 
       <section className="max-w-md rounded-card border border-stroke bg-panel p-6">

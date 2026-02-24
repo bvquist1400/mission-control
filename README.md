@@ -1,6 +1,6 @@
-# Mission Control
+# Baseline
 
-Mission Control is a Next.js + Supabase app for daily operations, triage, implementations, and secure calendar-derived briefing signals.
+Baseline is a Next.js + Supabase app for daily operations, triage, implementations, and secure calendar-derived briefing signals.
 
 ## Local Setup
 
