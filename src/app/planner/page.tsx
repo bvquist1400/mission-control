@@ -1,13 +1,26 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { PlannerCard } from "@/components/today/PlannerCard";
 import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
-import type { TaskUpdatePayload, TaskWithImplementation } from "@/types/database";
+import type { CommitmentSummary, TaskUpdatePayload, TaskWithImplementation } from "@/types/database";
 
 export default function PlannerPage() {
   const [modalTask, setModalTask] = useState<TaskWithImplementation | null>(null);
+  const [commitments, setCommitments] = useState<CommitmentSummary[]>([]);
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    fetch("/api/commitments")
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data: CommitmentSummary[]) => {
+        if (isMountedRef.current) setCommitments(data);
+      })
+      .catch(() => {});
+    return () => { isMountedRef.current = false; };
+  }, []);
 
   async function handleTaskClick(taskId: string) {
     try {
@@ -36,7 +49,7 @@ export default function PlannerPage() {
       <TaskDetailModal
         task={modalTask}
         allTasks={modalTask ? [modalTask] : []}
-        commitments={[]}
+        commitments={commitments}
         onClose={() => setModalTask(null)}
         onTaskUpdated={handleTaskUpdated}
       />

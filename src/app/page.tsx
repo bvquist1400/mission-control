@@ -7,7 +7,7 @@ import { TaskCard, type TaskCardData } from "@/components/tasks/TaskCard";
 import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
 import { CapacityMeter } from "@/components/today/CapacityMeter";
 import { FocusStatusBar } from "@/components/today/FocusStatusBar";
-import type { TaskUpdatePayload, TaskWithImplementation, CapacityResult } from "@/types/database";
+import type { CommitmentSummary, TaskUpdatePayload, TaskWithImplementation, CapacityResult } from "@/types/database";
 import { calculateCapacity } from "@/lib/capacity";
 
 interface WaitingTask {
@@ -34,6 +34,7 @@ interface TodayData {
   // Raw tasks kept for modal lookup
   topThreeRaw: TaskWithImplementation[];
   dueSoonRaw: TaskWithImplementation[];
+  commitments: CommitmentSummary[];
 }
 
 interface NeedsReviewCountResponse {
@@ -128,12 +129,13 @@ function dedupeTasksForCapacity(...groups: TaskWithImplementation[][]): TaskWith
 }
 
 async function fetchTodayData(): Promise<TodayData> {
-  const [topThreeTasks, dueSoonTasks, waitingTasks, reviewCountPayload, calendarPayload] = await Promise.all([
+  const [topThreeTasks, dueSoonTasks, waitingTasks, reviewCountPayload, calendarPayload, commitments] = await Promise.all([
     fetchJson<TaskWithImplementation[]>("/api/tasks?view=top3", "Failed to fetch top priorities"),
     fetchJson<TaskWithImplementation[]>("/api/tasks?view=due_soon&limit=30", "Failed to fetch due soon tasks"),
     fetchJson<TaskWithImplementation[]>("/api/tasks?status=Blocked%2FWaiting", "Failed to fetch blocked tasks"),
     fetchJson<NeedsReviewCountResponse>("/api/tasks?view=needs_review_count", "Failed to fetch review count"),
     fetchJson<CalendarTodayResponse>("/api/calendar/today", "Failed to fetch today's meetings"),
+    fetchJson<CommitmentSummary[]>("/api/commitments", "Failed to fetch commitments"),
   ]);
 
   const now = new Date();
@@ -165,6 +167,7 @@ async function fetchTodayData(): Promise<TodayData> {
     meetings,
     topThreeRaw: topThreeTasks,
     dueSoonRaw: dueSoonTasks.slice(0, 6),
+    commitments,
   };
 }
 
@@ -505,7 +508,7 @@ export default function TodayPage() {
             : null
         }
         allTasks={[...(data?.topThreeRaw ?? []), ...(data?.dueSoonRaw ?? [])]}
-        commitments={[]}
+        commitments={data?.commitments ?? []}
         onClose={() => setModalTaskId(null)}
         onTaskUpdated={handleTaskUpdated}
       />

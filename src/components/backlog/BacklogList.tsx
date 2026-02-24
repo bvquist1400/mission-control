@@ -515,10 +515,6 @@ export function BacklogList() {
   }, []);
 
   const handleDeleteChecklistItem = useCallback(async (taskId: string, itemId: string) => {
-    if (!confirm("Delete checklist item?")) {
-      return;
-    }
-
     // Optimistic update
     setTaskDetailsById((current) => {
       const details = current[taskId];

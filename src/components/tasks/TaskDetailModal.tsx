@@ -46,10 +46,8 @@ export function TaskDetailModal({
     removeDependency,
   } = useTaskDetail({ taskId: task?.id ?? null, onTaskUpdated });
 
-  async function handleUpdate(taskId: string, updates: TaskUpdatePayload) {
+  async function handleUpdate(_taskId: string, updates: TaskUpdatePayload) {
     await updateTask(updates);
-    // optimistically reflect title change in modal header via onTaskUpdated
-    onTaskUpdated(taskId, updates);
   }
 
   return (
@@ -60,7 +58,7 @@ export function TaskDetailModal({
           <div className="flex flex-wrap items-center gap-3">
             <StatusSelector
               value={task.status}
-              onChange={(status) => void updateTask({ status }).then(() => onTaskUpdated(task.id, { status }))}
+              onChange={(status) => void updateTask({ status })}
             />
             {task.implementation && (
               <span className="rounded bg-panel-muted px-2 py-1 text-xs text-muted-foreground">
@@ -81,10 +79,7 @@ export function TaskDetailModal({
               <button
                 type="button"
                 onClick={() =>
-                  void updateTask({ status: "Done" }).then(() => {
-                    onTaskUpdated(task.id, { status: "Done" });
-                    onClose();
-                  })
+                  void updateTask({ status: "Done" }).then(() => onClose())
                 }
                 disabled={task.status === "Done" || isSaving}
                 className="rounded bg-accent px-3 py-1 text-xs font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"

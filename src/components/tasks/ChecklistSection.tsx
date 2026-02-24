@@ -99,7 +99,7 @@ export function ChecklistSection({ checklist, onToggle, onAdd, onDelete }: Check
               </span>
               <button
                 type="button"
-                onClick={() => onDelete(item.id)}
+                onClick={() => { if (confirm("Delete checklist item?")) onDelete(item.id); }}
                 className="rounded p-1 text-muted-foreground opacity-0 transition group-hover:opacity-100 hover:bg-red-50 hover:text-red-600"
                 title="Delete"
               >

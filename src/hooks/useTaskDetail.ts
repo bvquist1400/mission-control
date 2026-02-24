@@ -181,7 +181,6 @@ export function useTaskDetail({ taskId, onTaskUpdated }: UseTaskDetailOptions): 
   const deleteChecklistItem = useCallback(
     async (itemId: string) => {
       if (!taskId) return;
-      if (!confirm("Delete checklist item?")) return;
 
       // Optimistic update
       setChecklist((current) => current.filter((ci) => ci.id !== itemId));
