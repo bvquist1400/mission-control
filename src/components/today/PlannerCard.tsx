@@ -103,6 +103,7 @@ interface PlannerViewState {
 interface PlannerCardProps {
   autoReplanKey?: string | null;
   onAutoReplanHandled?: (key: string) => void;
+  onTaskClick?: (taskId: string) => void;
 }
 
 const PLANNER_READ_TIMEOUT_MS = 12000;
@@ -498,7 +499,7 @@ function PinToggleButton({ pinned, busy, onClick }: PinToggleButtonProps) {
   );
 }
 
-export function PlannerCard({ autoReplanKey = null, onAutoReplanHandled }: PlannerCardProps) {
+export function PlannerCard({ autoReplanKey = null, onAutoReplanHandled, onTaskClick }: PlannerCardProps) {
   const dateInEt = useMemo(() => getDateInTimeZone("America/New_York"), []);
   const [selectedDate, setSelectedDate] = useState(dateInEt);
   const [mode, setMode] = useState<PlannerMode>("today");
@@ -825,9 +826,15 @@ export function PlannerCard({ autoReplanKey = null, onAutoReplanHandled }: Plann
                   <div className={`mt-2 space-y-2 ${pinAccentClass(isPinned)}`}>
                     <div className="flex items-start justify-between gap-3">
                       <p className="min-w-0 text-sm text-foreground">
-                        <Link className="font-semibold hover:underline" href={`/backlog#task-${nowNext.taskId}`}>
-                          {taskLabel(nowNext.taskId, nowNext.title)}
-                        </Link>
+                        {onTaskClick ? (
+                          <button type="button" className="font-semibold hover:underline" onClick={() => onTaskClick(nowNext.taskId)}>
+                            {taskLabel(nowNext.taskId, nowNext.title)}
+                          </button>
+                        ) : (
+                          <Link className="font-semibold hover:underline" href={`/backlog#task-${nowNext.taskId}`}>
+                            {taskLabel(nowNext.taskId, nowNext.title)}
+                          </Link>
+                        )}
                         {" · "}
                         {nowNext.suggestedMinutes} min · {formatModeLabel(nowNext.mode)}
                       </p>
@@ -865,9 +872,15 @@ export function PlannerCard({ autoReplanKey = null, onAutoReplanHandled }: Plann
                     <li key={item.taskId} className={pinAccentClass(isPinned)}>
                       <div className="flex items-start justify-between gap-3">
                         <p className="min-w-0">
-                          <Link className="font-medium text-foreground hover:underline" href={`/backlog#task-${item.taskId}`}>
-                            {taskLabel(item.taskId, item.title)}
-                          </Link>
+                          {onTaskClick ? (
+                            <button type="button" className="font-medium text-foreground hover:underline" onClick={() => onTaskClick(item.taskId)}>
+                              {taskLabel(item.taskId, item.title)}
+                            </button>
+                          ) : (
+                            <Link className="font-medium text-foreground hover:underline" href={`/backlog#task-${item.taskId}`}>
+                              {taskLabel(item.taskId, item.title)}
+                            </Link>
+                          )}
                         </p>
                         <PinToggleButton
                           pinned={isPinned}
@@ -898,9 +911,15 @@ export function PlannerCard({ autoReplanKey = null, onAutoReplanHandled }: Plann
                     <li key={item.taskId} className={pinAccentClass(isPinned)}>
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <Link className="block min-w-0 truncate font-medium text-foreground hover:underline" href={`/backlog#task-${item.taskId}`}>
-                            {displayTitle(item)}
-                          </Link>
+                          {onTaskClick ? (
+                            <button type="button" className="block min-w-0 truncate font-medium text-foreground hover:underline" onClick={() => onTaskClick(item.taskId)}>
+                              {displayTitle(item)}
+                            </button>
+                          ) : (
+                            <Link className="block min-w-0 truncate font-medium text-foreground hover:underline" href={`/backlog#task-${item.taskId}`}>
+                              {displayTitle(item)}
+                            </Link>
+                          )}
                           <span className="shrink-0 text-xs text-muted-foreground">
                             #{item.rank} · {item.score.toFixed(1)}
                           </span>
@@ -936,9 +955,15 @@ export function PlannerCard({ autoReplanKey = null, onAutoReplanHandled }: Plann
                     <li key={item.taskId} className={pinAccentClass(isPinned)}>
                       <div className="flex items-start justify-between gap-3">
                         <p className="min-w-0 font-medium text-foreground">
-                          <Link className="hover:underline" href={`/backlog#task-${item.taskId}`}>
-                            {displayTitle(item)}
-                          </Link>
+                          {onTaskClick ? (
+                            <button type="button" className="hover:underline" onClick={() => onTaskClick(item.taskId)}>
+                              {displayTitle(item)}
+                            </button>
+                          ) : (
+                            <Link className="hover:underline" href={`/backlog#task-${item.taskId}`}>
+                              {displayTitle(item)}
+                            </Link>
+                          )}
                           {typeof item.score === "number" ? <span className="ml-2 text-xs text-muted-foreground">{item.score.toFixed(1)}</span> : null}
                         </p>
                         <PinToggleButton

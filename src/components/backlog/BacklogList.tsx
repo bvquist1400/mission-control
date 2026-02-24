@@ -7,6 +7,9 @@ import { TaskComments } from "@/components/tasks/TaskComments";
 import { TaskDependencies } from "@/components/tasks/TaskDependencies";
 import { StatusSelector } from "@/components/ui/StatusSelector";
 import { localDateString } from "@/components/utils/dates";
+import { fetchTaskDetails, type TaskDetailData } from "@/lib/task-detail";
+import { TaskMetaEditor } from "@/components/tasks/TaskMetaEditor";
+import { ChecklistSection } from "@/components/tasks/ChecklistSection";
 import type {
   CommitmentSummary,
   ImplementationSummary,
@@ -14,16 +17,9 @@ import type {
   TaskChecklistItem,
   TaskComment,
   TaskStatus,
-  TaskType,
   TaskUpdatePayload,
   TaskWithImplementation,
 } from "@/types/database";
-
-interface TaskDetailData {
-  comments: TaskComment[];
-  checklist: TaskChecklistItem[];
-  dependencies: TaskDependencySummary[];
-}
 
 const TASKS_PAGE_SIZE = 200;
 
@@ -47,14 +43,6 @@ const DEFAULT_SORT_DIRECTIONS: Record<SortField, SortDirection> = {
 
 const STATUS_FILTER_OPTIONS: StatusFilter[] = ["All", "Backlog", "Planned", "In Progress", "Blocked/Waiting", "Done"];
 const REVIEW_FILTER_OPTIONS: ReviewFilter[] = ["All", "Needs review", "Ready"];
-const TASK_TYPE_OPTIONS: Array<{ value: TaskType; label: string }> = [
-  { value: "Task", label: "Task" },
-  { value: "Admin", label: "Admin" },
-  { value: "Ticket", label: "Ticket" },
-  { value: "MeetingPrep", label: "Meeting Prep" },
-  { value: "FollowUp", label: "Follow Up" },
-  { value: "Build", label: "Build" },
-];
 
 function toDateInputValue(isoString: string | null): string {
   if (!isoString) {
@@ -135,23 +123,6 @@ async function fetchCommitments(): Promise<CommitmentSummary[]> {
   return response.json();
 }
 
-async function fetchTaskDetails(taskId: string): Promise<TaskDetailData> {
-  const [commentsRes, checklistRes, dependenciesRes] = await Promise.all([
-    fetch(`/api/tasks/${taskId}/comments`, { cache: "no-store" }),
-    fetch(`/api/tasks/${taskId}/checklist`, { cache: "no-store" }),
-    fetch(`/api/tasks/${taskId}/dependencies`, { cache: "no-store" }),
-  ]);
-
-  const comments = commentsRes.ok ? await commentsRes.json() : [];
-  const checklist = checklistRes.ok ? await checklistRes.json() : [];
-  const dependencies = dependenciesRes.ok ? await dependenciesRes.json() : { dependencies: [] };
-
-  return {
-    comments,
-    checklist,
-    dependencies: Array.isArray(dependencies.dependencies) ? dependencies.dependencies : [],
-  };
-}
 
 function getUnresolvedDependencies(task: TaskWithImplementation): TaskDependencySummary[] {
   return (task.dependencies || []).filter((dependency) => dependency.unresolved);
@@ -214,198 +185,7 @@ function EmptyState() {
   );
 }
 
-function ChecklistAddForm({ onAdd }: { onAdd: (text: string) => void }) {
-  const [text, setText] = useState("");
-  const [isAdding, setIsAdding] = useState(false);
 
-  if (!isAdding) {
-    return (
-      <button
-        type="button"
-        onClick={() => setIsAdding(true)}
-        className="text-xs font-semibold text-accent hover:underline"
-      >
-        + Add item
-      </button>
-    );
-  }
-
-  return (
-    <div className="flex gap-2">
-      <input
-        type="text"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && text.trim()) {
-            onAdd(text);
-            setText("");
-            setIsAdding(false);
-          }
-          if (e.key === "Escape") {
-            setText("");
-            setIsAdding(false);
-          }
-        }}
-        placeholder="New checklist item..."
-        autoFocus
-        className="flex-1 rounded-lg border border-stroke bg-panel px-2 py-1.5 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
-      />
-      <button
-        type="button"
-        onClick={() => {
-          if (text.trim()) {
-            onAdd(text);
-            setText("");
-            setIsAdding(false);
-          }
-        }}
-        className="rounded-lg bg-accent px-2 py-1.5 text-xs font-semibold text-white transition hover:opacity-90"
-      >
-        Add
-      </button>
-      <button
-        type="button"
-        onClick={() => {
-          setText("");
-          setIsAdding(false);
-        }}
-        className="rounded-lg px-2 py-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground"
-      >
-        Cancel
-      </button>
-    </div>
-  );
-}
-
-interface TaskMetaEditorProps {
-  task: TaskWithImplementation;
-  isSaving: boolean;
-  onUpdate: (taskId: string, updates: TaskUpdatePayload) => Promise<void>;
-}
-
-function TaskMetaEditor({ task, isSaving, onUpdate }: TaskMetaEditorProps) {
-  const [titleDraft, setTitleDraft] = useState(task.title);
-  const [descriptionDraft, setDescriptionDraft] = useState(task.description ?? "");
-  const [taskTypeDraft, setTaskTypeDraft] = useState<TaskType>(task.task_type);
-  const [waitingOnDraft, setWaitingOnDraft] = useState(task.waiting_on ?? "");
-
-  const normalizedTitle = titleDraft.trim();
-  const normalizedDescription = descriptionDraft.trim();
-  const normalizedWaitingOn = waitingOnDraft.trim();
-  const nextWaitingOn = normalizedWaitingOn.length > 0 ? normalizedWaitingOn : null;
-  const nextDescription = normalizedDescription.length > 0 ? normalizedDescription : null;
-
-  const hasChanges =
-    normalizedTitle !== task.title
-    || taskTypeDraft !== task.task_type
-    || nextWaitingOn !== task.waiting_on
-    || nextDescription !== task.description;
-  const canSave = normalizedTitle.length > 0 && hasChanges && !isSaving;
-
-  function saveEdits() {
-    if (!canSave) {
-      return;
-    }
-
-    const updates: TaskUpdatePayload = {};
-    if (normalizedTitle !== task.title) {
-      updates.title = normalizedTitle;
-    }
-    if (taskTypeDraft !== task.task_type) {
-      updates.task_type = taskTypeDraft;
-    }
-    if (nextWaitingOn !== task.waiting_on) {
-      updates.waiting_on = nextWaitingOn;
-    }
-    if (nextDescription !== task.description) {
-      updates.description = nextDescription;
-    }
-
-    if (Object.keys(updates).length > 0) {
-      void onUpdate(task.id, updates);
-    }
-  }
-
-  return (
-    <section className="rounded-lg border border-stroke bg-panel p-3">
-      <div className="flex items-center justify-between gap-3">
-        <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Task Details</h4>
-        <button
-          type="button"
-          onClick={saveEdits}
-          disabled={!canSave}
-          className="rounded border border-stroke bg-panel px-2.5 py-1 text-xs font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {isSaving ? "Saving..." : "Save edits"}
-        </button>
-      </div>
-
-      <div className="mt-3 grid gap-3 md:grid-cols-3">
-        <label className="space-y-1">
-          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Title</span>
-          <input
-            value={titleDraft}
-            onChange={(event) => setTitleDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                saveEdits();
-              }
-            }}
-            disabled={isSaving}
-            className="w-full rounded border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
-          />
-        </label>
-
-        <label className="space-y-1">
-          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Task Type</span>
-          <select
-            value={taskTypeDraft}
-            onChange={(event) => setTaskTypeDraft(event.target.value as TaskType)}
-            disabled={isSaving}
-            className="w-full rounded border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {TASK_TYPE_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className="space-y-1">
-          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Waiting On</span>
-          <input
-            value={waitingOnDraft}
-            onChange={(event) => setWaitingOnDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                saveEdits();
-              }
-            }}
-            disabled={isSaving}
-            placeholder={task.status === "Blocked/Waiting" ? "Who or what is this waiting on?" : "Optional context"}
-            className="w-full rounded border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
-          />
-        </label>
-      </div>
-
-      <label className="mt-3 block space-y-1">
-        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Description</span>
-        <textarea
-          value={descriptionDraft}
-          onChange={(event) => setDescriptionDraft(event.target.value)}
-          disabled={isSaving}
-          rows={4}
-          placeholder="Add context, links, and detailed notes for this task..."
-          className="w-full resize-y rounded border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
-        />
-      </label>
-    </section>
-  );
-}
 
 export function BacklogList() {
   const searchParams = useSearchParams();
@@ -1362,51 +1142,12 @@ export function BacklogList() {
                                 />
 
                                 <div className="grid gap-6 xl:grid-cols-3">
-                                  <div className="space-y-3">
-                                    <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                                      Checklist ({details.checklist.length})
-                                    </h4>
-                                    {details.checklist.length > 0 ? (
-                                      <ul className="space-y-1">
-                                        {details.checklist.map((item) => (
-                                          <li key={item.id} className="group flex items-center gap-2">
-                                            <input
-                                              type="checkbox"
-                                              checked={item.is_done}
-                                              onChange={() => void handleChecklistToggle(task.id, item)}
-                                              className="h-4 w-4 rounded accent-accent"
-                                            />
-                                            <span
-                                              className={`flex-1 text-sm ${
-                                                item.is_done ? "text-muted-foreground line-through" : "text-foreground"
-                                              }`}
-                                            >
-                                              {item.text}
-                                            </span>
-                                            <button
-                                              type="button"
-                                              onClick={() => void handleDeleteChecklistItem(task.id, item.id)}
-                                              className="rounded p-1 text-muted-foreground opacity-0 transition group-hover:opacity-100 hover:bg-red-50 hover:text-red-600"
-                                              title="Delete"
-                                            >
-                                              <svg
-                                                className="h-3.5 w-3.5"
-                                                fill="none"
-                                                viewBox="0 0 24 24"
-                                                stroke="currentColor"
-                                                strokeWidth={2}
-                                              >
-                                                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                                              </svg>
-                                            </button>
-                                          </li>
-                                        ))}
-                                      </ul>
-                                    ) : (
-                                      <p className="text-xs italic text-muted-foreground">No checklist items</p>
-                                    )}
-                                    <ChecklistAddForm onAdd={(text) => void handleAddChecklistItem(task.id, text)} />
-                                  </div>
+                                  <ChecklistSection
+                                    checklist={details.checklist}
+                                    onToggle={(item) => void handleChecklistToggle(task.id, item)}
+                                    onAdd={(text) => void handleAddChecklistItem(task.id, text)}
+                                    onDelete={(itemId) => void handleDeleteChecklistItem(task.id, itemId)}
+                                  />
 
                                   <TaskDependencies
                                     taskId={task.id}

@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { TaskCard, type TaskCardData } from "@/components/tasks/TaskCard";
+import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
 import { CapacityMeter } from "@/components/today/CapacityMeter";
 import { FocusStatusBar } from "@/components/today/FocusStatusBar";
-import type { TaskWithImplementation, CapacityResult } from "@/types/database";
+import type { TaskUpdatePayload, TaskWithImplementation, CapacityResult } from "@/types/database";
 import { calculateCapacity } from "@/lib/capacity";
 
 interface WaitingTask {
@@ -30,6 +31,9 @@ interface TodayData {
   needsReviewCount: number;
   capacity: CapacityResult;
   meetings: MeetingEvent[];
+  // Raw tasks kept for modal lookup
+  topThreeRaw: TaskWithImplementation[];
+  dueSoonRaw: TaskWithImplementation[];
 }
 
 interface NeedsReviewCountResponse {
@@ -159,6 +163,8 @@ async function fetchTodayData(): Promise<TodayData> {
     needsReviewCount: typeof reviewCountPayload.count === "number" ? reviewCountPayload.count : 0,
     capacity,
     meetings,
+    topThreeRaw: topThreeTasks,
+    dueSoonRaw: dueSoonTasks.slice(0, 6),
   };
 }
 
@@ -235,6 +241,7 @@ export default function TodayPage() {
   const [error, setError] = useState<string | null>(null);
   const [completingIds, setCompletingIds] = useState<Set<string>>(new Set());
   const [pinningIds, setPinningIds] = useState<Set<string>>(new Set());
+  const [modalTaskId, setModalTaskId] = useState<string | null>(null);
 
   const today = new Intl.DateTimeFormat("en-US", {
     weekday: "long",
@@ -296,6 +303,22 @@ export default function TodayPage() {
       });
     }
   }
+
+  const handleTaskUpdated = useCallback((taskId: string, updates: TaskUpdatePayload) => {
+    setData((prev) => {
+      if (!prev) return prev;
+      function mergeTask(task: TaskWithImplementation): TaskWithImplementation {
+        return task.id === taskId ? { ...task, ...updates } : task;
+      }
+      return {
+        ...prev,
+        topThree: prev.topThree.map((t) => (t.id === taskId ? { ...t, ...updates } : t)),
+        dueSoon: prev.dueSoon.map((t) => (t.id === taskId ? { ...t, ...updates } : t)),
+        topThreeRaw: prev.topThreeRaw.map(mergeTask),
+        dueSoonRaw: prev.dueSoonRaw.map(mergeTask),
+      };
+    });
+  }, []);
 
   async function handleTogglePinned(taskId: string, nextPinned: boolean) {
     if (!data || pinningIds.has(taskId)) return;
@@ -377,13 +400,13 @@ export default function TodayPage() {
               <div className="grid gap-4 xl:grid-cols-3">
                 {data.topThree.map((task) => (
                   <div key={task.id} className="flex flex-col gap-2">
-                    <Link href={`/backlog?expand=${task.id}`} className="block">
+                    <button type="button" className="block text-left" onClick={() => setModalTaskId(task.id)}>
                       <TaskCard
                         task={task}
                         pinning={pinningIds.has(task.id)}
                         onTogglePinned={handleTogglePinned}
                       />
-                    </Link>
+                    </button>
                     <button
                       onClick={() => handleQuickComplete(task.id)}
                       disabled={completingIds.has(task.id)}
@@ -407,13 +430,13 @@ export default function TodayPage() {
               <div className="grid gap-4 md:grid-cols-2">
                 {data.dueSoon.map((task) => (
                   <div key={task.id} className="flex flex-col gap-2">
-                    <Link href={`/backlog?expand=${task.id}`} className="block">
+                    <button type="button" className="block text-left" onClick={() => setModalTaskId(task.id)}>
                       <TaskCard
                         task={task}
                         pinning={pinningIds.has(task.id)}
                         onTogglePinned={handleTogglePinned}
                       />
-                    </Link>
+                    </button>
                     <button
                       onClick={() => handleQuickComplete(task.id)}
                       disabled={completingIds.has(task.id)}
@@ -472,6 +495,20 @@ export default function TodayPage() {
           </section>
         </>
       ) : null}
+
+      <TaskDetailModal
+        task={
+          modalTaskId
+            ? (data?.topThreeRaw.find((t) => t.id === modalTaskId) ??
+               data?.dueSoonRaw.find((t) => t.id === modalTaskId) ??
+               null)
+            : null
+        }
+        allTasks={[...(data?.topThreeRaw ?? []), ...(data?.dueSoonRaw ?? [])]}
+        commitments={[]}
+        onClose={() => setModalTaskId(null)}
+        onTaskUpdated={handleTaskUpdated}
+      />
     </div>
   );
 }
