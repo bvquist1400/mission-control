@@ -25,6 +25,7 @@ export interface Task {
   title: string;
   description: string | null;
   implementation_id: string | null;
+  project_id: string | null;
   status: TaskStatus;
   task_type: TaskType;
   priority_score: number;
@@ -202,9 +203,10 @@ export interface LlmExtraction {
   waiting_on: string | null;
 }
 
-// Task with joined implementation data (from API responses)
+// Task with joined implementation and project data (from API responses)
 export interface TaskWithImplementation extends Task {
   implementation: { id: string; name: string; phase?: ImplPhase; rag?: RagStatus } | null;
+  project: { id: string; name: string; phase?: ImplPhase; rag?: RagStatus } | null;
   dependencies?: TaskDependencySummary[];
   dependency_blocked?: boolean;
 }
@@ -214,6 +216,7 @@ export interface TaskUpdatePayload {
   title?: string;
   description?: string | null;
   implementation_id?: string | null;
+  project_id?: string | null;
   status?: TaskStatus;
   task_type?: TaskType;
   estimated_minutes?: number;
@@ -253,6 +256,45 @@ export interface ImplementationDetail extends Implementation {
   blockers_count: number;
   open_tasks: TaskSummary[];
   recent_done_tasks: TaskSummary[];
+}
+
+export interface Project {
+  id: string;
+  user_id: string;
+  implementation_id: string | null;
+  name: string;
+  description: string | null;
+  phase: ImplPhase;
+  rag: RagStatus;
+  target_date: string | null;
+  servicenow_spm_id: string | null;
+  status_summary: string;
+  portfolio_rank: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectWithStats extends Project {
+  open_task_count: number;
+  implementation: ImplementationSummary | null;
+}
+
+export interface ProjectDetail extends Project {
+  blockers_count: number;
+  open_tasks: TaskSummary[];
+  implementation: ImplementationSummary | null;
+}
+
+export interface ProjectUpdatePayload {
+  name?: string;
+  description?: string | null;
+  implementation_id?: string | null;
+  phase?: ImplPhase;
+  rag?: RagStatus;
+  target_date?: string | null;
+  servicenow_spm_id?: string | null;
+  status_summary?: string;
+  portfolio_rank?: number;
 }
 
 // Allowed fields for implementation updates via API

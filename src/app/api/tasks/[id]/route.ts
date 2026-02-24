@@ -77,6 +77,7 @@ export async function PATCH(
       'title',
       'description',
       'implementation_id',
+      'project_id',
       'status',
       'task_type',
       'estimated_minutes',
@@ -98,6 +99,8 @@ export async function PATCH(
 
       const value = body[field];
       if (field === 'implementation_id') {
+        updates[field] = asStringOrNull(value);
+      } else if (field === 'project_id') {
         updates[field] = asStringOrNull(value);
       } else if (field === 'waiting_on') {
         updates[field] = asStringOrNull(value);
@@ -157,6 +160,20 @@ export async function PATCH(
 
       if (implementationError || !implementation) {
         return NextResponse.json({ error: 'application is invalid (implementation_id)' }, { status: 400 });
+      }
+    }
+
+    const projectId = updates.project_id;
+    if (typeof projectId === 'string') {
+      const { data: project, error: projectError } = await supabase
+        .from('projects')
+        .select('id')
+        .eq('id', projectId)
+        .eq('user_id', userId)
+        .single();
+
+      if (projectError || !project) {
+        return NextResponse.json({ error: 'project_id is invalid' }, { status: 400 });
       }
     }
 

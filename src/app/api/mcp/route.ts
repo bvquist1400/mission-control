@@ -2,6 +2,38 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { z } from 'zod';
 
+const ET_TIMEZONE = 'America/New_York';
+
+function getCurrentTimeEt(): string {
+  return new Date().toLocaleString('en-US', {
+    timeZone: ET_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+    timeZoneName: 'short',
+  });
+}
+
+function toMcpResponse(data: unknown) {
+  return {
+    content: [{
+      type: 'text' as const,
+      text: JSON.stringify(
+        {
+          current_time_et: getCurrentTimeEt(),
+          data,
+        },
+        null,
+        2
+      ),
+    }],
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Auth helper — validates API key before allowing MCP access
 // ---------------------------------------------------------------------------
@@ -33,7 +65,7 @@ function authenticate(request: Request): true | Response {
 }
 
 // ---------------------------------------------------------------------------
-// Build the MCP server with all Mission Control tools
+// Build the MCP server with all Baseline tools
 // ---------------------------------------------------------------------------
 function createMcpServer(): McpServer {
   const mcp = new McpServer(
@@ -58,7 +90,7 @@ function createMcpServer(): McpServer {
         headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
       });
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 
@@ -70,6 +102,7 @@ function createMcpServer(): McpServer {
       status: z.enum(['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Done']).optional().describe('Filter by status'),
       needs_review: z.boolean().optional().describe('Only tasks flagged for review'),
       implementation_id: z.string().optional().describe('Filter by application UUID'),
+      project_id: z.string().optional().describe('Filter by project UUID'),
       due_soon: z.boolean().optional().describe('Due within 48 hours, not Done'),
       include_done: z.boolean().optional().describe('Include completed tasks (default: excluded)'),
       limit: z.number().min(1).max(500).optional().describe('Max results (default 100)'),
@@ -79,6 +112,7 @@ function createMcpServer(): McpServer {
       if (args.status) url.searchParams.set('status', args.status);
       if (args.needs_review) url.searchParams.set('needs_review', 'true');
       if (args.implementation_id) url.searchParams.set('implementation_id', args.implementation_id);
+      if (args.project_id) url.searchParams.set('project_id', args.project_id);
       if (args.due_soon) url.searchParams.set('due_soon', 'true');
       if (args.include_done) url.searchParams.set('include_done', 'true');
       if (args.limit) url.searchParams.set('limit', String(args.limit));
@@ -87,7 +121,7 @@ function createMcpServer(): McpServer {
         headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
       });
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 
@@ -104,7 +138,7 @@ function createMcpServer(): McpServer {
         { headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! } }
       );
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 
@@ -124,6 +158,7 @@ function createMcpServer(): McpServer {
       needs_review: z.boolean().optional().describe('Flag for review'),
       waiting_on: z.string().optional().describe('Who/what is this waiting on'),
       implementation_id: z.string().optional().describe('Application UUID to link to'),
+      project_id: z.string().optional().describe('Project UUID to link to'),
       stakeholder_mentions: z.array(z.string()).optional().describe('Stakeholder names'),
       initial_comment: z.string().optional().describe('Creates first comment on the task'),
       initial_checklist: z.array(z.string()).optional().describe('Creates checklist items'),
@@ -138,7 +173,7 @@ function createMcpServer(): McpServer {
         body: JSON.stringify(args),
       });
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 
@@ -159,6 +194,7 @@ function createMcpServer(): McpServer {
       waiting_on: z.string().nullable().optional(),
       follow_up_at: z.string().nullable().optional(),
       implementation_id: z.string().nullable().optional(),
+      project_id: z.string().nullable().optional().describe('Project UUID or null to unlink'),
       pinned_excerpt: z.string().nullable().optional(),
       pinned: z.boolean().optional(),
     },
@@ -175,7 +211,7 @@ function createMcpServer(): McpServer {
         }
       );
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 
@@ -195,7 +231,7 @@ function createMcpServer(): McpServer {
         }
       );
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 
@@ -212,7 +248,7 @@ function createMcpServer(): McpServer {
         { headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! } }
       );
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 
@@ -236,7 +272,7 @@ function createMcpServer(): McpServer {
         }
       );
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 
@@ -253,7 +289,7 @@ function createMcpServer(): McpServer {
         { headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! } }
       );
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 
@@ -280,7 +316,7 @@ function createMcpServer(): McpServer {
         }
       );
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 
@@ -299,7 +335,7 @@ function createMcpServer(): McpServer {
         headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
       });
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 
@@ -316,7 +352,7 @@ function createMcpServer(): McpServer {
         { headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! } }
       );
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 
@@ -345,7 +381,7 @@ function createMcpServer(): McpServer {
         body: JSON.stringify(args),
       });
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 
@@ -381,7 +417,126 @@ function createMcpServer(): McpServer {
         }
       );
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
+    }
+  );
+
+  // ── LIST PROJECTS ─────────────────────────────────────────────────────
+  mcp.tool(
+    'list_projects',
+    'List projects, optionally filtered by application. Use with_stats=true for task counts.',
+    {
+      implementation_id: z.string().optional().describe('Filter by application UUID'),
+      with_stats: z.boolean().optional().describe('Include open_task_count and implementation info'),
+    },
+    async ({ implementation_id, with_stats }) => {
+      const url = new URL('/api/projects', 'https://mission-control-orpin-chi.vercel.app');
+      if (implementation_id) url.searchParams.set('implementation_id', implementation_id);
+      if (with_stats) url.searchParams.set('with_stats', 'true');
+
+      const res = await fetch(url.toString(), {
+        headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
+      });
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  // ── GET PROJECT ───────────────────────────────────────────────────────
+  mcp.tool(
+    'get_project',
+    'Get a single project with open tasks, blocker count, and linked application.',
+    {
+      project_id: z.string().describe('Project UUID'),
+    },
+    async ({ project_id }) => {
+      const res = await fetch(
+        `https://mission-control-orpin-chi.vercel.app/api/projects/${project_id}`,
+        { headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! } }
+      );
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  // ── CREATE PROJECT ────────────────────────────────────────────────────
+  mcp.tool(
+    'create_project',
+    'Create a new project. Only name is required.',
+    {
+      name: z.string().describe('Project name (required)'),
+      description: z.string().optional(),
+      implementation_id: z.string().optional().describe('Application UUID to link to'),
+      phase: z.enum(['Intake', 'Discovery', 'Design', 'Build', 'Test', 'Training', 'GoLive', 'Hypercare', 'Steady State', 'Sundown']).default('Intake'),
+      rag: z.enum(['Green', 'Yellow', 'Red']).default('Green'),
+      target_date: z.string().optional().describe('Target date (ISO date YYYY-MM-DD)'),
+      servicenow_spm_id: z.string().optional().describe('ServiceNow SPM project ID'),
+      status_summary: z.string().optional(),
+    },
+    async (args) => {
+      const res = await fetch('https://mission-control-orpin-chi.vercel.app/api/projects', {
+        method: 'POST',
+        headers: {
+          'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY!,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(args),
+      });
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  // ── UPDATE PROJECT ────────────────────────────────────────────────────
+  mcp.tool(
+    'update_project',
+    'Update a project. Provide project_id and any fields to change.',
+    {
+      project_id: z.string().describe('Project UUID'),
+      name: z.string().optional(),
+      description: z.string().nullable().optional(),
+      implementation_id: z.string().nullable().optional(),
+      phase: z.enum(['Intake', 'Discovery', 'Design', 'Build', 'Test', 'Training', 'GoLive', 'Hypercare', 'Steady State', 'Sundown']).optional(),
+      rag: z.enum(['Green', 'Yellow', 'Red']).optional(),
+      target_date: z.string().nullable().optional(),
+      servicenow_spm_id: z.string().nullable().optional(),
+      status_summary: z.string().optional(),
+      portfolio_rank: z.number().int().min(1).optional(),
+    },
+    async ({ project_id, ...updates }) => {
+      const res = await fetch(
+        `https://mission-control-orpin-chi.vercel.app/api/projects/${project_id}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY!,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(updates),
+        }
+      );
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  // ── DELETE PROJECT ────────────────────────────────────────────────────
+  mcp.tool(
+    'delete_project',
+    'Delete a project by ID.',
+    {
+      project_id: z.string().describe('Project UUID'),
+    },
+    async ({ project_id }) => {
+      const res = await fetch(
+        `https://mission-control-orpin-chi.vercel.app/api/projects/${project_id}`,
+        {
+          method: 'DELETE',
+          headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
+        }
+      );
+      const data = await res.json();
+      return toMcpResponse(data);
     }
   );
 
@@ -400,7 +555,7 @@ function createMcpServer(): McpServer {
         headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
       });
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 
@@ -417,7 +572,7 @@ function createMcpServer(): McpServer {
         { headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! } }
       );
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 
@@ -442,7 +597,7 @@ function createMcpServer(): McpServer {
         body: JSON.stringify(args),
       });
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 
@@ -471,7 +626,7 @@ function createMcpServer(): McpServer {
         }
       );
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 
@@ -488,7 +643,7 @@ function createMcpServer(): McpServer {
         { headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! } }
       );
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 
@@ -518,7 +673,7 @@ function createMcpServer(): McpServer {
         }
       );
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 
@@ -549,7 +704,7 @@ function createMcpServer(): McpServer {
         }
       );
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 
@@ -568,7 +723,7 @@ function createMcpServer(): McpServer {
         headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
       });
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 
@@ -596,7 +751,7 @@ function createMcpServer(): McpServer {
         body: JSON.stringify({ ...args, is_active: true }),
       });
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 
@@ -611,7 +766,7 @@ function createMcpServer(): McpServer {
         headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
       });
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 
@@ -632,7 +787,7 @@ function createMcpServer(): McpServer {
         headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
       });
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 
@@ -646,7 +801,7 @@ function createMcpServer(): McpServer {
         headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
       });
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 
@@ -667,7 +822,7 @@ function createMcpServer(): McpServer {
         body: JSON.stringify({ task_ids }),
       });
       const data = await res.json();
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 
@@ -690,16 +845,11 @@ function createMcpServer(): McpServer {
 
       if (!briefingRes.ok) {
         const errorText = await briefingRes.text();
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({
-              error: 'Failed to fetch briefing for narrative generation',
-              status: briefingRes.status,
-              body: errorText,
-            }, null, 2),
-          }],
-        };
+        return toMcpResponse({
+          error: 'Failed to fetch briefing for narrative generation',
+          status: briefingRes.status,
+          body: errorText,
+        });
       }
 
       const briefing = await briefingRes.json();
@@ -715,15 +865,10 @@ function createMcpServer(): McpServer {
 
       const payloadText = await narrativeRes.text();
       if (!payloadText.trim()) {
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({
-              error: 'Narrative endpoint returned an empty response body',
-              status: narrativeRes.status,
-            }, null, 2),
-          }],
-        };
+        return toMcpResponse({
+          error: 'Narrative endpoint returned an empty response body',
+          status: narrativeRes.status,
+        });
       }
 
       let data: unknown;
@@ -737,7 +882,7 @@ function createMcpServer(): McpServer {
         };
       }
 
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      return toMcpResponse(data);
     }
   );
 

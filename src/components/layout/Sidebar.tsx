@@ -9,6 +9,7 @@ const navItems = [
   { href: "/backlog", label: "Backlog", hint: "All tasks with filters and edits" },
   { href: "/triage", label: "Triage", hint: "Assign, estimate, schedule" },
   { href: "/applications", label: "Applications", hint: "Portfolio health and updates" },
+  { href: "/projects", label: "Projects", hint: "Track work within applications" },
   { href: "/stakeholders", label: "Stakeholders", hint: "People and commitments" },
   { href: "/focus", label: "Focus", hint: "Planner directives" },
   { href: "/planner", label: "Planner", hint: "Plan generation and refresh" },
@@ -63,7 +64,7 @@ export function Sidebar() {
           >
             <div className="border-b border-stroke pb-5">
               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Brent&apos;s Hub</p>
-              <h1 className="mt-2 text-2xl font-semibold tracking-tight text-foreground">Mission Control</h1>
+              <h1 className="mt-2 text-2xl font-semibold tracking-tight text-foreground">Baseline</h1>
             </div>
 
             <nav className="mt-4 space-y-2">
@@ -115,7 +116,7 @@ export function Sidebar() {
       <aside className="hidden min-h-[calc(100vh-2rem)] w-72 shrink-0 rounded-2xl border border-stroke bg-panel p-5 shadow-sm lg:block">
         <div className="border-b border-stroke pb-5">
           <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Brent&apos;s Hub</p>
-          <h1 className="mt-2 text-2xl font-semibold tracking-tight text-foreground">Mission Control</h1>
+          <h1 className="mt-2 text-2xl font-semibold tracking-tight text-foreground">Baseline</h1>
         </div>
 
         <nav className="mt-4 space-y-2">

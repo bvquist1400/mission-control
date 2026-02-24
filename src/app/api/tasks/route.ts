@@ -153,6 +153,11 @@ export async function GET(request: NextRequest) {
       query = query.eq('implementation_id', implementationId);
     }
 
+    const projectId = searchParams.get('project_id');
+    if (projectId) {
+      query = query.eq('project_id', projectId);
+    }
+
     if (dueSoon === 'true') {
       const now = new Date();
       const in48h = new Date(now.getTime() + 48 * 60 * 60 * 1000);
@@ -280,6 +285,20 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const projectId = asStringOrNull(body.project_id);
+    if (projectId) {
+      const { data: project, error: projectError } = await supabase
+        .from('projects')
+        .select('id')
+        .eq('id', projectId)
+        .eq('user_id', userId)
+        .single();
+
+      if (projectError || !project) {
+        return NextResponse.json({ error: 'project_id is invalid' }, { status: 400 });
+      }
+    }
+
     // Validate blocked_by_task_id if provided (for creating with dependency)
     const blockedByTaskId = asStringOrNull(body.blocked_by_task_id);
     if (blockedByTaskId) {
@@ -302,6 +321,7 @@ export async function POST(request: NextRequest) {
         title: body.title.trim(),
         description: asStringOrNull(body.description),
         implementation_id: implementationId,
+        project_id: projectId,
         status,
         task_type: taskType,
         priority_score: priorityScore,

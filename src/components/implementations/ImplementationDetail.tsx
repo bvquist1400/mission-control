@@ -7,6 +7,7 @@ import { PhaseBadge } from "@/components/ui/PhaseBadge";
 import { RagBadge } from "@/components/ui/RagBadge";
 import { PhaseSelector } from "@/components/ui/PhaseSelector";
 import { RagSelector } from "@/components/ui/RagSelector";
+import { ProjectsList } from "@/components/projects/ProjectsList";
 
 interface ImplementationDetailProps {
   id: string;
@@ -580,6 +581,20 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
             </ul>
           </>
         )}
+      </section>
+
+      {/* Projects Section */}
+      <section className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-foreground">Projects</h2>
+          <Link
+            href={`/projects?implementation_id=${id}`}
+            className="text-xs text-accent hover:underline"
+          >
+            View all
+          </Link>
+        </div>
+        <ProjectsList implementationId={id} embedded />
       </section>
 
       {/* Status Updates Log */}
