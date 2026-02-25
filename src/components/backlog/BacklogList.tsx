@@ -26,6 +26,7 @@ const TASKS_PAGE_SIZE = 200;
 type StatusFilter = "All" | TaskStatus;
 type ReviewFilter = "All" | "Needs review" | "Ready";
 type ImplementationFilter = "All" | "Unassigned" | string;
+type ProjectFilter = "All" | "Unassigned" | string;
 type SortDirection = "asc" | "desc";
 type SortField = "task" | "estimate" | "due" | "priority";
 
@@ -104,6 +105,20 @@ async function fetchImplementations(): Promise<ImplementationSummary[]> {
 
   if (!response.ok) {
     throw new Error("Failed to fetch applications");
+  }
+
+  return response.json();
+}
+
+async function fetchProjects(): Promise<{ id: string; name: string }[]> {
+  const response = await fetch("/api/projects", { cache: "no-store" });
+
+  if (response.status === 401) {
+    throw new Error("Authentication required. Sign in at /login.");
+  }
+
+  if (!response.ok) {
+    throw new Error("Failed to fetch projects");
   }
 
   return response.json();
@@ -191,15 +206,18 @@ export function BacklogList() {
   const searchParams = useSearchParams();
   const [tasks, setTasks] = useState<TaskWithImplementation[]>([]);
   const [implementations, setImplementations] = useState<ImplementationSummary[]>([]);
+  const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
   const [commitments, setCommitments] = useState<CommitmentSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [savingIds, setSavingIds] = useState<Record<string, number>>({});
+  const [estimateDrafts, setEstimateDrafts] = useState<Record<string, string>>({});
 
   const [includeCompleted, setIncludeCompleted] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
   const [implementationFilter, setImplementationFilter] = useState<ImplementationFilter>("All");
+  const [projectFilter, setProjectFilter] = useState<ProjectFilter>("All");
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("All");
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null);
 
@@ -216,9 +234,10 @@ export function BacklogList() {
       setError(null);
 
       try {
-        const [taskData, implementationData, commitmentData] = await Promise.all([
+        const [taskData, implementationData, projectData, commitmentData] = await Promise.all([
           fetchAllTaskPages(includeCompleted),
           fetchImplementations(),
+          fetchProjects(),
           fetchCommitments(),
         ]);
 
@@ -228,6 +247,7 @@ export function BacklogList() {
 
         setTasks(taskData);
         setImplementations(implementationData);
+        setProjects(projectData);
         setCommitments(commitmentData);
         setExpandedTaskId(null);
         setTaskDetailsById({});
@@ -635,6 +655,42 @@ export function BacklogList() {
     void updateTask(task.id, { status: nextStatus });
   }
 
+  async function commitEstimatedMinutes(task: TaskWithImplementation): Promise<void> {
+    const draftValue = estimateDrafts[task.id];
+    if (typeof draftValue !== "string") {
+      return;
+    }
+
+    const trimmedValue = draftValue.trim();
+    if (!trimmedValue) {
+      setEstimateDrafts((current) => {
+        const next = { ...current };
+        delete next[task.id];
+        return next;
+      });
+      return;
+    }
+
+    const parsed = Number.parseInt(trimmedValue, 10);
+    if (!Number.isFinite(parsed) || parsed < 1 || parsed > 480) {
+      setEstimateDrafts((current) => ({
+        ...current,
+        [task.id]: String(task.estimated_minutes),
+      }));
+      return;
+    }
+
+    setEstimateDrafts((current) => {
+      const next = { ...current };
+      delete next[task.id];
+      return next;
+    });
+
+    if (parsed !== task.estimated_minutes && !savingIds[task.id]) {
+      await updateTask(task.id, { estimated_minutes: parsed, estimate_source: "manual" });
+    }
+  }
+
   const filteredTasks = useMemo(() => {
     const normalizedSearch = searchQuery.trim().toLowerCase();
 
@@ -657,6 +713,14 @@ export function BacklogList() {
         }
 
         if (implementationFilter !== "All" && implementationFilter !== "Unassigned" && task.implementation_id !== implementationFilter) {
+          return false;
+        }
+
+        if (projectFilter === "Unassigned" && task.project_id !== null) {
+          return false;
+        }
+
+        if (projectFilter !== "All" && projectFilter !== "Unassigned" && task.project_id !== projectFilter) {
           return false;
         }
 
@@ -724,7 +788,7 @@ export function BacklogList() {
 
         return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
       });
-  }, [implementationFilter, reviewFilter, searchQuery, sortConfig, statusFilter, tasks]);
+  }, [implementationFilter, projectFilter, reviewFilter, searchQuery, sortConfig, statusFilter, tasks]);
 
   function toggleSort(field: SortField) {
     setSortConfig((current) => {
@@ -793,6 +857,23 @@ export function BacklogList() {
               {implementations.map((implementation) => (
                 <option key={implementation.id} value={implementation.id}>
                   {implementation.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="space-y-1">
+            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Project</span>
+            <select
+              value={projectFilter}
+              onChange={(event) => setProjectFilter(event.target.value as ProjectFilter)}
+              className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
+            >
+              <option value="All">All</option>
+              <option value="Unassigned">Unassigned</option>
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
                 </option>
               ))}
             </select>
@@ -1042,11 +1123,27 @@ export function BacklogList() {
                             type="number"
                             min={1}
                             max={480}
-                            value={task.estimated_minutes}
+                            value={estimateDrafts[task.id] ?? String(task.estimated_minutes)}
                             onChange={(event) => {
-                              const value = parseInt(event.target.value, 10);
-                              if (!isNaN(value) && value >= 1 && value <= 480 && !isSaving) {
-                                void updateTask(task.id, { estimated_minutes: value, estimate_source: "manual" });
+                              const nextValue = event.target.value;
+                              setEstimateDrafts((current) => ({ ...current, [task.id]: nextValue }));
+                            }}
+                            onBlur={() => {
+                              void commitEstimatedMinutes(task);
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                event.currentTarget.blur();
+                              }
+
+                              if (event.key === "Escape") {
+                                setEstimateDrafts((current) => {
+                                  const next = { ...current };
+                                  delete next[task.id];
+                                  return next;
+                                });
+                                event.currentTarget.blur();
                               }
                             }}
                             disabled={isSaving}

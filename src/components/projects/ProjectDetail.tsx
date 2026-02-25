@@ -62,6 +62,10 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [targetDateDraft, setTargetDateDraft] = useState("");
+  const [spmIdDraft, setSpmIdDraft] = useState("");
+  const [descriptionDraft, setDescriptionDraft] = useState("");
+  const [statusSummaryDraft, setStatusSummaryDraft] = useState("");
 
   // Inline task creation
   const [inlineRowActive, setInlineRowActive] = useState(false);
@@ -245,7 +249,18 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
           </div>
           <button
             type="button"
-            onClick={() => setIsEditing(!isEditing)}
+            onClick={() => {
+              setIsEditing((current) => {
+                const next = !current;
+                if (next && project) {
+                  setTargetDateDraft(formatDateInput(project.target_date));
+                  setSpmIdDraft(project.servicenow_spm_id ?? "");
+                  setDescriptionDraft(project.description ?? "");
+                  setStatusSummaryDraft(project.status_summary ?? "");
+                }
+                return next;
+              });
+            }}
             className="rounded-lg border border-stroke bg-panel px-3 py-1.5 text-xs font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground"
           >
             {isEditing ? "Done Editing" : "Edit"}
@@ -273,8 +288,18 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
             {isEditing ? (
               <input
                 type="date"
-                value={formatDateInput(project.target_date)}
-                onChange={(e) => updateField({ target_date: e.target.value || null })}
+                value={targetDateDraft}
+                onChange={(e) => setTargetDateDraft(e.target.value)}
+                onBlur={() => {
+                  if (!project) {
+                    return;
+                  }
+
+                  const currentTargetDate = formatDateInput(project.target_date);
+                  if (targetDateDraft !== currentTargetDate) {
+                    void updateField({ target_date: targetDateDraft || null });
+                  }
+                }}
                 disabled={saving}
                 className="mt-1 w-full rounded border border-stroke bg-panel px-2 py-1 text-sm text-foreground outline-none focus:border-accent"
               />
@@ -288,8 +313,18 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
             {isEditing ? (
               <input
                 type="text"
-                value={project.servicenow_spm_id ?? ""}
-                onChange={(e) => updateField({ servicenow_spm_id: e.target.value || null })}
+                value={spmIdDraft}
+                onChange={(e) => setSpmIdDraft(e.target.value)}
+                onBlur={() => {
+                  if (!project) {
+                    return;
+                  }
+
+                  const currentSpmId = project.servicenow_spm_id ?? "";
+                  if (spmIdDraft !== currentSpmId) {
+                    void updateField({ servicenow_spm_id: spmIdDraft || null });
+                  }
+                }}
                 disabled={saving}
                 placeholder="e.g. SPM-1234"
                 className="mt-1 w-full rounded border border-stroke bg-panel px-2 py-1 text-sm text-foreground outline-none focus:border-accent"
@@ -318,8 +353,18 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Description</p>
           {isEditing ? (
             <textarea
-              value={project.description ?? ""}
-              onChange={(e) => updateField({ description: e.target.value || null })}
+              value={descriptionDraft}
+              onChange={(e) => setDescriptionDraft(e.target.value)}
+              onBlur={() => {
+                if (!project) {
+                  return;
+                }
+
+                const currentDescription = project.description ?? "";
+                if (descriptionDraft !== currentDescription) {
+                  void updateField({ description: descriptionDraft || null });
+                }
+              }}
               disabled={saving}
               rows={2}
               placeholder="What is this project about?"
@@ -335,8 +380,18 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status Summary</p>
           {isEditing ? (
             <textarea
-              value={project.status_summary}
-              onChange={(e) => updateField({ status_summary: e.target.value })}
+              value={statusSummaryDraft}
+              onChange={(e) => setStatusSummaryDraft(e.target.value)}
+              onBlur={() => {
+                if (!project) {
+                  return;
+                }
+
+                const currentStatusSummary = project.status_summary ?? "";
+                if (statusSummaryDraft !== currentStatusSummary) {
+                  void updateField({ status_summary: statusSummaryDraft });
+                }
+              }}
               disabled={saving}
               rows={2}
               placeholder="Current status in 1-2 sentences"

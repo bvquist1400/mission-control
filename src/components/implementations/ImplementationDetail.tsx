@@ -93,6 +93,10 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [targetDateDraft, setTargetDateDraft] = useState("");
+  const [nextMilestoneDraft, setNextMilestoneDraft] = useState("");
+  const [nextMilestoneDateDraft, setNextMilestoneDateDraft] = useState("");
+  const [statusSummaryDraft, setStatusSummaryDraft] = useState("");
   const [newStatusText, setNewStatusText] = useState("");
   const [addingStatus, setAddingStatus] = useState(false);
 
@@ -189,6 +193,7 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
 
       // Update status_summary field
       await updateField({ status_summary: note });
+      setStatusSummaryDraft(note);
 
       // Refresh status updates
       const updatesData = await fetchStatusUpdates(id);
@@ -369,7 +374,18 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setIsEditing(!isEditing)}
+              onClick={() => {
+                setIsEditing((current) => {
+                  const next = !current;
+                  if (next && impl) {
+                    setTargetDateDraft(formatDateInput(impl.target_date));
+                    setNextMilestoneDraft(impl.next_milestone ?? "");
+                    setNextMilestoneDateDraft(formatDateInput(impl.next_milestone_date));
+                    setStatusSummaryDraft(impl.status_summary ?? "");
+                  }
+                  return next;
+                });
+              }}
               className="rounded-lg border border-stroke bg-panel px-3 py-1.5 text-xs font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground"
             >
               {isEditing ? "Done Editing" : "Edit"}
@@ -391,8 +407,18 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
             {isEditing ? (
               <input
                 type="date"
-                value={formatDateInput(impl.target_date)}
-                onChange={(e) => updateField({ target_date: e.target.value || null })}
+                value={targetDateDraft}
+                onChange={(e) => setTargetDateDraft(e.target.value)}
+                onBlur={() => {
+                  if (!impl) {
+                    return;
+                  }
+
+                  const currentTargetDate = formatDateInput(impl.target_date);
+                  if (targetDateDraft !== currentTargetDate) {
+                    void updateField({ target_date: targetDateDraft || null });
+                  }
+                }}
                 disabled={saving}
                 className="mt-1 w-full rounded border border-stroke bg-panel px-2 py-1 text-sm text-foreground outline-none focus:border-accent"
               />
@@ -406,8 +432,17 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
             {isEditing ? (
               <input
                 type="text"
-                value={impl.next_milestone}
-                onChange={(e) => updateField({ next_milestone: e.target.value })}
+                value={nextMilestoneDraft}
+                onChange={(e) => setNextMilestoneDraft(e.target.value)}
+                onBlur={() => {
+                  if (!impl) {
+                    return;
+                  }
+
+                  if (nextMilestoneDraft !== impl.next_milestone) {
+                    void updateField({ next_milestone: nextMilestoneDraft });
+                  }
+                }}
                 disabled={saving}
                 placeholder="Enter next milestone..."
                 className="mt-1 w-full rounded border border-stroke bg-panel px-2 py-1 text-sm text-foreground outline-none focus:border-accent"
@@ -422,8 +457,18 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
             {isEditing ? (
               <input
                 type="date"
-                value={formatDateInput(impl.next_milestone_date)}
-                onChange={(e) => updateField({ next_milestone_date: e.target.value || null })}
+                value={nextMilestoneDateDraft}
+                onChange={(e) => setNextMilestoneDateDraft(e.target.value)}
+                onBlur={() => {
+                  if (!impl) {
+                    return;
+                  }
+
+                  const currentMilestoneDate = formatDateInput(impl.next_milestone_date);
+                  if (nextMilestoneDateDraft !== currentMilestoneDate) {
+                    void updateField({ next_milestone_date: nextMilestoneDateDraft || null });
+                  }
+                }}
                 disabled={saving}
                 className="mt-1 w-full rounded border border-stroke bg-panel px-2 py-1 text-sm text-foreground outline-none focus:border-accent"
               />
@@ -449,8 +494,17 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status Summary</p>
           {isEditing ? (
             <textarea
-              value={impl.status_summary}
-              onChange={(e) => updateField({ status_summary: e.target.value })}
+              value={statusSummaryDraft}
+              onChange={(e) => setStatusSummaryDraft(e.target.value)}
+              onBlur={() => {
+                if (!impl) {
+                  return;
+                }
+
+                if (statusSummaryDraft !== impl.status_summary) {
+                  void updateField({ status_summary: statusSummaryDraft });
+                }
+              }}
               disabled={saving}
               rows={2}
               placeholder="Brief status update for stakeholders..."

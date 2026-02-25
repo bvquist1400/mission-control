@@ -9,6 +9,7 @@ import { CapacityMeter } from "@/components/today/CapacityMeter";
 import { FocusStatusBar } from "@/components/today/FocusStatusBar";
 import type { CommitmentSummary, TaskUpdatePayload, TaskWithImplementation, CapacityResult } from "@/types/database";
 import { calculateCapacity } from "@/lib/capacity";
+import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
 
 interface WaitingTask {
   id: string;
@@ -95,7 +96,37 @@ function normalizeBusyMinutes(value: unknown): number {
   return value;
 }
 
-function getDueState(dueAt: string | null, now: Date): TaskCardData["dueState"] {
+function getDateInTimeZone(date: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+
+  if (!year || !month || !day) {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  }
+
+  return `${year}-${month}-${day}`;
+}
+
+function resolveClientTimeZone(): string {
+  if (typeof window === "undefined") {
+    return DEFAULT_WORKDAY_CONFIG.timezone;
+  }
+
+  const resolved = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return typeof resolved === "string" && resolved.trim().length > 0
+    ? resolved
+    : DEFAULT_WORKDAY_CONFIG.timezone;
+}
+
+function getDueState(dueAt: string | null, now: Date, timeZone: string): TaskCardData["dueState"] {
   if (!dueAt) {
     return null;
   }
@@ -105,9 +136,9 @@ function getDueState(dueAt: string | null, now: Date): TaskCardData["dueState"] 
     return "Overdue";
   }
 
-  const endOfToday = new Date(now);
-  endOfToday.setHours(23, 59, 59, 999);
-  if (dueDate.getTime() <= endOfToday.getTime()) {
+  const dueDay = getDateInTimeZone(dueDate, timeZone);
+  const todayDay = getDateInTimeZone(now, timeZone);
+  if (dueDay === todayDay) {
     return "Due Today";
   }
 
@@ -128,20 +159,21 @@ function dedupeTasksForCapacity(...groups: TaskWithImplementation[][]): TaskWith
   return Array.from(byId.values());
 }
 
-async function fetchTodayData(): Promise<TodayData> {
+async function fetchTodayData(timeZone: string): Promise<TodayData> {
+  const calendarTodayUrl = `/api/calendar/today?${new URLSearchParams({ tz: timeZone }).toString()}`;
   const [topThreeTasks, dueSoonTasks, waitingTasks, reviewCountPayload, calendarPayload, commitments] = await Promise.all([
     fetchJson<TaskWithImplementation[]>("/api/tasks?view=top3", "Failed to fetch top priorities"),
     fetchJson<TaskWithImplementation[]>("/api/tasks?view=due_soon&limit=30", "Failed to fetch due soon tasks"),
     fetchJson<TaskWithImplementation[]>("/api/tasks?status=Blocked%2FWaiting", "Failed to fetch blocked tasks"),
     fetchJson<NeedsReviewCountResponse>("/api/tasks?view=needs_review_count", "Failed to fetch review count"),
-    fetchJson<CalendarTodayResponse>("/api/calendar/today", "Failed to fetch today's meetings"),
+    fetchJson<CalendarTodayResponse>(calendarTodayUrl, "Failed to fetch today's meetings"),
     fetchJson<CommitmentSummary[]>("/api/commitments", "Failed to fetch commitments"),
   ]);
 
   const now = new Date();
 
   const topThree = topThreeTasks.map((task) => taskToCardData(task));
-  const dueSoon = dueSoonTasks.slice(0, 6).map((task) => taskToCardData(task, getDueState(task.due_at, now)));
+  const dueSoon = dueSoonTasks.slice(0, 6).map((task) => taskToCardData(task, getDueState(task.due_at, now, timeZone)));
   const waitingOn: WaitingTask[] = waitingTasks.map((task) => ({
     id: task.id,
     title: task.title,
@@ -175,7 +207,7 @@ function formatDate(value: string): string {
   return new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric" }).format(new Date(value));
 }
 
-function formatMeetingTimeRange(start: string, end: string): string {
+function formatMeetingTimeRange(start: string, end: string, timeZone: string): string {
   const startDate = new Date(start);
   const endDate = new Date(end);
 
@@ -183,9 +215,10 @@ function formatMeetingTimeRange(start: string, end: string): string {
     return "Time unavailable";
   }
 
-  return `${new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(startDate)} - ${new Intl.DateTimeFormat("en-US", {
+  return `${new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone }).format(startDate)} - ${new Intl.DateTimeFormat("en-US", {
     hour: "numeric",
     minute: "2-digit",
+    timeZone,
   }).format(endDate)}`;
 }
 
@@ -245,8 +278,16 @@ export default function TodayPage() {
   const [completingIds, setCompletingIds] = useState<Set<string>>(new Set());
   const [pinningIds, setPinningIds] = useState<Set<string>>(new Set());
   const [modalTaskId, setModalTaskId] = useState<string | null>(null);
+  const [timeZone, setTimeZone] = useState(DEFAULT_WORKDAY_CONFIG.timezone);
+  const [timeZoneReady, setTimeZoneReady] = useState(false);
+
+  useEffect(() => {
+    setTimeZone(resolveClientTimeZone());
+    setTimeZoneReady(true);
+  }, []);
 
   const today = new Intl.DateTimeFormat("en-US", {
+    timeZone,
     weekday: "long",
     month: "long",
     day: "numeric",
@@ -254,6 +295,10 @@ export default function TodayPage() {
   }).format(new Date());
 
   useEffect(() => {
+    if (!timeZoneReady) {
+      return;
+    }
+
     let isMounted = true;
 
     async function loadData() {
@@ -261,7 +306,7 @@ export default function TodayPage() {
       setError(null);
 
       try {
-        const todayData = await fetchTodayData();
+        const todayData = await fetchTodayData(timeZone);
         if (isMounted) {
           setData(todayData);
         }
@@ -281,7 +326,7 @@ export default function TodayPage() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [timeZone, timeZoneReady]);
 
   async function handleQuickComplete(taskId: string) {
     if (!data) return;
@@ -293,7 +338,7 @@ export default function TodayPage() {
 
     try {
       await markTaskDone(taskId);
-      const todayData = await fetchTodayData();
+      const todayData = await fetchTodayData(timeZone);
       setData(todayData);
     } catch (err) {
       setData(previousData);
@@ -386,7 +431,7 @@ export default function TodayPage() {
                   {data.meetings.map((event, index) => (
                     <li key={`${event.start}-${event.title}-${index}`} className="rounded-lg bg-panel-muted p-3 text-sm">
                       <p className="font-medium text-foreground">{event.title || "Untitled meeting"}</p>
-                      <p className="mt-1 text-muted-foreground">{formatMeetingTimeRange(event.start, event.end)}</p>
+                      <p className="mt-1 text-muted-foreground">{formatMeetingTimeRange(event.start, event.end, timeZone)}</p>
                       {event.location ? <p className="mt-1 text-muted-foreground">{event.location}</p> : null}
                     </li>
                   ))}

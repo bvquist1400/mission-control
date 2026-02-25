@@ -9,6 +9,15 @@ interface CalendarTodayRow {
   title: string;
 }
 
+function isValidTimeZone(timeZone: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone }).format(new Date());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function getDateInTimeZone(date: Date, timeZone: string): string {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone,
@@ -22,7 +31,7 @@ function getDateInTimeZone(date: Date, timeZone: string): string {
   const day = parts.find((part) => part.type === 'day')?.value;
 
   if (!year || !month || !day) {
-    return new Date().toISOString().slice(0, 10);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   }
 
   return `${year}-${month}-${day}`;
@@ -36,9 +45,18 @@ export async function GET(request: NextRequest) {
     }
 
     const { supabase, userId } = auth.context;
-    const today = getDateInTimeZone(new Date(), DEFAULT_WORKDAY_CONFIG.timezone);
+    const requestedTimeZone = request.nextUrl.searchParams.get('tz');
+    const effectiveTimeZone =
+      requestedTimeZone && isValidTimeZone(requestedTimeZone)
+        ? requestedTimeZone
+        : DEFAULT_WORKDAY_CONFIG.timezone;
+
+    const today = getDateInTimeZone(new Date(), effectiveTimeZone);
     const range = { rangeStart: today, rangeEnd: today };
-    const rangeContext = buildDayWindows(range, DEFAULT_WORKDAY_CONFIG);
+    const rangeContext = buildDayWindows(range, {
+      ...DEFAULT_WORKDAY_CONFIG,
+      timezone: effectiveTimeZone,
+    });
 
     const { data, error } = await supabase
       .from('calendar_events')
@@ -65,6 +83,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       events,
       busyMinutes: stats.busyMinutes,
+      date: today,
+      timeZone: effectiveTimeZone,
     });
   } catch (error) {
     console.error('Error serving today calendar summary:', error);
