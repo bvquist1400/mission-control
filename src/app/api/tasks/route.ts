@@ -79,7 +79,7 @@ export async function GET(request: NextRequest) {
     if (view === 'top3') {
       const { data, error } = await supabase
         .from('tasks')
-        .select('*, implementation:implementations(id, name, phase, rag)')
+        .select('*, implementation:implementations(id, name, phase, rag), project:projects(id, name, phase, rag)')
         .eq('user_id', userId)
         .in('status', ['Planned', 'In Progress'])
         .order('priority_score', { ascending: false })
@@ -116,7 +116,7 @@ export async function GET(request: NextRequest) {
 
       const { data, error } = await supabase
         .from('tasks')
-        .select('*, implementation:implementations(id, name, phase, rag)')
+        .select('*, implementation:implementations(id, name, phase, rag), project:projects(id, name, phase, rag)')
         .eq('user_id', userId)
         .not('due_at', 'is', null)
         .lte('due_at', in48h.toISOString())
@@ -135,7 +135,7 @@ export async function GET(request: NextRequest) {
 
     let query = supabase
       .from('tasks')
-      .select('*, implementation:implementations(id, name, phase, rag)')
+      .select('*, implementation:implementations(id, name, phase, rag), project:projects(id, name, phase, rag)')
       .eq('user_id', userId)
       .order('priority_score', { ascending: false })
       .order('id', { ascending: true })
@@ -336,7 +336,7 @@ export async function POST(request: NextRequest) {
         source_url: asStringOrNull(body.source_url),
         pinned_excerpt: asStringOrNull(body.pinned_excerpt),
       })
-      .select('*, implementation:implementations(id, name, phase, rag)')
+      .select('*, implementation:implementations(id, name, phase, rag), project:projects(id, name, phase, rag)')
       .single();
 
     if (error) {
