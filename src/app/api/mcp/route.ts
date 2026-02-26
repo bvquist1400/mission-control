@@ -18,13 +18,50 @@ function getCurrentTimeEt(): string {
   });
 }
 
+/**
+ * Annotate calendar events with temporal_status relative to current time.
+ * This prevents the LLM from misinterpreting whether meetings are past or upcoming.
+ */
+function annotateCalendarEvents(
+  events: Array<Record<string, unknown>>,
+  now: Date = new Date()
+): Array<Record<string, unknown>> {
+  const nowMs = now.getTime();
+
+  return events.map(event => {
+    const startStr = (event.start_at ?? event.start) as string | undefined;
+    const endStr = (event.end_at ?? event.end) as string | undefined;
+
+    if (!startStr || !endStr) return event;
+
+    const startMs = new Date(startStr).getTime();
+    const endMs = new Date(endStr).getTime();
+
+    let temporal_status: 'past' | 'in_progress' | 'upcoming';
+    if (nowMs >= endMs) {
+      temporal_status = 'past';
+    } else if (nowMs >= startMs) {
+      temporal_status = 'in_progress';
+    } else {
+      temporal_status = 'upcoming';
+    }
+
+    return {
+      ...event,
+      temporal_status,
+    };
+  });
+}
+
 function toMcpResponse(data: unknown) {
+  const now = new Date();
   return {
     content: [{
       type: 'text' as const,
       text: JSON.stringify(
         {
           current_time_et: getCurrentTimeEt(),
+          current_time_utc: now.toISOString(),
           data,
         },
         null,
@@ -76,7 +113,7 @@ function createMcpServer(): McpServer {
   // ── GET BRIEFING ──────────────────────────────────────────────────────
   mcp.tool(
     'get_briefing',
-    'Get a daily briefing snapshot with calendar, tasks, capacity, and progress. Modes: morning, midday, eod, auto.',
+    'Get a daily briefing snapshot with calendar, tasks, capacity, and progress. Calendar events include temporal_status (past, in_progress, or upcoming) relative to current time — always use this to determine whether a meeting already happened. Modes: morning, midday, eod, auto.',
     {
       mode: z.enum(['morning', 'midday', 'eod', 'auto']).default('auto').describe('Briefing mode'),
       date: z.string().optional().describe('ISO date (YYYY-MM-DD). Defaults to today ET.'),
@@ -90,6 +127,15 @@ function createMcpServer(): McpServer {
         headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
       });
       const data = await res.json();
+
+      // Annotate calendar events with temporal_status so the LLM knows which are past/upcoming
+      if (data.today?.calendar?.events && Array.isArray(data.today.calendar.events)) {
+        data.today.calendar.events = annotateCalendarEvents(data.today.calendar.events);
+      }
+      if (data.tomorrow?.calendar?.events && Array.isArray(data.tomorrow.calendar.events)) {
+        data.tomorrow.calendar.events = annotateCalendarEvents(data.tomorrow.calendar.events);
+      }
+
       return toMcpResponse(data);
     }
   );
@@ -773,7 +819,7 @@ function createMcpServer(): McpServer {
   // ── GET CALENDAR ──────────────────────────────────────────────────────
   mcp.tool(
     'get_calendar',
-    'Get calendar events for a date range. Triggers iCal ingestion.',
+    'Get calendar events for a date range. Events include temporal_status (past, in_progress, or upcoming) relative to current time — always use this to determine whether a meeting already happened. Triggers iCal ingestion.',
     {
       range_start: z.string().describe('Start date (YYYY-MM-DD)'),
       range_end: z.string().describe('End date (YYYY-MM-DD)'),
@@ -787,6 +833,12 @@ function createMcpServer(): McpServer {
         headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
       });
       const data = await res.json();
+
+      // Annotate calendar events with temporal_status so the LLM knows which are past/upcoming
+      if (data.events && Array.isArray(data.events)) {
+        data.events = annotateCalendarEvents(data.events);
+      }
+
       return toMcpResponse(data);
     }
   );
@@ -853,6 +905,14 @@ function createMcpServer(): McpServer {
       }
 
       const briefing = await briefingRes.json();
+
+      // Annotate calendar events with temporal_status before narrative generation
+      if (briefing.today?.calendar?.events && Array.isArray(briefing.today.calendar.events)) {
+        briefing.today.calendar.events = annotateCalendarEvents(briefing.today.calendar.events);
+      }
+      if (briefing.tomorrow?.calendar?.events && Array.isArray(briefing.tomorrow.calendar.events)) {
+        briefing.tomorrow.calendar.events = annotateCalendarEvents(briefing.tomorrow.calendar.events);
+      }
 
       const narrativeRes = await fetch('https://mission-control-orpin-chi.vercel.app/api/briefing/narrative', {
         method: 'POST',
