@@ -529,13 +529,13 @@ export default function TodayPage() {
               ) : (
                 <div className="mt-4">
                   <p className="text-sm text-muted-foreground">
-                    {data.needsReviewCount} {data.needsReviewCount === 1 ? "task needs" : "tasks need"} review in triage.
+                    {data.needsReviewCount} {data.needsReviewCount === 1 ? "task needs" : "tasks need"} review in backlog.
                   </p>
                   <Link
-                    href="/triage"
+                    href="/backlog?review=needs_review"
                     className="mt-4 inline-flex rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:opacity-90"
                   >
-                    Open Triage ({data.needsReviewCount})
+                    Open Review Queue ({data.needsReviewCount})
                   </Link>
                 </div>
               )}

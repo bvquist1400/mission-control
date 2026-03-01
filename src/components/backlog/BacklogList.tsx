@@ -45,6 +45,18 @@ const DEFAULT_SORT_DIRECTIONS: Record<SortField, SortDirection> = {
 const STATUS_FILTER_OPTIONS: StatusFilter[] = ["All", "Backlog", "Planned", "In Progress", "Blocked/Waiting", "Done"];
 const REVIEW_FILTER_OPTIONS: ReviewFilter[] = ["All", "Needs review", "Ready"];
 
+function reviewFilterFromParam(value: string | null): ReviewFilter {
+  if (value === "needs_review") {
+    return "Needs review";
+  }
+
+  if (value === "ready") {
+    return "Ready";
+  }
+
+  return "All";
+}
+
 function toDateInputValue(isoString: string | null): string {
   if (!isoString) {
     return "";
@@ -204,6 +216,7 @@ function EmptyState() {
 
 export function BacklogList() {
   const searchParams = useSearchParams();
+  const reviewParam = searchParams.get("review");
   const [tasks, setTasks] = useState<TaskWithImplementation[]>([]);
   const [implementations, setImplementations] = useState<ImplementationSummary[]>([]);
   const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
@@ -218,13 +231,17 @@ export function BacklogList() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
   const [implementationFilter, setImplementationFilter] = useState<ImplementationFilter>("All");
   const [projectFilter, setProjectFilter] = useState<ProjectFilter>("All");
-  const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("All");
+  const [reviewFilter, setReviewFilter] = useState<ReviewFilter>(() => reviewFilterFromParam(reviewParam));
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null);
 
   // Expanded task panel state
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(() => searchParams.get("expand"));
   const [taskDetailsById, setTaskDetailsById] = useState<Record<string, TaskDetailData>>({});
   const [loadingDetailIds, setLoadingDetailIds] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    setReviewFilter(reviewFilterFromParam(reviewParam));
+  }, [reviewParam]);
 
   useEffect(() => {
     let isMounted = true;

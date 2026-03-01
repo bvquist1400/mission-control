@@ -609,7 +609,7 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
                     disabled={isCreating}
                     className="h-4 w-4 accent-accent"
                   />
-                  Send to triage (needs review)
+                  Mark for review
                 </label>
               </div>
 
@@ -902,7 +902,7 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
                         disabled={isCreating}
                         className="h-4 w-4 accent-accent"
                       />
-                      Send to triage (needs review)
+                      Mark for review
                     </label>
                   </div>
 

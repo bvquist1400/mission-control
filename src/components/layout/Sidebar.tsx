@@ -7,14 +7,12 @@ import { useState } from "react";
 const navItems = [
   { href: "/", label: "Today", hint: "Daily operating view" },
   { href: "/backlog", label: "Backlog", hint: "All tasks with filters and edits" },
-  { href: "/triage", label: "Triage", hint: "Assign, estimate, schedule" },
   { href: "/applications", label: "Applications", hint: "Portfolio health and updates" },
   { href: "/projects", label: "Projects", hint: "Track work within applications" },
   { href: "/stakeholders", label: "Stakeholders", hint: "People and commitments" },
   { href: "/focus", label: "Focus", hint: "Planner directives" },
   { href: "/planner", label: "Planner", hint: "Plan generation and refresh" },
   { href: "/calendar", label: "Calendar", hint: "Imported schedule metadata" },
-  { href: "/llm", label: "LLM", hint: "Model and cost evaluation" },
 ];
 
 function isActive(pathname: string, href: string): boolean {
