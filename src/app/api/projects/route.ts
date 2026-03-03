@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { DEFAULT_PROJECT_STAGE, PROJECT_STAGE_VALUES, normalizeProjectStage } from '@/lib/project-stage';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 
 async function getNextPortfolioRank(
@@ -110,6 +111,11 @@ export async function POST(request: NextRequest) {
 
     const implementationId =
       typeof body.implementation_id === 'string' ? body.implementation_id : null;
+    const hasStageInput = Object.prototype.hasOwnProperty.call(body, 'stage')
+      || Object.prototype.hasOwnProperty.call(body, 'phase');
+    const normalizedStage = hasStageInput
+      ? normalizeProjectStage(Object.prototype.hasOwnProperty.call(body, 'stage') ? body.stage : body.phase)
+      : null;
 
     // Validate implementation belongs to user if provided
     if (implementationId) {
@@ -124,13 +130,20 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    if (hasStageInput && !normalizedStage) {
+      return NextResponse.json(
+        { error: `Invalid stage. Must be one of: ${PROJECT_STAGE_VALUES.join(', ')}` },
+        { status: 400 }
+      );
+    }
+
     const nextRank = await getNextPortfolioRank(supabase, userId, implementationId);
 
     const insertPayload: Record<string, unknown> = {
       user_id: userId,
       name: body.name.trim(),
       implementation_id: implementationId,
-      phase: typeof body.phase === 'string' ? body.phase : 'Intake',
+      stage: normalizedStage ?? DEFAULT_PROJECT_STAGE,
       rag: typeof body.rag === 'string' ? body.rag : 'Green',
       target_date: typeof body.target_date === 'string' ? body.target_date : null,
       servicenow_spm_id: typeof body.servicenow_spm_id === 'string' ? body.servicenow_spm_id.trim() || null : null,

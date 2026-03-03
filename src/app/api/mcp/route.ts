@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import { PROJECT_STAGE_VALUES } from '@/lib/project-stage';
 import { z } from 'zod';
 
 const ET_TIMEZONE = 'America/New_York';
@@ -517,7 +518,7 @@ function createMcpServer(): McpServer {
       name: z.string().describe('Project name (required)'),
       description: z.string().optional(),
       implementation_id: z.string().optional().describe('Application UUID to link to'),
-      phase: z.enum(['Intake', 'Discovery', 'Design', 'Build', 'Test', 'Training', 'GoLive', 'Hypercare', 'Steady State', 'Sundown']).default('Intake'),
+      stage: z.enum(PROJECT_STAGE_VALUES).default('Planned'),
       rag: z.enum(['Green', 'Yellow', 'Red']).default('Green'),
       target_date: z.string().optional().describe('Target date (ISO date YYYY-MM-DD)'),
       servicenow_spm_id: z.string().optional().describe('ServiceNow SPM project ID'),
@@ -546,7 +547,7 @@ function createMcpServer(): McpServer {
       name: z.string().optional(),
       description: z.string().nullable().optional(),
       implementation_id: z.string().nullable().optional(),
-      phase: z.enum(['Intake', 'Discovery', 'Design', 'Build', 'Test', 'Training', 'GoLive', 'Hypercare', 'Steady State', 'Sundown']).optional(),
+      stage: z.enum(PROJECT_STAGE_VALUES).optional(),
       rag: z.enum(['Green', 'Yellow', 'Red']).optional(),
       target_date: z.string().nullable().optional(),
       servicenow_spm_id: z.string().nullable().optional(),

@@ -13,7 +13,7 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
     <div className="space-y-6">
       <PageHeader
         title="Project Detail"
-        description="View and edit project status, linked tasks, and configuration."
+        description="View and edit project stage, linked tasks, and configuration."
         actions={
           <Link
             href="/projects"

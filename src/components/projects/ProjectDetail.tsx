@@ -4,9 +4,9 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ScopedTaskGrid } from "@/components/tasks/ScopedTaskGrid";
 import { dateOnlyToInputValue, formatDateOnly } from "@/components/utils/dates";
-import { PhaseBadge } from "@/components/ui/PhaseBadge";
+import { ProjectStageBadge } from "@/components/ui/ProjectStageBadge";
+import { ProjectStageSelector } from "@/components/ui/ProjectStageSelector";
 import { RagBadge } from "@/components/ui/RagBadge";
-import { PhaseSelector } from "@/components/ui/PhaseSelector";
 import { RagSelector } from "@/components/ui/RagSelector";
 import type {
   ProjectDetail as ProjectDetailType,
@@ -204,12 +204,16 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
           <div className="flex items-center gap-3">
             {isEditing ? (
               <>
-                <PhaseSelector value={project.phase} onChange={(phase) => updateField({ phase })} disabled={saving} />
+                <ProjectStageSelector
+                  value={project.stage}
+                  onChange={(stage) => updateField({ stage })}
+                  disabled={saving}
+                />
                 <RagSelector value={project.rag} onChange={(rag) => updateField({ rag })} disabled={saving} />
               </>
             ) : (
               <>
-                <PhaseBadge phase={project.phase} />
+                <ProjectStageBadge stage={project.stage} />
                 <RagBadge status={project.rag} />
               </>
             )}

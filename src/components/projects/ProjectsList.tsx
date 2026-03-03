@@ -3,9 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { ProjectCard, type ProjectCardData } from "@/components/projects/ProjectCard";
-import { PhaseSelector } from "@/components/ui/PhaseSelector";
+import { DEFAULT_PROJECT_STAGE } from "@/lib/project-stage";
+import { ProjectStageSelector } from "@/components/ui/ProjectStageSelector";
 import { RagSelector } from "@/components/ui/RagSelector";
-import type { ImplPhase, RagStatus } from "@/types/database";
+import type { ImplPhase, ProjectStage, RagStatus } from "@/types/database";
 
 // ─── API response shape ───────────────────────────────────────────────────────
 
@@ -13,7 +14,7 @@ interface ApiProject {
   id: string;
   name: string;
   description: string | null;
-  phase: ImplPhase;
+  stage: ProjectStage;
   rag: RagStatus;
   target_date: string | null;
   servicenow_spm_id: string | null;
@@ -41,7 +42,7 @@ interface ApiImplementation {
 interface ProjectDraft {
   name: string;
   description: string;
-  phase: ImplPhase;
+  stage: ProjectStage;
   rag: RagStatus;
   targetDate: string;
   spmId: string;
@@ -52,7 +53,7 @@ interface ProjectDraft {
 const INITIAL_DRAFT: ProjectDraft = {
   name: "",
   description: "",
-  phase: "Intake",
+  stage: DEFAULT_PROJECT_STAGE,
   rag: "Green",
   targetDate: "",
   spmId: "",
@@ -66,7 +67,7 @@ function apiToCardData(project: ApiProject): ProjectCardData {
   return {
     id: project.id,
     name: project.name,
-    phase: project.phase,
+    stage: project.stage,
     rag: project.rag,
     targetDate: project.target_date,
     statusSummary: project.status_summary || "",
@@ -153,7 +154,7 @@ export function ProjectsList({ implementationId, embedded = false }: ProjectsLis
     try {
       const body: Record<string, unknown> = {
         name: draft.name.trim(),
-        phase: draft.phase,
+        stage: draft.stage,
         rag: draft.rag,
         status_summary: draft.statusSummary,
       };
@@ -226,8 +227,8 @@ export function ProjectsList({ implementationId, embedded = false }: ProjectsLis
               </div>
 
               <div>
-                <label className="mb-1 block text-xs font-medium text-muted-foreground">Phase</label>
-                <PhaseSelector value={draft.phase} onChange={(p) => setDraft((d) => ({ ...d, phase: p }))} />
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">Stage</label>
+                <ProjectStageSelector value={draft.stage} onChange={(stage) => setDraft((d) => ({ ...d, stage }))} />
               </div>
 
               <div>
@@ -372,7 +373,7 @@ export function ProjectsList({ implementationId, embedded = false }: ProjectsLis
     <div className="space-y-6">
       <PageHeader
         title="Projects"
-        description="Track work items within applications. Each project has its own phase, RAG status, and task list."
+        description="Track work items within applications. Each project has its own delivery stage, RAG status, and task list."
         actions={
           <button
             type="button"

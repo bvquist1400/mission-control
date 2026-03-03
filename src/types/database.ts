@@ -18,6 +18,16 @@ export type ImplPhase =
   | "Hypercare"
   | "Steady State"
   | "Sundown";
+export type ProjectStage =
+  | "Proposed"
+  | "Planned"
+  | "Ready"
+  | "In Progress"
+  | "Blocked"
+  | "Review"
+  | "Done"
+  | "On Hold"
+  | "Cancelled";
 export type RagStatus = "Green" | "Yellow" | "Red";
 export type EstimateSource = "default" | "llm" | "manual";
 
@@ -229,7 +239,7 @@ export interface LlmExtraction {
 // Task with joined implementation and project data (from API responses)
 export interface TaskWithImplementation extends Task {
   implementation: { id: string; name: string; phase?: ImplPhase; rag?: RagStatus } | null;
-  project: { id: string; name: string; phase?: ImplPhase; rag?: RagStatus } | null;
+  project: { id: string; name: string; stage?: ProjectStage; rag?: RagStatus } | null;
   dependencies?: TaskDependencySummary[];
   dependency_blocked?: boolean;
 }
@@ -289,7 +299,7 @@ export interface Project {
   implementation_id: string | null;
   name: string;
   description: string | null;
-  phase: ImplPhase;
+  stage: ProjectStage;
   rag: RagStatus;
   target_date: string | null;
   servicenow_spm_id: string | null;
@@ -314,7 +324,7 @@ export interface ProjectUpdatePayload {
   name?: string;
   description?: string | null;
   implementation_id?: string | null;
-  phase?: ImplPhase;
+  stage?: ProjectStage;
   rag?: RagStatus;
   target_date?: string | null;
   servicenow_spm_id?: string | null;

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { PROJECT_STAGE_VALUES, normalizeProjectStage } from '@/lib/project-stage';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 
 // GET /api/projects/[id] - Get a single project with stats
@@ -87,7 +88,6 @@ export async function PATCH(
       'name',
       'description',
       'implementation_id',
-      'phase',
       'rag',
       'target_date',
       'servicenow_spm_id',
@@ -105,6 +105,19 @@ export async function PATCH(
 
     if (typeof body.status_summary === 'string' && body.status_summary.length > 2000) {
       return NextResponse.json({ error: 'status_summary must be 2000 characters or fewer' }, { status: 400 });
+    }
+
+    const hasStageInput = Object.prototype.hasOwnProperty.call(body, 'stage')
+      || Object.prototype.hasOwnProperty.call(body, 'phase');
+    const normalizedStage = hasStageInput
+      ? normalizeProjectStage(Object.prototype.hasOwnProperty.call(body, 'stage') ? body.stage : body.phase)
+      : null;
+
+    if (hasStageInput && !normalizedStage) {
+      return NextResponse.json(
+        { error: `Invalid stage. Must be one of: ${PROJECT_STAGE_VALUES.join(', ')}` },
+        { status: 400 }
+      );
     }
 
     if ('portfolio_rank' in body) {
@@ -141,6 +154,10 @@ export async function PATCH(
       } else {
         updates[field] = value;
       }
+    }
+
+    if (hasStageInput && normalizedStage) {
+      updates.stage = normalizedStage;
     }
 
     if (Object.keys(updates).length === 0) {

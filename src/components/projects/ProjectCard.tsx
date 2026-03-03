@@ -2,14 +2,14 @@
 
 import Link from "next/link";
 import { formatDateOnly } from "@/components/utils/dates";
-import type { ImplPhase, RagStatus } from "@/types/database";
-import { PhaseBadge } from "@/components/ui/PhaseBadge";
+import type { ProjectStage, RagStatus } from "@/types/database";
+import { ProjectStageBadge } from "@/components/ui/ProjectStageBadge";
 import { RagBadge } from "@/components/ui/RagBadge";
 
 export interface ProjectCardData {
   id: string;
   name: string;
-  phase: ImplPhase;
+  stage: ProjectStage;
   rag: RagStatus;
   targetDate: string | null;
   statusSummary: string;
@@ -34,7 +34,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
           <p className="mt-1 text-xs text-muted-foreground">Target: {formatDateOnly(project.targetDate)}</p>
         </div>
         <div className="flex items-center gap-2">
-          <PhaseBadge phase={project.phase} />
+          <ProjectStageBadge stage={project.stage} />
           <RagBadge status={project.rag} />
         </div>
       </div>
