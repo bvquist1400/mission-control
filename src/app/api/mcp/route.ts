@@ -4,6 +4,13 @@ import { PROJECT_STAGE_VALUES } from '@/lib/project-stage';
 import { z } from 'zod';
 
 const ET_TIMEZONE = 'America/New_York';
+const TASK_RECURRENCE_FREQUENCIES = ['daily', 'weekly', 'biweekly', 'monthly'] as const;
+const STAKEHOLDER_CONTEXT_SCHEMA = z.object({
+  last_contacted_at: z.string().nullable().optional().describe('Last contact timestamp (ISO)'),
+  preferred_contact: z.string().nullable().optional().describe('Preferred contact method'),
+  current_priorities: z.string().nullable().optional().describe('Current stakeholder priorities'),
+  notes: z.string().nullable().optional().describe('Structured context notes'),
+});
 
 function getCurrentTimeEt(): string {
   return new Date().toLocaleString('en-US', {
@@ -173,6 +180,7 @@ function createMcpServer(): McpServer {
       include_done: z.boolean().optional().describe('Include completed tasks (default: excluded)'),
       include_parked: z.boolean().optional().describe('Include parked tasks (default: excluded)'),
       limit: z.number().min(1).max(500).optional().describe('Max results (default 100)'),
+      offset: z.number().min(0).max(5000).optional().describe('Result offset for pagination'),
     },
     async (args) => {
       const url = new URL('/api/tasks', 'https://mission-control-orpin-chi.vercel.app');
@@ -184,6 +192,32 @@ function createMcpServer(): McpServer {
       if (args.include_done) url.searchParams.set('include_done', 'true');
       if (args.include_parked) url.searchParams.set('include_parked', 'true');
       if (args.limit) url.searchParams.set('limit', String(args.limit));
+      if (typeof args.offset === 'number') url.searchParams.set('offset', String(args.offset));
+
+      const res = await fetch(url.toString(), {
+        headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
+      });
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  // ── LIST PARKED TASKS ─────────────────────────────────────────────────
+  mcp.tool(
+    'list_parked_tasks',
+    'List only parked tasks using the dedicated parking-lot endpoint.',
+    {
+      implementation_id: z.string().optional().describe('Filter by application UUID'),
+      project_id: z.string().optional().describe('Filter by project UUID'),
+      limit: z.number().min(1).max(500).optional().describe('Max results (default 100)'),
+      offset: z.number().min(0).max(5000).optional().describe('Result offset for pagination'),
+    },
+    async (args) => {
+      const url = new URL('/api/tasks/parked', 'https://mission-control-orpin-chi.vercel.app');
+      if (args.implementation_id) url.searchParams.set('implementation_id', args.implementation_id);
+      if (args.project_id) url.searchParams.set('project_id', args.project_id);
+      if (args.limit) url.searchParams.set('limit', String(args.limit));
+      if (typeof args.offset === 'number') url.searchParams.set('offset', String(args.offset));
 
       const res = await fetch(url.toString(), {
         headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
@@ -220,6 +254,7 @@ function createMcpServer(): McpServer {
       status: z.enum(['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done']).default('Backlog'),
       task_type: z.enum(['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build']).default('Task'),
       estimated_minutes: z.number().min(1).max(480).optional().describe('Time estimate in minutes'),
+      estimate_source: z.enum(['default', 'llm', 'manual']).optional().describe('How the estimate was chosen'),
       due_at: z.string().optional().describe('Due date as ISO string'),
       priority_score: z.number().min(0).max(100).optional().describe('Priority 0-100'),
       blocker: z.boolean().optional().describe('Is this a blocker?'),
@@ -228,6 +263,10 @@ function createMcpServer(): McpServer {
       implementation_id: z.string().optional().describe('Application UUID to link to'),
       project_id: z.string().optional().describe('Project UUID to link to'),
       stakeholder_mentions: z.array(z.string()).optional().describe('Stakeholder names'),
+      source_type: z.string().optional().describe('Source label, e.g. Manual or Recurring'),
+      source_url: z.string().optional().describe('Source URL for traceability'),
+      pinned_excerpt: z.string().optional().describe('Pinned source excerpt'),
+      blocked_by_task_id: z.string().optional().describe('Task UUID this new task should depend on'),
       initial_comment: z.string().optional().describe('Creates first comment on the task'),
       initial_checklist: z.array(z.string()).optional().describe('Creates checklist items'),
     },
@@ -252,10 +291,11 @@ function createMcpServer(): McpServer {
     {
       task_id: z.string().describe('Task UUID'),
       title: z.string().optional(),
-      description: z.string().optional(),
+      description: z.string().nullable().optional(),
       status: z.enum(['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done']).optional(),
       task_type: z.enum(['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build']).optional(),
       estimated_minutes: z.number().min(1).max(480).optional(),
+      estimate_source: z.enum(['default', 'llm', 'manual']).optional(),
       actual_minutes: z.number().int().min(0).nullable().optional(),
       due_at: z.string().nullable().optional(),
       needs_review: z.boolean().optional(),
@@ -285,6 +325,26 @@ function createMcpServer(): McpServer {
     }
   );
 
+  // ── PARK TASK ─────────────────────────────────────────────────────────
+  mcp.tool(
+    'park_task',
+    'Move a task into the Parked status using the dedicated convenience endpoint.',
+    {
+      task_id: z.string().describe('Task UUID'),
+    },
+    async ({ task_id }) => {
+      const res = await fetch(
+        `https://mission-control-orpin-chi.vercel.app/api/tasks/park/${task_id}`,
+        {
+          method: 'POST',
+          headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
+        }
+      );
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
   // ── DELETE TASK ───────────────────────────────────────────────────────
   mcp.tool(
     'delete_task',
@@ -300,6 +360,67 @@ function createMcpServer(): McpServer {
           headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
         }
       );
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  // ── TASK RECURRENCE ───────────────────────────────────────────────────
+  mcp.tool(
+    'set_task_recurrence',
+    'Configure a task as a recurring template. This parks the template (unless already Done) and clears any sprint assignment.',
+    {
+      task_id: z.string().describe('Task UUID'),
+      frequency: z.enum(TASK_RECURRENCE_FREQUENCIES).describe('Recurring cadence'),
+      next_due: z.string().optional().describe('Next scheduled date YYYY-MM-DD. Defaults from task due date or today.'),
+      day_of_week: z.number().int().min(0).max(6).optional().describe('For weekly/biweekly schedules, 0=Sunday through 6=Saturday'),
+      day_of_month: z.number().int().min(1).max(31).optional().describe('For monthly schedules, preferred day of month'),
+    },
+    async ({ task_id, ...recurrence }) => {
+      const res = await fetch(
+        `https://mission-control-orpin-chi.vercel.app/api/tasks/${task_id}/recur`,
+        {
+          method: 'POST',
+          headers: {
+            'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY!,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(recurrence),
+        }
+      );
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  mcp.tool(
+    'clear_task_recurrence',
+    'Remove recurrence from a task template.',
+    {
+      task_id: z.string().describe('Task UUID'),
+    },
+    async ({ task_id }) => {
+      const res = await fetch(
+        `https://mission-control-orpin-chi.vercel.app/api/tasks/${task_id}/recur`,
+        {
+          method: 'DELETE',
+          headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
+        }
+      );
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  mcp.tool(
+    'generate_recurring_tasks',
+    'Manually run the recurring-task generator now.',
+    {},
+    async () => {
+      const res = await fetch('https://mission-control-orpin-chi.vercel.app/api/tasks/generate-recurring', {
+        method: 'POST',
+        headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
+      });
       const data = await res.json();
       return toMcpResponse(data);
     }
@@ -393,7 +514,7 @@ function createMcpServer(): McpServer {
   // ── LIST APPLICATIONS ─────────────────────────────────────────────────
   mcp.tool(
     'list_applications',
-    'List all applications/implementations. Use with_stats for blocker counts and next action.',
+    'List all applications/implementations. Use with_stats for blocker counts, next action, and risk signals.',
     {
       with_stats: z.boolean().optional().describe('Include blockers_count and next_action'),
     },
@@ -402,6 +523,20 @@ function createMcpServer(): McpServer {
       if (with_stats) url.searchParams.set('with_stats', 'true');
 
       const res = await fetch(url.toString(), {
+        headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
+      });
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  // ── GET APPLICATION HEALTH SCORES ────────────────────────────────────
+  mcp.tool(
+    'get_application_health_scores',
+    'Compute and return current health scores for all applications. This also persists snapshots so later calls can report trend.',
+    {},
+    async () => {
+      const res = await fetch('https://mission-control-orpin-chi.vercel.app/api/applications/health-scores', {
         headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
       });
       const data = await res.json();
@@ -542,6 +677,7 @@ function createMcpServer(): McpServer {
       target_date: z.string().optional().describe('Target date (ISO date YYYY-MM-DD)'),
       servicenow_spm_id: z.string().optional().describe('ServiceNow SPM project ID'),
       status_summary: z.string().optional(),
+      portfolio_rank: z.number().int().min(1).optional().describe('Positive integer for ordering within the portfolio'),
     },
     async (args) => {
       const res = await fetch('https://mission-control-orpin-chi.vercel.app/api/projects', {
@@ -552,6 +688,107 @@ function createMcpServer(): McpServer {
         },
         body: JSON.stringify(args),
       });
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  // ── SPRINTS ───────────────────────────────────────────────────────────
+  mcp.tool(
+    'list_sprints',
+    'List all sprints, most recent first.',
+    {},
+    async () => {
+      const res = await fetch('https://mission-control-orpin-chi.vercel.app/api/sprints', {
+        headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
+      });
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  mcp.tool(
+    'create_sprint',
+    'Create a sprint for week-level planning.',
+    {
+      name: z.string().describe('Sprint name'),
+      start_date: z.string().describe('Start date YYYY-MM-DD'),
+      end_date: z.string().describe('End date YYYY-MM-DD'),
+      theme: z.string().optional().describe('Optional sprint theme'),
+      focus_implementation_id: z.string().nullable().optional().describe('Application UUID to focus the sprint on'),
+    },
+    async (args) => {
+      const res = await fetch('https://mission-control-orpin-chi.vercel.app/api/sprints', {
+        method: 'POST',
+        headers: {
+          'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY!,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(args),
+      });
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  mcp.tool(
+    'get_sprint',
+    'Get a sprint with completion stats and tasks grouped by status.',
+    {
+      sprint_id: z.string().describe('Sprint UUID'),
+    },
+    async ({ sprint_id }) => {
+      const res = await fetch(
+        `https://mission-control-orpin-chi.vercel.app/api/sprints/${sprint_id}`,
+        { headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! } }
+      );
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  mcp.tool(
+    'update_sprint',
+    'Update sprint metadata. Provide sprint_id and any fields to change.',
+    {
+      sprint_id: z.string().describe('Sprint UUID'),
+      name: z.string().optional(),
+      start_date: z.string().optional().describe('Start date YYYY-MM-DD'),
+      end_date: z.string().optional().describe('End date YYYY-MM-DD'),
+      theme: z.string().nullable().optional(),
+      focus_implementation_id: z.string().nullable().optional().describe('Application UUID or null to unlink'),
+    },
+    async ({ sprint_id, ...updates }) => {
+      const res = await fetch(
+        `https://mission-control-orpin-chi.vercel.app/api/sprints/${sprint_id}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY!,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(updates),
+        }
+      );
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  mcp.tool(
+    'delete_sprint',
+    'Delete a sprint by ID.',
+    {
+      sprint_id: z.string().describe('Sprint UUID'),
+    },
+    async ({ sprint_id }) => {
+      const res = await fetch(
+        `https://mission-control-orpin-chi.vercel.app/api/sprints/${sprint_id}`,
+        {
+          method: 'DELETE',
+          headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
+        }
+      );
       const data = await res.json();
       return toMcpResponse(data);
     }
@@ -682,6 +919,7 @@ function createMcpServer(): McpServer {
       role: z.string().nullable().optional(),
       organization: z.string().nullable().optional(),
       notes: z.string().nullable().optional(),
+      context: STAKEHOLDER_CONTEXT_SCHEMA.optional().describe('Structured stakeholder memory to merge into existing context'),
     },
     async ({ stakeholder_id, ...updates }) => {
       const res = await fetch(
