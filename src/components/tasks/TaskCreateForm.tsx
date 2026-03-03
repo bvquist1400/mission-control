@@ -51,7 +51,7 @@ interface QuickCaptureDraft {
   pinnedExcerpt: string;
 }
 
-const NEW_TASK_STATUSES: TaskStatus[] = ["Backlog", "Planned", "In Progress", "Blocked/Waiting"];
+const NEW_TASK_STATUSES: TaskStatus[] = ["Backlog", "Planned", "In Progress", "Blocked/Waiting", "Parked"];
 const TASK_TYPES: { value: TaskType; label: string }[] = [
   { value: "Task", label: "Task" },
   { value: "Admin", label: "Admin" },

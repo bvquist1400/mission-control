@@ -145,12 +145,13 @@ function createMcpServer(): McpServer {
     'list_tasks',
     'List tasks with optional filters. Returns tasks sorted by priority.',
     {
-      status: z.enum(['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Done']).optional().describe('Filter by status'),
+      status: z.enum(['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done']).optional().describe('Filter by status'),
       needs_review: z.boolean().optional().describe('Only tasks flagged for review'),
       implementation_id: z.string().optional().describe('Filter by application UUID'),
       project_id: z.string().optional().describe('Filter by project UUID'),
-      due_soon: z.boolean().optional().describe('Due within 48 hours, not Done'),
+      due_soon: z.boolean().optional().describe('Due within 48 hours, excluding Done and Parked'),
       include_done: z.boolean().optional().describe('Include completed tasks (default: excluded)'),
+      include_parked: z.boolean().optional().describe('Include parked tasks (default: excluded)'),
       limit: z.number().min(1).max(500).optional().describe('Max results (default 100)'),
     },
     async (args) => {
@@ -161,6 +162,7 @@ function createMcpServer(): McpServer {
       if (args.project_id) url.searchParams.set('project_id', args.project_id);
       if (args.due_soon) url.searchParams.set('due_soon', 'true');
       if (args.include_done) url.searchParams.set('include_done', 'true');
+      if (args.include_parked) url.searchParams.set('include_parked', 'true');
       if (args.limit) url.searchParams.set('limit', String(args.limit));
 
       const res = await fetch(url.toString(), {
@@ -195,7 +197,7 @@ function createMcpServer(): McpServer {
     {
       title: z.string().describe('Task title (required)'),
       description: z.string().optional().describe('Task description'),
-      status: z.enum(['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Done']).default('Backlog'),
+      status: z.enum(['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done']).default('Backlog'),
       task_type: z.enum(['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build']).default('Task'),
       estimated_minutes: z.number().min(1).max(480).optional().describe('Time estimate in minutes'),
       due_at: z.string().optional().describe('Due date as ISO string'),
@@ -231,7 +233,7 @@ function createMcpServer(): McpServer {
       task_id: z.string().describe('Task UUID'),
       title: z.string().optional(),
       description: z.string().optional(),
-      status: z.enum(['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Done']).optional(),
+      status: z.enum(['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done']).optional(),
       task_type: z.enum(['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build']).optional(),
       estimated_minutes: z.number().min(1).max(480).optional(),
       actual_minutes: z.number().int().min(0).nullable().optional(),
@@ -242,6 +244,7 @@ function createMcpServer(): McpServer {
       follow_up_at: z.string().nullable().optional(),
       implementation_id: z.string().nullable().optional(),
       project_id: z.string().nullable().optional().describe('Project UUID or null to unlink'),
+      sprint_id: z.string().nullable().optional().describe('Sprint UUID or null to unlink'),
       pinned_excerpt: z.string().nullable().optional(),
       pinned: z.boolean().optional(),
     },

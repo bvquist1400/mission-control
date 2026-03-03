@@ -139,7 +139,7 @@ export async function GET(request: NextRequest) {
       const nextActionByImplementation = new Map<string, { id: string; title: string }>();
 
       for (const task of taskRows) {
-        if (!task.implementation_id || task.status === 'Done') {
+        if (!task.implementation_id || task.status === 'Done' || task.status === 'Parked') {
           continue;
         }
 

@@ -150,7 +150,7 @@ export function getTasksDueSoon(tasks: Task[], hoursAhead: number = 48): Task[] 
 
   return tasks
     .filter((t) => {
-      if (t.status === 'Done' || !t.due_at) return false;
+      if (t.status === 'Done' || t.status === 'Parked' || !t.due_at) return false;
       const dueDate = new Date(t.due_at);
       return dueDate <= cutoff;
     })
@@ -179,5 +179,5 @@ export function getWaitingTasks(tasks: Task[]): Task[] {
  * Get tasks needing review
  */
 export function getNeedsReviewTasks(tasks: Task[]): Task[] {
-  return tasks.filter((t) => t.needs_review && t.status !== 'Done');
+  return tasks.filter((t) => t.needs_review && t.status !== 'Done' && t.status !== 'Parked');
 }

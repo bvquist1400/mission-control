@@ -135,7 +135,7 @@ export function identifyPrepTasks(
 
   for (const task of tasks) {
     // Skip completed tasks
-    if (task.status === "Done") continue;
+    if (task.status === "Done" || task.status === "Parked") continue;
 
     // 1. MeetingPrep tasks
     if (task.task_type === "MeetingPrep") {
@@ -204,7 +204,7 @@ export function findRolledOverTasks(
   return tasks
     .filter((task) => {
       // Not completed
-      if (task.status === "Done") return false;
+      if (task.status === "Done" || task.status === "Parked") return false;
       // Was due today or earlier
       if (task.due_at && task.due_at <= todayEnd) return true;
       // Or has high priority and is actionable

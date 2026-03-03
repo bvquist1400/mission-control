@@ -63,7 +63,7 @@ export function calculateRequiredMinutes(
 
   return tasks
     .filter((task) => {
-      if (task.status === 'Done') return false;
+      if (task.status === 'Done' || task.status === 'Parked') return false;
 
       // Include if in top 3
       if (topTaskIds.has(task.id)) return true;

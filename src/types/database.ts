@@ -1,4 +1,4 @@
-export type TaskStatus = "Backlog" | "Planned" | "In Progress" | "Blocked/Waiting" | "Done";
+export type TaskStatus = "Backlog" | "Planned" | "In Progress" | "Blocked/Waiting" | "Parked" | "Done";
 export type TaskType = "Task" | "Ticket" | "MeetingPrep" | "FollowUp" | "Admin" | "Build";
 export type CommentSource = "manual" | "system" | "llm";
 export type CommitmentStatus = "Open" | "Done" | "Dropped";
@@ -6,6 +6,7 @@ export type CommitmentDirection = "ours" | "theirs";
 export type TaskDependencyType = "task" | "commitment";
 export type TaskDependencyStatus = TaskStatus | CommitmentStatus;
 export type RiskLevel = "green" | "yellow" | "red";
+export type TaskRecurrenceFrequency = "daily" | "weekly" | "biweekly" | "monthly";
 export type ImplPhase =
   | "Intake"
   | "Discovery"
@@ -20,6 +21,15 @@ export type ImplPhase =
 export type RagStatus = "Green" | "Yellow" | "Red";
 export type EstimateSource = "default" | "llm" | "manual";
 
+export interface TaskRecurrence {
+  enabled: boolean;
+  frequency: TaskRecurrenceFrequency;
+  day_of_week: number | null;
+  day_of_month: number | null;
+  next_due: string;
+  template_task_id: string | null;
+}
+
 export interface Task {
   id: string;
   user_id: string;
@@ -27,11 +37,13 @@ export interface Task {
   description: string | null;
   implementation_id: string | null;
   project_id: string | null;
+  sprint_id: string | null;
   status: TaskStatus;
   task_type: TaskType;
   priority_score: number;
   estimated_minutes: number;
   actual_minutes: number | null;
+  recurrence: TaskRecurrence | null;
   estimate_source: EstimateSource;
   due_at: string | null;
   needs_review: boolean;
@@ -228,6 +240,7 @@ export interface TaskUpdatePayload {
   description?: string | null;
   implementation_id?: string | null;
   project_id?: string | null;
+  sprint_id?: string | null;
   status?: TaskStatus;
   task_type?: TaskType;
   estimated_minutes?: number;
@@ -307,6 +320,29 @@ export interface ProjectUpdatePayload {
   servicenow_spm_id?: string | null;
   status_summary?: string;
   portfolio_rank?: number;
+}
+
+export interface Sprint {
+  id: string;
+  user_id: string;
+  name: string;
+  start_date: string;
+  end_date: string;
+  theme: string;
+  focus_implementation_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SprintWithImplementation extends Sprint {
+  focus_implementation: ImplementationSummary | null;
+}
+
+export interface SprintDetail extends SprintWithImplementation {
+  total_tasks: number;
+  completed_tasks: number;
+  completion_pct: number;
+  tasks_by_status: Record<TaskStatus, TaskSummary[]>;
 }
 
 // Allowed fields for implementation updates via API

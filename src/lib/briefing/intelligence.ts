@@ -307,7 +307,7 @@ export function buildRiskRadar(
   return implementations
     .map((implementation) => {
       const implementationTasks = tasks.filter((task) => task.implementation_id === implementation.id);
-      const openTasks = implementationTasks.filter((task) => task.status !== 'Done');
+      const openTasks = implementationTasks.filter((task) => task.status !== 'Done' && task.status !== 'Parked');
       const blockerTasks = openTasks.filter((task) => task.blocker);
       const blockedWaitingCount = openTasks.filter((task) => task.status === 'Blocked/Waiting').length;
       const mostRecentDoneTask = implementationTasks
@@ -397,7 +397,7 @@ export function buildTomorrowContext(
     );
 
     const relatedTasks = tasks
-      .filter((task) => task.status !== 'Done')
+      .filter((task) => task.status !== 'Done' && task.status !== 'Parked')
       .filter(
         (task) =>
           taskMentionsStakeholder(task, matchedStakeholderNames) ||

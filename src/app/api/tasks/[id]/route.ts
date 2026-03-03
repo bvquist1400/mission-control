@@ -3,7 +3,7 @@ import { recalculateTaskPriority } from '@/lib/priority';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import type { TaskStatus, TaskType } from '@/types/database';
 
-const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Done'];
+const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done'];
 const VALID_TASK_TYPES: TaskType[] = ['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build'];
 
 function isValidStatus(value: string): value is TaskStatus {
@@ -78,6 +78,7 @@ export async function PATCH(
       'description',
       'implementation_id',
       'project_id',
+      'sprint_id',
       'status',
       'task_type',
       'estimated_minutes',
@@ -102,6 +103,8 @@ export async function PATCH(
       if (field === 'implementation_id') {
         updates[field] = asStringOrNull(value);
       } else if (field === 'project_id') {
+        updates[field] = asStringOrNull(value);
+      } else if (field === 'sprint_id') {
         updates[field] = asStringOrNull(value);
       } else if (field === 'waiting_on') {
         updates[field] = asStringOrNull(value);
@@ -189,6 +192,20 @@ export async function PATCH(
 
       if (projectError || !project) {
         return NextResponse.json({ error: 'project_id is invalid' }, { status: 400 });
+      }
+    }
+
+    const sprintId = updates.sprint_id;
+    if (typeof sprintId === 'string') {
+      const { data: sprint, error: sprintError } = await supabase
+        .from('sprints')
+        .select('id')
+        .eq('id', sprintId)
+        .eq('user_id', userId)
+        .single();
+
+      if (sprintError || !sprint) {
+        return NextResponse.json({ error: 'sprint_id is invalid' }, { status: 400 });
       }
     }
 

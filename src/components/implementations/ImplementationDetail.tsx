@@ -504,7 +504,7 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
               disabled={addingTask}
               className="rounded border border-stroke bg-panel px-2 py-1 text-xs text-foreground outline-none focus:border-accent disabled:opacity-60"
             >
-              {(["Backlog", "Planned", "In Progress", "Blocked/Waiting"] as TaskStatus[]).map((s) => (
+              {(["Backlog", "Planned", "In Progress", "Blocked/Waiting", "Parked"] as TaskStatus[]).map((s) => (
                 <option key={s} value={s}>{s}</option>
               ))}
             </select>

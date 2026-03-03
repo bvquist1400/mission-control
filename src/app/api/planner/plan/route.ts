@@ -852,6 +852,7 @@ export async function POST(request: NextRequest) {
       )
       .eq('user_id', userId)
       .neq('status', 'Done')
+      .neq('status', 'Parked')
       .limit(1000);
 
     if (tasksResult.error) {

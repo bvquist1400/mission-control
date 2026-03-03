@@ -4,5 +4,11 @@
     "src/app/api/mcp/route.ts": {
       "maxDuration": 60
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/tasks/generate-recurring",
+      "schedule": "0 11 * * *"
+    }
+  ]
 }

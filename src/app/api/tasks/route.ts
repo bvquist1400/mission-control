@@ -3,7 +3,7 @@ import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import { fetchTaskDependencySummaries } from '@/lib/task-dependencies';
 import type { TaskStatus, TaskType, EstimateSource } from '@/types/database';
 
-const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Done'];
+const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done'];
 const VALID_TASK_TYPES: TaskType[] = ['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build'];
 const VALID_ESTIMATE_SOURCES: EstimateSource[] = ['default', 'llm', 'manual'];
 
@@ -55,6 +55,8 @@ export async function GET(request: NextRequest) {
     const status = searchParams.get('status');
     const implementationId = searchParams.get('implementation_id');
     const dueSoon = searchParams.get('due_soon');
+    const includeDone = searchParams.get('include_done') === 'true';
+    const includeParked = searchParams.get('include_parked') === 'true';
     const view = searchParams.get('view');
     const rawLimit = Number.parseInt(searchParams.get('limit') || '100', 10);
     const rawOffset = Number.parseInt(searchParams.get('offset') || '0', 10);
@@ -67,7 +69,8 @@ export async function GET(request: NextRequest) {
         .select('id', { count: 'exact', head: true })
         .eq('user_id', userId)
         .eq('needs_review', true)
-        .neq('status', 'Done');
+        .neq('status', 'Done')
+        .neq('status', 'Parked');
 
       if (error) {
         throw error;
@@ -121,6 +124,7 @@ export async function GET(request: NextRequest) {
         .not('due_at', 'is', null)
         .lte('due_at', in48h.toISOString())
         .neq('status', 'Done')
+        .neq('status', 'Parked')
         .order('due_at', { ascending: true })
         .order('id', { ascending: true })
         .limit(fetchLimit);
@@ -164,11 +168,16 @@ export async function GET(request: NextRequest) {
       query = query
         .not('due_at', 'is', null)
         .lte('due_at', in48h.toISOString())
-        .neq('status', 'Done');
+        .neq('status', 'Done')
+        .neq('status', 'Parked');
     }
 
-    if (searchParams.get('include_done') !== 'true') {
+    if (!includeDone && status !== 'Done') {
       query = query.neq('status', 'Done');
+    }
+
+    if (!includeParked && status !== 'Parked') {
+      query = query.neq('status', 'Parked');
     }
 
     const { data, error } = await query;

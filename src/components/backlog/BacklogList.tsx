@@ -18,7 +18,7 @@ type ReviewFilter = "All" | "Needs review" | "Ready";
 type ImplementationFilter = "All" | "Unassigned" | string;
 type ProjectFilter = "All" | "Unassigned" | string;
 
-const STATUS_FILTER_OPTIONS: StatusFilter[] = ["All", "Backlog", "Planned", "In Progress", "Blocked/Waiting", "Done"];
+const STATUS_FILTER_OPTIONS: StatusFilter[] = ["All", "Backlog", "Planned", "In Progress", "Blocked/Waiting", "Parked", "Done"];
 const REVIEW_FILTER_OPTIONS: ReviewFilter[] = ["All", "Needs review", "Ready"];
 
 function reviewFilterFromParam(value: string | null): ReviewFilter {
@@ -55,6 +55,7 @@ async function fetchAllTaskPages(includeCompleted: boolean): Promise<TaskWithImp
   while (true) {
     const page = await fetchTaskPage({
       include_done: includeCompleted ? "true" : "false",
+      include_parked: "true",
       limit: String(TASKS_PAGE_SIZE),
       offset: String(offset),
     });
