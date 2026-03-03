@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { formatDateOnly } from "@/components/utils/dates";
 import type { ImplPhase, RagStatus } from "@/types/database";
 import { PhaseBadge } from "@/components/ui/PhaseBadge";
 import { RagBadge } from "@/components/ui/RagBadge";
@@ -24,22 +25,13 @@ interface ProjectCardProps {
   project: ProjectCardData;
 }
 
-function formatDate(date: string | null): string {
-  if (!date) return "Not set";
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  }).format(new Date(date + "T12:00:00")); // noon to avoid timezone off-by-one
-}
-
 export function ProjectCard({ project }: ProjectCardProps) {
   return (
     <article className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="text-base font-semibold text-foreground">{project.name}</h3>
-          <p className="mt-1 text-xs text-muted-foreground">Target: {formatDate(project.targetDate)}</p>
+          <p className="mt-1 text-xs text-muted-foreground">Target: {formatDateOnly(project.targetDate)}</p>
         </div>
         <div className="flex items-center gap-2">
           <PhaseBadge phase={project.phase} />

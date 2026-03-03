@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { EstimateButtons } from "@/components/ui/EstimateButtons";
-import { localDateString } from "@/components/utils/dates";
+import { localDateInputToEndOfDayIso } from "@/components/utils/dates";
 import type { ImplementationSummary, LlmExtraction, TaskStatus, TaskType, TaskWithImplementation } from "@/types/database";
 
 interface TaskCreateFormProps {
@@ -100,11 +100,6 @@ function createInitialQcDraft(): QuickCaptureDraft {
     needsReview: true,
     pinnedExcerpt: "",
   };
-}
-
-function dateToIso(dateString: string): string {
-  const date = new Date(`${dateString}T23:59:59`);
-  return `${localDateString(date)}T23:59:59.000Z`;
 }
 
 function cleanText(value: string): string {
@@ -227,7 +222,7 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
           implementation_id: draft.implementationId || null,
           estimated_minutes: draft.estimatedMinutes,
           estimate_source: "manual",
-          due_at: draft.dueDate ? dateToIso(draft.dueDate) : null,
+          due_at: draft.dueDate ? localDateInputToEndOfDayIso(draft.dueDate) : null,
           status: draft.status,
           blocker: draft.blocker,
           needs_review: draft.sendToTriage,
@@ -347,7 +342,7 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
         implementation_id: qcDraft.implementationId || null,
         estimated_minutes: qcDraft.estimatedMinutes,
         estimate_source: "llm",
-        due_at: qcDraft.dueDate ? dateToIso(qcDraft.dueDate) : null,
+        due_at: qcDraft.dueDate ? localDateInputToEndOfDayIso(qcDraft.dueDate) : null,
         status: qcDraft.status,
         blocker: qcDraft.blocker,
         needs_review: qcDraft.sendToTriage,

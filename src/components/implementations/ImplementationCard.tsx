@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { formatDateOnly } from "@/components/utils/dates";
 import type { ImplPhase, RagStatus } from "@/types/database";
 import { PhaseBadge } from "@/components/ui/PhaseBadge";
 import { RagBadge } from "@/components/ui/RagBadge";
@@ -21,18 +22,6 @@ export interface ImplementationCardData {
 interface ImplementationCardProps {
   implementation: ImplementationCardData;
   onCopyUpdate?: (implementationId: string) => Promise<string>;
-}
-
-function formatDate(date: string | null): string {
-  if (!date) {
-    return "Not set";
-  }
-
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  }).format(new Date(date));
 }
 
 type CopyState = "idle" | "loading" | "copied" | "error";
@@ -87,11 +76,11 @@ export function ImplementationCard({ implementation, onCopyUpdate }: Implementat
         isSundown ? "border-orange-500/35 bg-orange-500/5" : "border-stroke bg-panel"
       }`}
     >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h3 className="text-base font-semibold text-foreground">{implementation.name}</h3>
-          <p className="mt-1 text-xs text-muted-foreground">Target: {formatDate(implementation.targetDate)}</p>
-        </div>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-base font-semibold text-foreground">{implementation.name}</h3>
+            <p className="mt-1 text-xs text-muted-foreground">Target: {formatDateOnly(implementation.targetDate)}</p>
+          </div>
         <div className="flex items-center gap-2">
           <PhaseBadge phase={implementation.phase} />
           <RagBadge status={implementation.rag} />
@@ -100,7 +89,7 @@ export function ImplementationCard({ implementation, onCopyUpdate }: Implementat
 
       <div className="mt-4 space-y-2 text-sm">
         <p className="text-muted-foreground">
-          <span className="font-semibold text-foreground">Next milestone:</span> {implementation.nextMilestone} ({formatDate(implementation.nextMilestoneDate)})
+          <span className="font-semibold text-foreground">Next milestone:</span> {implementation.nextMilestone} ({formatDateOnly(implementation.nextMilestoneDate)})
         </p>
         <p className="text-muted-foreground">
           <span className="font-semibold text-foreground">Blockers:</span>{" "}

@@ -2,12 +2,20 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import type { ImplementationDetail as ImplementationDetailType, ImplementationUpdatePayload, StatusUpdate, TaskStatus, TaskSummary } from "@/types/database";
-import { PhaseBadge } from "@/components/ui/PhaseBadge";
-import { RagBadge } from "@/components/ui/RagBadge";
-import { PhaseSelector } from "@/components/ui/PhaseSelector";
-import { RagSelector } from "@/components/ui/RagSelector";
 import { ProjectsList } from "@/components/projects/ProjectsList";
+import { ScopedTaskGrid } from "@/components/tasks/ScopedTaskGrid";
+import { dateOnlyToInputValue, formatDateOnly } from "@/components/utils/dates";
+import { PhaseBadge } from "@/components/ui/PhaseBadge";
+import { PhaseSelector } from "@/components/ui/PhaseSelector";
+import { RagBadge } from "@/components/ui/RagBadge";
+import { RagSelector } from "@/components/ui/RagSelector";
+import type {
+  ImplementationDetail as ImplementationDetailType,
+  ImplementationUpdatePayload,
+  StatusUpdate,
+  TaskStatus,
+  TaskWithImplementation,
+} from "@/types/database";
 
 interface ImplementationDetailProps {
   id: string;
@@ -59,18 +67,12 @@ function LoadingSkeleton() {
   );
 }
 
-function formatDate(date: string | null): string {
-  if (!date) return "Not set";
+function formatTimestampDate(date: string): string {
   return new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",
   }).format(new Date(date));
-}
-
-function formatDateInput(date: string | null): string {
-  if (!date) return "";
-  return date.split("T")[0];
 }
 
 function formatRelativeTime(date: string): string {
@@ -83,7 +85,7 @@ function formatRelativeTime(date: string): string {
   if (diffDays === 1) return "Yesterday";
   if (diffDays < 7) return `${diffDays} days ago`;
   if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`;
-  return formatDate(date);
+  return formatTimestampDate(date);
 }
 
 export function ImplementationDetail({ id }: ImplementationDetailProps) {
@@ -107,6 +109,7 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
   const [inlineEstimate, setInlineEstimate] = useState<number>(15);
   const [addingTask, setAddingTask] = useState(false);
   const [inlineError, setInlineError] = useState<string | null>(null);
+  const [latestAddedTask, setLatestAddedTask] = useState<TaskWithImplementation | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -236,21 +239,6 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
     setAddingTask(true);
     setInlineError(null);
 
-    const tempId = `temp-${Date.now()}`;
-    const tempTask: TaskSummary = {
-      id: tempId,
-      title,
-      status: inlineStatus,
-      estimated_minutes: inlineEstimate,
-      due_at: null,
-      blocker: false,
-    };
-
-    // Optimistic update
-    setImpl((current) =>
-      current ? { ...current, open_tasks: [...current.open_tasks, tempTask] } : current
-    );
-
     try {
       const response = await fetch("/api/tasks", {
         method: "POST",
@@ -273,37 +261,14 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
         throw new Error(typeof data.error === "string" ? data.error : "Create failed");
       }
 
-      const newTask = await response.json();
-
-      // Replace temp task with real task from API
-      setImpl((current) => {
-        if (!current) return current;
-        return {
-          ...current,
-          open_tasks: current.open_tasks.map((t) =>
-            t.id === tempId
-              ? {
-                  id: newTask.id,
-                  title: newTask.title,
-                  status: newTask.status,
-                  estimated_minutes: newTask.estimated_minutes,
-                  due_at: newTask.due_at,
-                  blocker: newTask.blocker,
-                }
-              : t
-          ),
-        };
-      });
+      const newTask = (await response.json()) as TaskWithImplementation;
+      setLatestAddedTask(newTask);
 
       setInlineTitle("");
       setInlineStatus("Backlog");
       setInlineEstimate(15);
       setInlineRowActive(false);
     } catch (err) {
-      // Revert optimistic update
-      setImpl((current) =>
-        current ? { ...current, open_tasks: current.open_tasks.filter((t) => t.id !== tempId) } : current
-      );
       setInlineError(err instanceof Error ? err.message : "Failed to create task");
     } finally {
       setAddingTask(false);
@@ -378,9 +343,9 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
                 setIsEditing((current) => {
                   const next = !current;
                   if (next && impl) {
-                    setTargetDateDraft(formatDateInput(impl.target_date));
+                    setTargetDateDraft(dateOnlyToInputValue(impl.target_date));
                     setNextMilestoneDraft(impl.next_milestone ?? "");
-                    setNextMilestoneDateDraft(formatDateInput(impl.next_milestone_date));
+                    setNextMilestoneDateDraft(dateOnlyToInputValue(impl.next_milestone_date));
                     setStatusSummaryDraft(impl.status_summary ?? "");
                   }
                   return next;
@@ -414,7 +379,7 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
                     return;
                   }
 
-                  const currentTargetDate = formatDateInput(impl.target_date);
+                  const currentTargetDate = dateOnlyToInputValue(impl.target_date);
                   if (targetDateDraft !== currentTargetDate) {
                     void updateField({ target_date: targetDateDraft || null });
                   }
@@ -423,7 +388,7 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
                 className="mt-1 w-full rounded border border-stroke bg-panel px-2 py-1 text-sm text-foreground outline-none focus:border-accent"
               />
             ) : (
-              <p className="mt-1 text-sm font-medium text-foreground">{formatDate(impl.target_date)}</p>
+              <p className="mt-1 text-sm font-medium text-foreground">{formatDateOnly(impl.target_date)}</p>
             )}
           </article>
 
@@ -464,7 +429,7 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
                     return;
                   }
 
-                  const currentMilestoneDate = formatDateInput(impl.next_milestone_date);
+                  const currentMilestoneDate = dateOnlyToInputValue(impl.next_milestone_date);
                   if (nextMilestoneDateDraft !== currentMilestoneDate) {
                     void updateField({ next_milestone_date: nextMilestoneDateDraft || null });
                   }
@@ -473,7 +438,7 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
                 className="mt-1 w-full rounded border border-stroke bg-panel px-2 py-1 text-sm text-foreground outline-none focus:border-accent"
               />
             ) : (
-              <p className="mt-1 text-sm font-medium text-foreground">{formatDate(impl.next_milestone_date)}</p>
+              <p className="mt-1 text-sm font-medium text-foreground">{formatDateOnly(impl.next_milestone_date)}</p>
             )}
           </article>
 
@@ -516,31 +481,9 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
         </div>
       </section>
 
-      {/* Linked Tasks Section */}
+      {/* Tasks Section */}
       <section className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
-        <h2 className="text-sm font-semibold text-foreground">Open Tasks</h2>
-        {impl.open_tasks.length > 0 ? (
-          <ul className="mt-3 space-y-2">
-            {impl.open_tasks.map((task: TaskSummary) => (
-              <li key={task.id} className="flex items-center justify-between gap-3 rounded-lg bg-panel-muted px-3 py-2">
-                <div className="flex items-center gap-2">
-                  {task.blocker && (
-                    <span className="rounded-full bg-red-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-red-400">
-                      Blocker
-                    </span>
-                  )}
-                  <span className="text-sm text-foreground">{task.title}</span>
-                </div>
-                <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                  <span>{task.estimated_minutes} min</span>
-                  <span className="rounded bg-panel px-1.5 py-0.5 font-medium">{task.status}</span>
-                </div>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="mt-3 text-sm text-muted-foreground">No open tasks for this application.</p>
-        )}
+        <h2 className="text-sm font-semibold text-foreground">Tasks</h2>
 
         {/* Inline add row */}
         {inlineRowActive ? (
@@ -622,19 +565,9 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
           </p>
         )}
 
-        {impl.recent_done_tasks.length > 0 && (
-          <>
-            <h3 className="mt-5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recently Completed</h3>
-            <ul className="mt-2 space-y-1">
-              {impl.recent_done_tasks.map((task: TaskSummary) => (
-                <li key={task.id} className="flex items-center justify-between gap-3 rounded px-2 py-1 text-sm text-muted-foreground">
-                  <span className="line-through">{task.title}</span>
-                  <span className="text-xs">{task.updated_at ? formatRelativeTime(task.updated_at) : ""}</span>
-                </li>
-              ))}
-            </ul>
-          </>
-        )}
+        <div className="mt-4">
+          <ScopedTaskGrid scopeMode="implementation" scopeId={id} newTask={latestAddedTask} />
+        </div>
       </section>
 
       {/* Projects Section */}

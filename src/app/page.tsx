@@ -448,13 +448,25 @@ export default function TodayPage() {
               <div className="grid gap-4 xl:grid-cols-3">
                 {data.topThree.map((task) => (
                   <div key={task.id} className="flex flex-col gap-2">
-                    <button type="button" className="block text-left" onClick={() => setModalTaskId(task.id)}>
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      className="block cursor-pointer text-left focus:outline-none focus-visible:rounded-card focus-visible:ring-2 focus-visible:ring-accent/50"
+                      aria-label={`Open task details for ${task.title}`}
+                      onClick={() => setModalTaskId(task.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          setModalTaskId(task.id);
+                        }
+                      }}
+                    >
                       <TaskCard
                         task={task}
                         pinning={pinningIds.has(task.id)}
                         onTogglePinned={handleTogglePinned}
                       />
-                    </button>
+                    </div>
                     <button
                       onClick={() => handleQuickComplete(task.id)}
                       disabled={completingIds.has(task.id)}
@@ -478,13 +490,25 @@ export default function TodayPage() {
               <div className="grid gap-4 md:grid-cols-2">
                 {data.dueSoon.map((task) => (
                   <div key={task.id} className="flex flex-col gap-2">
-                    <button type="button" className="block text-left" onClick={() => setModalTaskId(task.id)}>
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      className="block cursor-pointer text-left focus:outline-none focus-visible:rounded-card focus-visible:ring-2 focus-visible:ring-accent/50"
+                      aria-label={`Open task details for ${task.title}`}
+                      onClick={() => setModalTaskId(task.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          setModalTaskId(task.id);
+                        }
+                      }}
+                    >
                       <TaskCard
                         task={task}
                         pinning={pinningIds.has(task.id)}
                         onTogglePinned={handleTogglePinned}
                       />
-                    </button>
+                    </div>
                     <button
                       onClick={() => handleQuickComplete(task.id)}
                       disabled={completingIds.has(task.id)}

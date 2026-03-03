@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { CommitmentStatus, CommitmentDirection } from "@/types/database";
-import { formatRelativeDate } from "@/components/utils/dates";
+import { formatRelativeDate, isPastTimestamp } from "@/components/utils/dates";
 
 export interface CommitmentRowData {
   id: string;
@@ -26,10 +26,7 @@ export function CommitmentRow({ commitment, onStatusChange }: CommitmentRowProps
   const isDone = commitment.status === "Done";
   const isDropped = commitment.status === "Dropped";
 
-  const isOverdue =
-    commitment.status === "Open" &&
-    commitment.due_at &&
-    new Date(commitment.due_at) < new Date();
+  const isOverdue = commitment.status === "Open" && isPastTimestamp(commitment.due_at);
 
   async function handleToggle() {
     setUpdating(true);

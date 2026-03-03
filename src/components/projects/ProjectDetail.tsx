@@ -2,28 +2,21 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import type { ProjectDetail as ProjectDetailType, ProjectUpdatePayload, TaskStatus, TaskSummary } from "@/types/database";
+import { ScopedTaskGrid } from "@/components/tasks/ScopedTaskGrid";
+import { dateOnlyToInputValue, formatDateOnly } from "@/components/utils/dates";
 import { PhaseBadge } from "@/components/ui/PhaseBadge";
 import { RagBadge } from "@/components/ui/RagBadge";
 import { PhaseSelector } from "@/components/ui/PhaseSelector";
 import { RagSelector } from "@/components/ui/RagSelector";
+import type {
+  ProjectDetail as ProjectDetailType,
+  ProjectUpdatePayload,
+  TaskStatus,
+  TaskWithImplementation,
+} from "@/types/database";
 
 interface ProjectDetailProps {
   id: string;
-}
-
-function formatDate(date: string | null): string {
-  if (!date) return "Not set";
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  }).format(new Date(date + "T12:00:00"));
-}
-
-function formatDateInput(date: string | null): string {
-  if (!date) return "";
-  return date.split("T")[0];
 }
 
 function LoadingSkeleton() {
@@ -74,6 +67,7 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
   const [inlineEstimate, setInlineEstimate] = useState<number>(15);
   const [addingTask, setAddingTask] = useState(false);
   const [inlineError, setInlineError] = useState<string | null>(null);
+  const [latestAddedTask, setLatestAddedTask] = useState<TaskWithImplementation | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -137,20 +131,6 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
     setAddingTask(true);
     setInlineError(null);
 
-    const tempId = `temp-${Date.now()}`;
-    const tempTask: TaskSummary = {
-      id: tempId,
-      title,
-      status: inlineStatus,
-      estimated_minutes: inlineEstimate,
-      due_at: null,
-      blocker: false,
-    };
-
-    setProject((current) =>
-      current ? { ...current, open_tasks: [...current.open_tasks, tempTask] } : current
-    );
-
     try {
       const res = await fetch("/api/tasks", {
         method: "POST",
@@ -174,27 +154,14 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
         throw new Error(typeof data.error === "string" ? data.error : "Create failed");
       }
 
-      const newTask = await res.json();
-      setProject((current) => {
-        if (!current) return current;
-        return {
-          ...current,
-          open_tasks: current.open_tasks.map((t) =>
-            t.id === tempId
-              ? { id: newTask.id, title: newTask.title, status: newTask.status, estimated_minutes: newTask.estimated_minutes, due_at: newTask.due_at, blocker: newTask.blocker }
-              : t
-          ),
-        };
-      });
+      const newTask = (await res.json()) as TaskWithImplementation;
+      setLatestAddedTask(newTask);
 
       setInlineTitle("");
       setInlineStatus("Backlog");
       setInlineEstimate(15);
       setInlineRowActive(false);
     } catch (err) {
-      setProject((current) =>
-        current ? { ...current, open_tasks: current.open_tasks.filter((t) => t.id !== tempId) } : current
-      );
       setInlineError(err instanceof Error ? err.message : "Failed to create task");
     } finally {
       setAddingTask(false);
@@ -253,7 +220,7 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
               setIsEditing((current) => {
                 const next = !current;
                 if (next && project) {
-                  setTargetDateDraft(formatDateInput(project.target_date));
+                  setTargetDateDraft(dateOnlyToInputValue(project.target_date));
                   setSpmIdDraft(project.servicenow_spm_id ?? "");
                   setDescriptionDraft(project.description ?? "");
                   setStatusSummaryDraft(project.status_summary ?? "");
@@ -295,7 +262,7 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
                     return;
                   }
 
-                  const currentTargetDate = formatDateInput(project.target_date);
+                  const currentTargetDate = dateOnlyToInputValue(project.target_date);
                   if (targetDateDraft !== currentTargetDate) {
                     void updateField({ target_date: targetDateDraft || null });
                   }
@@ -304,7 +271,7 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
                 className="mt-1 w-full rounded border border-stroke bg-panel px-2 py-1 text-sm text-foreground outline-none focus:border-accent"
               />
             ) : (
-              <p className="mt-1 text-sm font-medium text-foreground">{formatDate(project.target_date)}</p>
+              <p className="mt-1 text-sm font-medium text-foreground">{formatDateOnly(project.target_date)}</p>
             )}
           </article>
 
@@ -403,32 +370,9 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
         </div>
       </section>
 
-      {/* ── Open Tasks Section ── */}
+      {/* ── Tasks Section ── */}
       <section className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
-        <h2 className="text-sm font-semibold text-foreground">Open Tasks</h2>
-
-        {project.open_tasks.length > 0 ? (
-          <ul className="mt-3 space-y-2">
-            {project.open_tasks.map((task: TaskSummary) => (
-              <li key={task.id} className="flex items-center justify-between gap-3 rounded-lg bg-panel-muted px-3 py-2">
-                <div className="flex items-center gap-2">
-                  {task.blocker && (
-                    <span className="rounded-full bg-red-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-red-400">
-                      Blocker
-                    </span>
-                  )}
-                  <span className="text-sm text-foreground">{task.title}</span>
-                </div>
-                <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                  <span>{task.estimated_minutes} min</span>
-                  <span className="rounded bg-panel px-1.5 py-0.5 font-medium">{task.status}</span>
-                </div>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="mt-3 text-sm text-muted-foreground">No open tasks for this project.</p>
-        )}
+        <h2 className="text-sm font-semibold text-foreground">Tasks</h2>
 
         {/* Inline add row */}
         {inlineRowActive ? (
@@ -505,6 +449,10 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
             {inlineError}
           </p>
         )}
+
+        <div className="mt-4">
+          <ScopedTaskGrid scopeMode="project" scopeId={id} newTask={latestAddedTask} />
+        </div>
       </section>
     </div>
   );
