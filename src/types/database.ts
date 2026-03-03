@@ -7,6 +7,8 @@ export type TaskDependencyType = "task" | "commitment";
 export type TaskDependencyStatus = TaskStatus | CommitmentStatus;
 export type RiskLevel = "green" | "yellow" | "red";
 export type TaskRecurrenceFrequency = "daily" | "weekly" | "biweekly" | "monthly";
+export type HealthTrend = "improving" | "stable" | "degrading" | "unknown";
+export type HealthLabel = "Healthy" | "Watch" | "At Risk" | "Critical";
 export type ImplPhase =
   | "Intake"
   | "Discovery"
@@ -38,6 +40,25 @@ export interface TaskRecurrence {
   day_of_month: number | null;
   next_due: string;
   template_task_id: string | null;
+}
+
+export interface ImplementationHealthSnapshot {
+  as_of: string;
+  captured_at: string;
+  health_score: number;
+  blocker_count: number;
+  blocked_waiting_task_count: number;
+  cold_commitments_count: number;
+  stall_days: number | null;
+}
+
+export interface ImplementationHealthScore {
+  id: string;
+  name: string;
+  health_score: number;
+  health_label: HealthLabel;
+  signals: string[];
+  trend: HealthTrend;
 }
 
 export interface Task {
@@ -79,6 +100,7 @@ export interface Implementation {
   priority_weight: number;
   priority_note: string | null;
   portfolio_rank: number;
+  health_snapshot: ImplementationHealthSnapshot | null;
   target_date: string | null;
   status_summary: string;
   next_milestone: string;

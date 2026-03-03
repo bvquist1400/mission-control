@@ -1,5 +1,5 @@
 import type { ApiCalendarEvent, BusyBlock, BusyStats } from "@/lib/calendar";
-import type { CapacityResult, CommitmentDirection, RiskLevel } from "@/types/database";
+import type { CapacityResult, CommitmentDirection, ImplementationHealthScore, RiskLevel } from "@/types/database";
 import type { BriefingMode } from "./time-detection";
 import type { FocusBlock } from "./focus-blocks";
 import type { PrepTask, TaskSummary } from "./prep-tasks";
@@ -84,6 +84,7 @@ export interface BriefingResponse {
   today: TodayBriefingData;
   commitments: BriefingCommitmentData;
   risk_radar: BriefingRiskRadarItem[];
+  health_scores: ImplementationHealthScore[];
   tomorrow?: TomorrowBriefingData;
 }
 

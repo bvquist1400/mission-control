@@ -21,6 +21,7 @@ import {
   type IntelligenceTomorrowTask,
   normalizeCommitmentRows,
 } from "@/lib/briefing/intelligence";
+import { computeImplementationHealthScores, persistImplementationHealthSnapshots } from "@/lib/health-scores";
 import {
   BriefingMode,
   detectBriefingMode,
@@ -183,7 +184,7 @@ async function fetchImplementations(
 ): Promise<IntelligenceImplementation[]> {
   const { data, error } = await supabase
     .from("implementations")
-    .select("id, name, keywords")
+    .select("*")
     .eq("user_id", userId)
     .order("name", { ascending: true });
 
@@ -266,6 +267,13 @@ export async function GET(request: NextRequest) {
     const focusBlocks = calculateFocusBlocks(todayCalendar.busyBlocks, todayWindows.windows, nowMs);
     const coldCommitments = buildColdCommitments(openCommitments, now);
     const riskRadar = buildRiskRadar(implementations, allTasks as IntelligenceRiskTask[], openCommitments, now);
+    const { scores: healthScores, snapshots } = computeImplementationHealthScores(
+      implementations,
+      allTasks as IntelligenceRiskTask[],
+      openCommitments,
+      now
+    );
+    await persistImplementationHealthSnapshots(supabase, userId, snapshots);
 
     // Calculate today's task breakdown
     const todayStart = `${todayET}T00:00:00`;
@@ -341,6 +349,7 @@ export async function GET(request: NextRequest) {
         cold_commitments: coldCommitments,
       },
       risk_radar: riskRadar,
+      health_scores: healthScores,
     };
 
     // Add tomorrow data for EOD mode

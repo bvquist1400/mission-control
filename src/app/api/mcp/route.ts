@@ -141,6 +141,25 @@ function createMcpServer(): McpServer {
     }
   );
 
+  // ── GET WEEKLY REVIEW ────────────────────────────────────────────────
+  mcp.tool(
+    'get_weekly_review',
+    'Get the structured weekly review snapshot with shipped work, stalled work, pending decisions, health scores, and next-week suggestions.',
+    {
+      date: z.string().optional().describe('ISO date (YYYY-MM-DD). Defaults to today ET and reviews the current week-to-date.'),
+    },
+    async ({ date }) => {
+      const url = new URL('/api/briefing/weekly-review', 'https://mission-control-orpin-chi.vercel.app');
+      if (date) url.searchParams.set('date', date);
+
+      const res = await fetch(url.toString(), {
+        headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
+      });
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
   // ── LIST TASKS ────────────────────────────────────────────────────────
   mcp.tool(
     'list_tasks',

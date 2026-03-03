@@ -1,6 +1,7 @@
 import type {
   CommitmentDirection,
   CommitmentStatus,
+  ImplementationHealthSnapshot,
   ImplPhase,
   RagStatus,
   RiskLevel,
@@ -25,6 +26,7 @@ export interface IntelligenceImplementation {
   id: string;
   name: string;
   keywords?: string[] | null;
+  health_snapshot?: ImplementationHealthSnapshot | null;
 }
 
 export interface IntelligenceStakeholder {
