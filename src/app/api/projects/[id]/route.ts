@@ -1,6 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { PROJECT_STAGE_VALUES, normalizeProjectStage } from '@/lib/project-stage';
+import { DEFAULT_PROJECT_STAGE, PROJECT_STAGE_VALUES, normalizeProjectStage } from '@/lib/project-stage';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
+
+function withNormalizedProjectStage<T extends Record<string, unknown>>(project: T): T & { stage: string } {
+  const rest = { ...project } as T & { phase?: unknown };
+  delete rest.phase;
+  const normalizedStage = normalizeProjectStage(project.stage) ?? DEFAULT_PROJECT_STAGE;
+  return {
+    ...rest,
+    stage: normalizedStage,
+  };
+}
 
 // GET /api/projects/[id] - Get a single project with stats
 export async function GET(
@@ -58,7 +68,7 @@ export async function GET(
     }
 
     return NextResponse.json({
-      ...project,
+      ...withNormalizedProjectStage(project),
       blockers_count: blockersCount || 0,
       open_tasks: openTasks || [],
       implementation,
@@ -107,11 +117,8 @@ export async function PATCH(
       return NextResponse.json({ error: 'status_summary must be 2000 characters or fewer' }, { status: 400 });
     }
 
-    const hasStageInput = Object.prototype.hasOwnProperty.call(body, 'stage')
-      || Object.prototype.hasOwnProperty.call(body, 'phase');
-    const normalizedStage = hasStageInput
-      ? normalizeProjectStage(Object.prototype.hasOwnProperty.call(body, 'stage') ? body.stage : body.phase)
-      : null;
+    const hasStageInput = Object.prototype.hasOwnProperty.call(body, 'stage');
+    const normalizedStage = hasStageInput ? normalizeProjectStage(body.stage) : null;
 
     if (hasStageInput && !normalizedStage) {
       return NextResponse.json(
@@ -179,7 +186,7 @@ export async function PATCH(
       throw error;
     }
 
-    return NextResponse.json(data);
+    return NextResponse.json(withNormalizedProjectStage(data));
   } catch (error) {
     console.error('Error updating project:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

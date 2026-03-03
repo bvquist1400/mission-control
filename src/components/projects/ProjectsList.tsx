@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { ProjectCard, type ProjectCardData } from "@/components/projects/ProjectCard";
-import { DEFAULT_PROJECT_STAGE } from "@/lib/project-stage";
+import { DEFAULT_PROJECT_STAGE, normalizeProjectStage } from "@/lib/project-stage";
 import { ProjectStageSelector } from "@/components/ui/ProjectStageSelector";
 import { RagSelector } from "@/components/ui/RagSelector";
 import type { ImplPhase, ProjectStage, RagStatus } from "@/types/database";
@@ -64,10 +64,11 @@ const INITIAL_DRAFT: ProjectDraft = {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function apiToCardData(project: ApiProject): ProjectCardData {
+  const stage = normalizeProjectStage(project.stage) ?? DEFAULT_PROJECT_STAGE;
   return {
     id: project.id,
     name: project.name,
-    stage: project.stage,
+    stage,
     rag: project.rag,
     targetDate: project.target_date,
     statusSummary: project.status_summary || "",

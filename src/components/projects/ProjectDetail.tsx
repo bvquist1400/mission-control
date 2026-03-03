@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ScopedTaskGrid } from "@/components/tasks/ScopedTaskGrid";
+import { DEFAULT_PROJECT_STAGE, normalizeProjectStage } from "@/lib/project-stage";
 import { dateOnlyToInputValue, formatDateOnly } from "@/components/utils/dates";
 import { ProjectStageBadge } from "@/components/ui/ProjectStageBadge";
 import { ProjectStageSelector } from "@/components/ui/ProjectStageSelector";
@@ -17,6 +18,13 @@ import type {
 
 interface ProjectDetailProps {
   id: string;
+}
+
+function normalizeProject(project: ProjectDetailType): ProjectDetailType {
+  return {
+    ...project,
+    stage: normalizeProjectStage(project.stage) ?? DEFAULT_PROJECT_STAGE,
+  };
 }
 
 function LoadingSkeleton() {
@@ -81,7 +89,7 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
         if (!res.ok) throw new Error("Failed to fetch project");
         const data = await res.json() as ProjectDetailType;
         if (!isMounted) return;
-        setProject(data);
+        setProject(normalizeProject(data));
       } catch (err) {
         if (!isMounted) return;
         setError(err instanceof Error ? err.message : "Failed to load project");
@@ -114,7 +122,7 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
         throw new Error(typeof data.error === "string" ? data.error : "Update failed");
       }
 
-      const updated = await res.json() as ProjectDetailType;
+      const updated = normalizeProject(await res.json() as ProjectDetailType);
       setProject((current) => current ? { ...current, ...updated } : current);
     } catch (err) {
       setProject(previous);

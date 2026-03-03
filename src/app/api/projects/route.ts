@@ -27,6 +27,16 @@ async function getNextPortfolioRank(
   return Number(value) + 1;
 }
 
+function withNormalizedProjectStage<T extends Record<string, unknown>>(project: T): T & { stage: string } {
+  const rest = { ...project } as T & { phase?: unknown };
+  delete rest.phase;
+  const normalizedStage = normalizeProjectStage(project.stage) ?? DEFAULT_PROJECT_STAGE;
+  return {
+    ...rest,
+    stage: normalizedStage,
+  };
+}
+
 // GET /api/projects - List projects
 export async function GET(request: NextRequest) {
   try {
@@ -56,7 +66,7 @@ export async function GET(request: NextRequest) {
     if (error) throw error;
 
     if (!withStats) {
-      return NextResponse.json(projects || []);
+      return NextResponse.json((projects || []).map((project) => withNormalizedProjectStage(project)));
     }
 
     // Enrich with open_task_count and implementation name
@@ -80,7 +90,7 @@ export async function GET(request: NextRequest) {
         }
 
         return {
-          ...project,
+          ...withNormalizedProjectStage(project),
           open_task_count: openTaskCount || 0,
           implementation,
         };
@@ -111,11 +121,8 @@ export async function POST(request: NextRequest) {
 
     const implementationId =
       typeof body.implementation_id === 'string' ? body.implementation_id : null;
-    const hasStageInput = Object.prototype.hasOwnProperty.call(body, 'stage')
-      || Object.prototype.hasOwnProperty.call(body, 'phase');
-    const normalizedStage = hasStageInput
-      ? normalizeProjectStage(Object.prototype.hasOwnProperty.call(body, 'stage') ? body.stage : body.phase)
-      : null;
+    const hasStageInput = Object.prototype.hasOwnProperty.call(body, 'stage');
+    const normalizedStage = hasStageInput ? normalizeProjectStage(body.stage) : null;
 
     // Validate implementation belongs to user if provided
     if (implementationId) {
@@ -160,7 +167,7 @@ export async function POST(request: NextRequest) {
 
     if (error) throw error;
 
-    return NextResponse.json(data, { status: 201 });
+    return NextResponse.json(withNormalizedProjectStage(data), { status: 201 });
   } catch (error) {
     console.error('Error creating project:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
