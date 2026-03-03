@@ -100,6 +100,30 @@ export function determineRagStatus(
   }
 }
 
+function calculateEstimationAccuracy(tasks: Task[]): number | null {
+  const completedWithActuals = tasks.filter(
+    (task) => task.status === 'Done' && typeof task.actual_minutes === 'number' && task.estimated_minutes > 0
+  );
+
+  if (completedWithActuals.length === 0) {
+    return null;
+  }
+
+  const { actualTotal, estimatedTotal } = completedWithActuals.reduce(
+    (totals, task) => ({
+      actualTotal: totals.actualTotal + (task.actual_minutes || 0),
+      estimatedTotal: totals.estimatedTotal + task.estimated_minutes,
+    }),
+    { actualTotal: 0, estimatedTotal: 0 }
+  );
+
+  if (estimatedTotal <= 0) {
+    return null;
+  }
+
+  return Math.round((actualTotal / estimatedTotal) * 100) / 100;
+}
+
 /**
  * Calculate full capacity result for Today view
  */
@@ -130,6 +154,7 @@ export function calculateCapacity(
   const availableMinutes = calculateAvailableMinutes(focusTaskCount, meetingMinutes, config);
   const requiredMinutes = calculateRequiredMinutes(tasks, topTaskIds);
   const rag = determineRagStatus(requiredMinutes, availableMinutes);
+  const estimationAccuracy = calculateEstimationAccuracy(tasks);
 
   return {
     available_minutes: availableMinutes,
@@ -141,6 +166,7 @@ export function calculateCapacity(
       daily_overhead_minutes: config.daily_overhead_minutes,
       buffer_minutes: bufferMinutes,
       meeting_minutes: meetingMinutes,
+      estimation_accuracy: estimationAccuracy,
     },
   };
 }
@@ -172,6 +198,9 @@ export function getCapacityBreakdown(result: CapacityResult): string[] {
     `Overhead: -${breakdown.daily_overhead_minutes} min`,
     `Buffers: -${breakdown.buffer_minutes} min`,
     breakdown.meeting_minutes > 0 ? `Meetings: -${breakdown.meeting_minutes} min` : null,
+    breakdown.estimation_accuracy !== null
+      ? `Estimate accuracy: ${breakdown.estimation_accuracy.toFixed(2)}x actual vs estimate`
+      : null,
     `= Available: ${available_minutes} min`,
     `Required: ${required_minutes} min`,
   ].filter(Boolean) as string[];

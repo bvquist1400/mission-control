@@ -234,6 +234,7 @@ function createMcpServer(): McpServer {
       status: z.enum(['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Done']).optional(),
       task_type: z.enum(['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build']).optional(),
       estimated_minutes: z.number().min(1).max(480).optional(),
+      actual_minutes: z.number().int().min(0).nullable().optional(),
       due_at: z.string().nullable().optional(),
       needs_review: z.boolean().optional(),
       blocker: z.boolean().optional(),

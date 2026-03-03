@@ -30,6 +30,7 @@ export interface Task {
   task_type: TaskType;
   priority_score: number;
   estimated_minutes: number;
+  actual_minutes: number | null;
   estimate_source: EstimateSource;
   due_at: string | null;
   needs_review: boolean;
@@ -129,6 +130,7 @@ export interface CapacityBreakdown {
   daily_overhead_minutes: number;
   buffer_minutes: number;
   meeting_minutes: number;
+  estimation_accuracy: number | null;
 }
 
 export interface CapacityResult {
@@ -146,8 +148,16 @@ export interface Stakeholder {
   role: string | null;
   organization: string | null;
   notes: string | null;
+  context: StakeholderContext;
   created_at: string;
   updated_at: string;
+}
+
+export interface StakeholderContext {
+  last_contacted_at: string | null;
+  preferred_contact: string | null;
+  current_priorities: string | null;
+  notes: string | null;
 }
 
 export interface Commitment {
@@ -220,6 +230,7 @@ export interface TaskUpdatePayload {
   status?: TaskStatus;
   task_type?: TaskType;
   estimated_minutes?: number;
+  actual_minutes?: number | null;
   estimate_source?: EstimateSource;
   due_at?: string | null;
   needs_review?: boolean;

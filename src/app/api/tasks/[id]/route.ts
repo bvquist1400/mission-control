@@ -81,6 +81,7 @@ export async function PATCH(
       'status',
       'task_type',
       'estimated_minutes',
+      'actual_minutes',
       'estimate_source',
       'due_at',
       'needs_review',
@@ -142,6 +143,20 @@ export async function PATCH(
           { error: `Invalid task_type. Must be one of: ${VALID_TASK_TYPES.join(', ')}` },
           { status: 400 }
         );
+      }
+    }
+
+    if ('actual_minutes' in updates) {
+      const actualMinutes = updates.actual_minutes;
+      if (
+        actualMinutes !== null &&
+        (typeof actualMinutes !== 'number' || !Number.isFinite(actualMinutes) || Math.round(actualMinutes) < 0)
+      ) {
+        return NextResponse.json({ error: 'actual_minutes must be a non-negative integer or null' }, { status: 400 });
+      }
+
+      if (typeof actualMinutes === 'number') {
+        updates.actual_minutes = Math.round(actualMinutes);
       }
     }
 

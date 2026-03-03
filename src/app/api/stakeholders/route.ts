@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
+import { normalizeStakeholderContext } from '@/lib/stakeholders';
 
 function asStringOrNull(value: unknown): string | null {
   if (typeof value !== 'string') return null;
@@ -43,7 +44,11 @@ export async function GET(request: NextRequest) {
           .eq('stakeholder_id', s.id)
           .eq('status', 'Open');
 
-        return { ...s, open_commitments_count: count || 0 };
+        return {
+          ...s,
+          context: normalizeStakeholderContext(s.context),
+          open_commitments_count: count || 0,
+        };
       })
     );
 
@@ -88,7 +93,13 @@ export async function POST(request: NextRequest) {
 
     if (error) throw error;
 
-    return NextResponse.json(data, { status: 201 });
+    return NextResponse.json(
+      {
+        ...data,
+        context: normalizeStakeholderContext(data.context),
+      },
+      { status: 201 }
+    );
   } catch (error) {
     console.error('Error creating stakeholder:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

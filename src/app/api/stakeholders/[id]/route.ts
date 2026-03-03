@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
+import { mergeStakeholderContext, normalizeStakeholderContext } from '@/lib/stakeholders';
 
 function asStringOrNull(value: unknown): string | null {
   if (typeof value !== 'string') return null;
@@ -38,7 +39,11 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       .order('status', { ascending: true })
       .order('due_at', { ascending: true, nullsFirst: false });
 
-    return NextResponse.json({ ...stakeholder, commitments: commitments || [] });
+    return NextResponse.json({
+      ...stakeholder,
+      context: normalizeStakeholderContext(stakeholder.context),
+      commitments: commitments || [],
+    });
   } catch (error) {
     console.error('Error fetching stakeholder:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
@@ -56,6 +61,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const { supabase, userId } = auth.context;
     const { id } = await params;
     const body = (await request.json()) as Record<string, unknown>;
+    let currentContext: unknown;
 
     const updates: Record<string, unknown> = {};
 
@@ -70,6 +76,26 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if ('role' in body) updates.role = asStringOrNull(body.role);
     if ('organization' in body) updates.organization = asStringOrNull(body.organization);
     if ('notes' in body) updates.notes = asStringOrNull(body.notes);
+
+    if ('context' in body) {
+      if (!body.context || typeof body.context !== 'object' || Array.isArray(body.context)) {
+        return NextResponse.json({ error: 'context must be an object' }, { status: 400 });
+      }
+
+      const { data: stakeholder, error: fetchError } = await supabase
+        .from('stakeholders')
+        .select('context')
+        .eq('id', id)
+        .eq('user_id', userId)
+        .single();
+
+      if (fetchError || !stakeholder) {
+        return NextResponse.json({ error: 'Stakeholder not found' }, { status: 404 });
+      }
+
+      currentContext = stakeholder.context;
+      updates.context = mergeStakeholderContext(currentContext, body.context as Record<string, unknown>);
+    }
 
     if (Object.keys(updates).length === 0) {
       return NextResponse.json({ error: 'No valid fields to update' }, { status: 400 });
@@ -88,7 +114,10 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       return NextResponse.json({ error: 'Stakeholder not found' }, { status: 404 });
     }
 
-    return NextResponse.json(data);
+    return NextResponse.json({
+      ...data,
+      context: normalizeStakeholderContext(data.context),
+    });
   } catch (error) {
     console.error('Error updating stakeholder:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
