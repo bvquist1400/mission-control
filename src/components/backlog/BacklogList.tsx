@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { useSprints } from "@/hooks/useSprints";
 import { TaskCreateForm } from "@/components/tasks/TaskCreateForm";
 import { TaskGrid, TaskGridLoadingSkeleton } from "@/components/tasks/TaskGrid";
 import type {
@@ -17,6 +18,7 @@ type StatusFilter = "All" | TaskStatus;
 type ReviewFilter = "All" | "Needs review" | "Ready";
 type ImplementationFilter = "All" | "Unassigned" | string;
 type ProjectFilter = "All" | "Unassigned" | string;
+type SprintFilter = "All" | "Unassigned" | string;
 
 const STATUS_FILTER_OPTIONS: StatusFilter[] = ["All", "Backlog", "Planned", "In Progress", "Blocked/Waiting", "Parked", "Done"];
 const REVIEW_FILTER_OPTIONS: ReviewFilter[] = ["All", "Needs review", "Ready"];
@@ -28,6 +30,18 @@ function reviewFilterFromParam(value: string | null): ReviewFilter {
 
   if (value === "ready") {
     return "Ready";
+  }
+
+  return "All";
+}
+
+function sprintFilterFromParam(value: string | null): SprintFilter {
+  if (value === "unassigned") {
+    return "Unassigned";
+  }
+
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value;
   }
 
   return "All";
@@ -118,6 +132,8 @@ export function BacklogList() {
   const searchParams = useSearchParams();
   const reviewParam = searchParams.get("review");
   const expandParam = searchParams.get("expand");
+  const sprintParam = searchParams.get("sprint");
+  const { sprints, loading: sprintsLoading } = useSprints();
 
   const [tasks, setTasks] = useState<TaskWithImplementation[]>([]);
   const [implementations, setImplementations] = useState<ImplementationSummary[]>([]);
@@ -131,11 +147,16 @@ export function BacklogList() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
   const [implementationFilter, setImplementationFilter] = useState<ImplementationFilter>("All");
   const [projectFilter, setProjectFilter] = useState<ProjectFilter>("All");
+  const [sprintFilter, setSprintFilter] = useState<SprintFilter>(() => sprintFilterFromParam(sprintParam));
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>(() => reviewFilterFromParam(reviewParam));
 
   useEffect(() => {
     setReviewFilter(reviewFilterFromParam(reviewParam));
   }, [reviewParam]);
+
+  useEffect(() => {
+    setSprintFilter(sprintFilterFromParam(sprintParam));
+  }, [sprintParam]);
 
   useEffect(() => {
     let isMounted = true;
@@ -252,6 +273,14 @@ export function BacklogList() {
         return false;
       }
 
+      if (sprintFilter === "Unassigned" && task.sprint_id !== null) {
+        return false;
+      }
+
+      if (sprintFilter !== "All" && sprintFilter !== "Unassigned" && task.sprint_id !== sprintFilter) {
+        return false;
+      }
+
       if (reviewFilter === "Needs review" && !task.needs_review) {
         return false;
       }
@@ -262,14 +291,19 @@ export function BacklogList() {
 
       return true;
     });
-  }, [implementationFilter, projectFilter, reviewFilter, searchQuery, statusFilter, tasks]);
+  }, [implementationFilter, projectFilter, reviewFilter, searchQuery, sprintFilter, statusFilter, tasks]);
 
   return (
     <div className="space-y-4">
-      <TaskCreateForm implementations={implementations} onTaskCreated={handleTaskCreated} defaultNeedsReview={false} />
+      <TaskCreateForm
+        implementations={implementations}
+        sprints={sprints}
+        onTaskCreated={handleTaskCreated}
+        defaultNeedsReview={false}
+      />
 
       <section className="rounded-card border border-stroke bg-panel p-4 shadow-sm">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
           <label className="space-y-1 xl:col-span-2">
             <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Search</span>
             <input
@@ -324,6 +358,24 @@ export function BacklogList() {
               {projects.map((project) => (
                 <option key={project.id} value={project.id}>
                   {project.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="space-y-1">
+            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Sprint</span>
+            <select
+              value={sprintFilter}
+              onChange={(event) => setSprintFilter(event.target.value as SprintFilter)}
+              className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
+            >
+              <option value="All">All</option>
+              <option value="Unassigned">Unassigned</option>
+              {sprintsLoading && sprints.length === 0 ? <option value="All">Loading...</option> : null}
+              {sprints.map((sprint) => (
+                <option key={sprint.id} value={sprint.id}>
+                  {sprint.name}
                 </option>
               ))}
             </select>

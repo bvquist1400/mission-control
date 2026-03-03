@@ -10,6 +10,7 @@ import {
   type Dispatch,
   type SetStateAction,
 } from "react";
+import { useSprints } from "@/hooks/useSprints";
 import { ChecklistSection } from "@/components/tasks/ChecklistSection";
 import { TaskComments } from "@/components/tasks/TaskComments";
 import { TaskDependencies } from "@/components/tasks/TaskDependencies";
@@ -139,6 +140,7 @@ export function TaskGrid({
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(initialExpandedTaskId);
   const [taskDetailsById, setTaskDetailsById] = useState<Record<string, TaskDetailData>>({});
   const [loadingDetailIds, setLoadingDetailIds] = useState<Record<string, boolean>>({});
+  const { sprints } = useSprints();
   const isMountedRef = useRef(true);
   const taskDetailsByIdRef = useRef(taskDetailsById);
   const activeDetailRequestIdsRef = useRef<Record<string, number>>({});
@@ -146,7 +148,8 @@ export function TaskGrid({
 
   const scopedTasks = visibleTasks ?? tasks;
   const showImplementationColumn = scopeMode === "global";
-  const columnCount = showImplementationColumn ? 10 : 9;
+  const showSprintColumn = true;
+  const columnCount = showImplementationColumn ? 11 : 10;
 
   useEffect(() => {
     setExpandedTaskId(initialExpandedTaskId ?? null);
@@ -529,11 +532,29 @@ export function TaskGrid({
               ? null
               : implementations.find((implementation) => implementation.id === updates.implementation_id) ?? task.implementation
             : task.implementation;
+        const matchedSprint =
+          "sprint_id" in updates && typeof updates.sprint_id === "string"
+            ? sprints.find((sprint) => sprint.id === updates.sprint_id) ?? null
+            : null;
+        const nextSprint =
+          "sprint_id" in updates
+            ? updates.sprint_id === null
+              ? null
+              : matchedSprint
+                ? {
+                    id: matchedSprint.id,
+                    name: matchedSprint.name,
+                    start_date: matchedSprint.start_date,
+                    end_date: matchedSprint.end_date,
+                  }
+                : task.sprint
+            : task.sprint;
 
         return {
           ...task,
           ...updates,
           implementation: nextImplementation,
+          sprint: nextSprint,
         };
       })
     );
@@ -719,7 +740,7 @@ export function TaskGrid({
           Scroll for more &rarr;
         </p>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1100px]">
+          <table className="w-full min-w-[1280px]">
             <thead className="border-b-2 border-stroke bg-panel-muted">
               <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground [&>th]:border-r [&>th]:border-solid [&>th]:border-stroke [&>th:last-child]:border-r-0">
                 <th className="w-10 px-2 py-3" />
@@ -745,6 +766,9 @@ export function TaskGrid({
                 </th>
                 {showImplementationColumn ? (
                   <th className="w-[160px] px-3 py-3">Application</th>
+                ) : null}
+                {showSprintColumn ? (
+                  <th className="w-[170px] px-3 py-3">Sprint</th>
                 ) : null}
                 <th className="w-[170px] px-3 py-3">Status</th>
                 <th className="w-[80px] px-3 py-3 text-center">
@@ -896,6 +920,26 @@ export function TaskGrid({
                             {implementations.map((implementation) => (
                               <option key={implementation.id} value={implementation.id}>
                                 {implementation.name}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                      ) : null}
+
+                      {showSprintColumn ? (
+                        <td className="w-[170px] px-3 py-2.5 align-middle">
+                          <select
+                            value={task.sprint_id ?? ""}
+                            onChange={(event) =>
+                              void updateTask(task.id, { sprint_id: event.target.value || null })
+                            }
+                            disabled={isSaving}
+                            className="w-full rounded border border-stroke bg-transparent px-1.5 py-1 text-xs text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            <option value="">—</option>
+                            {sprints.map((sprint) => (
+                              <option key={sprint.id} value={sprint.id}>
+                                {sprint.name}
                               </option>
                             ))}
                           </select>

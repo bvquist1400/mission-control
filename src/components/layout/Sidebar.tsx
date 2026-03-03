@@ -6,7 +6,9 @@ import { useState } from "react";
 
 const navItems = [
   { href: "/", label: "Today", hint: "Daily operating view" },
+  { href: "/weekly-review", label: "Weekly Review", hint: "Shipped work, drag, and next-week calls" },
   { href: "/backlog", label: "Backlog", hint: "All tasks with filters and edits" },
+  { href: "/sprints", label: "Sprints", hint: "Week-level planning and sprint snapshots" },
   { href: "/applications", label: "Applications", hint: "Portfolio health and updates" },
   { href: "/projects", label: "Projects", hint: "Track work within applications" },
   { href: "/stakeholders", label: "Stakeholders", hint: "People and commitments" },

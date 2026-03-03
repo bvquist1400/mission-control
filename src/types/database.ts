@@ -262,6 +262,7 @@ export interface LlmExtraction {
 export interface TaskWithImplementation extends Task {
   implementation: { id: string; name: string; phase?: ImplPhase; rag?: RagStatus } | null;
   project: { id: string; name: string; stage?: ProjectStage; rag?: RagStatus } | null;
+  sprint: { id: string; name: string; start_date: string; end_date: string } | null;
   dependencies?: TaskDependencySummary[];
   dependency_blocked?: boolean;
 }

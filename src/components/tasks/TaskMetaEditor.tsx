@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useSprints } from "@/hooks/useSprints";
 import type { TaskType, TaskUpdatePayload, TaskWithImplementation } from "@/types/database";
 
 export const TASK_TYPE_OPTIONS: Array<{ value: TaskType; label: string }> = [
@@ -19,22 +20,26 @@ interface TaskMetaEditorProps {
 }
 
 export function TaskMetaEditor({ task, isSaving, onUpdate }: TaskMetaEditorProps) {
+  const { sprints, loading: sprintsLoading } = useSprints();
   const [titleDraft, setTitleDraft] = useState(task.title);
   const [descriptionDraft, setDescriptionDraft] = useState(task.description ?? "");
   const [taskTypeDraft, setTaskTypeDraft] = useState<TaskType>(task.task_type);
   const [waitingOnDraft, setWaitingOnDraft] = useState(task.waiting_on ?? "");
+  const [sprintIdDraft, setSprintIdDraft] = useState(task.sprint_id ?? "");
 
   const normalizedTitle = titleDraft.trim();
   const normalizedDescription = descriptionDraft.trim();
   const normalizedWaitingOn = waitingOnDraft.trim();
   const nextWaitingOn = normalizedWaitingOn.length > 0 ? normalizedWaitingOn : null;
   const nextDescription = normalizedDescription.length > 0 ? normalizedDescription : null;
+  const nextSprintId = sprintIdDraft || null;
 
   const hasChanges =
     normalizedTitle !== task.title
     || taskTypeDraft !== task.task_type
     || nextWaitingOn !== task.waiting_on
-    || nextDescription !== task.description;
+    || nextDescription !== task.description
+    || nextSprintId !== task.sprint_id;
   const canSave = normalizedTitle.length > 0 && hasChanges && !isSaving;
 
   function saveEdits() {
@@ -54,6 +59,9 @@ export function TaskMetaEditor({ task, isSaving, onUpdate }: TaskMetaEditorProps
     }
     if (nextDescription !== task.description) {
       updates.description = nextDescription;
+    }
+    if (nextSprintId !== task.sprint_id) {
+      updates.sprint_id = nextSprintId;
     }
 
     if (Object.keys(updates).length > 0) {
@@ -75,7 +83,7 @@ export function TaskMetaEditor({ task, isSaving, onUpdate }: TaskMetaEditorProps
         </button>
       </div>
 
-      <div className="mt-3 grid gap-3 md:grid-cols-3">
+      <div className="mt-3 grid gap-3 md:grid-cols-4">
         <label className="space-y-1">
           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Title</span>
           <input
@@ -123,6 +131,23 @@ export function TaskMetaEditor({ task, isSaving, onUpdate }: TaskMetaEditorProps
             placeholder={task.status === "Blocked/Waiting" ? "Who or what is this waiting on?" : "Optional context"}
             className="w-full rounded border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
           />
+        </label>
+
+        <label className="space-y-1">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Sprint</span>
+          <select
+            value={sprintIdDraft}
+            onChange={(event) => setSprintIdDraft(event.target.value)}
+            disabled={isSaving}
+            className="w-full rounded border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <option value="">{sprintsLoading ? "Loading..." : "Unassigned"}</option>
+            {sprints.map((sprint) => (
+              <option key={sprint.id} value={sprint.id}>
+                {sprint.name}
+              </option>
+            ))}
+          </select>
         </label>
       </div>
 

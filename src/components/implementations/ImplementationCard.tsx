@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { formatDateOnly } from "@/components/utils/dates";
-import type { ImplPhase, RagStatus } from "@/types/database";
+import type { HealthLabel, HealthTrend, ImplPhase, RagStatus } from "@/types/database";
 import { PhaseBadge } from "@/components/ui/PhaseBadge";
 import { RagBadge } from "@/components/ui/RagBadge";
 
@@ -17,6 +17,10 @@ export interface ImplementationCardData {
   statusSummary: string;
   blockersCount: number;
   nextAction: string;
+  healthScore?: number | null;
+  healthLabel?: HealthLabel | null;
+  healthTrend?: HealthTrend;
+  healthSignals?: string[];
 }
 
 interface ImplementationCardProps {
@@ -25,6 +29,34 @@ interface ImplementationCardProps {
 }
 
 type CopyState = "idle" | "loading" | "copied" | "error";
+
+function healthTone(label: HealthLabel | null | undefined): string {
+  switch (label) {
+    case "Healthy":
+      return "text-emerald-400";
+    case "Watch":
+      return "text-amber-300";
+    case "At Risk":
+      return "text-orange-300";
+    case "Critical":
+      return "text-red-400";
+    default:
+      return "text-muted-foreground";
+  }
+}
+
+function trendLabel(trend: HealthTrend | undefined): string {
+  switch (trend) {
+    case "improving":
+      return "Improving";
+    case "degrading":
+      return "Degrading";
+    case "stable":
+      return "Stable";
+    default:
+      return "No baseline";
+  }
+}
 
 export function ImplementationCard({ implementation, onCopyUpdate }: ImplementationCardProps) {
   const [copyState, setCopyState] = useState<CopyState>("idle");
@@ -102,6 +134,18 @@ export function ImplementationCard({ implementation, onCopyUpdate }: Implementat
         <p className="text-muted-foreground">
           <span className="font-semibold text-foreground">Your next action:</span> {implementation.nextAction}
         </p>
+        {typeof implementation.healthScore === "number" ? (
+          <p className="text-muted-foreground">
+            <span className="font-semibold text-foreground">Execution health:</span>{" "}
+            <span className={healthTone(implementation.healthLabel)}>
+              {implementation.healthLabel || "Unknown"} ({implementation.healthScore})
+            </span>{" "}
+            · {trendLabel(implementation.healthTrend)}
+          </p>
+        ) : null}
+        {implementation.healthSignals && implementation.healthSignals.length > 0 ? (
+          <p className="text-xs text-muted-foreground">{implementation.healthSignals.slice(0, 2).join(" · ")}</p>
+        ) : null}
       </div>
 
       <div className="mt-5 flex items-center justify-between gap-3">

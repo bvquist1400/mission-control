@@ -71,7 +71,7 @@ export async function POST(
       .update(updates)
       .eq('id', id)
       .eq('user_id', userId)
-      .select('*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag)')
+      .select('*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag), sprint:sprints(id, name, start_date, end_date)')
       .single();
 
     if (updateError) {
@@ -126,7 +126,7 @@ export async function DELETE(
       .update({ recurrence: null })
       .eq('id', id)
       .eq('user_id', userId)
-      .select('*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag)')
+      .select('*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag), sprint:sprints(id, name, start_date, end_date)')
       .single();
 
     if (error) {

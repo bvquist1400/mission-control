@@ -70,6 +70,11 @@ export function TaskDetailModal({
                 {task.project.name}
               </span>
             )}
+            {task.sprint && (
+              <span className="rounded bg-panel-muted px-2 py-1 text-xs text-muted-foreground">
+                {task.sprint.name}
+              </span>
+            )}
             <div className="ml-auto flex items-center gap-2">
               {task.blocker && (
                 <span className="rounded bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">

@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { ImplementationCard, type ImplementationCardData } from "@/components/implementations/ImplementationCard";
 import { PhaseSelector } from "@/components/ui/PhaseSelector";
 import { RagSelector } from "@/components/ui/RagSelector";
-import type { ImplPhase, RagStatus } from "@/types/database";
+import type { ImplPhase, ImplementationHealthScore, RagStatus } from "@/types/database";
 
 interface ImplementationDraft {
   name: string;
@@ -46,7 +46,11 @@ interface ApplicationListItem extends ImplementationCardData {
   priorityWeight: number;
 }
 
-function apiToListItem(impl: ApiImplementation, fallbackRank: number): ApplicationListItem {
+function apiToListItem(
+  impl: ApiImplementation,
+  fallbackRank: number,
+  healthScore: ImplementationHealthScore | null
+): ApplicationListItem {
   const portfolioRank =
     typeof impl.portfolio_rank === "number" && Number.isFinite(impl.portfolio_rank)
       ? Math.max(1, Math.round(impl.portfolio_rank))
@@ -67,6 +71,10 @@ function apiToListItem(impl: ApiImplementation, fallbackRank: number): Applicati
     statusSummary: impl.status_summary || "No status summary available.",
     blockersCount: impl.blockers_count,
     nextAction: impl.next_action?.title || "No pending tasks",
+    healthScore: healthScore?.health_score ?? null,
+    healthLabel: healthScore?.health_label ?? null,
+    healthTrend: healthScore?.trend,
+    healthSignals: healthScore?.signals ?? [],
     portfolioRank,
     priorityWeight,
   };
@@ -138,7 +146,10 @@ function moveByOffset(
 }
 
 async function fetchImplementations(): Promise<ApplicationListItem[]> {
-  const response = await fetch("/api/applications?with_stats=true", { cache: "no-store" });
+  const [response, healthResponse] = await Promise.all([
+    fetch("/api/applications?with_stats=true", { cache: "no-store" }),
+    fetch("/api/applications/health-scores", { cache: "no-store" }),
+  ]);
 
   if (response.status === 401) {
     throw new Error("Authentication required. Sign in at /login.");
@@ -149,7 +160,14 @@ async function fetchImplementations(): Promise<ApplicationListItem[]> {
   }
 
   const data: ApiImplementation[] = await response.json();
-  const mapped = data.map((impl, index) => apiToListItem(impl, index + 1));
+  let healthById = new Map<string, ImplementationHealthScore>();
+
+  if (healthResponse.ok) {
+    const scores = (await healthResponse.json()) as ImplementationHealthScore[];
+    healthById = new Map(scores.map((score) => [score.id, score]));
+  }
+
+  const mapped = data.map((impl, index) => apiToListItem(impl, index + 1, healthById.get(impl.id) ?? null));
   return normalizeRankedList(mapped);
 }
 

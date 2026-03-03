@@ -133,7 +133,7 @@ export async function GET(request: NextRequest) {
     const [taskResult, commitmentResult, implementationResult] = await Promise.all([
       supabase
         .from('tasks')
-        .select('*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag)')
+        .select('*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag), sprint:sprints(id, name, start_date, end_date)')
         .eq('user_id', userId)
         .order('updated_at', { ascending: false }),
       supabase

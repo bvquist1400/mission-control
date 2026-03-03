@@ -7,6 +7,7 @@ import type {
   TaskComment,
   TaskDependencySummary,
   TaskUpdatePayload,
+  TaskWithImplementation,
 } from "@/types/database";
 
 interface UseTaskDetailOptions {
@@ -108,7 +109,8 @@ export function useTaskDetail({ taskId, onTaskUpdated }: UseTaskDetailOptions): 
           throw new Error(typeof data.error === "string" ? data.error : "Update failed");
         }
 
-        onTaskUpdated?.(taskId, updates);
+        const updatedTask = (await response.json()) as TaskWithImplementation;
+        onTaskUpdated?.(taskId, updatedTask as unknown as TaskUpdatePayload);
       } catch (err) {
         if (isMountedRef.current) {
           setError(err instanceof Error ? err.message : "Failed to update task");

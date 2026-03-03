@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
 
     let query = supabase
       .from('tasks')
-      .select('*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag)')
+      .select('*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag), sprint:sprints(id, name, start_date, end_date)')
       .eq('user_id', userId)
       .eq('status', 'Parked')
       .order('updated_at', { ascending: false })

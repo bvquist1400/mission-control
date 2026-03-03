@@ -5,6 +5,8 @@ import type { TaskStatus, TaskType } from '@/types/database';
 
 const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done'];
 const VALID_TASK_TYPES: TaskType[] = ['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build'];
+const TASK_SELECT =
+  '*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag), sprint:sprints(id, name, start_date, end_date)';
 
 function isValidStatus(value: string): value is TaskStatus {
   return VALID_STATUSES.includes(value as TaskStatus);
@@ -39,7 +41,7 @@ export async function GET(
 
     const { data, error } = await supabase
       .from('tasks')
-      .select('*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag)')
+      .select(TASK_SELECT)
       .eq('id', id)
       .eq('user_id', userId)
       .single();
@@ -239,7 +241,7 @@ export async function PATCH(
       .update(updates)
       .eq('id', id)
       .eq('user_id', userId)
-      .select('*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag)')
+      .select(TASK_SELECT)
       .single();
 
     if (error) {

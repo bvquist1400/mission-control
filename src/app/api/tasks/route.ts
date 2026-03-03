@@ -6,6 +6,8 @@ import type { TaskStatus, TaskType, EstimateSource } from '@/types/database';
 const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done'];
 const VALID_TASK_TYPES: TaskType[] = ['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build'];
 const VALID_ESTIMATE_SOURCES: EstimateSource[] = ['default', 'llm', 'manual'];
+const TASK_SELECT =
+  '*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag), sprint:sprints(id, name, start_date, end_date)';
 
 function isValidStatus(value: string): value is TaskStatus {
   return VALID_STATUSES.includes(value as TaskStatus);
@@ -54,6 +56,7 @@ export async function GET(request: NextRequest) {
     const needsReview = searchParams.get('needs_review');
     const status = searchParams.get('status');
     const implementationId = searchParams.get('implementation_id');
+    const sprintId = searchParams.get('sprint_id');
     const dueSoon = searchParams.get('due_soon');
     const includeDone = searchParams.get('include_done') === 'true';
     const includeParked = searchParams.get('include_parked') === 'true';
@@ -82,7 +85,7 @@ export async function GET(request: NextRequest) {
     if (view === 'top3') {
       const { data, error } = await supabase
         .from('tasks')
-        .select('*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag)')
+        .select(TASK_SELECT)
         .eq('user_id', userId)
         .in('status', ['Planned', 'In Progress'])
         .order('priority_score', { ascending: false })
@@ -119,7 +122,7 @@ export async function GET(request: NextRequest) {
 
       const { data, error } = await supabase
         .from('tasks')
-        .select('*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag)')
+        .select(TASK_SELECT)
         .eq('user_id', userId)
         .not('due_at', 'is', null)
         .lte('due_at', in48h.toISOString())
@@ -139,7 +142,7 @@ export async function GET(request: NextRequest) {
 
     let query = supabase
       .from('tasks')
-      .select('*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag)')
+      .select(TASK_SELECT)
       .eq('user_id', userId)
       .order('priority_score', { ascending: false })
       .order('id', { ascending: true })
@@ -155,6 +158,10 @@ export async function GET(request: NextRequest) {
 
     if (implementationId) {
       query = query.eq('implementation_id', implementationId);
+    }
+
+    if (sprintId) {
+      query = query.eq('sprint_id', sprintId);
     }
 
     const projectId = searchParams.get('project_id');
@@ -308,6 +315,20 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const sprintId = asStringOrNull(body.sprint_id);
+    if (sprintId) {
+      const { data: sprint, error: sprintError } = await supabase
+        .from('sprints')
+        .select('id')
+        .eq('id', sprintId)
+        .eq('user_id', userId)
+        .single();
+
+      if (sprintError || !sprint) {
+        return NextResponse.json({ error: 'sprint_id is invalid' }, { status: 400 });
+      }
+    }
+
     // Validate blocked_by_task_id if provided (for creating with dependency)
     const blockedByTaskId = asStringOrNull(body.blocked_by_task_id);
     if (blockedByTaskId) {
@@ -331,6 +352,7 @@ export async function POST(request: NextRequest) {
         description: asStringOrNull(body.description),
         implementation_id: implementationId,
         project_id: projectId,
+        sprint_id: sprintId,
         status,
         task_type: taskType,
         priority_score: priorityScore,
@@ -345,7 +367,7 @@ export async function POST(request: NextRequest) {
         source_url: asStringOrNull(body.source_url),
         pinned_excerpt: asStringOrNull(body.pinned_excerpt),
       })
-      .select('*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag)')
+      .select(TASK_SELECT)
       .single();
 
     if (error) {

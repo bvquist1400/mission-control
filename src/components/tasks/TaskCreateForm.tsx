@@ -3,10 +3,18 @@
 import { useState, useCallback, useEffect } from "react";
 import { EstimateButtons } from "@/components/ui/EstimateButtons";
 import { localDateInputToEndOfDayIso } from "@/components/utils/dates";
-import type { ImplementationSummary, LlmExtraction, TaskStatus, TaskType, TaskWithImplementation } from "@/types/database";
+import type {
+  ImplementationSummary,
+  LlmExtraction,
+  SprintWithImplementation,
+  TaskStatus,
+  TaskType,
+  TaskWithImplementation,
+} from "@/types/database";
 
 interface TaskCreateFormProps {
   implementations: ImplementationSummary[];
+  sprints?: SprintWithImplementation[];
   onTaskCreated?: (task: TaskWithImplementation) => void;
   defaultNeedsReview?: boolean;
 }
@@ -15,6 +23,7 @@ interface TaskDraft {
   title: string;
   description: string;
   implementationId: string;
+  sprintId: string;
   estimatedMinutes: number;
   dueDate: string;
   status: TaskStatus;
@@ -37,6 +46,7 @@ interface QuickCaptureDraft {
   title: string;
   description: string;
   implementationId: string;
+  sprintId: string;
   estimatedMinutes: number;
   dueDate: string;
   status: TaskStatus;
@@ -71,6 +81,7 @@ function createInitialDraft(defaultNeedsReview: boolean, implementations: Implem
     title: "",
     description: "",
     implementationId: findAdminImplId(implementations),
+    sprintId: "",
     estimatedMinutes: 30,
     dueDate: "",
     status: "Backlog",
@@ -87,6 +98,7 @@ function createInitialQcDraft(): QuickCaptureDraft {
     title: "",
     description: "",
     implementationId: "",
+    sprintId: "",
     estimatedMinutes: 30,
     dueDate: "",
     status: "Backlog",
@@ -185,7 +197,12 @@ const inputClass = "w-full rounded-lg border border-stroke bg-panel px-3 py-2 te
 const selectClass = "w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60";
 const labelClass = "text-xs font-semibold uppercase tracking-wide text-muted-foreground";
 
-export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsReview = false }: TaskCreateFormProps) {
+export function TaskCreateForm({
+  implementations,
+  sprints = [],
+  onTaskCreated,
+  defaultNeedsReview = false,
+}: TaskCreateFormProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -220,6 +237,7 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
           title,
           description: draft.description.trim() || null,
           implementation_id: draft.implementationId || null,
+          sprint_id: draft.sprintId || null,
           estimated_minutes: draft.estimatedMinutes,
           estimate_source: "manual",
           due_at: draft.dueDate ? localDateInputToEndOfDayIso(draft.dueDate) : null,
@@ -340,6 +358,7 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
     try {
       const basePayload = {
         implementation_id: qcDraft.implementationId || null,
+        sprint_id: qcDraft.sprintId || null,
         estimated_minutes: qcDraft.estimatedMinutes,
         estimate_source: "llm",
         due_at: qcDraft.dueDate ? localDateInputToEndOfDayIso(qcDraft.dueDate) : null,
@@ -498,7 +517,7 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
                 />
               </label>
 
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
                 <label className="space-y-1">
                   <span className={labelClass}>Application</span>
                   <select
@@ -511,6 +530,23 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
                     {implementations.map((implementation) => (
                       <option key={implementation.id} value={implementation.id}>
                         {implementation.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="space-y-1">
+                  <span className={labelClass}>Sprint</span>
+                  <select
+                    value={draft.sprintId}
+                    onChange={(event) => setDraft((current) => ({ ...current, sprintId: event.target.value }))}
+                    disabled={isCreating}
+                    className={selectClass}
+                  >
+                    <option value="">Unassigned</option>
+                    {sprints.map((sprint) => (
+                      <option key={sprint.id} value={sprint.id}>
+                        {sprint.name}
                       </option>
                     ))}
                   </select>
@@ -798,7 +834,7 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
                     </div>
                   )}
 
-                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
                     <label className="space-y-1">
                       <span className={labelClass}>Application</span>
                       <select
@@ -810,6 +846,23 @@ export function TaskCreateForm({ implementations, onTaskCreated, defaultNeedsRev
                         <option value="">Unassigned</option>
                         {implementations.map((impl) => (
                           <option key={impl.id} value={impl.id}>{impl.name}</option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="space-y-1">
+                      <span className={labelClass}>Sprint</span>
+                      <select
+                        value={qcDraft.sprintId}
+                        onChange={(e) => setQcDraft((c) => ({ ...c, sprintId: e.target.value }))}
+                        disabled={isCreating}
+                        className={selectClass}
+                      >
+                        <option value="">Unassigned</option>
+                        {sprints.map((sprint) => (
+                          <option key={sprint.id} value={sprint.id}>
+                            {sprint.name}
+                          </option>
                         ))}
                       </select>
                     </label>
