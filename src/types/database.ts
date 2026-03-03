@@ -5,6 +5,7 @@ export type CommitmentStatus = "Open" | "Done" | "Dropped";
 export type CommitmentDirection = "ours" | "theirs";
 export type TaskDependencyType = "task" | "commitment";
 export type TaskDependencyStatus = TaskStatus | CommitmentStatus;
+export type RiskLevel = "green" | "yellow" | "red";
 export type ImplPhase =
   | "Intake"
   | "Discovery"

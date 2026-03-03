@@ -11,6 +11,17 @@ import {
   type BusyStats,
 } from "@/lib/calendar";
 import {
+  buildColdCommitments,
+  buildRiskRadar,
+  buildTomorrowContext,
+  type IntelligenceCommitment,
+  type IntelligenceImplementation,
+  type IntelligenceRiskTask,
+  type IntelligenceStakeholder,
+  type IntelligenceTomorrowTask,
+  normalizeCommitmentRows,
+} from "@/lib/briefing/intelligence";
+import {
   BriefingMode,
   detectBriefingMode,
   formatETTime,
@@ -166,6 +177,62 @@ async function fetchTasks(supabase: SupabaseClient, userId: string): Promise<Tas
   return (data || []) as TaskWithImplementation[];
 }
 
+async function fetchImplementations(
+  supabase: SupabaseClient,
+  userId: string
+): Promise<IntelligenceImplementation[]> {
+  const { data, error } = await supabase
+    .from("implementations")
+    .select("id, name, keywords")
+    .eq("user_id", userId)
+    .order("name", { ascending: true });
+
+  if (error) {
+    console.error("Implementations fetch error:", error);
+    return [];
+  }
+
+  return (data || []) as IntelligenceImplementation[];
+}
+
+async function fetchOpenCommitments(
+  supabase: SupabaseClient,
+  userId: string
+): Promise<IntelligenceCommitment[]> {
+  const { data, error } = await supabase
+    .from("commitments")
+    .select(
+      "id, title, direction, status, due_at, created_at, stakeholder:stakeholders(id, name), task:tasks(id, title, status, implementation_id)"
+    )
+    .eq("user_id", userId)
+    .eq("status", "Open");
+
+  if (error) {
+    console.error("Commitments fetch error:", error);
+    return [];
+  }
+
+  return normalizeCommitmentRows((data || []) as unknown[]);
+}
+
+async function fetchStakeholders(
+  supabase: SupabaseClient,
+  userId: string
+): Promise<IntelligenceStakeholder[]> {
+  const { data, error } = await supabase
+    .from("stakeholders")
+    .select("id, name")
+    .eq("user_id", userId)
+    .order("name", { ascending: true });
+
+  if (error) {
+    console.error("Stakeholders fetch error:", error);
+    return [];
+  }
+
+  return (data || []) as IntelligenceStakeholder[];
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -185,17 +252,20 @@ export async function GET(request: NextRequest) {
     const autoDetectedMode = detectBriefingMode(now);
     const mode: BriefingMode = modeParam === "auto" ? autoDetectedMode : (modeParam as BriefingMode);
 
-    // Fetch calendar data for today
-    const todayCalendar = await fetchCalendarData(supabase, userId, todayET, todayET);
+    const [todayCalendar, allTasks, implementations, openCommitments, stakeholders] = await Promise.all([
+      fetchCalendarData(supabase, userId, todayET, todayET),
+      fetchTasks(supabase, userId),
+      fetchImplementations(supabase, userId),
+      fetchOpenCommitments(supabase, userId),
+      fetchStakeholders(supabase, userId),
+    ]);
 
-    // Calculate focus blocks for today
     const todayRange = normalizeRequestedRange(todayET, todayET);
     const todayWindows = buildDayWindows(todayRange, DEFAULT_WORKDAY_CONFIG);
     const nowMs = mode === "morning" ? undefined : now.getTime();
     const focusBlocks = calculateFocusBlocks(todayCalendar.busyBlocks, todayWindows.windows, nowMs);
-
-    // Fetch all tasks
-    const allTasks = await fetchTasks(supabase, userId);
+    const coldCommitments = buildColdCommitments(openCommitments, now);
+    const riskRadar = buildRiskRadar(implementations, allTasks as IntelligenceRiskTask[], openCommitments, now);
 
     // Calculate today's task breakdown
     const todayStart = `${todayET}T00:00:00`;
@@ -264,6 +334,10 @@ export async function GET(request: NextRequest) {
       autoDetectedMode,
       currentTimeET,
       today: todayData,
+      commitments: {
+        cold_commitments: coldCommitments,
+      },
+      risk_radar: riskRadar,
     };
 
     // Add tomorrow data for EOD mode
@@ -295,6 +369,13 @@ export async function GET(request: NextRequest) {
         new Set(),
         tomorrowCalendar.stats.busyMinutes
       );
+      const tomorrowContext = buildTomorrowContext(
+        tomorrowCalendar.events,
+        allTasks as IntelligenceTomorrowTask[],
+        openCommitments,
+        stakeholders,
+        implementations
+      );
 
       response.tomorrow = {
         date: tomorrowET,
@@ -305,6 +386,7 @@ export async function GET(request: NextRequest) {
         },
         prepTasks,
         rolledOver,
+        tomorrow_context: tomorrowContext,
         estimatedCapacity: tomorrowCapacity,
       };
     }

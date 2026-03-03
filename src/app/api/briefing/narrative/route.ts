@@ -126,6 +126,13 @@ function buildMorningContext(briefing: BriefingResponse) {
       requiredMinutes: briefing.today.capacity.required_minutes,
       availableMinutes: briefing.today.capacity.available_minutes,
     },
+    riskRadar: briefing.risk_radar
+      .filter((item) => item.risk_level !== "green")
+      .slice(0, 4)
+      .map((item) => `${item.implementation_name}: ${item.risk_level} (${item.signals.join(", ")})`),
+    coldCommitments: briefing.commitments.cold_commitments
+      .slice(0, 4)
+      .map((item) => `${item.stakeholder_name}: ${item.title} (${item.days_open} days open)`),
   };
 }
 
@@ -143,6 +150,13 @@ function buildMiddayContext(briefing: BriefingResponse) {
       .filter((task) => task.blocker || (task.waiting_on && task.waiting_on.trim().length > 0))
       .slice(0, 4)
       .map((task) => `${task.title}: ${summarizeRollReason(task)}`),
+    riskRadar: briefing.risk_radar
+      .filter((item) => item.risk_level !== "green")
+      .slice(0, 4)
+      .map((item) => `${item.implementation_name}: ${item.risk_level} (${item.signals.join(", ")})`),
+    coldCommitments: briefing.commitments.cold_commitments
+      .slice(0, 4)
+      .map((item) => `${item.stakeholder_name}: ${item.title} (${item.days_open} days open)`),
   };
 }
 
@@ -172,8 +186,20 @@ function buildEodContext(briefing: BriefingResponse) {
                 reason: briefing.tomorrow.prepTasks[0].reason,
               }
             : null,
+          tomorrowContext: briefing.tomorrow.tomorrow_context.slice(0, 4).map((item) => ({
+            event: `${item.event_title} at ${item.event_time}`,
+            relatedTasks: item.related_tasks.slice(0, 3).map((task) => task.title),
+            openCommitments: item.open_commitments.slice(0, 3).map((commitment) => commitment.title),
+          })),
         }
       : null,
+    coldCommitments: briefing.commitments.cold_commitments
+      .slice(0, 5)
+      .map((item) => `${item.stakeholder_name}: ${item.title} (${item.days_open} days open)`),
+    riskRadar: briefing.risk_radar
+      .filter((item) => item.risk_level !== "green")
+      .slice(0, 4)
+      .map((item) => `${item.implementation_name}: ${item.risk_level} (${item.signals.join(", ")})`),
   };
 }
 

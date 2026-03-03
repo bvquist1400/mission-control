@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import {
+  buildRiskRadar,
+  type IntelligenceImplementation,
+  type IntelligenceRiskTask,
+  normalizeCommitmentRows,
+} from '@/lib/briefing/intelligence';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 
 function toStringArray(value: unknown): string[] {
@@ -100,33 +106,66 @@ export async function GET(request: NextRequest) {
     const implementations = await listImplementationsOrdered(supabase, userId);
 
     if (withStats) {
-      const enriched = await Promise.all(
-        (implementations || []).map(async (impl) => {
-          const { count: blockersCount } = await supabase
-            .from('tasks')
-            .select('*', { count: 'exact', head: true })
-            .eq('user_id', userId)
-            .eq('implementation_id', impl.id)
-            .eq('blocker', true)
-            .neq('status', 'Done');
+      const [taskResult, commitmentResult] = await Promise.all([
+        supabase
+          .from('tasks')
+          .select('id, title, implementation_id, status, blocker, created_at, updated_at, priority_score')
+          .eq('user_id', userId)
+          .order('priority_score', { ascending: false })
+          .order('id', { ascending: true }),
+        supabase
+          .from('commitments')
+          .select('id, title, direction, status, due_at, created_at, stakeholder:stakeholders(id, name), task:tasks(id, title, status, implementation_id)')
+          .eq('user_id', userId)
+          .eq('status', 'Open'),
+      ]);
 
-          const { data: nextAction } = await supabase
-            .from('tasks')
-            .select('id, title')
-            .eq('user_id', userId)
-            .eq('implementation_id', impl.id)
-            .neq('status', 'Done')
-            .order('priority_score', { ascending: false })
-            .limit(1)
-            .single();
+      if (taskResult.error) {
+        throw taskResult.error;
+      }
 
-          return {
-            ...impl,
-            blockers_count: blockersCount || 0,
-            next_action: nextAction || null,
-          };
-        })
+      if (commitmentResult.error) {
+        throw commitmentResult.error;
+      }
+
+      const taskRows = (taskResult.data || []) as Array<IntelligenceRiskTask & { priority_score: number }>;
+      const commitmentRows = normalizeCommitmentRows((commitmentResult.data || []) as unknown[]);
+      const implementationRows = implementations as Array<IntelligenceImplementation & Record<string, unknown>>;
+      const riskMap = new Map(
+        buildRiskRadar(implementationRows, taskRows, commitmentRows, new Date()).map((item) => [item.implementation_id, item])
       );
+
+      const blockersByImplementation = new Map<string, number>();
+      const nextActionByImplementation = new Map<string, { id: string; title: string }>();
+
+      for (const task of taskRows) {
+        if (!task.implementation_id || task.status === 'Done') {
+          continue;
+        }
+
+        if (task.blocker) {
+          blockersByImplementation.set(
+            task.implementation_id,
+            (blockersByImplementation.get(task.implementation_id) || 0) + 1
+          );
+        }
+
+        if (!nextActionByImplementation.has(task.implementation_id)) {
+          nextActionByImplementation.set(task.implementation_id, { id: task.id, title: task.title });
+        }
+      }
+
+      const enriched = implementationRows.map((impl) => {
+        const risk = riskMap.get(impl.id);
+        return {
+          ...impl,
+          blockers_count: blockersByImplementation.get(impl.id) || 0,
+          next_action: nextActionByImplementation.get(impl.id) || null,
+          risk_level: risk?.risk_level || 'green',
+          risk_score: risk?.risk_score || 0,
+          risk_signals: risk?.signals || [],
+        };
+      });
 
       return NextResponse.json(enriched);
     }

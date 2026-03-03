@@ -1,5 +1,5 @@
 import type { ApiCalendarEvent, BusyBlock, BusyStats } from "@/lib/calendar";
-import type { CapacityResult } from "@/types/database";
+import type { CapacityResult, CommitmentDirection, RiskLevel } from "@/types/database";
 import type { BriefingMode } from "./time-detection";
 import type { FocusBlock } from "./focus-blocks";
 import type { PrepTask, TaskSummary } from "./prep-tasks";
@@ -26,6 +26,40 @@ export interface BriefingProgress {
   percentComplete: number;
 }
 
+export interface BriefingColdCommitment {
+  stakeholder_name: string;
+  title: string;
+  days_open: number;
+  due_at: string | null;
+}
+
+export interface BriefingCommitmentData {
+  cold_commitments: BriefingColdCommitment[];
+}
+
+export interface BriefingRiskRadarItem {
+  implementation_id: string;
+  implementation_name: string;
+  risk_level: RiskLevel;
+  risk_score: number;
+  signals: string[];
+}
+
+export interface BriefingTomorrowCommitmentItem {
+  id: string;
+  title: string;
+  direction: CommitmentDirection;
+  due_at: string | null;
+  stakeholder_name: string;
+}
+
+export interface BriefingTomorrowContextItem {
+  event_title: string;
+  event_time: string;
+  related_tasks: TaskSummary[];
+  open_commitments: BriefingTomorrowCommitmentItem[];
+}
+
 export interface TodayBriefingData {
   calendar: BriefingCalendarData;
   tasks: BriefingTaskData;
@@ -38,6 +72,7 @@ export interface TomorrowBriefingData {
   calendar: Omit<BriefingCalendarData, "focusBlocks">;
   prepTasks: PrepTask[];
   rolledOver: TaskSummary[];
+  tomorrow_context: BriefingTomorrowContextItem[];
   estimatedCapacity: CapacityResult;
 }
 
@@ -47,6 +82,8 @@ export interface BriefingResponse {
   autoDetectedMode: BriefingMode;
   currentTimeET: string;
   today: TodayBriefingData;
+  commitments: BriefingCommitmentData;
+  risk_radar: BriefingRiskRadarItem[];
   tomorrow?: TomorrowBriefingData;
 }
 
