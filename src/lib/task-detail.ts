@@ -6,11 +6,12 @@ export interface TaskDetailData {
   dependencies: TaskDependencySummary[];
 }
 
-export async function fetchTaskDetails(taskId: string): Promise<TaskDetailData> {
+export async function fetchTaskDetails(taskId: string, signal?: AbortSignal): Promise<TaskDetailData> {
+  const requestInit: RequestInit = { cache: "no-store", signal };
   const [commentsRes, checklistRes, dependenciesRes] = await Promise.all([
-    fetch(`/api/tasks/${taskId}/comments`, { cache: "no-store" }),
-    fetch(`/api/tasks/${taskId}/checklist`, { cache: "no-store" }),
-    fetch(`/api/tasks/${taskId}/dependencies`, { cache: "no-store" }),
+    fetch(`/api/tasks/${taskId}/comments`, requestInit),
+    fetch(`/api/tasks/${taskId}/checklist`, requestInit),
+    fetch(`/api/tasks/${taskId}/dependencies`, requestInit),
   ]);
 
   const comments = commentsRes.ok ? await commentsRes.json() : [];

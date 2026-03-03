@@ -5,6 +5,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type Dispatch,
   type SetStateAction,
@@ -138,6 +139,10 @@ export function TaskGrid({
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(initialExpandedTaskId);
   const [taskDetailsById, setTaskDetailsById] = useState<Record<string, TaskDetailData>>({});
   const [loadingDetailIds, setLoadingDetailIds] = useState<Record<string, boolean>>({});
+  const isMountedRef = useRef(true);
+  const taskDetailsByIdRef = useRef(taskDetailsById);
+  const activeDetailRequestIdsRef = useRef<Record<string, number>>({});
+  const detailRequestCounterRef = useRef(0);
 
   const scopedTasks = visibleTasks ?? tasks;
   const showImplementationColumn = scopeMode === "global";
@@ -146,6 +151,17 @@ export function TaskGrid({
   useEffect(() => {
     setExpandedTaskId(initialExpandedTaskId ?? null);
   }, [initialExpandedTaskId]);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    taskDetailsByIdRef.current = taskDetailsById;
+  }, [taskDetailsById]);
 
   useEffect(() => {
     if (!expandedTaskId) {
@@ -160,47 +176,72 @@ export function TaskGrid({
   }, [expandedTaskId, tasks]);
 
   useEffect(() => {
-    if (!expandedTaskId || taskDetailsById[expandedTaskId] || loadingDetailIds[expandedTaskId]) {
+    if (!expandedTaskId || taskDetailsByIdRef.current[expandedTaskId]) {
       return;
     }
 
-    let isMounted = true;
-    setLoadingDetailIds((current) => ({ ...current, [expandedTaskId]: true }));
+    const taskId = expandedTaskId;
+    const controller = new AbortController();
+    const requestId = detailRequestCounterRef.current + 1;
+    detailRequestCounterRef.current = requestId;
+    activeDetailRequestIdsRef.current = { ...activeDetailRequestIdsRef.current, [taskId]: requestId };
+    setLoadingDetailIds((current) => {
+      if (current[taskId]) {
+        return current;
+      }
 
-    void fetchTaskDetails(expandedTaskId)
+      return { ...current, [taskId]: true };
+    });
+
+    void fetchTaskDetails(taskId, controller.signal)
       .then((details) => {
-        if (!isMounted) {
+        if (
+          controller.signal.aborted ||
+          !isMountedRef.current ||
+          activeDetailRequestIdsRef.current[taskId] !== requestId
+        ) {
           return;
         }
 
-        setTaskDetailsById((current) => ({ ...current, [expandedTaskId]: details }));
+        setTaskDetailsById((current) => ({ ...current, [taskId]: details }));
       })
       .catch(() => {
-        if (!isMounted) {
+        if (
+          controller.signal.aborted ||
+          !isMountedRef.current ||
+          activeDetailRequestIdsRef.current[taskId] !== requestId
+        ) {
           return;
         }
 
         setTaskDetailsById((current) => ({
           ...current,
-          [expandedTaskId]: { comments: [], checklist: [], dependencies: [] },
+          [taskId]: { comments: [], checklist: [], dependencies: [] },
         }));
       })
       .finally(() => {
-        if (!isMounted) {
+        if (!isMountedRef.current || activeDetailRequestIdsRef.current[taskId] !== requestId) {
           return;
         }
 
+        const nextRequests = { ...activeDetailRequestIdsRef.current };
+        delete nextRequests[taskId];
+        activeDetailRequestIdsRef.current = nextRequests;
         setLoadingDetailIds((current) => {
+          if (!current[taskId]) {
+            return current;
+          }
+
           const next = { ...current };
-          delete next[expandedTaskId];
+          delete next[taskId];
           return next;
         });
       });
 
     return () => {
-      isMounted = false;
+      controller.abort();
     };
-  }, [expandedTaskId, loadingDetailIds, taskDetailsById]);
+  }, [expandedTaskId]);
 
   useEffect(() => {
     if (!expandedTaskId) {

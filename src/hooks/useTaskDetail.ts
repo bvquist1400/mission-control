@@ -55,6 +55,7 @@ export function useTaskDetail({ taskId, onTaskUpdated }: UseTaskDetailOptions): 
   // Fetch details when taskId changes
   useEffect(() => {
     if (!taskId) {
+      setLoading(false);
       setComments([]);
       setChecklist([]);
       setDependencies([]);
@@ -63,10 +64,11 @@ export function useTaskDetail({ taskId, onTaskUpdated }: UseTaskDetailOptions): 
     }
 
     let active = true;
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
 
-    fetchTaskDetails(taskId)
+    fetchTaskDetails(taskId, controller.signal)
       .then((data) => {
         if (!active) return;
         setComments(data.comments);
@@ -74,6 +76,7 @@ export function useTaskDetail({ taskId, onTaskUpdated }: UseTaskDetailOptions): 
         setDependencies(data.dependencies);
       })
       .catch(() => {
+        if (controller.signal.aborted) return;
         if (!active) return;
         setError("Failed to load task details");
       })
@@ -83,6 +86,7 @@ export function useTaskDetail({ taskId, onTaskUpdated }: UseTaskDetailOptions): 
 
     return () => {
       active = false;
+      controller.abort();
     };
   }, [taskId]);
 
