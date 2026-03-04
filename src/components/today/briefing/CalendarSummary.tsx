@@ -56,7 +56,7 @@ export function CalendarSummary({
             className="flex items-start gap-3"
           >
             <span className="w-24 flex-shrink-0 text-xs font-medium text-muted-foreground">
-              {formatEventTime(event.start_at)}
+              {event.start_time_et ?? formatEventTime(event.start_at)}
             </span>
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium text-foreground">

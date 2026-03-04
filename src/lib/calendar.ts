@@ -61,7 +61,14 @@ export interface ApiCalendarEvent {
   is_all_day: boolean;
   external_event_id: string;
   meeting_context?: string | null;
+  date_et?: string;
+  start_time_et?: string;
+  end_time_et?: string;
+  time_range_et?: string;
+  temporal_status?: CalendarTemporalStatus;
 }
+
+export type CalendarTemporalStatus = 'past' | 'in_progress' | 'upcoming';
 
 export interface BusyBlock {
   start_at: string;
@@ -117,6 +124,71 @@ export interface CalendarIngestResult {
   source: CalendarSource;
   ingestedCount: number;
   warnings: string[];
+}
+
+function formatCalendarEventTimeLabel(iso: string, timeZone = DEFAULT_WORKDAY_CONFIG.timezone): string {
+  return new Date(iso).toLocaleTimeString('en-US', {
+    timeZone,
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+}
+
+function formatCalendarEventDateLabel(iso: string, timeZone = DEFAULT_WORKDAY_CONFIG.timezone): string {
+  return new Date(iso).toLocaleDateString('en-CA', { timeZone });
+}
+
+export function getCalendarEventTemporalStatus(
+  startIso: string,
+  endIso: string,
+  now: Date = new Date()
+): CalendarTemporalStatus {
+  const nowMs = now.getTime();
+  const startMs = new Date(startIso).getTime();
+  const endMs = new Date(endIso).getTime();
+
+  if (Number.isFinite(endMs) && nowMs >= endMs) {
+    return 'past';
+  }
+
+  if (Number.isFinite(startMs) && nowMs >= startMs) {
+    return 'in_progress';
+  }
+
+  return 'upcoming';
+}
+
+export function decorateCalendarEvent(
+  event: ApiCalendarEvent,
+  timeZone = DEFAULT_WORKDAY_CONFIG.timezone,
+  now: Date = new Date()
+): ApiCalendarEvent {
+  const dateEt = formatCalendarEventDateLabel(event.start_at, timeZone);
+  const temporalStatus = getCalendarEventTemporalStatus(event.start_at, event.end_at, now);
+
+  if (event.is_all_day) {
+    return {
+      ...event,
+      date_et: dateEt,
+      start_time_et: 'All day',
+      end_time_et: 'All day',
+      time_range_et: 'All day',
+      temporal_status: temporalStatus,
+    };
+  }
+
+  const startTimeEt = `${formatCalendarEventTimeLabel(event.start_at, timeZone)} ET`;
+  const endTimeEt = `${formatCalendarEventTimeLabel(event.end_at, timeZone)} ET`;
+
+  return {
+    ...event,
+    date_et: dateEt,
+    start_time_et: startTimeEt,
+    end_time_et: endTimeEt,
+    time_range_et: `${startTimeEt.replace(/ ET$/, '')} - ${endTimeEt}`,
+    temporal_status: temporalStatus,
+  };
 }
 
 interface ParsedIcsProperty {

@@ -3,6 +3,7 @@ import {
   buildDayWindows,
   buildSnapshotPayload,
   calculateBusyStats,
+  decorateCalendarEvent,
   computeDeltas,
   enforceCalendarRetention,
   ingestCalendarEvents,
@@ -123,7 +124,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Allowed fields contract: never return raw body, URLs, emails, or provider-only sensitive fields.
-    const events = calendarRows.map((row) => ({
+    const events = calendarRows.map((row) => decorateCalendarEvent({
       start_at: row.start_at,
       end_at: row.end_at,
       title: row.title,

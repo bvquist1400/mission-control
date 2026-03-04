@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { withCorsHeaders } from "@/lib/cors";
+import { requireMissionControlApiKeyRoute } from "@/lib/supabase/route-auth";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
 
 interface SyncTodayBody {
@@ -81,13 +82,12 @@ export async function OPTIONS(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const providedApiKey = request.headers.get("x-mission-control-key");
-  const validApiKey = process.env.MISSION_CONTROL_API_KEY;
-  const apiUserId = process.env.MISSION_CONTROL_USER_ID;
-
-  if (!providedApiKey || !validApiKey || providedApiKey !== validApiKey) {
-    return corsJson(request, { error: "Unauthorized" }, { status: 401 });
+  const auth = await requireMissionControlApiKeyRoute(request);
+  if (auth.response || !auth.context) {
+    return auth.response as NextResponse;
   }
+
+  const apiUserId = auth.context.userId;
 
   if (!apiUserId) {
     return corsJson(

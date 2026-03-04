@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   buildDayWindows,
   calculateBusyStats,
+  decorateCalendarEvent,
   mergeBusyBlocks,
   normalizeRequestedRange,
   parseEventPeople,
@@ -146,7 +147,7 @@ async function fetchCalendarData(
     }
   }
 
-  const events: ApiCalendarEvent[] = calendarRows.map((row) => ({
+  const events: ApiCalendarEvent[] = calendarRows.map((row) => decorateCalendarEvent({
     start_at: row.start_at,
     end_at: row.end_at,
     title: row.title,

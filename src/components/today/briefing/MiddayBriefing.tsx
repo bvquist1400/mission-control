@@ -29,7 +29,7 @@ export function MiddayBriefing({ calendar, tasks, progress }: MiddayBriefingProp
   // Filter to only upcoming events (not past)
   const now = new Date();
   const upcomingEvents = calendar.events.filter(
-    (e) => new Date(e.start_at) > now
+    (e) => e.temporal_status ? e.temporal_status !== "past" : new Date(e.end_at) > now
   );
 
   // Next task recommendation

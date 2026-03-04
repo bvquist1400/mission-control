@@ -84,8 +84,11 @@ function toMcpResponse(data: unknown) {
 // ---------------------------------------------------------------------------
 function authenticate(request: Request): true | Response {
   const validApiKey = process.env.MISSION_CONTROL_API_KEY;
+  const actionsApiKey = process.env.MISSION_CONTROL_ACTIONS_API_KEY;
 
-  if (!validApiKey) {
+  // Preserve the legacy MCP key path exactly as-is for Claude.
+  // If the actions key is distinct, reject it explicitly for this endpoint.
+  if (!validApiKey && !actionsApiKey) {
     return new Response(JSON.stringify({ error: 'API key auth not configured' }), {
       status: 503,
       headers: { 'Content-Type': 'application/json' },
@@ -99,14 +102,35 @@ function authenticate(request: Request): true | Response {
   const urlKey = new URL(request.url).searchParams.get('key');
   const apiKey = customKey || bearerToken || urlKey;
 
-  if (!apiKey || apiKey !== validApiKey) {
+  if (apiKey && validApiKey && apiKey === validApiKey) {
+    return true;
+  }
+
+  if (apiKey && actionsApiKey && apiKey === actionsApiKey) {
+    return new Response(JSON.stringify({ error: 'The actions API key cannot access /api/mcp' }), {
+      status: 403,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  if (!validApiKey) {
+    return new Response(JSON.stringify({ error: 'API key auth not configured' }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  if (!apiKey) {
     return new Response(JSON.stringify({ error: 'Invalid or missing API key' }), {
       status: 401,
       headers: { 'Content-Type': 'application/json' },
     });
   }
 
-  return true;
+  return new Response(JSON.stringify({ error: 'Invalid or missing API key' }), {
+    status: 401,
+    headers: { 'Content-Type': 'application/json' },
+  });
 }
 
 // ---------------------------------------------------------------------------

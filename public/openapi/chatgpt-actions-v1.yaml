@@ -1,0 +1,1670 @@
+---
+openapi: 3.1.0
+info:
+  title: Mission Control ChatGPT Actions API
+  version: 1.0.0
+  description: 'Action surface for the private Mission Control custom GPT. This schema
+    exposes the non-destructive v1 read/write operations needed for briefs, notes
+    parsing, task management, focus, projects, sprints, stakeholders, and commitments.
+
+'
+servers:
+- url: https://mission-control-orpin-chi.vercel.app
+security:
+- MissionControlKey: []
+tags:
+- name: Calendar
+- name: Planner
+- name: Tasks
+- name: Focus
+- name: Projects
+- name: Sprints
+- name: Stakeholders
+- name: Commitments
+paths:
+  "/api/calendar":
+    get:
+      tags:
+      - Calendar
+      operationId: get_calendar
+      summary: Get calendar events for a date range
+      parameters:
+      - name: rangeStart
+        in: query
+        required: true
+        schema:
+          type: string
+          format: date
+        description: Inclusive start date in YYYY-MM-DD.
+      - name: rangeEnd
+        in: query
+        required: true
+        schema:
+          type: string
+          format: date
+        description: Inclusive end date in YYYY-MM-DD.
+      responses:
+        '200':
+          description: Calendar snapshot
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/CalendarResponse"
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+  "/api/planner/plan":
+    get:
+      tags:
+      - Planner
+      operationId: get_plan
+      summary: Get the latest saved plan for a date
+      parameters:
+      - name: date
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date
+        description: Optional plan date in YYYY-MM-DD. Defaults to today in ET.
+      responses:
+        '200':
+          description: Planner snapshot
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/PlannerPlanResponse"
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+  "/api/planner/sync-today":
+    post:
+      tags:
+      - Planner
+      operationId: sync_today
+      summary: Promote the approved today task list
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - task_ids
+              properties:
+                task_ids:
+                  type: array
+                  minItems: 1
+                  maxItems: 20
+                  items:
+                    type: string
+                    format: uuid
+              additionalProperties: false
+      responses:
+        '200':
+          description: Sync result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  promoted:
+                    type: integer
+                  demoted:
+                    type: integer
+                  skipped_pinned:
+                    type: integer
+                  sync_at:
+                    type: string
+                    format: date-time
+                additionalProperties: false
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+  "/api/tasks":
+    get:
+      tags:
+      - Tasks
+      operationId: list_tasks
+      summary: List tasks with filters
+      parameters:
+      - name: status
+        in: query
+        required: false
+        schema:
+          "$ref": "#/components/schemas/TaskStatus"
+      - name: needs_review
+        in: query
+        required: false
+        schema:
+          type: boolean
+      - name: implementation_id
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: sprint_id
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: due_soon
+        in: query
+        required: false
+        schema:
+          type: boolean
+      - name: include_done
+        in: query
+        required: false
+        schema:
+          type: boolean
+      - name: include_parked
+        in: query
+        required: false
+        schema:
+          type: boolean
+      - name: view
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - needs_review_count
+          - top3
+          - due_soon
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 500
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+      responses:
+        '200':
+          description: Task list
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - type: array
+                  items:
+                    "$ref": "#/components/schemas/Task"
+                - type: object
+                  properties:
+                    count:
+                      type: integer
+                  additionalProperties: false
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+    post:
+      tags:
+      - Tasks
+      operationId: create_task
+      summary: Create a task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - title
+              properties:
+                title:
+                  type: string
+                  maxLength: 500
+                description:
+                  type: string
+                  maxLength: 8000
+                implementation_id:
+                  type: string
+                  format: uuid
+                project_id:
+                  type: string
+                  format: uuid
+                sprint_id:
+                  type: string
+                  format: uuid
+                status:
+                  "$ref": "#/components/schemas/TaskStatus"
+                task_type:
+                  "$ref": "#/components/schemas/TaskType"
+                priority_score:
+                  type: integer
+                  minimum: 0
+                  maximum: 100
+                estimated_minutes:
+                  type: integer
+                  minimum: 1
+                  maximum: 480
+                estimate_source:
+                  "$ref": "#/components/schemas/EstimateSource"
+                due_at:
+                  type: string
+                  format: date-time
+                needs_review:
+                  type: boolean
+                blocker:
+                  type: boolean
+                waiting_on:
+                  type: string
+                stakeholder_mentions:
+                  type: array
+                  items:
+                    type: string
+                source_type:
+                  type: string
+                source_url:
+                  type: string
+                  format: uri
+                pinned_excerpt:
+                  type: string
+                  maxLength: 2000
+                blocked_by_task_id:
+                  type: string
+                  format: uuid
+                initial_comment:
+                  type: string
+                initial_checklist:
+                  type: array
+                  items:
+                    type: string
+              additionalProperties: false
+      responses:
+        '200':
+          description: Created task
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Task"
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+  "/api/tasks/{task_id}":
+    get:
+      tags:
+      - Tasks
+      operationId: get_task
+      summary: Get a task by id
+      responses:
+        '200':
+          description: Task detail
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Task"
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+      parameters:
+      - &1
+        name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      tags:
+      - Tasks
+      operationId: update_task
+      summary: Update a task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                  maxLength: 500
+                description:
+                  anyOf:
+                  - type: string
+                    maxLength: 8000
+                  - type: 'null'
+                implementation_id:
+                  anyOf:
+                  - type: string
+                    format: uuid
+                  - type: 'null'
+                project_id:
+                  anyOf:
+                  - type: string
+                    format: uuid
+                  - type: 'null'
+                sprint_id:
+                  anyOf:
+                  - type: string
+                    format: uuid
+                  - type: 'null'
+                status:
+                  "$ref": "#/components/schemas/TaskStatus"
+                task_type:
+                  "$ref": "#/components/schemas/TaskType"
+                estimated_minutes:
+                  type: integer
+                  minimum: 1
+                  maximum: 480
+                actual_minutes:
+                  anyOf:
+                  - type: integer
+                    minimum: 0
+                  - type: 'null'
+                estimate_source:
+                  "$ref": "#/components/schemas/EstimateSource"
+                due_at:
+                  anyOf:
+                  - type: string
+                    format: date-time
+                  - type: 'null'
+                needs_review:
+                  type: boolean
+                blocker:
+                  type: boolean
+                waiting_on:
+                  anyOf:
+                  - type: string
+                  - type: 'null'
+                follow_up_at:
+                  anyOf:
+                  - type: string
+                    format: date-time
+                  - type: 'null'
+                pinned_excerpt:
+                  anyOf:
+                  - type: string
+                    maxLength: 2000
+                  - type: 'null'
+                pinned:
+                  type: boolean
+              additionalProperties: false
+      responses:
+        '200':
+          description: Updated task
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Task"
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+      parameters:
+      - *1
+  "/api/tasks/{task_id}/comments":
+    get:
+      tags:
+      - Tasks
+      operationId: list_task_comments
+      summary: List comments for a task
+      responses:
+        '200':
+          description: Task comments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  "$ref": "#/components/schemas/TaskComment"
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+      parameters:
+      - &2
+        name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags:
+      - Tasks
+      operationId: add_task_comment
+      summary: Add a comment to a task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - content
+              properties:
+                content:
+                  type: string
+                  minLength: 1
+                  maxLength: 5000
+                source:
+                  "$ref": "#/components/schemas/CommentSource"
+              additionalProperties: false
+      responses:
+        '201':
+          description: Created comment
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/TaskComment"
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+      parameters:
+      - *2
+  "/api/tasks/parse":
+    post:
+      tags:
+      - Tasks
+      operationId: parse_notes
+      summary: Parse pasted notes into task metadata
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - raw_text
+              properties:
+                raw_text:
+                  type: string
+                  minLength: 1
+              additionalProperties: false
+      responses:
+        '200':
+          description: Parsed note metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  extraction:
+                    type: object
+                    additionalProperties: true
+                  model:
+                    type: string
+                additionalProperties: true
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+  "/api/focus":
+    get:
+      tags:
+      - Focus
+      operationId: get_focus
+      summary: Get the active focus directive
+      parameters:
+      - name: include_history
+        in: query
+        required: false
+        schema:
+          type: boolean
+      responses:
+        '200':
+          description: Focus directive payload
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  active:
+                    anyOf:
+                    - allOf:
+                      - "$ref": "#/components/schemas/FocusDirective"
+                    - type: 'null'
+                  directives:
+                    type: array
+                    items:
+                      "$ref": "#/components/schemas/FocusDirective"
+                  note:
+                    anyOf:
+                    - type: string
+                    - type: 'null'
+                additionalProperties: true
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+    post:
+      tags:
+      - Focus
+      operationId: set_focus
+      summary: Create and activate a focus directive
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - text
+              - scope_type
+              properties:
+                text:
+                  type: string
+                scope_type:
+                  "$ref": "#/components/schemas/FocusScopeType"
+                scope_id:
+                  type: string
+                  format: uuid
+                scope_value:
+                  type: string
+                strength:
+                  "$ref": "#/components/schemas/FocusStrength"
+                starts_at:
+                  type: string
+                  format: date-time
+                ends_at:
+                  type: string
+                  format: date-time
+                reason:
+                  anyOf:
+                  - type: string
+                  - type: 'null'
+                is_active:
+                  type: boolean
+              additionalProperties: false
+      responses:
+        '200':
+          description: Focus directive result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  created:
+                    type: boolean
+                  directive:
+                    anyOf:
+                    - allOf:
+                      - "$ref": "#/components/schemas/FocusDirective"
+                    - type: 'null'
+                  active:
+                    anyOf:
+                    - allOf:
+                      - "$ref": "#/components/schemas/FocusDirective"
+                    - type: 'null'
+                  note:
+                    anyOf:
+                    - type: string
+                    - type: 'null'
+                additionalProperties: true
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+  "/api/focus/clear":
+    post:
+      tags:
+      - Focus
+      operationId: clear_focus
+      summary: Clear active focus directives
+      responses:
+        '200':
+          description: Clear result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cleared:
+                    type: integer
+                  clearedIds:
+                    type: array
+                    items:
+                      type: string
+                      format: uuid
+                  clearedAt:
+                    type: string
+                    format: date-time
+                  note:
+                    anyOf:
+                    - type: string
+                    - type: 'null'
+                additionalProperties: true
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+  "/api/projects":
+    get:
+      tags:
+      - Projects
+      operationId: list_projects
+      summary: List projects
+      parameters:
+      - name: implementation_id
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: with_stats
+        in: query
+        required: false
+        schema:
+          type: boolean
+      responses:
+        '200':
+          description: Project list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  "$ref": "#/components/schemas/Project"
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+    post:
+      tags:
+      - Projects
+      operationId: create_project
+      summary: Create a project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - name
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                implementation_id:
+                  anyOf:
+                  - type: string
+                    format: uuid
+                  - type: 'null'
+                stage:
+                  "$ref": "#/components/schemas/ProjectStage"
+                rag:
+                  type: string
+                target_date:
+                  anyOf:
+                  - type: string
+                    format: date
+                  - type: 'null'
+                servicenow_spm_id:
+                  anyOf:
+                  - type: string
+                  - type: 'null'
+                status_summary:
+                  type: string
+                description:
+                  anyOf:
+                  - type: string
+                  - type: 'null'
+                portfolio_rank:
+                  type: integer
+                  minimum: 1
+              additionalProperties: false
+      responses:
+        '201':
+          description: Created project
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Project"
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+  "/api/projects/{project_id}":
+    get:
+      tags:
+      - Projects
+      operationId: get_project
+      summary: Get a project by id
+      responses:
+        '200':
+          description: Project detail
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Project"
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+      parameters:
+      - &3
+        name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      tags:
+      - Projects
+      operationId: update_project
+      summary: Update a project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  maxLength: 200
+                description:
+                  anyOf:
+                  - type: string
+                  - type: 'null'
+                implementation_id:
+                  anyOf:
+                  - type: string
+                    format: uuid
+                  - type: 'null'
+                stage:
+                  "$ref": "#/components/schemas/ProjectStage"
+                rag:
+                  type: string
+                target_date:
+                  anyOf:
+                  - type: string
+                    format: date
+                  - type: 'null'
+                servicenow_spm_id:
+                  anyOf:
+                  - type: string
+                  - type: 'null'
+                status_summary:
+                  type: string
+                  maxLength: 2000
+                portfolio_rank:
+                  type: integer
+                  minimum: 1
+              additionalProperties: false
+      responses:
+        '200':
+          description: Updated project
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Project"
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+      parameters:
+      - *3
+  "/api/sprints":
+    get:
+      tags:
+      - Sprints
+      operationId: list_sprints
+      summary: List sprints
+      responses:
+        '200':
+          description: Sprint list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  "$ref": "#/components/schemas/Sprint"
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+    post:
+      tags:
+      - Sprints
+      operationId: create_sprint
+      summary: Create a sprint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - name
+              - start_date
+              - end_date
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                start_date:
+                  type: string
+                  format: date
+                end_date:
+                  type: string
+                  format: date
+                theme:
+                  anyOf:
+                  - type: string
+                  - type: 'null'
+                focus_implementation_id:
+                  anyOf:
+                  - type: string
+                    format: uuid
+                  - type: 'null'
+              additionalProperties: false
+      responses:
+        '201':
+          description: Created sprint
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Sprint"
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+  "/api/sprints/{sprint_id}":
+    get:
+      tags:
+      - Sprints
+      operationId: get_sprint
+      summary: Get a sprint by id
+      responses:
+        '200':
+          description: Sprint detail
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Sprint"
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+      parameters:
+      - &4
+        name: sprint_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      tags:
+      - Sprints
+      operationId: update_sprint
+      summary: Update a sprint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                start_date:
+                  type: string
+                  format: date
+                end_date:
+                  type: string
+                  format: date
+                theme:
+                  anyOf:
+                  - type: string
+                  - type: 'null'
+                focus_implementation_id:
+                  anyOf:
+                  - type: string
+                    format: uuid
+                  - type: 'null'
+              additionalProperties: false
+      responses:
+        '200':
+          description: Updated sprint
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Sprint"
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+      parameters:
+      - *4
+  "/api/stakeholders":
+    get:
+      tags:
+      - Stakeholders
+      operationId: list_stakeholders
+      summary: List stakeholders
+      parameters:
+      - name: search
+        in: query
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Stakeholder list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  "$ref": "#/components/schemas/Stakeholder"
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+    post:
+      tags:
+      - Stakeholders
+      operationId: create_stakeholder
+      summary: Create a stakeholder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - name
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                email:
+                  anyOf:
+                  - type: string
+                    format: email
+                  - type: 'null'
+                role:
+                  anyOf:
+                  - type: string
+                  - type: 'null'
+                organization:
+                  anyOf:
+                  - type: string
+                  - type: 'null'
+                notes:
+                  anyOf:
+                  - type: string
+                  - type: 'null'
+              additionalProperties: false
+      responses:
+        '201':
+          description: Created stakeholder
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Stakeholder"
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+  "/api/stakeholders/{stakeholder_id}":
+    get:
+      tags:
+      - Stakeholders
+      operationId: get_stakeholder
+      summary: Get a stakeholder by id
+      responses:
+        '200':
+          description: Stakeholder detail
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Stakeholder"
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+      parameters:
+      - &5
+        name: stakeholder_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      tags:
+      - Stakeholders
+      operationId: update_stakeholder
+      summary: Update a stakeholder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                email:
+                  anyOf:
+                  - type: string
+                    format: email
+                  - type: 'null'
+                role:
+                  anyOf:
+                  - type: string
+                  - type: 'null'
+                organization:
+                  anyOf:
+                  - type: string
+                  - type: 'null'
+                notes:
+                  anyOf:
+                  - type: string
+                  - type: 'null'
+                context:
+                  type: object
+                  description: 'Partial stakeholder context. The backend merges this
+                    with the existing context instead of overwriting unrelated fields.
+
+'
+                  additionalProperties: true
+              additionalProperties: false
+      responses:
+        '200':
+          description: Updated stakeholder
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Stakeholder"
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+      parameters:
+      - *5
+  "/api/commitments":
+    get:
+      tags:
+      - Commitments
+      operationId: list_commitments
+      summary: List commitments
+      parameters:
+      - name: status
+        in: query
+        required: false
+        schema:
+          "$ref": "#/components/schemas/CommitmentStatus"
+      - name: include_done
+        in: query
+        required: false
+        schema:
+          type: boolean
+      - name: search
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 1000
+      responses:
+        '200':
+          description: Commitment list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  "$ref": "#/components/schemas/Commitment"
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+  "/api/stakeholders/{stakeholder_id}/commitments":
+    post:
+      tags:
+      - Commitments
+      operationId: create_commitment
+      summary: Create a commitment for a stakeholder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - title
+              properties:
+                title:
+                  type: string
+                  minLength: 1
+                direction:
+                  "$ref": "#/components/schemas/CommitmentDirection"
+                status:
+                  "$ref": "#/components/schemas/CommitmentStatus"
+                due_at:
+                  anyOf:
+                  - type: string
+                    format: date-time
+                  - type: 'null'
+                notes:
+                  anyOf:
+                  - type: string
+                  - type: 'null'
+                task_id:
+                  anyOf:
+                  - type: string
+                    format: uuid
+                  - type: 'null'
+              additionalProperties: false
+      responses:
+        '201':
+          description: Created commitment
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Commitment"
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+      parameters:
+      - name: stakeholder_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  "/api/commitments/{commitment_id}":
+    patch:
+      tags:
+      - Commitments
+      operationId: update_commitment
+      summary: Update a commitment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                  minLength: 1
+                direction:
+                  "$ref": "#/components/schemas/CommitmentDirection"
+                status:
+                  "$ref": "#/components/schemas/CommitmentStatus"
+                due_at:
+                  anyOf:
+                  - type: string
+                    format: date-time
+                  - type: 'null'
+                notes:
+                  anyOf:
+                  - type: string
+                  - type: 'null'
+                task_id:
+                  anyOf:
+                  - type: string
+                    format: uuid
+                  - type: 'null'
+              additionalProperties: false
+      responses:
+        '200':
+          description: Updated commitment
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Commitment"
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
+      parameters:
+      - name: commitment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+components:
+  securitySchemes:
+    MissionControlKey:
+      type: apiKey
+      in: header
+      name: X-Mission-Control-Key
+  responses:
+    ErrorResponse:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            "$ref": "#/components/schemas/BasicError"
+  schemas:
+    BasicError:
+      type: object
+      properties:
+        error:
+          type: string
+        detail:
+          type: string
+      required:
+      - error
+      additionalProperties: true
+    TaskStatus:
+      type: string
+      enum:
+      - Backlog
+      - Planned
+      - In Progress
+      - Blocked/Waiting
+      - Parked
+      - Done
+    TaskType:
+      type: string
+      enum:
+      - Task
+      - Ticket
+      - MeetingPrep
+      - FollowUp
+      - Admin
+      - Build
+    EstimateSource:
+      type: string
+      enum:
+      - default
+      - llm
+      - manual
+    CommentSource:
+      type: string
+      enum:
+      - manual
+      - system
+      - llm
+    FocusScopeType:
+      type: string
+      enum:
+      - implementation
+      - stakeholder
+      - task_type
+      - query
+    FocusStrength:
+      type: string
+      enum:
+      - nudge
+      - strong
+      - hard
+    ProjectStage:
+      type: string
+      enum:
+      - Proposed
+      - Planned
+      - Ready
+      - In Progress
+      - Blocked
+      - Review
+      - Done
+      - On Hold
+      - Cancelled
+    CommitmentStatus:
+      type: string
+      enum:
+      - Open
+      - Done
+      - Dropped
+    CommitmentDirection:
+      type: string
+      enum:
+      - ours
+      - theirs
+    Task:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+        status:
+          "$ref": "#/components/schemas/TaskStatus"
+        task_type:
+          "$ref": "#/components/schemas/TaskType"
+        priority_score:
+          type: integer
+        estimated_minutes:
+          type: integer
+        actual_minutes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+        due_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+        follow_up_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+        needs_review:
+          type: boolean
+        blocker:
+          type: boolean
+        waiting_on:
+          anyOf:
+          - type: string
+          - type: 'null'
+        stakeholder_mentions:
+          type: array
+          items:
+            type: string
+        pinned:
+          type: boolean
+        pinned_excerpt:
+          anyOf:
+          - type: string
+          - type: 'null'
+        dependency_blocked:
+          type: boolean
+        implementation:
+          anyOf:
+          - type: object
+            additionalProperties: true
+          - type: 'null'
+        project:
+          anyOf:
+          - type: object
+            additionalProperties: true
+          - type: 'null'
+        sprint:
+          anyOf:
+          - type: object
+            additionalProperties: true
+          - type: 'null'
+      required:
+      - id
+      - title
+      additionalProperties: true
+    TaskComment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        task_id:
+          type: string
+          format: uuid
+        content:
+          type: string
+        source:
+          "$ref": "#/components/schemas/CommentSource"
+        created_at:
+          type: string
+          format: date-time
+      required:
+      - id
+      - task_id
+      - content
+      additionalProperties: true
+    FocusDirective:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        text:
+          type: string
+        scope_type:
+          "$ref": "#/components/schemas/FocusScopeType"
+        scope_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+        scope_value:
+          anyOf:
+          - type: string
+          - type: 'null'
+        strength:
+          "$ref": "#/components/schemas/FocusStrength"
+        starts_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+        ends_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+        reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+        is_active:
+          type: boolean
+      required:
+      - id
+      - text
+      - scope_type
+      additionalProperties: true
+    Project:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        stage:
+          "$ref": "#/components/schemas/ProjectStage"
+        rag:
+          type: string
+        target_date:
+          anyOf:
+          - type: string
+            format: date
+          - type: 'null'
+        implementation_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+      required:
+      - id
+      - name
+      additionalProperties: true
+    Sprint:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        start_date:
+          type: string
+          format: date
+        end_date:
+          type: string
+          format: date
+        theme:
+          anyOf:
+          - type: string
+          - type: 'null'
+        focus_implementation_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+      required:
+      - id
+      - name
+      additionalProperties: true
+    Stakeholder:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        email:
+          anyOf:
+          - type: string
+            format: email
+          - type: 'null'
+        role:
+          anyOf:
+          - type: string
+          - type: 'null'
+        organization:
+          anyOf:
+          - type: string
+          - type: 'null'
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+        context:
+          anyOf:
+          - type: object
+            additionalProperties: true
+          - type: 'null'
+      required:
+      - id
+      - name
+      additionalProperties: true
+    Commitment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        status:
+          "$ref": "#/components/schemas/CommitmentStatus"
+        direction:
+          "$ref": "#/components/schemas/CommitmentDirection"
+        due_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+        task_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+        stakeholder_id:
+          type: string
+          format: uuid
+        task:
+          anyOf:
+          - type: object
+            additionalProperties: true
+          - type: 'null'
+        stakeholder:
+          anyOf:
+          - type: object
+            additionalProperties: true
+          - type: 'null'
+      required:
+      - id
+      - title
+      additionalProperties: true
+    CalendarResponse:
+      type: object
+      properties:
+        rangeStart:
+          type: string
+          format: date
+        rangeEnd:
+          type: string
+          format: date
+        source:
+          type: string
+        warning:
+          anyOf:
+          - type: string
+          - type: 'null'
+        warnings:
+          type: array
+          items:
+            type: string
+        ingest:
+          type: object
+          properties:
+            source:
+              type: string
+            ingestedCount:
+              type: integer
+            warningCount:
+              type: integer
+          additionalProperties: true
+        events:
+          type: array
+          items:
+            type: object
+            properties:
+              start_at:
+                type: string
+                format: date-time
+              end_at:
+                type: string
+                format: date-time
+              title:
+                type: string
+              with_display:
+                type: array
+                items:
+                  type: string
+              body_scrubbed_preview:
+                anyOf:
+                - type: string
+                - type: 'null'
+              is_all_day:
+                type: boolean
+              external_event_id:
+                type: string
+              meeting_context:
+                anyOf:
+                - type: string
+                - type: 'null'
+              date_et:
+                type: string
+              start_time_et:
+                type: string
+              end_time_et:
+                type: string
+              time_range_et:
+                type: string
+              temporal_status:
+                type: string
+                enum:
+                - past
+                - in_progress
+                - upcoming
+            additionalProperties: true
+        busyBlocks:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        stats:
+          type: object
+          additionalProperties: true
+        changesSince:
+          type: object
+          additionalProperties: true
+        generatedAt:
+          type: string
+          format: date-time
+      required:
+      - rangeStart
+      - rangeEnd
+      - events
+      additionalProperties: true
+    PlannerPlanResponse:
+      type: object
+      properties:
+        planDate:
+          type: string
+          format: date
+        source:
+          type: string
+        plan:
+          anyOf:
+          - type: object
+            additionalProperties: true
+          - type: 'null'
+        note:
+          anyOf:
+          - type: string
+          - type: 'null'
+      required:
+      - planDate
+      - source
+      additionalProperties: true

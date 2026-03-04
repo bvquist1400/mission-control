@@ -16,7 +16,13 @@ Baseline is a Next.js + Supabase app for daily operations, triage, implementatio
 
 ## Environment Variables
 
-Required: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`. Optional: `DEFAULT_USER_ID`, `LLM_ADMIN_USER_ID`, and the settings below.
+Required for the app: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`. Optional: `DEFAULT_USER_ID`, `LLM_ADMIN_USER_ID`, and the settings below.
+
+If you want machine-auth access for Claude MCP or the ChatGPT custom GPT, also configure:
+
+- `MISSION_CONTROL_API_KEY` for the existing Claude MCP / legacy machine-auth flow
+- `MISSION_CONTROL_ACTIONS_API_KEY` for the private ChatGPT custom GPT Actions flow
+- `MISSION_CONTROL_USER_ID` for the user that machine-auth requests run as
 
 ### Calendar settings
 
@@ -36,6 +42,16 @@ Required: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE
 
 - `PLANNER_ENABLE_CRITICAL_EXCEPTION=false`
 - `PLANNER_CRITICAL_EXCEPTION_THRESHOLD=90`
+
+### Machine auth settings
+
+- `MISSION_CONTROL_API_KEY`: legacy backend key used by Claude and existing external callers
+- `MISSION_CONTROL_ACTIONS_API_KEY`: dedicated backend key used only by the private ChatGPT custom GPT Actions integration
+- `MISSION_CONTROL_USER_ID`: required when either machine key is enabled
+- `MISSION_CONTROL_ACTIONS_API_KEY` is a Mission Control backend key, not an OpenAI API key
+- Use a distinct value for `MISSION_CONTROL_ACTIONS_API_KEY` so `/api/mcp` remains reserved for the legacy Claude key
+- The actions key is restricted to the allowlisted non-delete routes used by the ChatGPT Actions surface
+- Delete operations are intentionally excluded from the ChatGPT Actions v1 surface
 
 ### Focus directive API
 
@@ -58,6 +74,27 @@ Required: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE
 - App API routes require an authenticated Supabase session.
 - Use `/login` to request a magic-link sign-in email.
 - Callback route (`/auth/callback`) exchanges the auth code and returns to app routes.
+- Claude continues to use `/api/mcp` with `MISSION_CONTROL_API_KEY`.
+- ChatGPT uses a private custom GPT with Actions and sends `X-Mission-Control-Key: <MISSION_CONTROL_ACTIONS_API_KEY>`.
+
+## Mission Control GPT
+
+Use one private custom GPT in ChatGPT as the ChatGPT-facing surface. Claude remains unchanged and continues to use MCP in parallel.
+
+You do not need an OpenAI API key for normal use inside ChatGPT. The only extra credential for this integration is `MISSION_CONTROL_ACTIONS_API_KEY`.
+
+1. Open the GPT builder in ChatGPT and create a private GPT.
+2. Paste your adapted Mission Control instructions into the GPT Instructions field.
+3. Import the tracked OpenAPI schema from `/openapi/chatgpt-actions-v1.yaml`.
+4. Configure the action authentication header as `X-Mission-Control-Key` with `MISSION_CONTROL_ACTIONS_API_KEY`.
+5. Add prompt starters such as `morning brief`, `midday brief`, `eod brief`, `review these meeting notes and suggest updates`, and `apply these meeting notes to Mission Control`.
+
+Notes:
+- The tracked schema file in this repo is [`/Users/owner/dev/Cooper Mission Control/mission-control/public/openapi/chatgpt-actions-v1.yaml`](/Users/owner/dev/Cooper%20Mission%20Control/mission-control/public/openapi/chatgpt-actions-v1.yaml).
+- A paste-ready builder instruction draft lives at [`/Users/owner/dev/Cooper Mission Control/mission-control/chatgpt-gpt-instructions.md`](/Users/owner/dev/Cooper%20Mission%20Control/mission-control/chatgpt-gpt-instructions.md).
+- Claude still uses MCP.
+- ChatGPT uses the private custom GPT with Actions.
+- Deletes are intentionally excluded from the ChatGPT Actions v1 schema.
 
 ## Database
 
