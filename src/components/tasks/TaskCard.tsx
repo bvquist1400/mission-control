@@ -12,6 +12,7 @@ export interface TaskCardData {
   status: TaskStatus;
   blocker: boolean;
   pinned: boolean;
+  syncedToday?: boolean;
   implementationName?: string | null;
 }
 
@@ -76,6 +77,11 @@ export function TaskCard({ task, pinning = false, onTogglePinned }: TaskCardProp
       <div className="flex items-start gap-3">
         <h3 className="flex-1 text-sm font-semibold leading-relaxed text-foreground">{task.title}</h3>
         <div className="flex items-center gap-1.5">
+          {task.syncedToday ? (
+            <span className="shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-400">
+              Synced Today
+            </span>
+          ) : null}
           <button
             type="button"
             onClick={handlePinClick}

@@ -140,6 +140,29 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(filtered);
     }
 
+    if (view === 'waiting_summary') {
+      const waitingLimit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 30;
+      const { data, error } = await supabase
+        .from('tasks')
+        .select('id, title, waiting_on, follow_up_at, priority_score')
+        .eq('user_id', userId)
+        .eq('status', 'Blocked/Waiting')
+        .order('priority_score', { ascending: false })
+        .order('id', { ascending: true })
+        .limit(waitingLimit);
+
+      if (error) {
+        throw error;
+      }
+
+      return NextResponse.json((data || []).map((task) => ({
+        id: task.id,
+        title: task.title,
+        waiting_on: task.waiting_on,
+        follow_up_at: task.follow_up_at,
+      })));
+    }
+
     let query = supabase
       .from('tasks')
       .select(TASK_SELECT)

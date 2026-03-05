@@ -42,6 +42,7 @@ If you want machine-auth access for Claude MCP or the ChatGPT custom GPT, also c
 
 - `PLANNER_ENABLE_CRITICAL_EXCEPTION=false`
 - `PLANNER_CRITICAL_EXCEPTION_THRESHOLD=90`
+- `NEXT_PUBLIC_SPRINT_HOLIDAYS=2026-01-01,2026-05-25,2026-07-03` optional comma-separated `YYYY-MM-DD` list used by Today sprint pacing; excluded from workday counts in addition to weekends
 
 ### Machine auth settings
 

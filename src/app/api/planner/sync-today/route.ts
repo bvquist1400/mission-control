@@ -124,12 +124,29 @@ export async function POST(request: NextRequest) {
     }
 
     const row = (Array.isArray(data) ? data[0] : null) as SyncTodayRpcRow | null;
+    const promoted = Number(row?.promoted ?? 0);
+    const demoted = Number(row?.demoted ?? 0);
+    const skippedPinned = Number(row?.skipped_pinned ?? 0);
+    const syncAt = row?.sync_at ?? new Date().toISOString();
+
+    const { error: logError } = await supabase.from("today_sync_events").insert({
+      user_id: apiUserId,
+      task_ids: taskIds,
+      promoted,
+      demoted,
+      skipped_pinned: skippedPinned,
+      synced_at: syncAt,
+    });
+
+    if (logError) {
+      console.error("Error logging today sync event:", logError);
+    }
 
     return corsJson(request, {
-      promoted: Number(row?.promoted ?? 0),
-      demoted: Number(row?.demoted ?? 0),
-      skipped_pinned: Number(row?.skipped_pinned ?? 0),
-      sync_at: row?.sync_at ?? new Date().toISOString(),
+      promoted,
+      demoted,
+      skipped_pinned: skippedPinned,
+      sync_at: syncAt,
     });
   } catch (error) {
     console.error("Error syncing today tasks:", error);
