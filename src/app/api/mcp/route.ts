@@ -1481,6 +1481,7 @@ async function proxyPublicMcpRequest(request: Request): Promise<Response> {
     upstreamUrl,
     bodyLength: body?.length ?? 0,
     contentType: request.headers.get('content-type'),
+    bodyPreview: body?.slice(0, 300),
   });
 
   let upstreamResponse: Response;
@@ -1498,12 +1499,16 @@ async function proxyPublicMcpRequest(request: Request): Promise<Response> {
     }), request);
   }
 
+  const upstreamBody = await upstreamResponse.text();
+
   console.info('[mcp-proxy] upstream response', {
     status: upstreamResponse.status,
     contentType: upstreamResponse.headers.get('content-type'),
+    bodyLength: upstreamBody.length,
+    bodyPreview: upstreamBody.slice(0, 500),
   });
 
-  return applyProxyCors(new Response(upstreamResponse.body, {
+  return applyProxyCors(new Response(upstreamBody, {
     status: upstreamResponse.status,
     headers: upstreamResponse.headers,
   }), request);
