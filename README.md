@@ -18,11 +18,14 @@ Baseline is a Next.js + Supabase app for daily operations, triage, implementatio
 
 Required for the app: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`. Optional: `DEFAULT_USER_ID`, `LLM_ADMIN_USER_ID`, and the settings below.
 
-If you want machine-auth access for Claude MCP or the ChatGPT custom GPT, also configure:
+If you want machine-auth access for Claude MCP, the legacy ChatGPT custom GPT, or the new public remote MCP deployment, also configure:
 
 - `MISSION_CONTROL_API_KEY` for the existing Claude MCP / legacy machine-auth flow
 - `MISSION_CONTROL_ACTIONS_API_KEY` for the private ChatGPT custom GPT Actions flow
 - `MISSION_CONTROL_USER_ID` for the user that machine-auth requests run as
+- `DEPLOYMENT_ROLE=main|mcp` to split the protected main app from the public MCP deployment
+- `MCP_CANONICAL_APP_URL` for stable user-facing URLs returned from `search` / `fetch`
+- `MCP_UPSTREAM_API_URL` for the public MCP deployment to call the protected main app upstream routes
 
 ### Calendar settings
 
@@ -54,6 +57,15 @@ If you want machine-auth access for Claude MCP or the ChatGPT custom GPT, also c
 - The actions key is restricted to the allowlisted non-delete routes used by the ChatGPT Actions surface
 - Delete operations are intentionally excluded from the ChatGPT Actions v1 surface
 
+### Remote MCP deployment settings
+
+- `DEPLOYMENT_ROLE=main` on the normal app deployment
+- `DEPLOYMENT_ROLE=mcp` on the public MCP-only deployment
+- `MCP_CANONICAL_APP_URL=https://your-main-app.example.com` on both deployments
+- `MCP_UPSTREAM_API_URL=https://your-main-app.example.com` on the public `mcp` deployment
+- The public `mcp` deployment serves only `/api/mcp`, `/oauth/*`, `/.well-known/*`, `/login`, and `/auth/callback`
+- The protected main deployment exposes `/api/mcp-upstream` and `/api/mcp-upstream/*` for bearer-token upstream calls only
+
 ### Focus directive API
 
 - `GET /api/focus`: returns current active focus directive (`active`) and optional fallback `note`
@@ -77,6 +89,51 @@ If you want machine-auth access for Claude MCP or the ChatGPT custom GPT, also c
 - Callback route (`/auth/callback`) exchanges the auth code and returns to app routes.
 - Claude continues to use `/api/mcp` with `MISSION_CONTROL_API_KEY`.
 - ChatGPT uses a private custom GPT with Actions and sends `X-Mission-Control-Key: <MISSION_CONTROL_ACTIONS_API_KEY>`.
+- Public remote MCP clients use OAuth authorization code + PKCE with dynamic client registration.
+- Public remote MCP auth is limited to `/api/mcp` and `/api/mcp-upstream/*`; general app APIs do not accept MCP OAuth bearer tokens.
+
+## Remote MCP
+
+Mission Control now supports a public remote MCP deployment for hosted MCP-compatible LLM products.
+
+- Public MCP endpoint: `https://<your-mcp-domain>/api/mcp`
+- OAuth authorize endpoint: `https://<your-mcp-domain>/oauth/authorize`
+- OAuth token endpoint: `https://<your-mcp-domain>/oauth/token`
+- Dynamic client registration endpoint: `https://<your-mcp-domain>/oauth/register`
+- Authorization server metadata: `https://<your-mcp-domain>/.well-known/oauth-authorization-server`
+- Protected resource metadata: `https://<your-mcp-domain>/.well-known/oauth-protected-resource/api/mcp`
+
+Scope model:
+
+- `mcp.read`: read/list/search/fetch/briefing/calendar style operations
+- `mcp.write`: non-destructive mutations
+- `mcp.delete`: destructive deletes only; request this separately from the default read/write consent
+
+Tool behavior:
+
+- Existing domain-specific tools remain available.
+- Generic `search(query)` and `fetch(id)` are additive retrieval tools.
+- `search` returns stable URLs pointing to `MCP_CANONICAL_APP_URL`.
+
+Deployment outline:
+
+1. Deploy the existing app normally with `DEPLOYMENT_ROLE=main`.
+2. Deploy the same repo a second time with `DEPLOYMENT_ROLE=mcp`.
+3. Point `MCP_UPSTREAM_API_URL` on the public `mcp` deployment at the protected main app domain.
+4. Keep `MISSION_CONTROL_API_KEY` and `MISSION_CONTROL_ACTIONS_API_KEY` only on `main` while migrating legacy clients.
+
+ChatGPT setup:
+
+1. Open ChatGPT Developer Mode or MCP app setup.
+2. Add the public MCP server URL: `https://<your-mcp-domain>/api/mcp`.
+3. Let ChatGPT dynamically register as a public OAuth client.
+4. Approve the default `mcp.read mcp.write` consent in the browser.
+5. Re-run consent with `mcp.delete` only if you explicitly want destructive tools enabled.
+
+Product note:
+
+- As of March 8, 2026, OpenAI Help Center documentation says full write-capable MCP in ChatGPT beta is for Business and Enterprise/Edu, while Pro is read/fetch only in developer mode.
+- This is a product-availability constraint, not a code limitation in this repo.
 
 ## Mission Control GPT
 
@@ -111,6 +168,7 @@ Apply Supabase SQL migrations from `supabase/migrations/`:
 - `008_task_status_workflow.sql` — Renames task status enum values (Next->Backlog, Scheduled->Planned, Waiting->Blocked/Waiting) and adds In Progress
 - `009_add_quick_capture_feature.sql` — Adds `quick_capture` to LLM feature CHECK constraints
 - `010_missing_rls_policies.sql` — Adds missing RLS policies for inbox_items and status_updates
+- `027_add_mcp_oauth.sql` — Adds OAuth client, authorization code, access token, and refresh token storage for public remote MCP
 
 ### Task status values
 
@@ -135,6 +193,7 @@ npm run lint
 npm run build
 npm run test:planner-scoring
 npm run test:calendar-sanitize
+npm run test:mcp-oauth
 ```
 
 Calendar API contract check (requires running app at `http://localhost:3000` by default):

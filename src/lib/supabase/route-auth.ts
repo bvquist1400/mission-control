@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { SupabaseClient, User } from '@supabase/supabase-js';
 import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase/server';
 import { withCorsHeaders } from '@/lib/cors';
+import { readInternalAuthContext } from '@/lib/supabase/internal-auth';
 
-export type AuthSource = 'session' | 'bearer' | 'legacy_api_key' | 'actions_api_key';
+export type AuthSource = 'session' | 'bearer' | 'legacy_api_key' | 'actions_api_key' | 'mcp_oauth';
 
 export interface AuthenticatedRouteContext {
   supabase: SupabaseClient;
@@ -147,6 +148,14 @@ async function requireMachineKeyRoute(request: NextRequest): Promise<RouteAuthRe
 export async function requireAuthenticatedRoute(
   request: NextRequest
 ): Promise<RouteAuthResult> {
+  const internalContext = readInternalAuthContext<AuthenticatedRouteContext>(request);
+  if (internalContext) {
+    return {
+      context: internalContext,
+      response: null,
+    };
+  }
+
   const machineAuth = await requireMachineKeyRoute(request);
   if (machineAuth) {
     return machineAuth;
@@ -186,6 +195,14 @@ export async function requireAuthenticatedRoute(
 export async function requireMissionControlApiKeyRoute(
   request: NextRequest
 ): Promise<RouteAuthResult> {
+  const internalContext = readInternalAuthContext<AuthenticatedRouteContext>(request);
+  if (internalContext) {
+    return {
+      context: internalContext,
+      response: null,
+    };
+  }
+
   const machineAuth = await requireMachineKeyRoute(request);
   if (machineAuth) {
     return machineAuth;

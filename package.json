@@ -10,7 +10,8 @@
     "test:planner-scoring": "node --experimental-strip-types scripts/test-planner-scoring.mjs",
     "test:calendar-sanitize": "node scripts/test-calendar-sanitizer.mjs",
     "test:calendar-api": "node scripts/test-calendar-api-contract.mjs",
-    "test:today-sprint": "node --experimental-strip-types scripts/test-today-sprint-progress.mjs"
+    "test:today-sprint": "node --experimental-strip-types scripts/test-today-sprint-progress.mjs",
+    "test:mcp-oauth": "node --experimental-strip-types scripts/test-mcp-oauth.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",

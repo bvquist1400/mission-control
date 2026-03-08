@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 const CORS_ALLOWED_METHODS = 'GET, POST, PATCH, DELETE, OPTIONS';
-const CORS_ALLOWED_HEADERS = 'Content-Type, X-Mission-Control-Key';
+const CORS_ALLOWED_HEADERS = 'Authorization, Content-Type, X-Mission-Control-Key';
 
 function isAllowedClaudeOrigin(origin: string): boolean {
   try {

@@ -3,6 +3,9 @@
   "functions": {
     "src/app/api/mcp/route.ts": {
       "maxDuration": 60
+    },
+    "src/app/api/mcp-upstream/route.ts": {
+      "maxDuration": 60
     }
   },
   "crons": [

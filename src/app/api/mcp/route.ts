@@ -1,9 +1,14 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import { getCanonicalAppUrl, getUpstreamApiUrl, isMcpDeployment } from '@/lib/mcp/config';
+import { fetchMissionControlItemById, searchMissionControlData } from '@/lib/mcp/search';
 import { PROJECT_STAGE_VALUES } from '@/lib/project-stage';
+import { createSupabaseAdminClient } from '@/lib/supabase/server';
 import { z } from 'zod';
 
 const ET_TIMEZONE = 'America/New_York';
+const LEGACY_APP_ORIGIN = 'https://mission-control-orpin-chi.vercel.app';
 const TASK_RECURRENCE_FREQUENCIES = ['daily', 'weekly', 'biweekly', 'monthly'] as const;
 const STAKEHOLDER_CONTEXT_SCHEMA = z.object({
   last_contacted_at: z.string().nullable().optional().describe('Last contact timestamp (ISO)'),
@@ -11,6 +16,80 @@ const STAKEHOLDER_CONTEXT_SCHEMA = z.object({
   current_priorities: z.string().nullable().optional().describe('Current stakeholder priorities'),
   notes: z.string().nullable().optional().describe('Structured context notes'),
 });
+
+type McpRuntimeMode = 'legacy' | 'oauth';
+
+interface McpRuntimeConfig {
+  mode: McpRuntimeMode;
+  apiBaseUrl: string;
+  apiPathPrefix: string;
+  canonicalAppUrl: string;
+  apiKey?: string;
+  bearerToken?: string;
+  userId?: string | null;
+}
+
+interface LegacyMcpAuthResult {
+  apiKey: string;
+  userId: string | null;
+}
+
+const nativeFetch = globalThis.fetch.bind(globalThis);
+const mcpRuntimeStorage = new AsyncLocalStorage<McpRuntimeConfig>();
+
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, '');
+}
+
+function getRuntimeConfig(): McpRuntimeConfig {
+  const config = mcpRuntimeStorage.getStore();
+  if (!config) {
+    throw new Error('MCP runtime config not initialized');
+  }
+
+  return config;
+}
+
+function buildRoutedUrl(rawInput: string | URL, config: McpRuntimeConfig): string {
+  const inputUrl = typeof rawInput === 'string' || rawInput instanceof URL
+    ? new URL(rawInput.toString(), LEGACY_APP_ORIGIN)
+    : new URL(String(rawInput));
+
+  if (inputUrl.origin !== LEGACY_APP_ORIGIN || !inputUrl.pathname.startsWith('/api/')) {
+    return inputUrl.toString();
+  }
+
+  const baseUrl = new URL(config.apiBaseUrl);
+  const basePathname = trimTrailingSlash(baseUrl.pathname);
+  const apiPathPrefix = trimTrailingSlash(config.apiPathPrefix);
+  const routedPath = `${basePathname}${apiPathPrefix}${inputUrl.pathname.slice(4)}` || '/';
+
+  baseUrl.pathname = routedPath;
+  baseUrl.search = inputUrl.search;
+  baseUrl.hash = inputUrl.hash;
+  return baseUrl.toString();
+}
+
+async function fetch(input: string | URL, init?: RequestInit): Promise<Response> {
+  const config = mcpRuntimeStorage.getStore();
+  if (!config) {
+    return nativeFetch(input, init);
+  }
+
+  const headers = new Headers(init?.headers);
+  headers.delete('x-mission-control-key');
+
+  if (config.mode === 'legacy') {
+    headers.set('X-Mission-Control-Key', config.apiKey!);
+  } else {
+    headers.set('Authorization', `Bearer ${config.bearerToken!}`);
+  }
+
+  return nativeFetch(buildRoutedUrl(input, config), {
+    ...init,
+    headers,
+  });
+}
 
 function getCurrentTimeEt(): string {
   return new Date().toLocaleString('en-US', {
@@ -80,9 +159,9 @@ function toMcpResponse(data: unknown) {
 }
 
 // ---------------------------------------------------------------------------
-// Auth helper — validates API key before allowing MCP access
+// Auth helper — validates API key before allowing legacy MCP access
 // ---------------------------------------------------------------------------
-function authenticate(request: Request): true | Response {
+function authenticateLegacyMcp(request: Request): LegacyMcpAuthResult | Response {
   const validApiKey = process.env.MISSION_CONTROL_API_KEY;
   const actionsApiKey = process.env.MISSION_CONTROL_ACTIONS_API_KEY;
 
@@ -103,7 +182,10 @@ function authenticate(request: Request): true | Response {
   const apiKey = customKey || bearerToken || urlKey;
 
   if (apiKey && validApiKey && apiKey === validApiKey) {
-    return true;
+    return {
+      apiKey,
+      userId: process.env.MISSION_CONTROL_USER_ID?.trim() || null,
+    };
   }
 
   if (apiKey && actionsApiKey && apiKey === actionsApiKey) {
@@ -1232,6 +1314,58 @@ function createMcpServer(): McpServer {
     }
   );
 
+  mcp.tool(
+    'search',
+    'Search Mission Control records using a single free-text query. Returns up to 10 results with stable URLs.',
+    {
+      query: z.string().min(1).describe('Free-text query'),
+    },
+    async ({ query }) => {
+      const runtime = getRuntimeConfig();
+      if (!runtime.userId) {
+        return toMcpResponse({ error: 'Search is not configured for this MCP auth context' });
+      }
+
+      const supabase = createSupabaseAdminClient();
+      const results = await searchMissionControlData(
+        supabase,
+        runtime.userId,
+        query,
+        runtime.canonicalAppUrl
+      );
+
+      return toMcpResponse(results);
+    }
+  );
+
+  mcp.tool(
+    'fetch',
+    'Fetch the full stored text for a Mission Control search result id.',
+    {
+      id: z.string().min(1).describe('Typed search result id such as record:task:<id>, email:<id>, or calendar:<id>'),
+    },
+    async ({ id }) => {
+      const runtime = getRuntimeConfig();
+      if (!runtime.userId) {
+        return toMcpResponse({ error: 'Fetch is not configured for this MCP auth context' });
+      }
+
+      const supabase = createSupabaseAdminClient();
+      const result = await fetchMissionControlItemById(
+        supabase,
+        runtime.userId,
+        id,
+        runtime.canonicalAppUrl
+      );
+
+      if (!result) {
+        return toMcpResponse({ error: 'Result not found', id });
+      }
+
+      return toMcpResponse(result);
+    }
+  );
+
   return mcp;
 }
 
@@ -1239,28 +1373,103 @@ function createMcpServer(): McpServer {
 // Next.js App Router handlers — POST for MCP messages, GET for SSE, DELETE for cleanup
 // ---------------------------------------------------------------------------
 
-async function handleMcpRequest(request: Request): Promise<Response> {
-  // Authenticate
-  const authResult = authenticate(request);
+async function runConfiguredMcpRequest(
+  request: Request,
+  runtimeConfig: McpRuntimeConfig
+): Promise<Response> {
+  return mcpRuntimeStorage.run(runtimeConfig, async () => {
+    const mcp = createMcpServer();
+    const transport = new WebStandardStreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+      enableJsonResponse: true,
+    });
+
+    await mcp.connect(transport);
+
+    try {
+      return await transport.handleRequest(request);
+    } finally {
+      await mcp.close();
+    }
+  });
+}
+
+async function handleLegacyMcpRequest(request: Request): Promise<Response> {
+  const authResult = authenticateLegacyMcp(request);
   if (authResult instanceof Response) {
     return authResult;
   }
 
-  // Create a fresh MCP server + transport per request (stateless / serverless)
-  const mcp = createMcpServer();
-  const transport = new WebStandardStreamableHTTPServerTransport({
-    sessionIdGenerator: undefined, // stateless mode
-    enableJsonResponse: true,
+  return runConfiguredMcpRequest(request, {
+    mode: 'legacy',
+    apiBaseUrl: new URL(request.url).origin,
+    apiPathPrefix: '/api',
+    canonicalAppUrl: getCanonicalAppUrl(new URL(request.url).origin),
+    apiKey: authResult.apiKey,
+    userId: authResult.userId,
+  });
+}
+
+export async function handleMcpUpstreamRequest(
+  request: Request,
+  input: {
+    bearerToken: string;
+    userId: string;
+  }
+): Promise<Response> {
+  return runConfiguredMcpRequest(request, {
+    mode: 'oauth',
+    apiBaseUrl: new URL(request.url).origin,
+    apiPathPrefix: '/api/mcp-upstream',
+    canonicalAppUrl: getCanonicalAppUrl(new URL(request.url).origin),
+    bearerToken: input.bearerToken,
+    userId: input.userId,
+  });
+}
+
+async function proxyPublicMcpRequest(request: Request): Promise<Response> {
+  const url = new URL(request.url);
+  if (url.searchParams.has('key') || request.headers.has('x-mission-control-key')) {
+    return new Response(JSON.stringify({ error: 'Legacy API key auth is disabled on the public MCP deployment' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  const authHeader = request.headers.get('authorization');
+  if (!authHeader?.toLowerCase().startsWith('bearer ')) {
+    return new Response(JSON.stringify({ error: 'OAuth bearer token required' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  const body = request.method === 'GET' || request.method === 'DELETE'
+    ? undefined
+    : await request.text();
+  const upstreamUrl = `${getUpstreamApiUrl()}/api/mcp-upstream${url.search}`;
+  const headers = new Headers(request.headers);
+  headers.delete('host');
+  headers.delete('x-mission-control-key');
+
+  const upstreamResponse = await nativeFetch(upstreamUrl, {
+    method: request.method,
+    headers,
+    body,
   });
 
-  await mcp.connect(transport);
+  return new Response(upstreamResponse.body, {
+    status: upstreamResponse.status,
+    headers: upstreamResponse.headers,
+  });
+}
 
-  try {
-    return await transport.handleRequest(request);
-  } finally {
-    // Clean up after the request
-    await mcp.close();
+async function handleMcpRequest(request: Request): Promise<Response> {
+  if (isMcpDeployment()) {
+    return proxyPublicMcpRequest(request);
   }
+
+  return handleLegacyMcpRequest(request);
 }
 
 export async function POST(request: Request): Promise<Response> {

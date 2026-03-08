@@ -6,6 +6,7 @@ import {
   coerceTaskRecurrence,
 } from '@/lib/recurrence';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
+import { readInternalAuthContext } from '@/lib/supabase/internal-auth';
 import type { TaskRecurrence } from '@/types/database';
 
 interface RecurringTaskRow {
@@ -31,6 +32,10 @@ function getTodayDateOnly(): string {
 }
 
 function isAuthorized(request: NextRequest): boolean {
+  if (readInternalAuthContext(request)) {
+    return true;
+  }
+
   const cronSecret = process.env.CRON_SECRET;
   const apiKey = process.env.MISSION_CONTROL_API_KEY;
   const authHeader = request.headers.get('authorization');
