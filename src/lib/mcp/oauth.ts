@@ -112,7 +112,7 @@ export function buildOauthErrorRedirect(
   if (state) {
     url.searchParams.set('state', state);
   }
-  return NextResponse.redirect(url);
+  return NextResponse.redirect(url, 302);
 }
 
 export function jsonOauthError(

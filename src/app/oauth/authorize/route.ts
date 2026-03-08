@@ -126,7 +126,9 @@ function buildAuthorizeSuccessResponse(
     url.searchParams.set('state', state);
   }
 
-  return NextResponse.redirect(url);
+  // Use 302 (not Next.js default 307) so the browser switches from POST to GET
+  // when following the redirect to the OAuth callback.
+  return NextResponse.redirect(url, 302);
 }
 
 function buildAuthorizeErrorResponse(

@@ -1427,12 +1427,20 @@ export async function handleMcpUpstreamRequest(
   });
 }
 
+function buildWwwAuthenticateHeader(request: Request): string {
+  const origin = new URL(request.url).origin;
+  return `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource"`;
+}
+
 async function proxyPublicMcpRequest(request: Request): Promise<Response> {
   const url = new URL(request.url);
   if (url.searchParams.has('key') || request.headers.has('x-mission-control-key')) {
     return new Response(JSON.stringify({ error: 'Legacy API key auth is disabled on the public MCP deployment' }), {
       status: 401,
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'WWW-Authenticate': buildWwwAuthenticateHeader(request),
+      },
     });
   }
 
@@ -1440,7 +1448,10 @@ async function proxyPublicMcpRequest(request: Request): Promise<Response> {
   if (!authHeader?.toLowerCase().startsWith('bearer ')) {
     return new Response(JSON.stringify({ error: 'OAuth bearer token required' }), {
       status: 401,
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'WWW-Authenticate': buildWwwAuthenticateHeader(request),
+      },
     });
   }
 
@@ -1482,4 +1493,13 @@ export async function GET(request: Request): Promise<Response> {
 
 export async function DELETE(request: Request): Promise<Response> {
   return handleMcpRequest(request);
+}
+
+export async function HEAD(): Promise<Response> {
+  return new Response(null, {
+    status: 200,
+    headers: {
+      'MCP-Protocol-Version': '2025-06-18',
+    },
+  });
 }

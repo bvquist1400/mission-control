@@ -11,7 +11,8 @@ function isAllowedClaudeOrigin(origin: string): boolean {
     }
 
     const hostname = parsed.hostname.toLowerCase();
-    return hostname === 'claude.ai' || hostname.endsWith('.claude.ai');
+    return hostname === 'claude.ai' || hostname.endsWith('.claude.ai')
+      || hostname === 'claude.com' || hostname.endsWith('.claude.com');
   } catch {
     return false;
   }
