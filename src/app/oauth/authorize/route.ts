@@ -23,6 +23,97 @@ function getRequestedValue(searchParams: URLSearchParams | FormData, key: string
   return typeof raw === 'string' && raw.trim().length > 0 ? raw.trim() : null;
 }
 
+type OAuthAuthorizeResponseMode = 'query' | 'form_post';
+
+function getAuthorizeResponseMode(value: string | null): OAuthAuthorizeResponseMode | null {
+  if (!value || value === 'query') {
+    return 'query';
+  }
+
+  if (value === 'form_post') {
+    return 'form_post';
+  }
+
+  return null;
+}
+
+function buildFormPostHtml(redirectUri: string, values: Record<string, string>): string {
+  const inputs = Object.entries(values)
+    .map(([key, value]) => `<input type="hidden" name="${escapeHtml(key)}" value="${escapeHtml(value)}" />`)
+    .join('\n        ');
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Completing authorization</title>
+  </head>
+  <body>
+    <form id="oauth-form-post" method="POST" action="${escapeHtml(redirectUri)}">
+        ${inputs}
+    </form>
+    <script>
+      document.getElementById('oauth-form-post')?.submit();
+    </script>
+  </body>
+</html>`;
+}
+
+function buildAuthorizeSuccessResponse(
+  redirectUri: string,
+  code: string,
+  state: string | null,
+  responseMode: OAuthAuthorizeResponseMode
+): NextResponse {
+  if (responseMode === 'form_post') {
+    const values: Record<string, string> = { code };
+    if (state) {
+      values.state = state;
+    }
+
+    return new NextResponse(buildFormPostHtml(redirectUri, values), {
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8',
+      },
+    });
+  }
+
+  const url = new URL(redirectUri);
+  url.searchParams.set('code', code);
+  if (state) {
+    url.searchParams.set('state', state);
+  }
+
+  return NextResponse.redirect(url);
+}
+
+function buildAuthorizeErrorResponse(
+  redirectUri: string,
+  error: string,
+  state: string | null,
+  description: string,
+  responseMode: OAuthAuthorizeResponseMode
+): NextResponse {
+  if (responseMode === 'form_post') {
+    const values: Record<string, string> = {
+      error,
+      error_description: description,
+    };
+    if (state) {
+      values.state = state;
+    }
+
+    return new NextResponse(buildFormPostHtml(redirectUri, values), {
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8',
+      },
+    });
+  }
+
+  return buildOauthErrorRedirect(redirectUri, error, state, description);
+}
+
 function buildAuthorizeHtml(input: {
   clientName: string;
   userEmail: string;
@@ -31,6 +122,7 @@ function buildAuthorizeHtml(input: {
   scope: string;
   state: string | null;
   codeChallenge: string;
+  responseMode: OAuthAuthorizeResponseMode;
 }): string {
   const deleteRequested = input.scope.split(/\s+/).includes('mcp.delete');
   const dangerNote = deleteRequested
@@ -72,6 +164,7 @@ function buildAuthorizeHtml(input: {
         <input type="hidden" name="scope" value="${escapeHtml(input.scope)}" />
         <input type="hidden" name="code_challenge" value="${escapeHtml(input.codeChallenge)}" />
         <input type="hidden" name="code_challenge_method" value="S256" />
+        <input type="hidden" name="response_mode" value="${escapeHtml(input.responseMode)}" />
         ${input.state ? `<input type="hidden" name="state" value="${escapeHtml(input.state)}" />` : ''}
         <div class="actions">
           <button class="approve" type="submit" name="decision" value="approve">Approve</button>
@@ -102,6 +195,7 @@ function validateAuthorizeRequest(values: {
   clientId: string | null;
   redirectUri: string | null;
   responseType: string | null;
+  responseMode: string | null;
   codeChallenge: string | null;
   codeChallengeMethod: string | null;
   scope: string | null;
@@ -112,6 +206,11 @@ function validateAuthorizeRequest(values: {
 
   if (values.responseType !== 'code') {
     return { error: 'unsupported_response_type', description: 'Only response_type=code is supported' };
+  }
+
+  const responseMode = getAuthorizeResponseMode(values.responseMode);
+  if (!responseMode) {
+    return { error: 'invalid_request', description: 'Only response_mode=query or form_post is supported' };
   }
 
   if (values.codeChallengeMethod && values.codeChallengeMethod !== 'S256') {
@@ -133,6 +232,7 @@ function validateAuthorizeRequest(values: {
   return {
     error: null,
     description: null,
+    responseMode,
     normalizedScope: scopeValidation.scope,
   };
 }
@@ -150,6 +250,7 @@ export async function GET(request: NextRequest) {
   const clientId = getRequestedValue(request.nextUrl.searchParams, 'client_id');
   const redirectUri = getRequestedValue(request.nextUrl.searchParams, 'redirect_uri');
   const responseType = getRequestedValue(request.nextUrl.searchParams, 'response_type');
+  const responseMode = getRequestedValue(request.nextUrl.searchParams, 'response_mode');
   const scope = getRequestedValue(request.nextUrl.searchParams, 'scope');
   const state = getRequestedValue(request.nextUrl.searchParams, 'state');
   const codeChallenge = getRequestedValue(request.nextUrl.searchParams, 'code_challenge');
@@ -159,6 +260,7 @@ export async function GET(request: NextRequest) {
     clientId,
     redirectUri,
     responseType,
+    responseMode,
     codeChallenge,
     codeChallengeMethod,
     scope,
@@ -176,11 +278,23 @@ export async function GET(request: NextRequest) {
 
   const client = await findRegisteredMcpClient(clientId!);
   if (!client) {
-    return buildOauthErrorRedirect(redirectUri, 'invalid_client', state, 'Unknown client_id');
+    return buildAuthorizeErrorResponse(
+      redirectUri,
+      'invalid_client',
+      state,
+      'Unknown client_id',
+      validation.responseMode || 'query'
+    );
   }
 
   if (!client.redirect_uris.includes(redirectUri)) {
-    return buildOauthErrorRedirect(redirectUri, 'invalid_grant', state, 'redirect_uri mismatch');
+    return buildAuthorizeErrorResponse(
+      redirectUri,
+      'invalid_grant',
+      state,
+      'redirect_uri mismatch',
+      validation.responseMode || 'query'
+    );
   }
 
   return new NextResponse(
@@ -192,6 +306,7 @@ export async function GET(request: NextRequest) {
       scope: validation.normalizedScope || client.scope,
       state,
       codeChallenge: codeChallenge!,
+      responseMode: validation.responseMode || 'query',
     }),
     {
       headers: {
@@ -217,6 +332,7 @@ export async function POST(request: NextRequest) {
   const redirectUri = getRequestedValue(formData, 'redirect_uri');
   const scope = getRequestedValue(formData, 'scope');
   const state = getRequestedValue(formData, 'state');
+  const responseMode = getRequestedValue(formData, 'response_mode');
   const codeChallenge = getRequestedValue(formData, 'code_challenge');
   const codeChallengeMethod = getRequestedValue(formData, 'code_challenge_method');
 
@@ -224,6 +340,7 @@ export async function POST(request: NextRequest) {
     clientId,
     redirectUri,
     responseType: 'code',
+    responseMode,
     codeChallenge,
     codeChallengeMethod,
     scope,
@@ -241,15 +358,33 @@ export async function POST(request: NextRequest) {
 
   const client = await findRegisteredMcpClient(clientId!);
   if (!client) {
-    return buildOauthErrorRedirect(redirectUri, 'invalid_client', state, 'Unknown client_id');
+    return buildAuthorizeErrorResponse(
+      redirectUri,
+      'invalid_client',
+      state,
+      'Unknown client_id',
+      validation.responseMode || 'query'
+    );
   }
 
   if (!client.redirect_uris.includes(redirectUri)) {
-    return buildOauthErrorRedirect(redirectUri, 'invalid_grant', state, 'redirect_uri mismatch');
+    return buildAuthorizeErrorResponse(
+      redirectUri,
+      'invalid_grant',
+      state,
+      'redirect_uri mismatch',
+      validation.responseMode || 'query'
+    );
   }
 
   if (decision !== 'approve') {
-    return buildOauthErrorRedirect(redirectUri, 'access_denied', state, 'Authorization was denied');
+    return buildAuthorizeErrorResponse(
+      redirectUri,
+      'access_denied',
+      state,
+      'Authorization was denied',
+      validation.responseMode || 'query'
+    );
   }
 
   const code = await issueAuthorizationCode({
@@ -261,11 +396,10 @@ export async function POST(request: NextRequest) {
     codeChallengeMethod: 'S256',
   });
 
-  const url = new URL(redirectUri);
-  url.searchParams.set('code', code);
-  if (state) {
-    url.searchParams.set('state', state);
-  }
-
-  return NextResponse.redirect(url);
+  return buildAuthorizeSuccessResponse(
+    redirectUri,
+    code,
+    state,
+    validation.responseMode || 'query'
+  );
 }
