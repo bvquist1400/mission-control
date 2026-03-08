@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import {
@@ -8,6 +9,35 @@ import {
   validateScopeInput,
 } from '@/lib/mcp/oauth';
 import { isMcpDeployment } from '@/lib/mcp/config';
+
+function maskValue(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  if (value.length <= 12) {
+    return value;
+  }
+
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
+function describeRedirectUri(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const url = new URL(value);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return value;
+  }
+}
+
+function logAuthorizeEvent(event: string, requestId: string, payload: Record<string, unknown>) {
+  console.info(`[mcp-oauth][authorize][${requestId}] ${event}`, payload);
+}
 
 function escapeHtml(value: string): string {
   return value
@@ -37,21 +67,12 @@ function getAuthorizeResponseMode(value: string | null): OAuthAuthorizeResponseM
   return null;
 }
 
-function shouldDefaultToClaudeFormPost(redirectUri: string): boolean {
-  try {
-    const url = new URL(redirectUri);
-    return url.hostname.toLowerCase() === 'claude.ai' && url.pathname === '/api/mcp/auth_callback';
-  } catch {
-    return false;
-  }
-}
-
 function resolveAuthorizeResponseMode(
-  redirectUri: string,
+  _redirectUri: string,
   requestedResponseMode: string | null
 ): OAuthAuthorizeResponseMode | null {
   if (!requestedResponseMode) {
-    return shouldDefaultToClaudeFormPost(redirectUri) ? 'form_post' : 'query';
+    return 'query';
   }
 
   return getAuthorizeResponseMode(requestedResponseMode);
@@ -262,8 +283,13 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
+  const requestId = randomUUID().slice(0, 8);
   const user = await getSignedInUser();
   if (!user) {
+    logAuthorizeEvent('redirect_to_login', requestId, {
+      pathname: request.nextUrl.pathname,
+      userAgent: request.headers.get('user-agent'),
+    });
     return redirectToLogin(request);
   }
 
@@ -286,7 +312,26 @@ export async function GET(request: NextRequest) {
     scope,
   });
 
+  logAuthorizeEvent('request', requestId, {
+    clientId: maskValue(clientId),
+    redirectUri: describeRedirectUri(redirectUri),
+    responseType,
+    requestedResponseMode: responseMode,
+    resolvedResponseMode: validation.responseMode ?? null,
+    scope: validation.normalizedScope ?? scope,
+    statePresent: Boolean(state),
+    codeChallengeMethod,
+    userId: user.id,
+    userAgent: request.headers.get('user-agent'),
+    origin: request.headers.get('origin'),
+    referer: request.headers.get('referer'),
+  });
+
   if (validation.error || !redirectUri) {
+    logAuthorizeEvent('invalid_request', requestId, {
+      error: validation.error ?? 'invalid_request',
+      description: validation.description ?? 'Missing redirect_uri',
+    });
     return NextResponse.json(
       {
         error: validation.error ?? 'invalid_request',
@@ -298,6 +343,11 @@ export async function GET(request: NextRequest) {
 
   const client = await findRegisteredMcpClient(clientId!);
   if (!client) {
+    logAuthorizeEvent('unknown_client', requestId, {
+      clientId: maskValue(clientId),
+      redirectUri: describeRedirectUri(redirectUri),
+      responseMode: validation.responseMode || 'query',
+    });
     return buildAuthorizeErrorResponse(
       redirectUri,
       'invalid_client',
@@ -308,6 +358,12 @@ export async function GET(request: NextRequest) {
   }
 
   if (!client.redirect_uris.includes(redirectUri)) {
+    logAuthorizeEvent('redirect_uri_mismatch', requestId, {
+      clientId: maskValue(clientId),
+      redirectUri: describeRedirectUri(redirectUri),
+      registeredRedirectUris: client.redirect_uris.map(describeRedirectUri),
+      responseMode: validation.responseMode || 'query',
+    });
     return buildAuthorizeErrorResponse(
       redirectUri,
       'invalid_grant',
@@ -316,6 +372,13 @@ export async function GET(request: NextRequest) {
       validation.responseMode || 'query'
     );
   }
+
+  logAuthorizeEvent('render_consent', requestId, {
+    clientId: maskValue(client.client_id),
+    redirectUri: describeRedirectUri(redirectUri),
+    responseMode: validation.responseMode || 'query',
+    scope: validation.normalizedScope || client.scope,
+  });
 
   return new NextResponse(
     buildAuthorizeHtml({
@@ -341,8 +404,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
+  const requestId = randomUUID().slice(0, 8);
   const user = await getSignedInUser();
   if (!user) {
+    logAuthorizeEvent('post_redirect_to_login', requestId, {
+      pathname: request.nextUrl.pathname,
+      userAgent: request.headers.get('user-agent'),
+    });
     return redirectToLogin(request);
   }
 
@@ -366,7 +434,25 @@ export async function POST(request: NextRequest) {
     scope,
   });
 
+  logAuthorizeEvent('decision', requestId, {
+    clientId: maskValue(clientId),
+    redirectUri: describeRedirectUri(redirectUri),
+    decision,
+    requestedResponseMode: responseMode,
+    resolvedResponseMode: validation.responseMode ?? null,
+    scope: validation.normalizedScope ?? scope,
+    statePresent: Boolean(state),
+    userId: user.id,
+    userAgent: request.headers.get('user-agent'),
+    origin: request.headers.get('origin'),
+    referer: request.headers.get('referer'),
+  });
+
   if (validation.error || !redirectUri) {
+    logAuthorizeEvent('post_invalid_request', requestId, {
+      error: validation.error ?? 'invalid_request',
+      description: validation.description ?? 'Missing redirect_uri',
+    });
     return NextResponse.json(
       {
         error: validation.error ?? 'invalid_request',
@@ -378,6 +464,10 @@ export async function POST(request: NextRequest) {
 
   const client = await findRegisteredMcpClient(clientId!);
   if (!client) {
+    logAuthorizeEvent('post_unknown_client', requestId, {
+      clientId: maskValue(clientId),
+      redirectUri: describeRedirectUri(redirectUri),
+    });
     return buildAuthorizeErrorResponse(
       redirectUri,
       'invalid_client',
@@ -388,6 +478,11 @@ export async function POST(request: NextRequest) {
   }
 
   if (!client.redirect_uris.includes(redirectUri)) {
+    logAuthorizeEvent('post_redirect_uri_mismatch', requestId, {
+      clientId: maskValue(clientId),
+      redirectUri: describeRedirectUri(redirectUri),
+      registeredRedirectUris: client.redirect_uris.map(describeRedirectUri),
+    });
     return buildAuthorizeErrorResponse(
       redirectUri,
       'invalid_grant',
@@ -398,6 +493,11 @@ export async function POST(request: NextRequest) {
   }
 
   if (decision !== 'approve') {
+    logAuthorizeEvent('access_denied', requestId, {
+      clientId: maskValue(clientId),
+      redirectUri: describeRedirectUri(redirectUri),
+      responseMode: validation.responseMode || 'query',
+    });
     return buildAuthorizeErrorResponse(
       redirectUri,
       'access_denied',
@@ -414,6 +514,14 @@ export async function POST(request: NextRequest) {
     scope: validation.normalizedScope || client.scope,
     codeChallenge: codeChallenge!,
     codeChallengeMethod: 'S256',
+  });
+
+  logAuthorizeEvent('issued_code', requestId, {
+    clientId: maskValue(client.client_id),
+    redirectUri: describeRedirectUri(redirectUri),
+    responseMode: validation.responseMode || 'query',
+    statePresent: Boolean(state),
+    code: maskValue(code),
   });
 
   return buildAuthorizeSuccessResponse(
