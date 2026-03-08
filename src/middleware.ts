@@ -15,6 +15,12 @@ const MCP_ALLOWED_EXACT_PATHS = new Set([
   '/favicon.ico',
 ]);
 
+const CORS_ENABLED_PREFIXES = [
+  '/api/',
+  '/oauth',
+  '/.well-known',
+];
+
 function isAllowedMcpPath(pathname: string): boolean {
   if (MCP_ALLOWED_EXACT_PATHS.has(pathname)) {
     return true;
@@ -23,12 +29,16 @@ function isAllowedMcpPath(pathname: string): boolean {
   return MCP_ALLOWED_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
 }
 
+function isCorsEnabledPath(pathname: string): boolean {
+  return CORS_ENABLED_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(prefix));
+}
+
 export function middleware(request: NextRequest) {
   if (getDeploymentRole() === 'mcp' && !isAllowedMcpPath(request.nextUrl.pathname)) {
     return new NextResponse('Not Found', { status: 404 });
   }
 
-  if (!request.nextUrl.pathname.startsWith('/api/')) {
+  if (!isCorsEnabledPath(request.nextUrl.pathname)) {
     return NextResponse.next();
   }
 
