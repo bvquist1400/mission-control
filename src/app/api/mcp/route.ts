@@ -1463,10 +1463,31 @@ async function proxyPublicMcpRequest(request: Request): Promise<Response> {
   headers.delete('host');
   headers.delete('x-mission-control-key');
 
-  const upstreamResponse = await nativeFetch(upstreamUrl, {
+  console.info('[mcp-proxy] forwarding', {
     method: request.method,
-    headers,
-    body,
+    upstreamUrl,
+    bodyLength: body?.length ?? 0,
+    contentType: request.headers.get('content-type'),
+  });
+
+  let upstreamResponse: Response;
+  try {
+    upstreamResponse = await nativeFetch(upstreamUrl, {
+      method: request.method,
+      headers,
+      body,
+    });
+  } catch (err) {
+    console.error('[mcp-proxy] upstream fetch error', err);
+    return new Response(JSON.stringify({ error: 'Upstream fetch failed', message: String(err) }), {
+      status: 502,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  console.info('[mcp-proxy] upstream response', {
+    status: upstreamResponse.status,
+    contentType: upstreamResponse.headers.get('content-type'),
   });
 
   return new Response(upstreamResponse.body, {
