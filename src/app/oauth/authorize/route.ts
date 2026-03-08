@@ -37,6 +37,26 @@ function getAuthorizeResponseMode(value: string | null): OAuthAuthorizeResponseM
   return null;
 }
 
+function shouldDefaultToClaudeFormPost(redirectUri: string): boolean {
+  try {
+    const url = new URL(redirectUri);
+    return url.hostname.toLowerCase() === 'claude.ai' && url.pathname === '/api/mcp/auth_callback';
+  } catch {
+    return false;
+  }
+}
+
+function resolveAuthorizeResponseMode(
+  redirectUri: string,
+  requestedResponseMode: string | null
+): OAuthAuthorizeResponseMode | null {
+  if (!requestedResponseMode) {
+    return shouldDefaultToClaudeFormPost(redirectUri) ? 'form_post' : 'query';
+  }
+
+  return getAuthorizeResponseMode(requestedResponseMode);
+}
+
 function buildFormPostHtml(redirectUri: string, values: Record<string, string>): string {
   const inputs = Object.entries(values)
     .map(([key, value]) => `<input type="hidden" name="${escapeHtml(key)}" value="${escapeHtml(value)}" />`)
@@ -208,7 +228,7 @@ function validateAuthorizeRequest(values: {
     return { error: 'unsupported_response_type', description: 'Only response_type=code is supported' };
   }
 
-  const responseMode = getAuthorizeResponseMode(values.responseMode);
+  const responseMode = resolveAuthorizeResponseMode(values.redirectUri, values.responseMode);
   if (!responseMode) {
     return { error: 'invalid_request', description: 'Only response_mode=query or form_post is supported' };
   }
