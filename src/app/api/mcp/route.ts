@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import { getAllowedCorsOrigin, applyCorsHeaders } from '@/lib/cors';
 import { getCanonicalAppUrl, getUpstreamApiUrl, isMcpDeployment } from '@/lib/mcp/config';
 import { fetchMissionControlItemById, searchMissionControlData } from '@/lib/mcp/search';
 import { PROJECT_STAGE_VALUES } from '@/lib/project-stage';
@@ -1432,27 +1433,39 @@ function buildWwwAuthenticateHeader(request: Request): string {
   return `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource"`;
 }
 
+function applyProxyCors(response: Response, request: Request): Response {
+  const origin = request.headers.get('origin');
+  const allowedOrigin = getAllowedCorsOrigin(origin);
+  const headers = new Headers(response.headers);
+  applyCorsHeaders(headers, allowedOrigin);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 async function proxyPublicMcpRequest(request: Request): Promise<Response> {
   const url = new URL(request.url);
   if (url.searchParams.has('key') || request.headers.has('x-mission-control-key')) {
-    return new Response(JSON.stringify({ error: 'Legacy API key auth is disabled on the public MCP deployment' }), {
+    return applyProxyCors(new Response(JSON.stringify({ error: 'Legacy API key auth is disabled on the public MCP deployment' }), {
       status: 401,
       headers: {
         'Content-Type': 'application/json',
         'WWW-Authenticate': buildWwwAuthenticateHeader(request),
       },
-    });
+    }), request);
   }
 
   const authHeader = request.headers.get('authorization');
   if (!authHeader?.toLowerCase().startsWith('bearer ')) {
-    return new Response(JSON.stringify({ error: 'OAuth bearer token required' }), {
+    return applyProxyCors(new Response(JSON.stringify({ error: 'OAuth bearer token required' }), {
       status: 401,
       headers: {
         'Content-Type': 'application/json',
         'WWW-Authenticate': buildWwwAuthenticateHeader(request),
       },
-    });
+    }), request);
   }
 
   const body = request.method === 'GET' || request.method === 'DELETE'
@@ -1479,10 +1492,10 @@ async function proxyPublicMcpRequest(request: Request): Promise<Response> {
     });
   } catch (err) {
     console.error('[mcp-proxy] upstream fetch error', err);
-    return new Response(JSON.stringify({ error: 'Upstream fetch failed', message: String(err) }), {
+    return applyProxyCors(new Response(JSON.stringify({ error: 'Upstream fetch failed', message: String(err) }), {
       status: 502,
       headers: { 'Content-Type': 'application/json' },
-    });
+    }), request);
   }
 
   console.info('[mcp-proxy] upstream response', {
@@ -1490,10 +1503,10 @@ async function proxyPublicMcpRequest(request: Request): Promise<Response> {
     contentType: upstreamResponse.headers.get('content-type'),
   });
 
-  return new Response(upstreamResponse.body, {
+  return applyProxyCors(new Response(upstreamResponse.body, {
     status: upstreamResponse.status,
     headers: upstreamResponse.headers,
-  });
+  }), request);
 }
 
 async function handleMcpRequest(request: Request): Promise<Response> {
