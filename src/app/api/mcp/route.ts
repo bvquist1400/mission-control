@@ -1501,17 +1501,26 @@ async function proxyPublicMcpRequest(request: Request): Promise<Response> {
 
   const upstreamBody = await upstreamResponse.text();
 
+  const upstreamHeaders: Record<string, string> = {};
+  upstreamResponse.headers.forEach((value, key) => { upstreamHeaders[key] = value; });
+
   console.info('[mcp-proxy] upstream response', {
     status: upstreamResponse.status,
-    contentType: upstreamResponse.headers.get('content-type'),
+    headers: upstreamHeaders,
     bodyLength: upstreamBody.length,
     bodyPreview: upstreamBody.slice(0, 500),
   });
 
-  return applyProxyCors(new Response(upstreamBody, {
+  const proxyResponse = applyProxyCors(new Response(upstreamBody, {
     status: upstreamResponse.status,
     headers: upstreamResponse.headers,
   }), request);
+
+  const finalHeaders: Record<string, string> = {};
+  proxyResponse.headers.forEach((value, key) => { finalHeaders[key] = value; });
+  console.info('[mcp-proxy] final response headers', finalHeaders);
+
+  return proxyResponse;
 }
 
 async function handleMcpRequest(request: Request): Promise<Response> {
