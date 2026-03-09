@@ -1535,9 +1535,16 @@ async function proxyPublicMcpRequest(request: Request): Promise<Response> {
     bodyPreview: upstreamBody.slice(0, 500),
   });
 
+  // Build clean headers: strip hop-by-hop and encoding headers since we
+  // consumed the body as text (which auto-decompresses).
+  const responseHeaders = new Headers(upstreamResponse.headers);
+  responseHeaders.delete('content-encoding');
+  responseHeaders.delete('transfer-encoding');
+  responseHeaders.delete('content-length');
+
   const proxyResponse = applyProxyCors(new Response(upstreamBody, {
     status: upstreamResponse.status,
-    headers: upstreamResponse.headers,
+    headers: responseHeaders,
   }), request);
 
   const finalHeaders: Record<string, string> = {};
