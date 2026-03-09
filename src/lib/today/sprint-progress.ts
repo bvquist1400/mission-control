@@ -1,4 +1,7 @@
-const DATE_ONLY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+import { normalizeDateOnly, toUtcDateMs } from '../date-only.ts';
+
+export { normalizeDateOnly, toUtcDateMs } from '../date-only.ts';
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_PACE_TOLERANCE_TASKS = 1;
 const EMPTY_HOLIDAY_SET = new Set<string>();
@@ -24,30 +27,6 @@ export interface SprintProgressMetrics {
   forecastFinishDate: string | null;
   forecastWithinSprint: boolean | null;
   onTrack: boolean;
-}
-
-export function toUtcDateMs(dateOnly: string): number | null {
-  const match = DATE_ONLY_REGEX.exec(dateOnly);
-  if (!match) {
-    return null;
-  }
-
-  const year = Number(match[0].slice(0, 4));
-  const monthIndex = Number(match[0].slice(5, 7)) - 1;
-  const day = Number(match[0].slice(8, 10));
-  const utcMs = Date.UTC(year, monthIndex, day);
-  const normalized = new Date(utcMs).toISOString().slice(0, 10);
-
-  return normalized === dateOnly ? utcMs : null;
-}
-
-export function normalizeDateOnly(value: string): string | null {
-  const trimmed = value.trim();
-  if (!DATE_ONLY_REGEX.test(trimmed)) {
-    return null;
-  }
-
-  return toUtcDateMs(trimmed) === null ? null : trimmed;
 }
 
 export function parseSprintHolidaySet(raw: string | undefined): Set<string> {

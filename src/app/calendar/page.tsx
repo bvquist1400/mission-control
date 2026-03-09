@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { localDateString } from '@/components/utils/dates';
+import { addDateOnlyDays } from '@/lib/date-only';
 
 interface CalendarEvent {
   start_at: string;
@@ -85,9 +86,7 @@ function formatMinutes(value: number): string {
 }
 
 function addDays(dateString: string, days: number): string {
-  const date = new Date(`${dateString}T00:00:00.000Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return localDateString(date);
+  return addDateOnlyDays(dateString, days) ?? dateString;
 }
 
 function LoadingSkeleton() {

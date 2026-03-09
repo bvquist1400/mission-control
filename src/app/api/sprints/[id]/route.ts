@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getSprintWeekRange, isMondayToFridaySprintRange, resolveSprintWeekRange } from '@/lib/date-only';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import type { TaskStatus } from '@/types/database';
 
@@ -23,8 +24,25 @@ function asDateOnlyOrNull(value: unknown): string | null {
   return normalized;
 }
 
-function isValidDateRange(startDate: string, endDate: string): boolean {
-  return startDate <= endDate;
+function asSprintWeekRange(startDate: string, endDate: string) {
+  return resolveSprintWeekRange(startDate, endDate);
+}
+
+function normalizeSprintWindow<T extends { start_date: string; end_date: string }>(sprint: T): T {
+  if (isMondayToFridaySprintRange(sprint.start_date, sprint.end_date)) {
+    return sprint;
+  }
+
+  const sprintWeek = getSprintWeekRange(sprint.start_date);
+  if (!sprintWeek) {
+    return sprint;
+  }
+
+  return {
+    ...sprint,
+    start_date: sprintWeek.startDate,
+    end_date: sprintWeek.endDate,
+  };
 }
 
 function createTaskGroups() {
@@ -72,6 +90,8 @@ export async function GET(
       throw sprintError;
     }
 
+    const normalizedSprint = normalizeSprintWindow(sprint);
+
     const { data: tasks, error: tasksError } = await supabase
       .from('tasks')
       .select('id, title, status, estimated_minutes, due_at, blocker, priority_score, updated_at')
@@ -99,7 +119,7 @@ export async function GET(
     const completionPct = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
 
     return NextResponse.json({
-      ...sprint,
+      ...normalizedSprint,
       total_tasks: totalTasks,
       completed_tasks: completedTasks,
       completion_pct: completionPct,
@@ -198,11 +218,23 @@ export async function PATCH(
         throw currentSprintError;
       }
 
-      const startDate = (updates.start_date as string | undefined) || currentSprint.start_date;
-      const endDate = (updates.end_date as string | undefined) || currentSprint.end_date;
-      if (!isValidDateRange(startDate, endDate)) {
-        return NextResponse.json({ error: 'end_date must be on or after start_date' }, { status: 400 });
+      const explicitStartDate = updates.start_date as string | undefined;
+      const explicitEndDate = updates.end_date as string | undefined;
+      const sprintWeek =
+        explicitStartDate && explicitEndDate
+          ? asSprintWeekRange(explicitStartDate, explicitEndDate)
+          : explicitStartDate
+            ? getSprintWeekRange(explicitStartDate)
+            : explicitEndDate
+              ? getSprintWeekRange(explicitEndDate)
+              : asSprintWeekRange(currentSprint.start_date, currentSprint.end_date);
+
+      if (!sprintWeek) {
+        return NextResponse.json({ error: 'Sprint dates must resolve to the same Monday-Friday week' }, { status: 400 });
       }
+
+      updates.start_date = sprintWeek.startDate;
+      updates.end_date = sprintWeek.endDate;
     }
 
     const { data, error } = await supabase

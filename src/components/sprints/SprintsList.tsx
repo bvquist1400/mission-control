@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { formatDateOnly, localDateString } from "@/components/utils/dates";
+import { getSprintWeekRange } from "@/lib/date-only";
 import type { ImplementationSummary, SprintWithImplementation } from "@/types/database";
 
 interface SprintDraft {
@@ -13,13 +14,17 @@ interface SprintDraft {
   focusImplementationId: string;
 }
 
-const INITIAL_DRAFT: SprintDraft = {
-  name: "",
-  startDate: localDateString(),
-  endDate: localDateString(new Date(Date.now() + (6 * 24 * 60 * 60 * 1000))),
-  theme: "",
-  focusImplementationId: "",
-};
+function createInitialDraft(anchorDate = localDateString()): SprintDraft {
+  const sprintWeek = getSprintWeekRange(anchorDate);
+
+  return {
+    name: "",
+    startDate: sprintWeek?.startDate ?? anchorDate,
+    endDate: sprintWeek?.endDate ?? anchorDate,
+    theme: "",
+    focusImplementationId: "",
+  };
+}
 
 async function fetchSprints(): Promise<SprintWithImplementation[]> {
   const response = await fetch("/api/sprints", { cache: "no-store" });
@@ -81,7 +86,7 @@ export function SprintsList() {
   const [error, setError] = useState<string | null>(null);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
-  const [draft, setDraft] = useState<SprintDraft>(INITIAL_DRAFT);
+  const [draft, setDraft] = useState<SprintDraft>(() => createInitialDraft());
 
   useEffect(() => {
     let isMounted = true;
@@ -154,13 +159,22 @@ export function SprintsList() {
 
       const createdSprint = (await response.json()) as SprintWithImplementation;
       setSprints((current) => [createdSprint, ...current]);
-      setDraft(INITIAL_DRAFT);
+      setDraft(createInitialDraft());
       setIsCreateOpen(false);
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : "Failed to create sprint");
     } finally {
       setIsCreating(false);
     }
+  }
+
+  function applySprintWeek(anchorDate: string) {
+    const sprintWeek = getSprintWeekRange(anchorDate);
+    setDraft((current) => ({
+      ...current,
+      startDate: sprintWeek?.startDate ?? anchorDate,
+      endDate: sprintWeek?.endDate ?? anchorDate,
+    }));
   }
 
   return (
@@ -175,7 +189,7 @@ export function SprintsList() {
         <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="text-sm font-semibold text-foreground">Create Sprint</h2>
-            <p className="text-xs text-muted-foreground">Define a week-sized planning window and optional focus app.</p>
+            <p className="text-xs text-muted-foreground">Define a Monday-through-Friday planning window and optional focus app.</p>
           </div>
           <button
             type="button"
@@ -204,7 +218,7 @@ export function SprintsList() {
               <input
                 type="date"
                 value={draft.startDate}
-                onChange={(event) => setDraft((current) => ({ ...current, startDate: event.target.value }))}
+                onChange={(event) => applySprintWeek(event.target.value)}
                 disabled={isCreating}
                 className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
               />
@@ -215,7 +229,7 @@ export function SprintsList() {
               <input
                 type="date"
                 value={draft.endDate}
-                onChange={(event) => setDraft((current) => ({ ...current, endDate: event.target.value }))}
+                onChange={(event) => applySprintWeek(event.target.value)}
                 disabled={isCreating}
                 className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
               />
@@ -248,6 +262,10 @@ export function SprintsList() {
                 className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
               />
             </label>
+
+            <p className="text-xs text-muted-foreground md:col-span-2 xl:col-span-4">
+              Pick any date in the target week. Sprint dates snap to Monday through Friday.
+            </p>
 
             <div className="flex items-end justify-end gap-2 xl:col-span-1">
               <button
