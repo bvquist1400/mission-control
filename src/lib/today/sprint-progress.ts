@@ -1,6 +1,6 @@
-import { normalizeDateOnly, toUtcDateMs } from '../date-only.ts';
+import { normalizeDateOnly, toUtcDateMs } from '../date-only';
 
-export { normalizeDateOnly, toUtcDateMs } from '../date-only.ts';
+export { normalizeDateOnly, toUtcDateMs } from '../date-only';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_PACE_TOLERANCE_TASKS = 1;
