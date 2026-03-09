@@ -18,10 +18,10 @@ Baseline is a Next.js + Supabase app for daily operations, triage, implementatio
 
 Required for the app: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`. Optional: `DEFAULT_USER_ID`, `LLM_ADMIN_USER_ID`, and the settings below.
 
-If you want machine-auth access for Claude MCP, the legacy ChatGPT custom GPT, or the new public remote MCP deployment, also configure:
+If you want MCP access outside the browser app, or you still maintain the legacy ChatGPT custom GPT fallback, also configure:
 
-- `MISSION_CONTROL_API_KEY` for the existing Claude MCP / legacy machine-auth flow
-- `MISSION_CONTROL_ACTIONS_API_KEY` for the private ChatGPT custom GPT Actions flow
+- `MISSION_CONTROL_API_KEY` for legacy or internal machine-auth MCP callers
+- `MISSION_CONTROL_ACTIONS_API_KEY` only if you still use the private ChatGPT custom GPT Actions fallback
 - `MISSION_CONTROL_USER_ID` for the user that machine-auth requests run as
 - `DEPLOYMENT_ROLE=main|mcp` to split the protected main app from the public MCP deployment
 - `MCP_CANONICAL_APP_URL` for stable user-facing URLs returned from `search` / `fetch`
@@ -49,13 +49,13 @@ If you want machine-auth access for Claude MCP, the legacy ChatGPT custom GPT, o
 
 ### Machine auth settings
 
-- `MISSION_CONTROL_API_KEY`: legacy backend key used by Claude and existing external callers
-- `MISSION_CONTROL_ACTIONS_API_KEY`: dedicated backend key used only by the private ChatGPT custom GPT Actions integration
+- `MISSION_CONTROL_API_KEY`: backend key used by legacy or internal machine-auth MCP callers and other existing external callers
+- `MISSION_CONTROL_ACTIONS_API_KEY`: optional backend key used only by the legacy private ChatGPT custom GPT Actions integration
 - `MISSION_CONTROL_USER_ID`: required when either machine key is enabled
 - `MISSION_CONTROL_ACTIONS_API_KEY` is a Mission Control backend key, not an OpenAI API key
-- Use a distinct value for `MISSION_CONTROL_ACTIONS_API_KEY` so `/api/mcp` remains reserved for the legacy Claude key
-- The actions key is restricted to the allowlisted non-delete routes used by the ChatGPT Actions surface
-- Delete operations are intentionally excluded from the ChatGPT Actions v1 surface
+- Use a distinct value for `MISSION_CONTROL_ACTIONS_API_KEY` so `/api/mcp` remains reserved for the primary MCP machine-auth key
+- The actions key is restricted to the allowlisted non-delete routes used by the legacy ChatGPT Actions surface
+- Delete operations are intentionally excluded from the ChatGPT Actions v1 fallback surface
 
 ### Remote MCP deployment settings
 
@@ -87,14 +87,17 @@ If you want machine-auth access for Claude MCP, the legacy ChatGPT custom GPT, o
 - App API routes require an authenticated Supabase session.
 - Use `/login` to request a magic-link sign-in email.
 - Callback route (`/auth/callback`) exchanges the auth code and returns to app routes.
-- Claude continues to use `/api/mcp` with `MISSION_CONTROL_API_KEY`.
-- ChatGPT uses a private custom GPT with Actions and sends `X-Mission-Control-Key: <MISSION_CONTROL_ACTIONS_API_KEY>`.
+- MCP is the primary LLM interface for both ChatGPT and Claude.
+- Internal or legacy MCP callers can still use `/api/mcp` with `MISSION_CONTROL_API_KEY`.
+- The private ChatGPT custom GPT Actions flow remains available only as a fallback and sends `X-Mission-Control-Key: <MISSION_CONTROL_ACTIONS_API_KEY>`.
 - Public remote MCP clients use OAuth authorization code + PKCE with dynamic client registration.
 - Public remote MCP auth is limited to `/api/mcp` and `/api/mcp-upstream/*`; general app APIs do not accept MCP OAuth bearer tokens.
 
 ## Remote MCP
 
 Mission Control now supports a public remote MCP deployment for hosted MCP-compatible LLM products.
+
+ChatGPT and Claude should both prefer this MCP path unless you have a specific reason to keep the legacy ChatGPT Actions fallback.
 
 - Public MCP endpoint: `https://<your-mcp-domain>/api/mcp`
 - OAuth authorize endpoint: `https://<your-mcp-domain>/oauth/authorize`
@@ -135,9 +138,9 @@ Product note:
 - As of March 8, 2026, OpenAI Help Center documentation says full write-capable MCP in ChatGPT beta is for Business and Enterprise/Edu, while Pro is read/fetch only in developer mode.
 - This is a product-availability constraint, not a code limitation in this repo.
 
-## Mission Control GPT
+## Legacy ChatGPT Custom GPT Fallback
 
-Use one private custom GPT in ChatGPT as the ChatGPT-facing surface. Claude remains unchanged and continues to use MCP in parallel.
+Prefer MCP for both ChatGPT and Claude. Use this section only if you still want the older private custom GPT plus Actions integration as a fallback.
 
 You do not need an OpenAI API key for normal use inside ChatGPT. The only extra credential for this integration is `MISSION_CONTROL_ACTIONS_API_KEY`.
 
@@ -151,8 +154,7 @@ Notes:
 - The tracked schema file in this repo is [`/Users/owner/dev/Cooper Mission Control/mission-control/public/openapi/chatgpt-actions-v1.yaml`](/Users/owner/dev/Cooper%20Mission%20Control/mission-control/public/openapi/chatgpt-actions-v1.yaml).
 - A paste-ready builder instruction draft lives at [`/Users/owner/dev/Cooper Mission Control/mission-control/chatgpt-gpt-instructions.md`](/Users/owner/dev/Cooper%20Mission%20Control/mission-control/chatgpt-gpt-instructions.md).
 - Re-import the schema in the GPT builder after action-surface changes; the custom GPT does not auto-refresh from this repo.
-- Claude still uses MCP.
-- ChatGPT uses the private custom GPT with Actions.
+- ChatGPT and Claude should both prefer MCP. This fallback exists only for the older private custom GPT setup.
 - Deletes are intentionally excluded from the ChatGPT Actions v1 schema.
 
 ## Database

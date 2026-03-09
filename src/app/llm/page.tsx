@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
 
-type Surface = "ChatGPT Actions" | "Claude MCP";
+type Surface = "MCP" | "Legacy Actions";
 
 interface QuickTip {
   title: string;
@@ -41,6 +41,10 @@ const QUICK_TIPS: QuickTip[] = [
     body: "Ask for recommendations first. Add `do not apply yet` when you want analysis without writes.",
   },
   {
+    title: "Prefer MCP",
+    body: "ChatGPT and Claude should both use Mission Control through MCP. Keep the older custom GPT Actions path only as a fallback.",
+  },
+  {
     title: "Use exact scope",
     body: "Name the application, project, stakeholder, or sprint so the LLM does not guess the target.",
   },
@@ -69,7 +73,7 @@ const PLAYBOOK_SECTIONS: PlaybookSection[] = [
           "eod brief. Focus on rollover risk and tomorrow prep.",
         ],
         uses: ["get_calendar", "list_tasks", "list_sprints", "list_commitments", "sync_today"],
-        surfaces: ["ChatGPT Actions", "Claude MCP"],
+        surfaces: ["MCP", "Legacy Actions"],
         href: "/",
         hrefLabel: "Open Today",
         note: "Approving `sync_today` should be explicit. If you want only the recommendation, say `do not apply yet` every time.",
@@ -84,10 +88,10 @@ const PLAYBOOK_SECTIONS: PlaybookSection[] = [
           "Give me a weekly review focused only on shipped work and stalled work.",
         ],
         uses: ["get_weekly_review"],
-        surfaces: ["ChatGPT Actions", "Claude MCP"],
+        surfaces: ["MCP", "Legacy Actions"],
         href: "/weekly-review",
         hrefLabel: "Open Weekly Review",
-        note: "If your custom GPT does not recognize weekly review yet, re-import the latest OpenAPI schema in the GPT builder.",
+        note: "If you still use the legacy private custom GPT and weekly review is missing, re-import the latest OpenAPI schema in the GPT builder.",
       },
     ],
   },
@@ -105,7 +109,7 @@ const PLAYBOOK_SECTIONS: PlaybookSection[] = [
           "Turn this into action items and commitment follow-ups, but wait for approval before writing.",
         ],
         uses: ["parse_notes", "create_task", "update_stakeholder", "create_commitment"],
-        surfaces: ["ChatGPT Actions", "Claude MCP"],
+        surfaces: ["MCP", "Legacy Actions"],
         href: "/backlog",
         hrefLabel: "Open Backlog",
       },
@@ -119,7 +123,7 @@ const PLAYBOOK_SECTIONS: PlaybookSection[] = [
           "Create the tasks and commitment follow-ups from this thread, then summarize what changed.",
         ],
         uses: ["parse_notes", "create_task", "update_stakeholder", "create_commitment"],
-        surfaces: ["ChatGPT Actions", "Claude MCP"],
+        surfaces: ["MCP", "Legacy Actions"],
         href: "/stakeholders",
         hrefLabel: "Open Stakeholders",
         note: "If anything is ambiguous, the safer prompt is still the review-first version above.",
@@ -140,7 +144,7 @@ const PLAYBOOK_SECTIONS: PlaybookSection[] = [
           "Give me the now, next 3, and exceptions from the planner in plain English.",
         ],
         uses: ["get_plan", "sync_today"],
-        surfaces: ["ChatGPT Actions", "Claude MCP"],
+        surfaces: ["MCP", "Legacy Actions"],
         href: "/planner",
         hrefLabel: "Open Planner",
       },
@@ -154,7 +158,7 @@ const PLAYBOOK_SECTIONS: PlaybookSection[] = [
           "Clear my current focus and set a nudge toward quick admin cleanup until noon ET.",
         ],
         uses: ["get_focus", "set_focus", "clear_focus"],
-        surfaces: ["ChatGPT Actions", "Claude MCP"],
+        surfaces: ["MCP", "Legacy Actions"],
         href: "/focus",
         hrefLabel: "Open Focus",
       },
@@ -174,7 +178,7 @@ const PLAYBOOK_SECTIONS: PlaybookSection[] = [
           "Review this project and tell me what is actually blocked versus just not started.",
         ],
         uses: ["list_projects", "get_project", "list_tasks"],
-        surfaces: ["ChatGPT Actions", "Claude MCP"],
+        surfaces: ["MCP", "Legacy Actions"],
         href: "/projects",
         hrefLabel: "Open Projects",
       },
@@ -188,15 +192,15 @@ const PLAYBOOK_SECTIONS: PlaybookSection[] = [
           "Review stakeholder commitments and tell me what I owe next.",
         ],
         uses: ["list_stakeholders", "list_commitments", "get_stakeholder", "create_task"],
-        surfaces: ["ChatGPT Actions", "Claude MCP"],
+        surfaces: ["MCP", "Legacy Actions"],
         href: "/stakeholders",
         hrefLabel: "Open Stakeholders",
       },
     ],
   },
   {
-    title: "MCP-Only Retrieval",
-    description: "Best when you know the topic but not the exact record yet. These workflows are available in Claude MCP, not the ChatGPT Actions schema.",
+    title: "MCP-Native Retrieval",
+    description: "Best when you know the topic but not the exact record yet. These workflows are native in MCP and are not exposed through the legacy Actions fallback.",
     playbooks: [
       {
         id: "search-fetch",
@@ -208,8 +212,8 @@ const PLAYBOOK_SECTIONS: PlaybookSection[] = [
           "Search for the stakeholder or project first if I only remember part of the name.",
         ],
         uses: ["search", "fetch"],
-        surfaces: ["Claude MCP"],
-        note: "ChatGPT Actions does not currently expose generic search/fetch. Use Claude MCP for this flow.",
+        surfaces: ["MCP"],
+        note: "Legacy Actions does not expose generic search or fetch. Use MCP for this flow.",
       },
     ],
   },
@@ -225,7 +229,11 @@ const FAQ_ITEMS: FaqItem[] = [
     answer: "The planner workflow is designed to wait for explicit approval before calling `sync_today`.",
   },
   {
-    question: "Why does ChatGPT sometimes miss a newly added tool?",
+    question: "Should I use MCP or the legacy custom GPT?",
+    answer: "Prefer MCP in both ChatGPT and Claude. Keep the legacy custom GPT only if you still need the older Actions-based fallback.",
+  },
+  {
+    question: "Why would a legacy custom GPT miss a newly added tool?",
     answer: "The custom GPT keeps its own imported schema copy. Re-import the latest OpenAPI schema after tool changes.",
   },
   {
@@ -235,9 +243,9 @@ const FAQ_ITEMS: FaqItem[] = [
 ];
 
 function surfaceClass(surface: Surface): string {
-  return surface === "ChatGPT Actions"
-    ? "border-sky-500/30 bg-sky-500/10 text-sky-200"
-    : "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
+  return surface === "MCP"
+    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+    : "border-sky-500/30 bg-sky-500/10 text-sky-200";
 }
 
 export default function LlmPage() {
@@ -273,14 +281,14 @@ export default function LlmPage() {
     <div className="space-y-8">
       <PageHeader
         title="AI Playbooks"
-        description="Prompt patterns and workflow shortcuts for ChatGPT Actions and Claude MCP. Start read-only, use explicit scope and dates, and only say apply when you want writes."
+        description="Prompt patterns and workflow shortcuts for Mission Control over MCP, with notes for the legacy ChatGPT Actions fallback. Start read-only, use explicit scope and dates, and only say apply when you want writes."
       />
 
       <section className="rounded-card border border-amber-500/30 bg-amber-500/10 p-4 shadow-sm">
         <p className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-200">Important</p>
         <p className="mt-2 text-sm text-amber-100">
-          If your private ChatGPT GPT does not recognize a newly added workflow, re-import the latest OpenAPI schema in the GPT builder.
-          The in-app page updates immediately, but the GPT action schema does not auto-refresh.
+          Mission Control now treats MCP as the default path for both ChatGPT and Claude. If you still use the older private custom GPT
+          Actions setup, re-import the latest OpenAPI schema after workflow changes because that fallback schema does not auto-refresh.
         </p>
       </section>
 
@@ -383,7 +391,7 @@ export default function LlmPage() {
       <section className="space-y-4">
         <div>
           <h2 className="text-lg font-semibold text-foreground">FAQ</h2>
-          <p className="mt-1 text-sm text-muted-foreground">The short answers to the things that usually feel inconsistent when you jump between the app and the GPT.</p>
+          <p className="mt-1 text-sm text-muted-foreground">The short answers to the things that usually feel inconsistent when you jump between the app and your LLM client.</p>
         </div>
 
         <div className="grid gap-4 xl:grid-cols-2">
