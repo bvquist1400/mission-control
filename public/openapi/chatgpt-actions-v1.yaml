@@ -641,6 +641,7 @@ paths:
       - name: with_stats
         in: query
         required: false
+        description: Include task counts, blocker count, and linked application info.
         schema:
           type: boolean
       responses:
@@ -1446,6 +1447,19 @@ components:
           anyOf:
           - type: string
             format: uuid
+          - type: 'null'
+        open_task_count:
+          type: integer
+        completed_task_count:
+          type: integer
+        total_task_count:
+          type: integer
+        blockers_count:
+          type: integer
+        implementation:
+          anyOf:
+          - type: object
+            additionalProperties: true
           - type: 'null'
       required:
       - id

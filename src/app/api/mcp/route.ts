@@ -736,10 +736,10 @@ function createMcpServer(): McpServer {
   // ── LIST PROJECTS ─────────────────────────────────────────────────────
   mcp.tool(
     'list_projects',
-    'List projects, optionally filtered by application. Use with_stats=true for task counts.',
+    'List projects, optionally filtered by application. Use with_stats=true for open, completed, total, and blocker task counts.',
     {
       implementation_id: z.string().optional().describe('Filter by application UUID'),
-      with_stats: z.boolean().optional().describe('Include open_task_count and implementation info'),
+      with_stats: z.boolean().optional().describe('Include task counts, blocker count, and linked application info'),
     },
     async ({ implementation_id, with_stats }) => {
       const url = new URL('/api/projects', 'https://mission-control-orpin-chi.vercel.app');

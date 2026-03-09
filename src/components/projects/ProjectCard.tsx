@@ -16,6 +16,8 @@ export interface ProjectCardData {
   description: string | null;
   servicenowSpmId: string | null;
   openTaskCount: number;
+  completedTaskCount: number;
+  totalTaskCount: number;
   blockersCount: number;
   implementationName: string | null;
   implementationId: string | null;
@@ -26,6 +28,11 @@ interface ProjectCardProps {
 }
 
 export function ProjectCard({ project }: ProjectCardProps) {
+  const hasTrackedTasks = project.totalTaskCount > 0;
+  const percentComplete = hasTrackedTasks
+    ? Math.round((project.completedTaskCount / project.totalTaskCount) * 100)
+    : 0;
+
   return (
     <article className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -63,6 +70,35 @@ export function ProjectCard({ project }: ProjectCardProps) {
             <span className="ml-2 text-red-400">({project.blockersCount} blocker{project.blockersCount !== 1 ? "s" : ""})</span>
           )}
         </p>
+        <div className="rounded-lg border border-stroke/80 bg-panel-muted/40 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Progress</p>
+            <span className="text-sm font-semibold text-foreground">
+              {hasTrackedTasks ? `${percentComplete}%` : "No tasks yet"}
+            </span>
+          </div>
+          <div
+            role="progressbar"
+            aria-label="Project progress"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={percentComplete}
+            aria-valuetext={
+              hasTrackedTasks
+                ? `${project.completedTaskCount} of ${project.totalTaskCount} tasks done`
+                : "No tasks yet"
+            }
+            className="mt-2 h-2 overflow-hidden rounded-full bg-panel-muted"
+          >
+            <div
+              className="h-full rounded-full bg-green-500 transition-all duration-500"
+              style={{ width: `${percentComplete}%` }}
+            />
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {hasTrackedTasks ? `${project.completedTaskCount} of ${project.totalTaskCount} done` : "No tasks yet"}
+          </p>
+        </div>
         {project.description && (
           <p className="line-clamp-2 text-muted-foreground">{project.description}</p>
         )}

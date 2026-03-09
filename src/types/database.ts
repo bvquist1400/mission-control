@@ -334,6 +334,9 @@ export interface Project {
 
 export interface ProjectWithStats extends Project {
   open_task_count: number;
+  completed_task_count: number;
+  total_task_count: number;
+  blockers_count: number;
   implementation: ImplementationSummary | null;
 }
 

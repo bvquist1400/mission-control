@@ -3,6 +3,28 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { DEFAULT_PROJECT_STAGE, PROJECT_STAGE_VALUES, normalizeProjectStage } from '@/lib/project-stage';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 
+interface ProjectTaskStats {
+  openTaskCount: number;
+  completedTaskCount: number;
+  totalTaskCount: number;
+  blockersCount: number;
+}
+
+interface ProjectTaskRow {
+  project_id: string | null;
+  status: string;
+  blocker: boolean | null;
+}
+
+function createEmptyProjectTaskStats(): ProjectTaskStats {
+  return {
+    openTaskCount: 0,
+    completedTaskCount: 0,
+    totalTaskCount: 0,
+    blockersCount: 0,
+  };
+}
+
 async function getNextPortfolioRank(
   supabase: SupabaseClient,
   userId: string,
@@ -69,33 +91,91 @@ export async function GET(request: NextRequest) {
       return NextResponse.json((projects || []).map((project) => withNormalizedProjectStage(project)));
     }
 
-    // Enrich with open_task_count and implementation name
-    const enriched = await Promise.all(
-      (projects || []).map(async (project) => {
-        const { count: openTaskCount } = await supabase
-          .from('tasks')
-          .select('*', { count: 'exact', head: true })
-          .eq('user_id', userId)
-          .eq('project_id', project.id)
-          .neq('status', 'Done');
+    const projectList = projects || [];
+    if (projectList.length === 0) {
+      return NextResponse.json([]);
+    }
 
-        let implementation = null;
-        if (project.implementation_id) {
-          const { data: impl } = await supabase
+    const projectIds = projectList.map((project) => project.id);
+    const implementationIds = [...new Set(
+      projectList
+        .map((project) => project.implementation_id)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0)
+    )];
+
+    const [
+      { data: taskRows, error: taskError },
+      { data: implementationRows, error: implementationError },
+    ] = await Promise.all([
+      supabase
+        .from('tasks')
+        .select('project_id, status, blocker')
+        .eq('user_id', userId)
+        .in('project_id', projectIds),
+      implementationIds.length > 0
+        ? supabase
             .from('implementations')
             .select('id, name, phase, rag, portfolio_rank')
-            .eq('id', project.implementation_id)
-            .single();
-          implementation = impl || null;
-        }
+            .eq('user_id', userId)
+            .in('id', implementationIds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
 
-        return {
-          ...withNormalizedProjectStage(project),
-          open_task_count: openTaskCount || 0,
-          implementation,
-        };
-      })
+    if (taskError) throw taskError;
+    if (implementationError) throw implementationError;
+
+    const statsByProject = new Map<string, ProjectTaskStats>(
+      projectIds.map((projectId) => [projectId, createEmptyProjectTaskStats()])
     );
+
+    for (const task of (taskRows || []) as ProjectTaskRow[]) {
+      if (!task.project_id) {
+        continue;
+      }
+
+      const stats = statsByProject.get(task.project_id);
+      if (!stats) {
+        continue;
+      }
+
+      const isDone = task.status === 'Done';
+      const isParked = task.status === 'Parked';
+
+      if (!isDone) {
+        stats.openTaskCount += 1;
+      }
+
+      if (!isParked) {
+        stats.totalTaskCount += 1;
+        if (isDone) {
+          stats.completedTaskCount += 1;
+        }
+      }
+
+      if (task.blocker && !isDone) {
+        stats.blockersCount += 1;
+      }
+    }
+
+    const implementationsById = new Map(
+      (implementationRows || []).map((implementation) => [implementation.id, implementation])
+    );
+
+    const enriched = projectList.map((project) => {
+      const stats = statsByProject.get(project.id) ?? createEmptyProjectTaskStats();
+
+      return {
+        ...withNormalizedProjectStage(project),
+        open_task_count: stats.openTaskCount,
+        completed_task_count: stats.completedTaskCount,
+        total_task_count: stats.totalTaskCount,
+        blockers_count: stats.blockersCount,
+        implementation:
+          typeof project.implementation_id === 'string'
+            ? implementationsById.get(project.implementation_id) ?? null
+            : null,
+      };
+    });
 
     return NextResponse.json(enriched);
   } catch (error) {
