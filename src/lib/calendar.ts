@@ -1288,6 +1288,19 @@ function parseIcsEvents(
       }
     }
 
+    // DEBUG: dump raw ICS properties for 1:1 events to verify attendee data
+    if (summary.toLowerCase().includes('1:1')) {
+      const allProps = lines.map((l) => parseIcsProperty(l)).filter(Boolean);
+      console.info('[calendar-debug] 1:1 event raw properties', {
+        summary,
+        organizer: organizer ? { name: organizer.name, value: organizer.value, params: organizer.params } : null,
+        attendeeCount: attendeeDisplays.length,
+        attendeeDisplays,
+        allPropertyNames: allProps.map((p) => p!.name),
+        rawLines: lines.filter((l) => /^(ATTENDEE|ORGANIZER)/i.test(l)),
+      });
+    }
+
     if (status === 'CANCELLED') {
       match = eventRegex.exec(unfolded);
       continue;
