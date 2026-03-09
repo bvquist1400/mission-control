@@ -1374,6 +1374,8 @@ function createMcpServer(): McpServer {
 // Next.js App Router handlers — POST for MCP messages, GET for SSE, DELETE for cleanup
 // ---------------------------------------------------------------------------
 
+const STATELESS_SESSION_ID = 'stateless';
+
 async function runConfiguredMcpRequest(
   request: Request,
   runtimeConfig: McpRuntimeConfig
@@ -1381,14 +1383,36 @@ async function runConfiguredMcpRequest(
   return mcpRuntimeStorage.run(runtimeConfig, async () => {
     const mcp = createMcpServer();
     const transport = new WebStandardStreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
+      sessionIdGenerator: () => STATELESS_SESSION_ID,
       enableJsonResponse: true,
     });
 
     await mcp.connect(transport);
 
+    // For non-initialize requests, pre-set the transport as initialized
+    // so it accepts the session ID from the client. This allows stateless
+    // per-request transports to work with session-aware clients.
+    const body = await request.text();
+    let parsed: unknown;
+    try { parsed = JSON.parse(body); } catch { parsed = null; }
+    const isInit = parsed && typeof parsed === 'object' && 'method' in parsed && (parsed as { method: string }).method === 'initialize';
+
+    if (!isInit) {
+      // Trick the transport into accepting this session by marking it initialized
+      // and setting the expected session ID.
+      (transport as unknown as { _initialized: boolean })._initialized = true;
+      (transport as unknown as { sessionId: string }).sessionId = STATELESS_SESSION_ID;
+    }
+
+    // Re-create the request with the consumed body
+    const reconstructedRequest = new Request(request.url, {
+      method: request.method,
+      headers: request.headers,
+      body,
+    });
+
     try {
-      return await transport.handleRequest(request);
+      return await transport.handleRequest(reconstructedRequest);
     } finally {
       await mcp.close();
     }
