@@ -145,11 +145,12 @@ You do not need an OpenAI API key for normal use inside ChatGPT. The only extra 
 2. Paste your adapted Mission Control instructions into the GPT Instructions field.
 3. Import the tracked OpenAPI schema from `/openapi/chatgpt-actions-v1.yaml`.
 4. Configure the action authentication header as `X-Mission-Control-Key` with `MISSION_CONTROL_ACTIONS_API_KEY`.
-5. Add prompt starters such as `morning brief`, `midday brief`, `eod brief`, `review these meeting notes and suggest updates`, and `apply these meeting notes to Mission Control`.
+5. Add prompt starters such as `morning brief`, `midday brief`, `eod brief`, `weekly review`, `recommend my today list but do not sync yet`, `review these meeting notes and suggest updates`, and `apply these meeting notes to Mission Control`.
 
 Notes:
 - The tracked schema file in this repo is [`/Users/owner/dev/Cooper Mission Control/mission-control/public/openapi/chatgpt-actions-v1.yaml`](/Users/owner/dev/Cooper%20Mission%20Control/mission-control/public/openapi/chatgpt-actions-v1.yaml).
 - A paste-ready builder instruction draft lives at [`/Users/owner/dev/Cooper Mission Control/mission-control/chatgpt-gpt-instructions.md`](/Users/owner/dev/Cooper%20Mission%20Control/mission-control/chatgpt-gpt-instructions.md).
+- Re-import the schema in the GPT builder after action-surface changes; the custom GPT does not auto-refresh from this repo.
 - Claude still uses MCP.
 - ChatGPT uses the private custom GPT with Actions.
 - Deletes are intentionally excluded from the ChatGPT Actions v1 schema.

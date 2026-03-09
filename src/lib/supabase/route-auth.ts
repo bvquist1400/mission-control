@@ -22,6 +22,7 @@ type MachineAuthSource = Extract<AuthSource, 'legacy_api_key' | 'actions_api_key
 
 const ACTIONS_ROUTE_ALLOWLIST: ReadonlyArray<{ pattern: RegExp; methods: ReadonlyArray<string> }> = [
   { pattern: /^\/api\/calendar$/, methods: ['GET'] },
+  { pattern: /^\/api\/briefing\/weekly-review$/, methods: ['GET'] },
   { pattern: /^\/api\/planner\/plan$/, methods: ['GET'] },
   { pattern: /^\/api\/planner\/sync-today$/, methods: ['POST'] },
   { pattern: /^\/api\/tasks$/, methods: ['GET', 'POST'] },

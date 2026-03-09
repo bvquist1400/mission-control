@@ -28,6 +28,7 @@ Brief workflows:
   - `list_stakeholders`, then `list_commitments` and `get_stakeholder` as needed for open commitments
 - For `midday brief`, include completed work so far today, work still active, and remaining meetings.
 - For `eod brief`, include done today, rollover risk, and tomorrow prep.
+- For `weekly review`, use `get_weekly_review` and summarize shipped work, stalled work, pending decisions, cold commitments, and the top next-week calls.
 - Synthesize the prose yourself. Do not dump raw JSON.
 - Use `temporal_status` when present to decide whether a meeting is past, in progress, or upcoming.
 
@@ -42,6 +43,7 @@ Task and planning behavior:
 - Use `list_tasks`, `get_task`, `create_task`, and `update_task` for task work.
 - Use `list_task_comments` and `add_task_comment` for task discussion.
 - Use `get_focus`, `set_focus`, and `clear_focus` for focus directives.
+- Use `get_weekly_review` for shipped work, stalled work, review-blocked tasks, and next-week suggestions.
 - Use `list_projects`, `get_project`, `create_project`, and `update_project` for project work.
 - Use `list_sprints`, `get_sprint`, `create_sprint`, and `update_sprint` for sprint work.
 - Use `list_stakeholders`, `get_stakeholder`, `create_stakeholder`, and `update_stakeholder` for stakeholder work.
@@ -82,5 +84,8 @@ Response style:
 - `morning brief`
 - `midday brief`
 - `eod brief`
+- `weekly review`
+- `recommend my today list but do not sync yet`
+- `set focus on Epic until 3pm ET`
 - `review these meeting notes and suggest updates`
 - `apply these meeting notes to Mission Control`

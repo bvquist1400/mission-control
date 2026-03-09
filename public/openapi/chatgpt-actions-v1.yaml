@@ -118,6 +118,29 @@ paths:
                 additionalProperties: false
         default:
           "$ref": "#/components/responses/ErrorResponse"
+  "/api/briefing/weekly-review":
+    get:
+      tags:
+      - Planner
+      operationId: get_weekly_review
+      summary: Get the structured weekly review snapshot
+      parameters:
+      - name: date
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date
+        description: Optional anchor date in YYYY-MM-DD. Defaults to today in ET and reviews the current week-to-date.
+      responses:
+        '200':
+          description: Weekly review snapshot
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/WeeklyReviewResponse"
+        default:
+          "$ref": "#/components/responses/ErrorResponse"
   "/api/tasks":
     get:
       tags:
@@ -1681,4 +1704,106 @@ components:
       required:
       - planDate
       - source
+      additionalProperties: true
+    WeeklyReviewResponse:
+      type: object
+      properties:
+        week:
+          type: object
+          properties:
+            start_date:
+              type: string
+              format: date
+            end_date:
+              type: string
+              format: date
+          required:
+          - start_date
+          - end_date
+          additionalProperties: false
+        shipped:
+          type: array
+          items:
+            "$ref": "#/components/schemas/Task"
+        stalled:
+          type: array
+          items:
+            "$ref": "#/components/schemas/Task"
+        pending_decisions:
+          type: array
+          items:
+            "$ref": "#/components/schemas/Task"
+        cold_commitments:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+              title:
+                type: string
+              created_at:
+                type: string
+                format: date-time
+              due_at:
+                anyOf:
+                - type: string
+                  format: date-time
+                - type: 'null'
+              stakeholder:
+                anyOf:
+                - type: object
+                  properties:
+                    id:
+                      type: string
+                      format: uuid
+                    name:
+                      type: string
+                  required:
+                  - id
+                  - name
+                  additionalProperties: true
+                - type: 'null'
+            required:
+            - id
+            - title
+            - created_at
+            additionalProperties: true
+        health_scores:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+              name:
+                type: string
+              health_score:
+                type: integer
+              health_label:
+                type: string
+              signals:
+                type: array
+                items:
+                  type: string
+              trend:
+                type: string
+            required:
+            - id
+            - name
+            additionalProperties: true
+        next_week_suggestions:
+          type: array
+          items:
+            type: string
+      required:
+      - week
+      - shipped
+      - stalled
+      - pending_decisions
+      - cold_commitments
+      - health_scores
+      - next_week_suggestions
       additionalProperties: true
