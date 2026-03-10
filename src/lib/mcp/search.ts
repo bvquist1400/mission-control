@@ -29,6 +29,87 @@ interface SearchCandidate extends MissionControlSearchResult {
   updatedAt?: string | null;
 }
 
+const CALENDAR_INTENT_TERMS = new Set([
+  'meeting',
+  'meetings',
+  'calendar',
+  'calendars',
+  'event',
+  'events',
+  'call',
+  'calls',
+  'appointment',
+  'appointments',
+]);
+
+const CALENDAR_SEARCH_KEYWORDS = 'meeting meetings calendar calendars event events call calls appointment appointments';
+
+function normalizeSearchText(value: string | null | undefined): string {
+  return (value || '')
+    .toLowerCase()
+    .replace(/[%(),]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getSearchTerms(query: string): string[] {
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  const uniqueTerms = new Set<string>([normalizedQuery]);
+  for (const term of normalizedQuery.split(' ')) {
+    if (term.length >= 2) {
+      uniqueTerms.add(term);
+    }
+  }
+
+  return [...uniqueTerms].slice(0, 6);
+}
+
+function getSearchTermsExcluding(query: string, ignoredTerms: ReadonlySet<string>): string[] {
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  const filteredTokens = normalizedQuery
+    .split(' ')
+    .filter((term) => term.length >= 2 && !ignoredTerms.has(term));
+
+  if (filteredTokens.length === 0) {
+    return [];
+  }
+
+  const uniqueTerms = new Set<string>([filteredTokens.join(' ')]);
+  for (const term of filteredTokens) {
+    uniqueTerms.add(term);
+  }
+
+  return [...uniqueTerms].slice(0, 6);
+}
+
+function buildIlikeOrFilterFromTerms(columns: string[], terms: string[]): string {
+  return terms
+    .flatMap((term) => columns.map((column) => `${column}.ilike.%${term}%`))
+    .join(',');
+}
+
+function buildIlikeOrFilter(columns: string[], query: string): string {
+  return buildIlikeOrFilterFromTerms(columns, getSearchTerms(query));
+}
+
+function tokenizeFieldText(value: string | null | undefined): string[] {
+  return normalizeSearchText(value)
+    .split(/[^a-z0-9@._-]+/)
+    .filter(Boolean);
+}
+
+function hasPrefixTokenMatch(value: string, term: string): boolean {
+  return tokenizeFieldText(value).some((token) => token.startsWith(term));
+}
+
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '');
 }
@@ -51,24 +132,62 @@ function joinText(parts: Array<string | null | undefined>): string {
 }
 
 function scoreText(query: string, fields: Array<string | null | undefined>, updatedAt?: string | null): number {
-  const normalizedQuery = query.trim().toLowerCase();
+  const normalizedQuery = normalizeSearchText(query);
   if (!normalizedQuery) {
     return 0;
   }
 
+  const normalizedFields = fields
+    .map((field) => normalizeSearchText(field))
+    .filter(Boolean);
+
+  if (normalizedFields.length === 0) {
+    return 0;
+  }
+
   let score = 0;
-  for (const [index, field] of fields.entries()) {
-    const normalizedField = (field || '').toLowerCase();
+  for (const [index, normalizedField] of normalizedFields.entries()) {
     if (!normalizedField) {
       continue;
     }
 
     if (normalizedField === normalizedQuery) {
-      score = Math.max(score, 150 - index * 10);
+      score = Math.max(score, 180 - index * 12);
     } else if (normalizedField.startsWith(normalizedQuery)) {
-      score = Math.max(score, 120 - index * 8);
+      score = Math.max(score, 150 - index * 10);
     } else if (normalizedField.includes(normalizedQuery)) {
-      score = Math.max(score, 90 - index * 6);
+      score = Math.max(score, 120 - index * 8);
+    }
+  }
+
+  const tokenTerms = getSearchTerms(query).filter((term) => term !== normalizedQuery);
+  let matchedTerms = 0;
+
+  for (const term of tokenTerms) {
+    let termMatched = false;
+
+    for (const [index, normalizedField] of normalizedFields.entries()) {
+      if (!normalizedField.includes(term)) {
+        continue;
+      }
+
+      score += hasPrefixTokenMatch(normalizedField, term)
+        ? Math.max(10, 30 - index * 2)
+        : Math.max(6, 18 - index * 2);
+      termMatched = true;
+      break;
+    }
+
+    if (termMatched) {
+      matchedTerms += 1;
+    }
+  }
+
+  if (tokenTerms.length > 1) {
+    if (matchedTerms === tokenTerms.length) {
+      score += 40;
+    } else if (matchedTerms > 0) {
+      score += matchedTerms * 6;
     }
   }
 
@@ -147,7 +266,7 @@ async function searchTasks(
     .from('tasks')
     .select('id, title, description, waiting_on, pinned_excerpt, status, due_at, updated_at')
     .eq('user_id', userId)
-    .or(`title.ilike.%${query}%,description.ilike.%${query}%,waiting_on.ilike.%${query}%,pinned_excerpt.ilike.%${query}%`)
+    .or(buildIlikeOrFilter(['title', 'description', 'waiting_on', 'pinned_excerpt'], query))
     .order('updated_at', { ascending: false })
     .limit(10);
 
@@ -180,7 +299,7 @@ async function searchApplications(
     .from('implementations')
     .select('id, name, status_summary, next_milestone, updated_at')
     .eq('user_id', userId)
-    .or(`name.ilike.%${query}%,status_summary.ilike.%${query}%,next_milestone.ilike.%${query}%`)
+    .or(buildIlikeOrFilter(['name', 'status_summary', 'next_milestone'], query))
     .order('updated_at', { ascending: false })
     .limit(10);
 
@@ -207,7 +326,7 @@ async function searchProjects(
     .from('projects')
     .select('id, name, description, status_summary, updated_at')
     .eq('user_id', userId)
-    .or(`name.ilike.%${query}%,description.ilike.%${query}%,status_summary.ilike.%${query}%`)
+    .or(buildIlikeOrFilter(['name', 'description', 'status_summary'], query))
     .order('updated_at', { ascending: false })
     .limit(10);
 
@@ -234,7 +353,7 @@ async function searchSprints(
     .from('sprints')
     .select('id, name, theme, start_date, end_date, created_at')
     .eq('user_id', userId)
-    .or(`name.ilike.%${query}%,theme.ilike.%${query}%`)
+    .or(buildIlikeOrFilter(['name', 'theme'], query))
     .order('start_date', { ascending: false })
     .limit(10);
 
@@ -265,7 +384,7 @@ async function searchStakeholders(
     .from('stakeholders')
     .select('id, name, email, role, organization, notes, updated_at')
     .eq('user_id', userId)
-    .or(`name.ilike.%${query}%,email.ilike.%${query}%,organization.ilike.%${query}%,notes.ilike.%${query}%`)
+    .or(buildIlikeOrFilter(['name', 'email', 'organization', 'notes'], query))
     .order('updated_at', { ascending: false })
     .limit(10);
 
@@ -290,9 +409,9 @@ async function searchCommitments(
 ): Promise<SearchCandidate[]> {
   const { data, error } = await supabase
     .from('commitments')
-    .select('id, title, notes, status, due_at, updated_at, stakeholder:stakeholders(name)')
+    .select('id, title, notes, status, due_at, updated_at, stakeholder_id, stakeholder:stakeholders(name)')
     .eq('user_id', userId)
-    .or(`title.ilike.%${query}%,notes.ilike.%${query}%`)
+    .or(buildIlikeOrFilter(['title', 'notes'], query))
     .order('updated_at', { ascending: false })
     .limit(10);
 
@@ -307,6 +426,8 @@ async function searchCommitments(
       entity: 'commitment',
       status: item.status,
       due_at: item.due_at,
+      stakeholder_id: item.stakeholder_id,
+      stakeholder_name: readNestedName(item.stakeholder),
     },
     score: scoreText(query, [item.title, item.notes, readNestedName(item.stakeholder)], item.updated_at),
     updatedAt: item.updated_at,
@@ -321,9 +442,9 @@ async function searchEmails(
 ): Promise<SearchCandidate[]> {
   const { data, error } = await supabase
     .from('inbox_items')
-    .select('id, subject, from_name, from_email, source, source_url, created_at, llm_extraction_json')
+    .select('id, subject, from_name, from_email, source, source_url, created_at, received_at, llm_extraction_json')
     .eq('user_id', userId)
-    .or(`subject.ilike.%${query}%,from_name.ilike.%${query}%,from_email.ilike.%${query}%`)
+    .or(buildIlikeOrFilter(['subject', 'from_name', 'from_email'], query))
     .order('created_at', { ascending: false })
     .limit(10);
 
@@ -344,6 +465,7 @@ async function searchEmails(
       entity: 'email',
       source: item.source,
       source_url: item.source_url,
+      received_at: item.received_at,
     },
     score: scoreText(
       query,
@@ -365,21 +487,38 @@ async function searchCalendar(
   query: string,
   canonicalBaseUrl: string
 ): Promise<SearchCandidate[]> {
+  const calendarTerms = getSearchTermsExcluding(query, CALENDAR_INTENT_TERMS);
+  const searchAllRecentEvents = calendarTerms.length === 0;
+
   const [eventsResult, contextResult] = await Promise.all([
-    supabase
-      .from('calendar_events')
-      .select('source, external_event_id, start_at, end_at, title, body_scrubbed_preview, updated_at')
-      .eq('user_id', userId)
-      .or(`title.ilike.%${query}%,body_scrubbed_preview.ilike.%${query}%`)
-      .order('start_at', { ascending: false })
-      .limit(10),
-    supabase
-      .from('calendar_event_context')
-      .select('source, external_event_id, meeting_context, updated_at')
-      .eq('user_id', userId)
-      .ilike('meeting_context', `%${query}%`)
-      .order('updated_at', { ascending: false })
-      .limit(10),
+    searchAllRecentEvents
+      ? supabase
+          .from('calendar_events')
+          .select('source, external_event_id, start_at, end_at, title, body_scrubbed_preview, updated_at')
+          .eq('user_id', userId)
+          .order('start_at', { ascending: false })
+          .limit(10)
+      : supabase
+          .from('calendar_events')
+          .select('source, external_event_id, start_at, end_at, title, body_scrubbed_preview, updated_at')
+          .eq('user_id', userId)
+          .or(buildIlikeOrFilterFromTerms(['title', 'body_scrubbed_preview'], calendarTerms))
+          .order('start_at', { ascending: false })
+          .limit(10),
+    searchAllRecentEvents
+      ? supabase
+          .from('calendar_event_context')
+          .select('source, external_event_id, meeting_context, updated_at')
+          .eq('user_id', userId)
+          .order('updated_at', { ascending: false })
+          .limit(10)
+      : supabase
+          .from('calendar_event_context')
+          .select('source, external_event_id, meeting_context, updated_at')
+          .eq('user_id', userId)
+          .or(buildIlikeOrFilterFromTerms(['meeting_context'], calendarTerms))
+          .order('updated_at', { ascending: false })
+          .limit(10),
   ]);
 
   if (eventsResult.error) throw eventsResult.error;
@@ -403,7 +542,11 @@ async function searchCalendar(
         start_at: event.start_at,
         end_at: event.end_at,
       },
-      score: scoreText(query, [event.title, event.body_scrubbed_preview], event.updated_at ?? event.start_at),
+      score: scoreText(
+        query,
+        [event.title, event.body_scrubbed_preview, CALENDAR_SEARCH_KEYWORDS],
+        event.updated_at ?? event.start_at
+      ),
       updatedAt: event.updated_at ?? event.start_at,
     });
   }
@@ -431,7 +574,11 @@ async function searchCalendar(
       startAt: event.start_at,
     });
     const meetingContextText = truncateText(joinText([event.body_scrubbed_preview, contextRow.meeting_context]));
-    const score = scoreText(query, [event.title, event.body_scrubbed_preview, contextRow.meeting_context], contextRow.updated_at ?? event.updated_at ?? event.start_at);
+    const score = scoreText(
+      query,
+      [event.title, event.body_scrubbed_preview, contextRow.meeting_context, CALENDAR_SEARCH_KEYWORDS],
+      contextRow.updated_at ?? event.updated_at ?? event.start_at
+    );
 
     eventMap.set(key, {
       id: `calendar:${encodedId}`,
@@ -458,7 +605,7 @@ export async function searchMissionControlData(
   query: string,
   canonicalBaseUrl: string
 ): Promise<MissionControlSearchResult[]> {
-  const normalizedQuery = query.trim();
+  const normalizedQuery = normalizeSearchText(query);
   if (!normalizedQuery) {
     return [];
   }

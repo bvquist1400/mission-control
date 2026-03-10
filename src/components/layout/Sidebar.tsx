@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { UniversalSearchPalette } from "@/components/layout/UniversalSearchPalette";
 
 const navItems = [
   { href: "/", label: "Today", hint: "Daily operating view" },
@@ -26,9 +27,65 @@ function isActive(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
+function SearchLauncherButton({
+  onClick,
+  className,
+  compact = false,
+}: {
+  onClick: () => void;
+  className?: string;
+  compact?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex items-center gap-3 rounded-xl border border-stroke bg-panel px-3 py-2 text-left text-sm text-foreground shadow-sm transition hover:border-accent/40 hover:bg-panel-muted ${className ?? ""}`}
+      aria-label="Open universal search"
+    >
+      <svg className="h-4 w-4 shrink-0 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-4.35-4.35" />
+        <circle cx="11" cy="11" r="6.5" />
+      </svg>
+      <div className="min-w-0 flex-1">
+        <p className="truncate font-medium">{compact ? "Search" : "Search everything"}</p>
+        {!compact ? <p className="text-xs text-muted-foreground">Tasks, projects, stakeholders, meetings, email</p> : null}
+      </div>
+      {!compact ? (
+        <span className="rounded-md border border-stroke bg-panel-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          Cmd/Ctrl K
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
 export function Sidebar() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  const openSearch = useCallback(() => {
+    setMobileOpen(false);
+    setSearchOpen(true);
+  }, []);
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+  }, []);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setMobileOpen(false);
+        setSearchOpen((current) => !current);
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   return (
     <>
@@ -51,6 +108,12 @@ export function Sidebar() {
         )}
       </button>
 
+      <SearchLauncherButton
+        onClick={openSearch}
+        compact
+        className="fixed right-4 top-4 z-40 lg:hidden"
+      />
+
       {mobileOpen ? (
         <>
           <button
@@ -67,6 +130,8 @@ export function Sidebar() {
               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Brent&apos;s Hub</p>
               <h1 className="mt-2 text-2xl font-semibold tracking-tight text-foreground">Baseline</h1>
             </div>
+
+            <SearchLauncherButton onClick={openSearch} className="mt-4 w-full" />
 
             <nav className="mt-4 space-y-2">
               {navItems.map((item) => {
@@ -120,6 +185,8 @@ export function Sidebar() {
           <h1 className="mt-2 text-2xl font-semibold tracking-tight text-foreground">Baseline</h1>
         </div>
 
+        <SearchLauncherButton onClick={openSearch} className="mt-4 w-full" />
+
         <nav className="mt-4 space-y-2">
           {navItems.map((item) => {
             const active = isActive(pathname, item.href);
@@ -141,6 +208,8 @@ export function Sidebar() {
           })}
         </nav>
       </aside>
+
+      {searchOpen ? <UniversalSearchPalette onClose={closeSearch} /> : null}
     </>
   );
 }
