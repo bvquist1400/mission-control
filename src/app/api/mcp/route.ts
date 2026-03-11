@@ -1192,8 +1192,8 @@ function createMcpServer(): McpServer {
     'Set a focus directive to prioritize certain areas in the planner.',
     {
       text: z.string().describe('Description of the focus directive'),
-      scope_type: z.enum(['implementation', 'stakeholder', 'task_type', 'query']).describe('What kind of thing to focus on'),
-      scope_id: z.string().optional().describe('UUID — for scope_type=implementation'),
+      scope_type: z.enum(['implementation', 'project', 'stakeholder', 'task_type', 'query']).describe('What kind of thing to focus on'),
+      scope_id: z.string().optional().describe('UUID — for scope_type=implementation or project'),
       scope_value: z.string().optional().describe('String value — for stakeholder/task_type/query'),
       strength: z.enum(['nudge', 'strong', 'hard']).default('strong'),
       reason: z.string().optional().describe('Why this focus matters'),

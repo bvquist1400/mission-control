@@ -87,6 +87,21 @@ async function ensureImplementationOwnership(
   return !error && Boolean(data?.id);
 }
 
+async function ensureProjectOwnership(
+  supabase: SupabaseClient,
+  userId: string,
+  projectId: string
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('projects')
+    .select('id')
+    .eq('id', projectId)
+    .eq('user_id', userId)
+    .single();
+
+  return !error && Boolean(data?.id);
+}
+
 async function fetchActiveDirective(
   supabase: SupabaseClient,
   userId: string,
@@ -206,7 +221,7 @@ export async function POST(request: NextRequest) {
 
     if (typeof body.scope_type !== 'string' || !isValidDirectiveScopeType(body.scope_type)) {
       return NextResponse.json(
-        { error: 'scope_type must be one of: implementation, stakeholder, task_type, query' },
+        { error: 'scope_type must be one of: implementation, project, stakeholder, task_type, query' },
         { status: 400 }
       );
     }
@@ -262,6 +277,22 @@ export async function POST(request: NextRequest) {
 
       normalizedScopeId = scopeId;
       normalizedScopeValue = null;
+    } else if (scopeType === 'project') {
+      const projectId = scopeId ?? scopeValue;
+      if (!projectId) {
+        return NextResponse.json(
+          { error: 'scope_id or scope_value is required for project scope' },
+          { status: 400 }
+        );
+      }
+
+      const projectOwned = await ensureProjectOwnership(supabase, userId, projectId);
+      if (!projectOwned) {
+        return NextResponse.json({ error: 'project focus must reference one of your projects' }, { status: 400 });
+      }
+
+      normalizedScopeId = null;
+      normalizedScopeValue = projectId;
     } else {
       if (!scopeValue) {
         return NextResponse.json(

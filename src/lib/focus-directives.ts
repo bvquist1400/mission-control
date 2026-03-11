@@ -1,4 +1,4 @@
-export type DirectiveScopeType = 'implementation' | 'stakeholder' | 'task_type' | 'query';
+export type DirectiveScopeType = 'implementation' | 'project' | 'stakeholder' | 'task_type' | 'query';
 export type DirectiveStrength = 'nudge' | 'strong' | 'hard';
 
 export interface FocusDirectiveRow {
@@ -21,6 +21,7 @@ export const FOCUS_DIRECTIVE_SELECT =
 
 export const VALID_DIRECTIVE_SCOPE_TYPES: DirectiveScopeType[] = [
   'implementation',
+  'project',
   'stakeholder',
   'task_type',
   'query',

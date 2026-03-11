@@ -84,6 +84,21 @@ async function ensureImplementationOwnership(
   return !error && Boolean(data?.id);
 }
 
+async function ensureProjectOwnership(
+  supabase: SupabaseClient,
+  userId: string,
+  projectId: string
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('projects')
+    .select('id')
+    .eq('id', projectId)
+    .eq('user_id', userId)
+    .single();
+
+  return !error && Boolean(data?.id);
+}
+
 async function clearOtherActiveDirectives(
   supabase: SupabaseClient,
   userId: string,
@@ -208,7 +223,7 @@ export async function PATCH(
     if (hasOwn(body, 'scope_type')) {
       if (typeof body.scope_type !== 'string' || !isValidDirectiveScopeType(body.scope_type)) {
         return NextResponse.json(
-          { error: 'scope_type must be one of: implementation, stakeholder, task_type, query' },
+          { error: 'scope_type must be one of: implementation, project, stakeholder, task_type, query' },
           { status: 400 }
         );
       }
@@ -272,11 +287,20 @@ export async function PATCH(
       updates.is_active = isActive.value;
     }
 
+    const scopeTypeChanged = hasOwn(updates, 'scope_type');
+    const scopeIdProvided = hasOwn(updates, 'scope_id');
+    const scopeValueProvided = hasOwn(updates, 'scope_value');
     const nextScopeType = (updates.scope_type as DirectiveScopeType | undefined) ?? current.scope_type;
-    const nextScopeId = hasOwn(updates, 'scope_id') ? (updates.scope_id as string | null) : current.scope_id;
-    const nextScopeValue = hasOwn(updates, 'scope_value')
+    const nextScopeId = scopeIdProvided
+      ? (updates.scope_id as string | null)
+      : scopeTypeChanged
+        ? null
+        : current.scope_id;
+    const nextScopeValue = scopeValueProvided
       ? (updates.scope_value as string | null)
-      : current.scope_value;
+      : scopeTypeChanged
+        ? null
+        : current.scope_value;
 
     if (nextScopeType === 'implementation') {
       if (!nextScopeId) {
@@ -289,6 +313,22 @@ export async function PATCH(
       }
 
       updates.scope_value = null;
+    } else if (nextScopeType === 'project') {
+      const nextProjectId = nextScopeId ?? nextScopeValue;
+      if (!nextProjectId) {
+        return NextResponse.json(
+          { error: 'scope_id or scope_value is required for project scope' },
+          { status: 400 }
+        );
+      }
+
+      const projectOwned = await ensureProjectOwnership(supabase, userId, nextProjectId);
+      if (!projectOwned) {
+        return NextResponse.json({ error: 'project focus must reference one of your projects' }, { status: 400 });
+      }
+
+      updates.scope_id = null;
+      updates.scope_value = nextProjectId;
     } else {
       if (!nextScopeValue) {
         return NextResponse.json(

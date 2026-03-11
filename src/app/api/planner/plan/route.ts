@@ -13,7 +13,7 @@ import { DEFAULT_WORKDAY_CONFIG } from '@/lib/workday';
 
 type PlannerMode = 'today' | 'now';
 type DirectiveStrength = 'nudge' | 'strong' | 'hard';
-type DirectiveScopeType = 'implementation' | 'stakeholder' | 'task_type' | 'query';
+type DirectiveScopeType = 'implementation' | 'project' | 'stakeholder' | 'task_type' | 'query';
 
 interface PlannerRequestBody {
   date?: string;
@@ -24,6 +24,7 @@ interface TaskRow {
   id: string;
   title: string;
   implementation_id: string | null;
+  project_id: string | null;
   priority_score: number | null;
   due_at: string | null;
   follow_up_at: string | null;
@@ -405,6 +406,8 @@ function matchesDirective(task: TaskRow, directive: FocusDirectiveRow | null): b
   switch (directive.scope_type) {
     case 'implementation':
       return Boolean(directive.scope_id && task.implementation_id === directive.scope_id);
+    case 'project':
+      return Boolean(directive.scope_value && task.project_id === directive.scope_value);
     case 'stakeholder': {
       const scope = directive.scope_value?.trim().toLowerCase();
       if (!scope) {
@@ -848,7 +851,7 @@ export async function POST(request: NextRequest) {
     const tasksResult = await supabase
       .from('tasks')
       .select(
-        'id, title, implementation_id, priority_score, due_at, follow_up_at, waiting_on, blocker, status, estimated_minutes, stakeholder_mentions, task_type, updated_at, pinned_excerpt, pinned'
+        'id, title, implementation_id, project_id, priority_score, due_at, follow_up_at, waiting_on, blocker, status, estimated_minutes, stakeholder_mentions, task_type, updated_at, pinned_excerpt, pinned'
       )
       .eq('user_id', userId)
       .neq('status', 'Done')

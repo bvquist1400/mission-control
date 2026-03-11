@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-type DirectiveScopeType = "implementation" | "stakeholder" | "task_type" | "query";
+type DirectiveScopeType = "implementation" | "project" | "stakeholder" | "task_type" | "query";
 type DirectiveStrength = "nudge" | "strong" | "hard";
 
 interface FocusDirective {
@@ -41,7 +41,7 @@ interface FocusMutationResponse {
   note?: string;
 }
 
-interface ImplementationOption {
+interface NamedOption {
   id: string;
   name: string;
 }
@@ -62,6 +62,7 @@ type LoadMode = "initial" | "refresh" | "silent";
 
 const SCOPE_OPTIONS: Array<{ value: DirectiveScopeType; label: string }> = [
   { value: "implementation", label: "Application" },
+  { value: "project", label: "Project" },
   { value: "stakeholder", label: "Stakeholder" },
   { value: "task_type", label: "Task Type" },
   { value: "query", label: "Query" },
@@ -151,7 +152,15 @@ function formatWindowLabel(directive: FocusDirective): string {
   return `Ends ${endsAt}`;
 }
 
-function formatScopeLabel(directive: FocusDirective, implementationNames: Map<string, string>): string {
+function isIdBasedScope(scopeType: DirectiveScopeType): boolean {
+  return scopeType === "implementation" || scopeType === "project";
+}
+
+function formatScopeLabel(
+  directive: FocusDirective,
+  implementationNames: Map<string, string>,
+  projectNames: Map<string, string>
+): string {
   switch (directive.scope_type) {
     case "implementation": {
       if (!directive.scope_id) {
@@ -159,6 +168,10 @@ function formatScopeLabel(directive: FocusDirective, implementationNames: Map<st
       }
 
       return implementationNames.get(directive.scope_id) ?? "Application focus";
+    }
+    case "project": {
+      const projectName = directive.scope_value ? projectNames.get(directive.scope_value) : null;
+      return projectName ? `Project: ${projectName}` : "Project focus";
     }
     case "stakeholder":
       return directive.scope_value ? `Stakeholder: ${directive.scope_value}` : "Stakeholder focus";
@@ -254,7 +267,7 @@ async function clearFocus(): Promise<FocusClearResponse> {
   return response.json();
 }
 
-async function fetchImplementations(): Promise<ImplementationOption[]> {
+async function fetchImplementations(): Promise<NamedOption[]> {
   const response = await fetch("/api/applications", { cache: "no-store" });
 
   if (response.status === 401) {
@@ -274,11 +287,32 @@ async function fetchImplementations(): Promise<ImplementationOption[]> {
     .filter((item) => item.id.length > 0 && item.name.length > 0);
 }
 
+async function fetchProjects(): Promise<NamedOption[]> {
+  const response = await fetch("/api/projects", { cache: "no-store" });
+
+  if (response.status === 401) {
+    throw new Error("Authentication required. Sign in at /login.");
+  }
+
+  if (!response.ok) {
+    throw new Error("Failed to fetch projects");
+  }
+
+  const data = (await response.json()) as Array<{ id?: string; name?: string }>;
+  return data
+    .map((item) => ({
+      id: typeof item.id === "string" ? item.id : "",
+      name: typeof item.name === "string" ? item.name : "",
+    }))
+    .filter((item) => item.id.length > 0 && item.name.length > 0);
+}
+
 export function FocusContextBar({ onDirectiveChange }: FocusContextBarProps) {
   const [draft, setDraft] = useState<DirectiveDraft>(() => createInitialDraft());
   const [active, setActive] = useState<FocusDirective | null>(null);
   const [directives, setDirectives] = useState<FocusDirective[]>([]);
-  const [implementations, setImplementations] = useState<ImplementationOption[]>([]);
+  const [implementations, setImplementations] = useState<NamedOption[]>([]);
+  const [projects, setProjects] = useState<NamedOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -290,6 +324,10 @@ export function FocusContextBar({ onDirectiveChange }: FocusContextBarProps) {
   const implementationNameLookup = useMemo(
     () => new Map(implementations.map((item) => [item.id, item.name])),
     [implementations]
+  );
+  const projectNameLookup = useMemo(
+    () => new Map(projects.map((item) => [item.id, item.name])),
+    [projects]
   );
 
   const loadFocusState = useCallback(
@@ -304,9 +342,10 @@ export function FocusContextBar({ onDirectiveChange }: FocusContextBarProps) {
       setError(null);
 
       try {
-        const [focusResult, implementationsResult] = await Promise.allSettled([
+        const [focusResult, implementationsResult, projectsResult] = await Promise.allSettled([
           fetchFocus(true),
           fetchImplementations(),
+          fetchProjects(),
         ]);
 
         if (operationId !== latestOperationId.current) {
@@ -325,6 +364,9 @@ export function FocusContextBar({ onDirectiveChange }: FocusContextBarProps) {
 
         if (implementationsResult.status === "fulfilled") {
           setImplementations(implementationsResult.value);
+        }
+        if (projectsResult.status === "fulfilled") {
+          setProjects(projectsResult.value);
         }
       } catch (loadError) {
         if (operationId !== latestOperationId.current) {
@@ -379,12 +421,12 @@ export function FocusContextBar({ onDirectiveChange }: FocusContextBarProps) {
         return;
       }
 
-      if (draft.scopeType === "implementation" && !draft.scopeId) {
-        setError("Select an application scope");
+      if (isIdBasedScope(draft.scopeType) && !draft.scopeId) {
+        setError(draft.scopeType === "project" ? "Select a project scope" : "Select an application scope");
         return;
       }
 
-      if (draft.scopeType !== "implementation" && draft.scopeValue.trim().length === 0) {
+      if (!isIdBasedScope(draft.scopeType) && draft.scopeValue.trim().length === 0) {
         setError("Scope value is required");
         return;
       }
@@ -419,7 +461,7 @@ export function FocusContextBar({ onDirectiveChange }: FocusContextBarProps) {
         is_active: draft.isActive,
       };
 
-      if (draft.scopeType === "implementation") {
+      if (isIdBasedScope(draft.scopeType)) {
         payload.scope_id = draft.scopeId;
       } else {
         payload.scope_value = draft.scopeValue.trim();
@@ -476,8 +518,12 @@ export function FocusContextBar({ onDirectiveChange }: FocusContextBarProps) {
     setDraft({
       text: directive.text,
       scopeType: directive.scope_type,
-      scopeId: directive.scope_id ?? "",
-      scopeValue: directive.scope_value ?? "",
+      scopeId: directive.scope_type === "implementation"
+        ? (directive.scope_id ?? "")
+        : directive.scope_type === "project"
+          ? (directive.scope_value ?? "")
+          : "",
+      scopeValue: isIdBasedScope(directive.scope_type) ? "" : (directive.scope_value ?? ""),
       strength: directive.strength,
       reason: directive.reason ?? "",
       startsAt: toDateTimeLocal(directive.starts_at),
@@ -487,6 +533,8 @@ export function FocusContextBar({ onDirectiveChange }: FocusContextBarProps) {
   }, []);
 
   const scopeLabel = draft.scopeType === "query" ? "Query text" : draft.scopeType === "task_type" ? "Task type" : "Value";
+  const idScopeLabel = draft.scopeType === "project" ? "Project" : "Application";
+  const idScopeOptions = draft.scopeType === "project" ? projects : implementations;
 
   return (
     <section className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
@@ -543,7 +591,7 @@ export function FocusContextBar({ onDirectiveChange }: FocusContextBarProps) {
                   <>
                     <p className="mt-1 text-sm font-semibold text-foreground">{active.text}</p>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {formatScopeLabel(active, implementationNameLookup)} · {formatStrengthPill(active.strength)}
+                      {formatScopeLabel(active, implementationNameLookup, projectNameLookup)} · {formatStrengthPill(active.strength)}
                     </p>
                     <p className="mt-1 text-xs text-muted-foreground">{formatWindowLabel(active)}</p>
                     {active.reason ? <p className="mt-1 text-xs text-muted-foreground">Reason: {active.reason}</p> : null}
@@ -603,8 +651,8 @@ export function FocusContextBar({ onDirectiveChange }: FocusContextBarProps) {
                         setDraft((current) => ({
                           ...current,
                           scopeType: event.target.value as DirectiveScopeType,
-                          scopeId: event.target.value === "implementation" ? current.scopeId : "",
-                          scopeValue: event.target.value === "implementation" ? "" : current.scopeValue,
+                          scopeId: "",
+                          scopeValue: "",
                         }))
                       }
                       disabled={creating}
@@ -638,19 +686,19 @@ export function FocusContextBar({ onDirectiveChange }: FocusContextBarProps) {
                   </label>
                 </div>
 
-                {draft.scopeType === "implementation" ? (
+                {isIdBasedScope(draft.scopeType) ? (
                   <label className="block space-y-1">
-                    <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Application</span>
+                    <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{idScopeLabel}</span>
                     <select
                       value={draft.scopeId}
                       onChange={(event) => setDraft((current) => ({ ...current, scopeId: event.target.value }))}
                       disabled={creating}
                       className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      <option value="">Select application</option>
-                      {implementations.map((implementation) => (
-                        <option key={implementation.id} value={implementation.id}>
-                          {implementation.name}
+                      <option value="">{`Select ${idScopeLabel.toLowerCase()}`}</option>
+                      {idScopeOptions.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.name}
                         </option>
                       ))}
                     </select>
@@ -745,7 +793,7 @@ export function FocusContextBar({ onDirectiveChange }: FocusContextBarProps) {
                           <div className="min-w-0">
                             <p className="truncate text-sm font-medium text-foreground">{directive.text}</p>
                             <p className="mt-1 text-xs text-muted-foreground">
-                              {formatScopeLabel(directive, implementationNameLookup)} · {formatStrengthPill(directive.strength)}
+                              {formatScopeLabel(directive, implementationNameLookup, projectNameLookup)} · {formatStrengthPill(directive.strength)}
                             </p>
                             <p className="mt-1 text-xs text-muted-foreground">{formatWindowLabel(directive)}</p>
                             {directive.reason ? <p className="mt-1 text-xs text-muted-foreground">Reason: {directive.reason}</p> : null}
