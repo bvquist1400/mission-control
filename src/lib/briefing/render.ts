@@ -492,12 +492,12 @@ function truncatePreview(value: string, max = 140): string {
 }
 
 const EMAIL_COLORS = {
-  page: "#06080d",
-  panel: "#0d1218",
-  panelMuted: "#151b23",
-  stroke: "#2a3441",
-  text: "#f2f5f7",
-  muted: "#98a6b5",
+  page: "#0d1117",
+  panel: "#161b22",
+  panelMuted: "#21262d",
+  stroke: "#30363d",
+  text: "#e6edf3",
+  muted: "#7d8590",
   accent: "#c41e3a",
   accentSoft: "rgba(196, 30, 58, 0.15)",
   accentText: "#ff9fb0",
@@ -567,9 +567,9 @@ function metricCard(
   valueColor: string
 ): string {
   return `
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="${background}" style="width:100%;background-color:${background};border:1px solid ${border};border-radius:14px;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background-color:${background};border:1px solid ${border};border-radius:14px;">
       <tr>
-        <td bgcolor="${background}" style="padding:14px;">
+        <td style="padding:14px;">
           <div style="font-family:'Avenir Next','Trebuchet MS','Segoe UI',sans-serif;font-size:11px;line-height:16px;color:${labelColor};text-transform:uppercase;letter-spacing:1px;font-weight:700;">${escapeHtml(label)}</div>
           <div style="font-family:'Avenir Next','Trebuchet MS','Segoe UI',sans-serif;font-size:22px;line-height:28px;color:${valueColor};font-weight:700;padding-top:6px;">${escapeHtml(value)}</div>
           <div style="font-family:'Avenir Next','Trebuchet MS','Segoe UI',sans-serif;font-size:13px;line-height:20px;color:${labelColor};padding-top:2px;">${escapeHtml(subtext)}</div>
@@ -580,9 +580,9 @@ function metricCard(
 
 function sectionFrame(title: string, body: string): string {
   return `
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="${EMAIL_COLORS.panel}" style="width:100%;background-color:${EMAIL_COLORS.panel};border:1px solid ${EMAIL_COLORS.stroke};border-radius:16px;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background-color:${EMAIL_COLORS.panel};border:1px solid ${EMAIL_COLORS.stroke};border-radius:16px;">
       <tr>
-        <td bgcolor="${EMAIL_COLORS.panelMuted}" style="padding:18px 20px;background-color:${EMAIL_COLORS.panelMuted};border-bottom:1px solid ${EMAIL_COLORS.stroke};font-family:'Avenir Next','Trebuchet MS','Segoe UI',sans-serif;font-size:18px;line-height:24px;color:${EMAIL_COLORS.text};font-weight:700;">
+        <td style="padding:18px 20px;background-color:${EMAIL_COLORS.panelMuted};border-bottom:1px solid ${EMAIL_COLORS.stroke};font-family:'Avenir Next','Trebuchet MS','Segoe UI',sans-serif;font-size:18px;line-height:24px;color:${EMAIL_COLORS.text};font-weight:700;">
           ${escapeHtml(title)}
         </td>
       </tr>
@@ -598,7 +598,7 @@ function statusPill(label: string, background: string, border: string, color: st
   return `
     <table role="presentation" cellspacing="0" cellpadding="0" border="0">
       <tr>
-        <td bgcolor="${background}" style="background-color:${background};border:1px solid ${border};border-radius:999px;padding:4px 10px;font-family:'Avenir Next','Trebuchet MS','Segoe UI',sans-serif;font-size:11px;line-height:14px;color:${color};font-weight:700;text-transform:uppercase;letter-spacing:1px;">
+        <td style="background-color:${background};border:1px solid ${border};border-radius:999px;padding:4px 10px;font-family:'Avenir Next','Trebuchet MS','Segoe UI',sans-serif;font-size:11px;line-height:14px;color:${color};font-weight:700;text-transform:uppercase;letter-spacing:1px;">
           ${escapeHtml(label)}
         </td>
       </tr>
@@ -688,9 +688,9 @@ function renderPriorityTasks(digest: DailyBriefDigestResponse): string {
     .join("");
 
   return `
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="${EMAIL_COLORS.panel}" style="width:100%;background-color:${EMAIL_COLORS.panel};border:1px solid ${EMAIL_COLORS.stroke};border-radius:16px;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background-color:${EMAIL_COLORS.panel};border:1px solid ${EMAIL_COLORS.stroke};border-radius:16px;">
       <tr>
-        <td bgcolor="${EMAIL_COLORS.panelMuted}" style="padding:18px 20px;background-color:${EMAIL_COLORS.panelMuted};border-bottom:1px solid ${EMAIL_COLORS.stroke};font-family:'Avenir Next','Trebuchet MS','Segoe UI',sans-serif;font-size:18px;line-height:24px;color:${EMAIL_COLORS.text};font-weight:700;">
+        <td style="padding:18px 20px;background-color:${EMAIL_COLORS.panelMuted};border-bottom:1px solid ${EMAIL_COLORS.stroke};font-family:'Avenir Next','Trebuchet MS','Segoe UI',sans-serif;font-size:18px;line-height:24px;color:${EMAIL_COLORS.text};font-weight:700;">
           ⚡ Priority tasks
         </td>
       </tr>
@@ -722,9 +722,9 @@ function renderMeetingsCard(meetings: DailyBriefDigestMeetingItem[]): string {
   }).join("");
 
   return `
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="${EMAIL_COLORS.panel}" style="width:100%;background-color:${EMAIL_COLORS.panel};border:1px solid ${EMAIL_COLORS.stroke};border-radius:16px;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background-color:${EMAIL_COLORS.panel};border:1px solid ${EMAIL_COLORS.stroke};border-radius:16px;">
       <tr>
-        <td bgcolor="${EMAIL_COLORS.panelMuted}" style="padding:18px 20px;background-color:${EMAIL_COLORS.panelMuted};border-bottom:1px solid ${EMAIL_COLORS.stroke};font-family:'Avenir Next','Trebuchet MS','Segoe UI',sans-serif;font-size:18px;line-height:24px;color:${EMAIL_COLORS.text};font-weight:700;">
+        <td style="padding:18px 20px;background-color:${EMAIL_COLORS.panelMuted};border-bottom:1px solid ${EMAIL_COLORS.stroke};font-family:'Avenir Next','Trebuchet MS','Segoe UI',sans-serif;font-size:18px;line-height:24px;color:${EMAIL_COLORS.text};font-weight:700;">
           📅 Remaining meetings
         </td>
       </tr>
@@ -758,9 +758,9 @@ function renderGuidanceCard(copy: DailyBriefRenderCopy): string {
   }).join("");
 
   return `
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="${EMAIL_COLORS.panelMuted}" style="width:100%;background-color:${EMAIL_COLORS.panelMuted};border:1px solid ${EMAIL_COLORS.stroke};border-radius:16px;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background-color:${EMAIL_COLORS.panelMuted};border:1px solid ${EMAIL_COLORS.stroke};border-radius:16px;">
       <tr>
-        <td bgcolor="${EMAIL_COLORS.panelMuted}" style="padding:20px 22px;font-family:'Avenir Next','Trebuchet MS','Segoe UI',sans-serif;">
+        <td style="padding:20px 22px;font-family:'Avenir Next','Trebuchet MS','Segoe UI',sans-serif;">
           <div style="font-size:18px;line-height:24px;color:${EMAIL_COLORS.text};font-weight:700;padding-bottom:10px;">
             💡 ${escapeHtml(copy.guidance_title)}
           </div>
@@ -781,9 +781,9 @@ function renderWatchoutCard(watchout: string | null): string {
   }
 
   return `
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#221118" style="width:100%;background-color:${EMAIL_COLORS.accentSoft};border:1px solid rgba(196, 30, 58, 0.35);border-radius:16px;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background-color:${EMAIL_COLORS.accentSoft};border:1px solid rgba(196, 30, 58, 0.35);border-radius:16px;">
       <tr>
-        <td bgcolor="#221118" style="padding:18px 20px;font-family:'Avenir Next','Trebuchet MS','Segoe UI',sans-serif;">
+        <td style="padding:18px 20px;font-family:'Avenir Next','Trebuchet MS','Segoe UI',sans-serif;">
           <div style="font-size:12px;line-height:18px;color:${EMAIL_COLORS.accentText};text-transform:uppercase;letter-spacing:1px;font-weight:700;padding-bottom:6px;">Watchout</div>
           <div style="font-size:15px;line-height:24px;color:${EMAIL_COLORS.text};font-weight:700;">${escapeHtml(watchout)}</div>
         </td>
@@ -801,9 +801,9 @@ function renderSyncCard(digest: DailyBriefDigestResponse, syncApprovalText: stri
   }).join("");
 
   return `
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#102218" style="width:100%;background-color:${EMAIL_COLORS.greenSoft};border:1px solid ${EMAIL_COLORS.greenBorder};border-radius:16px;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background-color:${EMAIL_COLORS.greenSoft};border:1px solid ${EMAIL_COLORS.greenBorder};border-radius:16px;">
       <tr>
-        <td bgcolor="#102218" style="padding:20px 22px;font-family:'Avenir Next','Trebuchet MS','Segoe UI',sans-serif;">
+        <td style="padding:20px 22px;font-family:'Avenir Next','Trebuchet MS','Segoe UI',sans-serif;">
           <div style="font-size:18px;line-height:24px;color:${EMAIL_COLORS.greenText};font-weight:700;padding-bottom:10px;">
             Suggested sync_today
           </div>
@@ -843,9 +843,9 @@ function renderStaleFollowupsCard(digest: DailyBriefDigestResponse): string {
   }).join("");
 
   return `
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="${EMAIL_COLORS.panel}" style="width:100%;background-color:${EMAIL_COLORS.panel};border:1px solid ${EMAIL_COLORS.stroke};border-radius:16px;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background-color:${EMAIL_COLORS.panel};border:1px solid ${EMAIL_COLORS.stroke};border-radius:16px;">
       <tr>
-        <td bgcolor="${EMAIL_COLORS.panelMuted}" style="padding:18px 20px;background-color:${EMAIL_COLORS.panelMuted};border-bottom:1px solid ${EMAIL_COLORS.stroke};font-family:'Avenir Next','Trebuchet MS','Segoe UI',sans-serif;font-size:18px;line-height:24px;color:${EMAIL_COLORS.text};font-weight:700;">
+        <td style="padding:18px 20px;background-color:${EMAIL_COLORS.panelMuted};border-bottom:1px solid ${EMAIL_COLORS.stroke};font-family:'Avenir Next','Trebuchet MS','Segoe UI',sans-serif;font-size:18px;line-height:24px;color:${EMAIL_COLORS.text};font-weight:700;">
           Stale follow-ups
         </td>
       </tr>
@@ -863,7 +863,7 @@ function renderBriefHtml(
   const headline = modeLabel;
   const headerSubtitle = buildHeaderSubtitle(digest, copy);
   const summaryStrip = `
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="${EMAIL_COLORS.panelMuted}" style="width:100%;background-color:${EMAIL_COLORS.panelMuted};border-top:1px solid ${EMAIL_COLORS.stroke};border-bottom:1px solid ${EMAIL_COLORS.stroke};">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background-color:${EMAIL_COLORS.panelMuted};border-top:1px solid ${EMAIL_COLORS.stroke};border-bottom:1px solid ${EMAIL_COLORS.stroke};">
       <tr>
         <td style="padding:18px 20px;">
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
@@ -886,34 +886,27 @@ function renderBriefHtml(
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark" />
     <meta name="supported-color-schemes" content="dark" />
-    <!--[if mso]>
-    <style type="text/css">
-      body, table, td {
-        font-family: Arial, Helvetica, sans-serif !important;
-      }
-    </style>
-    <![endif]-->
     <title>${escapeHtml(digest.subject)}</title>
   </head>
-  <body bgcolor="${EMAIL_COLORS.page}" style="margin:0; padding:0; background-color:${EMAIL_COLORS.page}; font-family:'Avenir Next','Trebuchet MS','Segoe UI',sans-serif; color:${EMAIL_COLORS.text};">
+  <body style="margin:0; padding:0; background-color:${EMAIL_COLORS.page}; font-family:'Avenir Next','Trebuchet MS','Segoe UI',sans-serif; color:${EMAIL_COLORS.text};">
     <div style="display:none; max-height:0; overflow:hidden; opacity:0; mso-hide:all;">
       ${escapeHtml(preheader)}
     </div>
 
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="${EMAIL_COLORS.page}" style="width:100%; background-color:${EMAIL_COLORS.page}; margin:0; padding:0;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%; background-color:${EMAIL_COLORS.page}; margin:0; padding:0;">
       <tr>
-        <td align="center" bgcolor="${EMAIL_COLORS.page}" style="padding:24px 12px;">
-          <table role="presentation" width="680" cellspacing="0" cellpadding="0" border="0" bgcolor="${EMAIL_COLORS.page}" style="width:680px; max-width:680px;">
+        <td align="center" style="padding:24px 12px;">
+          <table role="presentation" width="680" cellspacing="0" cellpadding="0" border="0" style="width:680px; max-width:680px;">
             <tr>
               <td style="padding:0 0 12px 0; font-size:12px; line-height:18px; color:${EMAIL_COLORS.muted}; text-transform:uppercase; letter-spacing:1px;">
                 Mission Control • Daily Brief
               </td>
             </tr>
             <tr>
-              <td bgcolor="${EMAIL_COLORS.panel}" style="background-color:${EMAIL_COLORS.panel}; border:1px solid ${EMAIL_COLORS.stroke}; border-radius:18px; overflow:hidden;">
-                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="${EMAIL_COLORS.panel}">
+              <td style="background-color:${EMAIL_COLORS.panel}; border:1px solid ${EMAIL_COLORS.stroke}; border-radius:18px; overflow:hidden;">
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
                   <tr>
-                    <td bgcolor="${EMAIL_COLORS.page}" style="background-color:${EMAIL_COLORS.page}; padding:28px 32px 24px 32px; border-bottom:1px solid ${EMAIL_COLORS.stroke}; border-top:3px solid ${EMAIL_COLORS.accent};">
+                    <td style="background-color:${EMAIL_COLORS.page}; padding:28px 32px 24px 32px; border-bottom:1px solid ${EMAIL_COLORS.stroke}; border-top:3px solid ${EMAIL_COLORS.accent};">
                       <div style="font-size:12px; line-height:18px; color:${EMAIL_COLORS.muted}; text-transform:uppercase; letter-spacing:1px; font-weight:700; margin-bottom:8px;">
                         ${escapeHtml(modeLabel)}
                       </div>
