@@ -60,6 +60,33 @@ curl -s \
 
 Do not auto-apply `suggested_sync_today`. The digest only recommends changes.
 
+## Importable workflow
+
+Repo export:
+
+- `n8n/mission-control-daily-briefs.json`
+
+What it includes:
+
+- weekday morning, midday, and EOD schedule triggers
+- one HTTP Request node per brief mode
+- one SMTP Send Email node per brief mode
+- ET-based `since` calculation for midday and EOD using `08:05 ET`
+- workflow timezone set to `America/New_York`
+
+Setup after import:
+
+1. Import `n8n/mission-control-daily-briefs.json` into n8n.
+2. Attach your SMTP credential to each `Send ... Email` node.
+3. Either set these n8n environment variables or replace the placeholder expressions directly in the nodes:
+   - `MISSION_CONTROL_BASE_URL`
+   - `MISSION_CONTROL_ACTIONS_API_KEY` or `MISSION_CONTROL_API_KEY`
+   - `DAILY_BRIEF_TO_EMAIL`
+   - `DAILY_BRIEF_FROM_EMAIL`
+4. Save, test one branch manually, then activate the workflow.
+
+The workflow is imported inactive on purpose.
+
 ## Manual sync_today follow-up
 
 If the email's `Suggested sync_today` section looks right, you can copy those recommended lines back into an MCP-enabled chat and approve them there.

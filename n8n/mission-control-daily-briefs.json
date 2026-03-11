@@ -1,0 +1,347 @@
+{
+  "name": "Mission Control Daily Brief Emails",
+  "nodes": [
+    {
+      "parameters": {
+        "color": 5,
+        "width": 540,
+        "height": 320,
+        "content": "## Setup\n\n1. Import this workflow.\n2. In workflow settings, confirm timezone is `America/New_York`.\n3. Attach your SMTP credential to each `Send ... Email` node.\n4. Either set these n8n env vars or replace the placeholder expressions in the nodes:\n   - `MISSION_CONTROL_BASE_URL`\n   - `MISSION_CONTROL_ACTIONS_API_KEY` or `MISSION_CONTROL_API_KEY`\n   - `DAILY_BRIEF_TO_EMAIL`\n   - `DAILY_BRIEF_FROM_EMAIL`\n\nThis workflow only sends recommendation emails. It does not auto-apply `sync_today`."
+      },
+      "id": "9d1474b5-619a-4ddd-9d83-cd1d5325d76c",
+      "name": "Setup Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -860,
+        -520
+      ]
+    },
+    {
+      "parameters": {
+        "color": 7,
+        "width": 540,
+        "height": 220,
+        "content": "## Timing\n\n- Morning: `08:05` ET weekdays\n- Midday: `12:30` ET weekdays\n- EOD: `16:45` ET weekdays\n\nMidday and EOD compute `since` as the same day at `08:05 ET` so the digest window lines up with the morning brief."
+      },
+      "id": "7d481e69-d436-4525-86a6-c3ed053a66c7",
+      "name": "Timing Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -260,
+        -520
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "5 8 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "412064fa-35bf-40d4-be8a-d5272a783aeb",
+      "name": "Morning Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -860,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.MISSION_CONTROL_BASE_URL || 'https://mission-control-orpin-chi.vercel.app' }}/api/briefing/render",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "mode",
+              "value": "morning"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Mission-Control-Key",
+              "value": "={{ $env.MISSION_CONTROL_ACTIONS_API_KEY || $env.MISSION_CONTROL_API_KEY || 'REPLACE_WITH_MACHINE_KEY' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b4e89935-eefb-48f1-af6d-34ebd516ec53",
+      "name": "Fetch Morning Brief",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -620,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.DAILY_BRIEF_FROM_EMAIL || 'Baseline <change-me@example.com>' }}",
+        "toEmail": "={{ $env.DAILY_BRIEF_TO_EMAIL || 'change-me@example.com' }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "both",
+        "text": "={{ $json.text }}",
+        "html": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "3c5f9b37-4f46-46ca-b876-32682525de06",
+      "name": "Send Morning Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -360,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 12 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "819e4f74-1f7b-4584-81dc-2d8827ec695e",
+      "name": "Midday Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -860,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.MISSION_CONTROL_BASE_URL || 'https://mission-control-orpin-chi.vercel.app' }}/api/briefing/render",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "mode",
+              "value": "midday"
+            },
+            {
+              "name": "since",
+              "value": "={{ $now.setZone('America/New_York').startOf('day').plus({ hours: 8, minutes: 5 }).toUTC().toISO() }}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Mission-Control-Key",
+              "value": "={{ $env.MISSION_CONTROL_ACTIONS_API_KEY || $env.MISSION_CONTROL_API_KEY || 'REPLACE_WITH_MACHINE_KEY' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "0c5e209c-bb43-40de-8365-269412f44857",
+      "name": "Fetch Midday Brief",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -620,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.DAILY_BRIEF_FROM_EMAIL || 'Baseline <change-me@example.com>' }}",
+        "toEmail": "={{ $env.DAILY_BRIEF_TO_EMAIL || 'change-me@example.com' }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "both",
+        "text": "={{ $json.text }}",
+        "html": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "1c8ff998-a269-4449-bf44-b86323058f74",
+      "name": "Send Midday Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -360,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "45 16 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "f74b2023-1d71-438e-b766-8638bb056c8a",
+      "name": "EOD Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -860,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.MISSION_CONTROL_BASE_URL || 'https://mission-control-orpin-chi.vercel.app' }}/api/briefing/render",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "mode",
+              "value": "eod"
+            },
+            {
+              "name": "since",
+              "value": "={{ $now.setZone('America/New_York').startOf('day').plus({ hours: 8, minutes: 5 }).toUTC().toISO() }}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Mission-Control-Key",
+              "value": "={{ $env.MISSION_CONTROL_ACTIONS_API_KEY || $env.MISSION_CONTROL_API_KEY || 'REPLACE_WITH_MACHINE_KEY' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e7874f09-6748-4f1d-ab10-adc2da237b76",
+      "name": "Fetch EOD Brief",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -620,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.DAILY_BRIEF_FROM_EMAIL || 'Baseline <change-me@example.com>' }}",
+        "toEmail": "={{ $env.DAILY_BRIEF_TO_EMAIL || 'change-me@example.com' }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "both",
+        "text": "={{ $json.text }}",
+        "html": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "01f3c4c7-adcf-46ce-a76f-d2e5d6a4c89d",
+      "name": "Send EOD Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -360,
+        280
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Morning Schedule": {
+      "main": [
+        [
+          {
+            "node": "Fetch Morning Brief",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Morning Brief": {
+      "main": [
+        [
+          {
+            "node": "Send Morning Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Midday Schedule": {
+      "main": [
+        [
+          {
+            "node": "Fetch Midday Brief",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Midday Brief": {
+      "main": [
+        [
+          {
+            "node": "Send Midday Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "EOD Schedule": {
+      "main": [
+        [
+          {
+            "node": "Fetch EOD Brief",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch EOD Brief": {
+      "main": [
+        [
+          {
+            "node": "Send EOD Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/New_York"
+  },
+  "versionId": "c299f0f6-c112-4614-a22e-949761b6d90a",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "id": "qLQmbnZK2W7Vq5PR",
+  "tags": []
+}
