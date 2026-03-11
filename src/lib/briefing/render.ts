@@ -62,6 +62,7 @@ export interface DailyBriefRenderCopy {
 export interface DailyBriefRenderResponse {
   requestedDate: string;
   mode: DailyBriefDigestResponse["mode"];
+  modeLabel: string;
   generatedAt: string;
   subject: string;
   preheader: string;
@@ -1119,12 +1120,14 @@ export async function renderDailyBrief(
   digest: DailyBriefDigestResponse
 ): Promise<DailyBriefRenderResponse> {
   const { copy, llm } = await generateChiefOfStaffCopy(supabase, userId, digest);
+  const modeLabel = getModeLabel(digest.mode);
   const preheader = buildPreheader(digest, copy);
   const syncApprovalText = buildSyncApprovalText(digest);
 
   return {
     requestedDate: digest.requestedDate,
     mode: digest.mode,
+    modeLabel,
     generatedAt: new Date().toISOString(),
     subject: digest.subject,
     preheader,

@@ -47,6 +47,7 @@ curl -s \
 ## Response fields n8n should use
 
 - `subject` -> email subject
+- `modeLabel` -> display-safe label like `Morning Brief`, `Midday Brief`, or `EOD Brief`
 - `html` -> primary email body
 - `text` -> plain-text fallback
 - `syncApprovalText` -> optional copy/paste block for approving `sync_today` in chat
