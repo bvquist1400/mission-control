@@ -806,18 +806,41 @@ export default function TodayPage() {
   const handleTaskUpdated = useCallback((taskId: string, updates: TaskUpdatePayload) => {
     setData((prev) => {
       if (!prev) return prev;
+
+      const nextDueAt = Object.prototype.hasOwnProperty.call(updates, "due_at")
+        ? (updates.due_at ?? null)
+        : undefined;
+      const nextDueState = nextDueAt !== undefined ? getDueState(nextDueAt, new Date(), timeZone) : undefined;
+
+      function mergeCard(task: TaskCardData): TaskCardData {
+        if (task.id !== taskId) {
+          return task;
+        }
+
+        return {
+          ...task,
+          ...(typeof updates.title === "string" ? { title: updates.title } : {}),
+          ...(typeof updates.estimated_minutes === "number" ? { estimatedMinutes: updates.estimated_minutes } : {}),
+          ...(typeof updates.status === "string" ? { status: updates.status } : {}),
+          ...(typeof updates.blocker === "boolean" ? { blocker: updates.blocker } : {}),
+          ...(typeof updates.pinned === "boolean" ? { pinned: updates.pinned } : {}),
+          ...(nextDueAt !== undefined ? { dueAt: nextDueAt, dueState: nextDueState } : {}),
+        };
+      }
+
       function mergeTask(task: TaskWithImplementation): TaskWithImplementation {
         return task.id === taskId ? { ...task, ...updates } : task;
       }
+
       return {
         ...prev,
-        topThree: prev.topThree.map((t) => (t.id === taskId ? { ...t, ...updates } : t)),
-        dueSoon: prev.dueSoon.map((t) => (t.id === taskId ? { ...t, ...updates } : t)),
+        topThree: prev.topThree.map(mergeCard),
+        dueSoon: prev.dueSoon.map(mergeCard),
         topThreeRaw: prev.topThreeRaw.map(mergeTask),
         dueSoonRaw: prev.dueSoonRaw.map(mergeTask),
       };
     });
-  }, []);
+  }, [timeZone]);
 
   async function handleTogglePinned(taskId: string, nextPinned: boolean) {
     if (!data || pinningIds.has(taskId)) return;

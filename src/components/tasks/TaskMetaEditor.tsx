@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { formatDateOnly, resolveDueDateInput, timestampToLocalDateInputValue } from "@/components/utils/dates";
 import { useSprints } from "@/hooks/useSprints";
 import type { TaskType, TaskUpdatePayload, TaskWithImplementation } from "@/types/database";
 
@@ -26,6 +27,7 @@ export function TaskMetaEditor({ task, isSaving, onUpdate }: TaskMetaEditorProps
   const [taskTypeDraft, setTaskTypeDraft] = useState<TaskType>(task.task_type);
   const [waitingOnDraft, setWaitingOnDraft] = useState(task.waiting_on ?? "");
   const [sprintIdDraft, setSprintIdDraft] = useState(task.sprint_id ?? "");
+  const [dueDateDraft, setDueDateDraft] = useState(timestampToLocalDateInputValue(task.due_at));
 
   const normalizedTitle = titleDraft.trim();
   const normalizedDescription = descriptionDraft.trim();
@@ -33,14 +35,29 @@ export function TaskMetaEditor({ task, isSaving, onUpdate }: TaskMetaEditorProps
   const nextWaitingOn = normalizedWaitingOn.length > 0 ? normalizedWaitingOn : null;
   const nextDescription = normalizedDescription.length > 0 ? normalizedDescription : null;
   const nextSprintId = sprintIdDraft || null;
+  const currentDueDate = timestampToLocalDateInputValue(task.due_at);
+  const dueDateResolution = resolveDueDateInput(dueDateDraft);
+  const hasDueDateChange = dueDateResolution.error === null && dueDateResolution.dateOnly !== currentDueDate;
 
   const hasChanges =
     normalizedTitle !== task.title
     || taskTypeDraft !== task.task_type
     || nextWaitingOn !== task.waiting_on
     || nextDescription !== task.description
-    || nextSprintId !== task.sprint_id;
-  const canSave = normalizedTitle.length > 0 && hasChanges && !isSaving;
+    || nextSprintId !== task.sprint_id
+    || hasDueDateChange;
+  const canSave = normalizedTitle.length > 0 && hasChanges && !isSaving && dueDateResolution.error === null;
+
+  function normalizeDueDateDraft() {
+    if (dueDateResolution.error) {
+      return;
+    }
+
+    const normalizedValue = dueDateResolution.dateOnly ?? "";
+    if (normalizedValue !== dueDateDraft) {
+      setDueDateDraft(normalizedValue);
+    }
+  }
 
   function saveEdits() {
     if (!canSave) {
@@ -63,6 +80,9 @@ export function TaskMetaEditor({ task, isSaving, onUpdate }: TaskMetaEditorProps
     if (nextSprintId !== task.sprint_id) {
       updates.sprint_id = nextSprintId;
     }
+    if (hasDueDateChange) {
+      updates.due_at = dueDateResolution.iso;
+    }
 
     if (Object.keys(updates).length > 0) {
       void onUpdate(task.id, updates);
@@ -83,7 +103,7 @@ export function TaskMetaEditor({ task, isSaving, onUpdate }: TaskMetaEditorProps
         </button>
       </div>
 
-      <div className="mt-3 grid gap-3 md:grid-cols-4">
+      <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
         <label className="space-y-1">
           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Title</span>
           <input
@@ -114,6 +134,41 @@ export function TaskMetaEditor({ task, isSaving, onUpdate }: TaskMetaEditorProps
               </option>
             ))}
           </select>
+        </label>
+
+        <label className="space-y-1">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Due Date</span>
+          <input
+            value={dueDateDraft}
+            onChange={(event) => setDueDateDraft(event.target.value)}
+            onBlur={normalizeDueDateDraft}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                normalizeDueDateDraft();
+                saveEdits();
+              }
+
+              if (event.key === "Escape") {
+                setDueDateDraft(currentDueDate);
+                event.currentTarget.blur();
+              }
+            }}
+            disabled={isSaving}
+            placeholder="YYYY-MM-DD or t+7"
+            aria-invalid={dueDateResolution.error ? "true" : "false"}
+            className={`w-full rounded border bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition disabled:cursor-not-allowed disabled:opacity-60 ${
+              dueDateResolution.error
+                ? "border-red-300 focus:border-red-400"
+                : "border-stroke focus:border-accent"
+            }`}
+          />
+          <p className={`text-[11px] ${dueDateResolution.error ? "text-red-600" : "text-muted-foreground"}`}>
+            {dueDateResolution.error
+              ?? (dueDateResolution.dateOnly
+                ? `Resolves to ${formatDateOnly(dueDateResolution.dateOnly)}.`
+                : "Leave blank to clear. Shortcuts: t+30, w+1, m+1, y+1.")}
+          </p>
         </label>
 
         <label className="space-y-1">
