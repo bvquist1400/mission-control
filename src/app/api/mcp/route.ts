@@ -255,6 +255,50 @@ function createMcpServer(): McpServer {
     }
   );
 
+  mcp.tool(
+    'get_brief_digest',
+    'Get a deterministic daily brief digest with sprint health, task buckets, stakeholder commitments, remaining meetings, guidance, and email-ready markdown. This is the preferred low-token brief for morning, midday, and eod.',
+    {
+      mode: z.enum(['morning', 'midday', 'eod', 'auto']).default('auto').describe('Briefing mode'),
+      date: z.string().optional().describe('ISO date (YYYY-MM-DD). Defaults to today ET.'),
+      since: z.string().optional().describe('Optional ISO timestamp to define the activity window for midday/eod updates.'),
+    },
+    async ({ mode, date, since }) => {
+      const url = new URL('/api/briefing/digest', 'https://mission-control-orpin-chi.vercel.app');
+      url.searchParams.set('mode', mode);
+      if (date) url.searchParams.set('date', date);
+      if (since) url.searchParams.set('since', since);
+
+      const res = await fetch(url.toString(), {
+        headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
+      });
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  mcp.tool(
+    'get_brief_render',
+    'Get the rendered daily brief with deterministic facts plus a concise chief-of-staff voice layer. Returns subject, html, text, digest, and llm metadata.',
+    {
+      mode: z.enum(['morning', 'midday', 'eod', 'auto']).default('auto').describe('Briefing mode'),
+      date: z.string().optional().describe('ISO date (YYYY-MM-DD). Defaults to today ET.'),
+      since: z.string().optional().describe('Optional ISO timestamp to define the activity window for midday/eod updates.'),
+    },
+    async ({ mode, date, since }) => {
+      const url = new URL('/api/briefing/render', 'https://mission-control-orpin-chi.vercel.app');
+      url.searchParams.set('mode', mode);
+      if (date) url.searchParams.set('date', date);
+      if (since) url.searchParams.set('since', since);
+
+      const res = await fetch(url.toString(), {
+        headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
+      });
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
   // ── GET WEEKLY REVIEW ────────────────────────────────────────────────
   mcp.tool(
     'get_weekly_review',

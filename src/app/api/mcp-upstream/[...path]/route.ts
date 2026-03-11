@@ -3,6 +3,8 @@ import * as applicationsRoute from '@/app/api/applications/route';
 import * as applicationRoute from '@/app/api/applications/[id]/route';
 import * as applicationHealthRoute from '@/app/api/applications/health-scores/route';
 import * as briefingRoute from '@/app/api/briefing/route';
+import * as briefingDigestRoute from '@/app/api/briefing/digest/route';
+import * as briefingRenderRoute from '@/app/api/briefing/render/route';
 import * as briefingNarrativeRoute from '@/app/api/briefing/narrative/route';
 import * as briefingWeeklyReviewRoute from '@/app/api/briefing/weekly-review/route';
 import * as commitmentsRoute from '@/app/api/commitments/route';
@@ -146,6 +148,14 @@ async function handleRequest(
 
   if (segments[0] === 'briefing' && segments.length === 1) {
     return invokeStatic(briefingRoute.GET, requestWithContext);
+  }
+
+  if (segments[0] === 'briefing' && segments[1] === 'digest' && segments.length === 2) {
+    return invokeStatic(briefingDigestRoute.GET, requestWithContext);
+  }
+
+  if (segments[0] === 'briefing' && segments[1] === 'render' && segments.length === 2) {
+    return invokeStatic(briefingRenderRoute.GET, requestWithContext);
   }
 
   if (segments[0] === 'briefing' && segments[1] === 'weekly-review' && segments.length === 2) {

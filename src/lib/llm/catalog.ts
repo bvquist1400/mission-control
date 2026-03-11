@@ -5,15 +5,27 @@ import type {
   LlmPreferenceFeature,
   LlmPreferenceSelection,
   LlmPricingTier,
+  LlmProvider,
   ResolvedLlmModel,
 } from "./types";
 
 export const LLM_PREFERENCE_FEATURES: LlmPreferenceFeature[] = [
   "global_default",
-  "briefing_narrative",
-  "intake_extraction",
-  "quick_capture",
 ];
+
+interface LibControlledFeatureModel {
+  provider: LlmProvider;
+  model_id: string;
+}
+
+// Brief narrative generation is now code-owned so it does not drift with stale per-user settings.
+// Change this model here when you want to retune the email brief voice.
+export const LIB_CONTROLLED_FEATURE_MODELS: Partial<Record<LlmFeature, LibControlledFeatureModel>> = {
+  briefing_narrative: {
+    provider: "anthropic",
+    model_id: "claude-sonnet-4-6",
+  },
+};
 
 interface LlmModelCatalogDbRow {
   id: string;
@@ -66,6 +78,26 @@ function toCatalogRow(row: LlmModelCatalogDbRow): LlmModelCatalogRow {
   };
 }
 
+function buildSyntheticDefaultModel(
+  provider: LlmProvider,
+  modelId: string
+): ResolvedLlmModel {
+  const providerLabel = provider === "openai" ? "OpenAI" : "Anthropic";
+  return {
+    id: `default:${provider}:${modelId}`,
+    provider,
+    model_id: modelId,
+    display_name: `${providerLabel} ${modelId}`,
+    input_price_per_1m_usd: null,
+    output_price_per_1m_usd: null,
+    pricing_tier: null,
+    enabled: true,
+    pricing_is_placeholder: true,
+    sort_order: -1,
+    source: "default",
+  };
+}
+
 export async function listAllModels(supabase: SupabaseClient): Promise<LlmModelCatalogRow[]> {
   const { data, error } = await supabase
     .from("llm_model_catalog")
@@ -98,6 +130,27 @@ export async function getModelById(
       "id, provider, model_id, display_name, input_price_per_1m_usd, output_price_per_1m_usd, pricing_tier, enabled, pricing_is_placeholder, sort_order"
     )
     .eq("id", modelId)
+    .maybeSingle();
+
+  if (error || !data) {
+    return null;
+  }
+
+  return toCatalogRow(data as LlmModelCatalogDbRow);
+}
+
+export async function getModelByProviderAndModelId(
+  supabase: SupabaseClient,
+  provider: LlmProvider,
+  modelId: string
+): Promise<LlmModelCatalogRow | null> {
+  const { data, error } = await supabase
+    .from("llm_model_catalog")
+    .select(
+      "id, provider, model_id, display_name, input_price_per_1m_usd, output_price_per_1m_usd, pricing_tier, enabled, pricing_is_placeholder, sort_order"
+    )
+    .eq("provider", provider)
+    .eq("model_id", modelId)
     .maybeSingle();
 
   if (error || !data) {
@@ -150,6 +203,15 @@ export async function resolveModelForFeature(
   userId: string,
   feature: LlmFeature
 ): Promise<ResolvedLlmModel | null> {
+  const libControlled = LIB_CONTROLLED_FEATURE_MODELS[feature];
+  if (libControlled) {
+    const model = await getModelByProviderAndModelId(supabase, libControlled.provider, libControlled.model_id);
+    if (model) {
+      return { ...model, source: "default" };
+    }
+    return buildSyntheticDefaultModel(libControlled.provider, libControlled.model_id);
+  }
+
   const preferences = preferenceListToMap(await listUserModelPreferences(supabase, userId));
 
   const featureModelId = preferences[feature];

@@ -1,8 +1,10 @@
 export {
+  LIB_CONTROLLED_FEATURE_MODELS,
   LLM_PREFERENCE_FEATURES,
   listAllModels,
   listEnabledModels,
   getModelById,
+  getModelByProviderAndModelId,
   listUserModelPreferences,
   preferenceListToMap,
   resolveModelForFeature,

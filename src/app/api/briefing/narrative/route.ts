@@ -335,7 +335,7 @@ export async function POST(request: NextRequest) {
       feature: "briefing_narrative",
       provider: cacheMeta.provider,
       modelId: cacheMeta.modelId,
-      modelCatalogId: resolvedModel?.id ?? null,
+      modelCatalogId: resolvedModel?.source === "default" ? null : resolvedModel?.id ?? null,
       modelSource: cacheMeta.source,
       status: "cache_hit",
       latencyMs: 0,
@@ -369,7 +369,7 @@ ${JSON.stringify(context, null, 2)}`;
     userPrompt,
     temperature: 0.2,
     maxTokens: 180,
-    timeoutMs: 4500,
+    timeoutMs: 15000,
     requestFingerprint,
   });
 

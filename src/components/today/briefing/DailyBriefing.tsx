@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { MorningBriefing } from "./MorningBriefing";
 import { MiddayBriefing } from "./MiddayBriefing";
 import { EODBriefing } from "./EODBriefing";
@@ -13,20 +13,12 @@ interface DailyBriefingProps {
 }
 
 interface LlmModelsResponse {
-  models: LlmModelCatalogRow[];
-  preferences?: {
-    global_default: string | null;
-    briefing_narrative: string | null;
-    intake_extraction: string | null;
+  libControlledFeatures?: {
+    briefing_narrative?: {
+      provider: string;
+      model_id: string;
+    } | null;
   };
-  resolved?: {
-    briefing_narrative: (LlmModelCatalogRow & { source: string }) | null;
-    intake_extraction: (LlmModelCatalogRow & { source: string }) | null;
-  };
-  activeModelId?: string | null;
-}
-
-interface ActiveModelResponse {
   preferences?: {
     global_default: string | null;
     briefing_narrative: string | null;
@@ -113,24 +105,19 @@ export function DailyBriefing({ replanSignal }: DailyBriefingProps) {
   const [narrativeMeta, setNarrativeMeta] = useState<LlmRunMeta | null>(null);
   const [narrativeLoading, setNarrativeLoading] = useState(false);
 
-  const [models, setModels] = useState<LlmModelCatalogRow[]>([]);
-  const [narrativeModelId, setNarrativeModelId] = useState<string | null>(null);
   const [resolvedNarrativeModel, setResolvedNarrativeModel] = useState<
     (LlmModelCatalogRow & { source: string }) | null
   >(null);
+  const [libControlledNarrativeModel, setLibControlledNarrativeModel] = useState<{
+    provider: string;
+    model_id: string;
+  } | null>(null);
   const [modelLoading, setModelLoading] = useState(true);
-  const [modelSaving, setModelSaving] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
 
   const latestBriefingRequestRef = useRef(0);
   const latestNarrativeRequestRef = useRef(0);
   const lastNarrativeCycleKeyRef = useRef<string | null>(null);
-
-  const enabledModels = useMemo(() => models.filter((model) => model.enabled), [models]);
-  const selectedModel = useMemo(
-    () => enabledModels.find((model) => model.id === narrativeModelId) || null,
-    [enabledModels, narrativeModelId]
-  );
 
   const fetchModelState = useCallback(async () => {
     setModelLoading(true);
@@ -143,14 +130,12 @@ export function DailyBriefing({ replanSignal }: DailyBriefingProps) {
       }
 
       const payload = (await response.json()) as LlmModelsResponse;
-      setModels(Array.isArray(payload.models) ? payload.models : []);
-      setNarrativeModelId(payload.preferences?.briefing_narrative ?? payload.activeModelId ?? null);
       setResolvedNarrativeModel(payload.resolved?.briefing_narrative ?? null);
+      setLibControlledNarrativeModel(payload.libControlledFeatures?.briefing_narrative ?? null);
     } catch (err) {
       setModelError(err instanceof Error ? err.message : "Failed to load model selector");
-      setModels([]);
-      setNarrativeModelId(null);
       setResolvedNarrativeModel(null);
+      setLibControlledNarrativeModel(null);
     } finally {
       setModelLoading(false);
     }
@@ -324,35 +309,6 @@ export function DailyBriefing({ replanSignal }: DailyBriefingProps) {
     void fetchNarrative(data);
   };
 
-  const handleModelChange = async (nextModelId: string | null) => {
-    setModelSaving(true);
-    setModelError(null);
-
-    try {
-      const response = await fetch("/api/llm/models/active", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ modelId: nextModelId, feature: "briefing_narrative" }),
-      });
-
-      if (!response.ok) {
-        const body = (await response.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error || "Failed to update active model");
-      }
-
-      const payload = (await response.json()) as ActiveModelResponse;
-      setNarrativeModelId(payload.preferences?.briefing_narrative ?? null);
-      setResolvedNarrativeModel(payload.resolved?.briefing_narrative ?? null);
-      if (data) {
-        void fetchNarrative(data);
-      }
-    } catch (err) {
-      setModelError(err instanceof Error ? err.message : "Failed to update active model");
-    } finally {
-      setModelSaving(false);
-    }
-  };
-
   if (loading && !data) {
     return (
       <div className="rounded-lg border border-stroke bg-panel p-6">
@@ -397,11 +353,13 @@ export function DailyBriefing({ replanSignal }: DailyBriefingProps) {
             {modeDescriptions[activeMode]} &middot; {data.currentTimeET}
           </p>
           <p className="text-xs text-muted-foreground">
-            {selectedModel
-              ? `LLM: ${selectedModel.display_name}`
-              : resolvedNarrativeModel
-                ? `LLM: ${resolvedNarrativeModel.display_name} (${resolvedNarrativeModel.source.replace("_", " ")})`
-                : "Using system default model"}
+            {resolvedNarrativeModel
+              ? `LLM: ${resolvedNarrativeModel.display_name}${libControlledNarrativeModel ? " (pinned in lib)" : ""}`
+              : libControlledNarrativeModel
+                ? `LLM: ${libControlledNarrativeModel.provider}/${libControlledNarrativeModel.model_id} (pinned in lib)`
+                : modelLoading
+                  ? "Loading narrative model..."
+                  : "Using system default model"}
           </p>
           {modelError && <p className="text-xs text-red-400">{modelError}</p>}
         </div>
@@ -433,27 +391,6 @@ export function DailyBriefing({ replanSignal }: DailyBriefingProps) {
               </button>
             ))}
           </div>
-
-          {/* Model selector */}
-          <label className="flex items-center gap-2 rounded-lg border border-stroke bg-panel-muted px-2 py-1 text-xs text-muted-foreground">
-            <span>Model</span>
-            <select
-              value={narrativeModelId ?? "__default__"}
-              onChange={(event) => {
-                const value = event.target.value;
-                void handleModelChange(value === "__default__" ? null : value);
-              }}
-              disabled={modelSaving || modelLoading || enabledModels.length === 0}
-              className="rounded border border-stroke bg-panel px-2 py-1 text-xs text-foreground"
-            >
-              <option value="__default__">Inherit Global/Default</option>
-              {enabledModels.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.display_name}
-                </option>
-              ))}
-            </select>
-          </label>
 
           {/* Refresh button */}
           <button
@@ -495,12 +432,6 @@ export function DailyBriefing({ replanSignal }: DailyBriefingProps) {
           llm={narrativeMeta}
           loading={narrativeLoading}
         />
-
-        {enabledModels.length === 0 && (
-          <p className="mb-4 text-xs text-amber-400">
-            No enabled catalog models found. Using default provider fallback sequence.
-          </p>
-        )}
 
         {activeMode === "morning" && (
           <MorningBriefing

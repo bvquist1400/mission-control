@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { SupabaseClient } from '@supabase/supabase-js';
-import { DEFAULT_WORKDAY_CONFIG, WorkdayConfig } from '@/lib/workday';
+import { DEFAULT_WORKDAY_CONFIG, type WorkdayConfig } from '@/lib/workday';
 
 // Windows timezone names to IANA timezone names mapping
 // Microsoft Outlook/Exchange use Windows timezone IDs in ICS exports

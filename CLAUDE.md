@@ -73,7 +73,17 @@ Implementation (Application) -> Project -> Task
 | CORS | `src/lib/cors.ts` |
 | Route auth | `src/lib/supabase/route-auth.ts` |
 | Calendar parsing | `src/lib/calendar.ts` |
+| Daily brief digest builder | `src/lib/briefing/digest.ts` |
+| Daily brief digest route | `src/app/api/briefing/digest/route.ts` |
+| Daily brief render builder | `src/lib/briefing/render.ts` |
+| Daily brief render route | `src/app/api/briefing/render/route.ts` |
 | Upstream API router | `src/app/api/mcp-upstream/[...path]/route.ts` |
+
+## Briefing Model Note
+
+- `briefing_narrative` is lib-controlled, not user-configured in the database.
+- To change the model used for daily brief email narration, edit `LIB_CONTROLLED_FEATURE_MODELS.briefing_narrative` in `src/lib/llm/catalog.ts`.
+- The current daily brief email flow expects Mission Control to generate the narrative server-side before n8n sends the email.
 
 ## Calendar
 

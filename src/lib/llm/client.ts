@@ -20,19 +20,6 @@ interface ProviderInvokeResult {
 const DEFAULT_MODEL_CANDIDATES: Record<LlmFeature, ResolvedLlmModel[]> = {
   briefing_narrative: [
     {
-      id: "default-anthropic-claude-3-haiku-20240307",
-      provider: "anthropic",
-      model_id: "claude-3-haiku-20240307",
-      display_name: "Anthropic Claude 3 Haiku (Default)",
-      input_price_per_1m_usd: null,
-      output_price_per_1m_usd: null,
-      pricing_tier: null,
-      enabled: true,
-      pricing_is_placeholder: true,
-      sort_order: 0,
-      source: "default",
-    },
-    {
       id: "default-openai-gpt-4o-mini",
       provider: "openai",
       model_id: "gpt-4o-mini",
@@ -43,6 +30,19 @@ const DEFAULT_MODEL_CANDIDATES: Record<LlmFeature, ResolvedLlmModel[]> = {
       enabled: true,
       pricing_is_placeholder: true,
       sort_order: 1,
+      source: "default",
+    },
+    {
+      id: "default-anthropic-claude-3-haiku-20240307",
+      provider: "anthropic",
+      model_id: "claude-3-haiku-20240307",
+      display_name: "Anthropic Claude 3 Haiku (Default)",
+      input_price_per_1m_usd: null,
+      output_price_per_1m_usd: null,
+      pricing_tier: null,
+      enabled: true,
+      pricing_is_placeholder: true,
+      sort_order: 0,
       source: "default",
     },
   ],
@@ -149,6 +149,14 @@ function clampMaxTokens(value: number | undefined, fallback: number): number {
   return Math.max(32, Math.min(4000, Math.round(value)));
 }
 
+function usesMaxCompletionTokens(modelId: string): boolean {
+  return modelId.startsWith("gpt-5");
+}
+
+function supportsTemperature(modelId: string): boolean {
+  return !modelId.startsWith("gpt-5");
+}
+
 async function invokeOpenAI(
   apiKey: string,
   modelId: string,
@@ -175,8 +183,10 @@ async function invokeOpenAI(
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
-        temperature,
-        max_tokens: maxTokens,
+        ...(supportsTemperature(modelId) ? { temperature } : {}),
+        ...(usesMaxCompletionTokens(modelId)
+          ? { max_completion_tokens: maxTokens }
+          : { max_tokens: maxTokens }),
       }),
       signal: controller.signal,
     });

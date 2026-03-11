@@ -596,6 +596,42 @@ Additional briefing data:
 - `health_scores` — per-implementation health scores and trends
 - `tomorrow.tomorrow_context` — joins tomorrow’s meetings to related tasks and commitments (EOD mode)
 
+#### Get brief digest
+```
+GET /api/briefing/digest
+```
+Query params:
+- `mode` — `morning` | `midday` | `eod` | `auto` (default: auto-detects from current time ET)
+- `date` — ISO date string e.g. `2026-02-20` (default: today ET)
+- `since` — optional ISO timestamp to define the activity window for midday/EOD updates
+
+Returns a deterministic low-token brief payload with:
+- `subject` — email-ready subject line
+- `markdown` — email-ready markdown body
+- `narrative` — opening paragraph
+- `sprint` — current sprint summary and health assessment when a sprint is active
+- `tasks.due_soon`, `tasks.blocked`, `tasks.in_progress`, `tasks.completed_today`, `tasks.rolled_to_tomorrow`
+- `meetings` — only meetings that have not yet ended, including notes/context, matched commitments, and related tasks
+- `commitments.theirs` / `commitments.ours` — open commitments grouped by stakeholder
+- `guidance_title`, `guidance` — the `Where to Start`, `Afternoon Focus`, or `Tomorrow Prep` section
+- `suggested_sync_today` — recommendation only, never auto-apply
+
+#### Get brief render
+```
+GET /api/briefing/render
+```
+Query params:
+- `mode` — `morning` | `midday` | `eod` | `auto`
+- `date` — ISO date string e.g. `2026-02-20`
+- `since` — optional ISO timestamp to define the update window
+
+Returns:
+- `subject` — email-ready subject line
+- `html` — chief-of-staff brief rendered as HTML email
+- `text` — plain-text fallback
+- `digest` — the underlying deterministic digest facts
+- `copy` — LLM-written `opening_narrative`, `what_matters_most`, `guidance`, and `watchout`
+
 #### Get briefing narrative (LLM-generated)
 ```
 GET /api/briefing/narrative
@@ -622,7 +658,7 @@ Returns:
 }
 ```
 
-**MCP tools:** `get_briefing`, `get_weekly_review`
+**MCP tools:** `get_briefing`, `get_brief_digest`, `get_brief_render`, `get_weekly_review`
 
 ---
 
@@ -685,14 +721,19 @@ Returns:
 ## Common Patterns for Claude
 
 **Morning brief workflow (required)**
-1. Generate the morning brief from `GET /api/briefing?mode=morning`.
+1. Generate the morning brief from `GET /api/briefing/digest?mode=morning` or MCP `get_brief_digest`.
 2. Select the surfaced task UUIDs for today's focus list.
 3. Call `POST /api/planner/sync-today` with `{ "task_ids": [...] }`.
 4. Append this confirmation line to the brief:
 `✅ Synced X tasks to Today tab (Y demoted, Z pinned task protected).`
 
+**Scheduled email brief workflow**
+1. Call `GET /api/briefing/render?mode=morning|midday|eod` or MCP `get_brief_render`.
+2. Use `subject` plus `html` for the email body and `text` as fallback.
+3. Do not auto-apply `suggested_sync_today`; keep it as a recommendation.
+
 **EOD status-summary workflow (required)**
-1. Generate the EOD brief from `GET /api/briefing?mode=eod`.
+1. Generate the EOD brief from `GET /api/briefing/digest?mode=eod` or MCP `get_brief_digest`.
 2. Identify implementations with meaningful same-day activity (for example: completed tasks, new blockers, cleared blockers, or milestone movement).
 3. If no material implementation changes occurred, explicitly say no status-summary drafts are needed.
 4. If changes occurred, draft `1-2` sentences per implementation in this format:
@@ -701,7 +742,7 @@ Returns:
 6. Only after explicit approval, call `PATCH /api/applications/:id` with `{ "status_summary": "..." }` for each approved draft.
 
 **"What's on my plate today?"**
-→ Call `GET /api/briefing?mode=auto` — gives the full picture.
+→ Call `GET /api/briefing/digest?mode=auto` or use `get_brief_digest` — gives the low-token full picture.
 
 **"What are my blockers?"**
 → Call `GET /api/tasks?status=Blocked%2FWaiting` or `GET /api/tasks?status=Backlog&needs_review=true`

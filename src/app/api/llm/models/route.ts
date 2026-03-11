@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuthenticatedRoute } from "@/lib/supabase/route-auth";
 import {
+  LIB_CONTROLLED_FEATURE_MODELS,
   LLM_PREFERENCE_FEATURES,
   listAllModels,
   listUserModelPreferences,
@@ -26,6 +27,7 @@ export async function GET(request: NextRequest) {
     models,
     enabledModels,
     preferenceFeatures,
+    libControlledFeatures: LIB_CONTROLLED_FEATURE_MODELS,
     preferences,
     resolved: {
       briefing_narrative: resolvedBriefing,

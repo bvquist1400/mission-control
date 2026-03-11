@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuthenticatedRoute } from "@/lib/supabase/route-auth";
 import {
+  LIB_CONTROLLED_FEATURE_MODELS,
   getModelById,
   listUserModelPreferences,
   preferenceListToMap,
@@ -31,12 +32,17 @@ export async function PUT(request: NextRequest) {
 
   const requestedModelId =
     typeof body.modelId === "string" && body.modelId.trim().length > 0 ? body.modelId.trim() : null;
-  const requestedFeature: LlmPreferenceFeature =
-    body.feature === "briefing_narrative" ||
-    body.feature === "intake_extraction" ||
-    body.feature === "global_default"
-      ? body.feature
-      : "global_default";
+  const requestedFeature: LlmPreferenceFeature = body.feature === "global_default" ? body.feature : "global_default";
+
+  if (body.feature && body.feature !== "global_default") {
+    return NextResponse.json(
+      {
+        error: `${body.feature} is lib-controlled and no longer editable here`,
+        libControlledFeatures: LIB_CONTROLLED_FEATURE_MODELS,
+      },
+      { status: 400 }
+    );
+  }
 
   if (requestedModelId) {
     const model = await getModelById(supabase, requestedModelId);
@@ -57,6 +63,7 @@ export async function PUT(request: NextRequest) {
 
   return NextResponse.json({
     feature: requestedFeature,
+    libControlledFeatures: LIB_CONTROLLED_FEATURE_MODELS,
     preferences,
     resolved: {
       briefing_narrative: resolvedBriefing,

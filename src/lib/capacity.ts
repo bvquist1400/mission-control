@@ -1,4 +1,4 @@
-import { Task, CapacityConfig, CapacityResult, RagStatus } from '@/types/database';
+import type { Task, CapacityConfig, CapacityResult, RagStatus } from '@/types/database';
 import { DEFAULT_WORKDAY_CONFIG } from '@/lib/workday';
 
 export const CAPACITY_TIMEZONE = DEFAULT_WORKDAY_CONFIG.timezone;
