@@ -103,6 +103,7 @@ export function ProjectsList({ implementationId, embedded = false }: ProjectsLis
   const [draft, setDraft] = useState<ProjectDraft>(INITIAL_DRAFT);
   const [saving, setSaving] = useState(false);
   const [filterImplId, setFilterImplId] = useState(implementationId ?? "");
+  const [includeDoneProjects, setIncludeDoneProjects] = useState(false);
   const isMounted = useRef(true);
 
   useEffect(() => {
@@ -200,6 +201,10 @@ export function ProjectsList({ implementationId, embedded = false }: ProjectsLis
   }
 
   // ─── Render ───────────────────────────────────────────────────────────────
+
+  const visibleProjects = includeDoneProjects
+    ? projects
+    : projects.filter((project) => project.stage !== "Done");
 
   const content = (
     <div className="space-y-6">
@@ -321,20 +326,34 @@ export function ProjectsList({ implementationId, embedded = false }: ProjectsLis
         )}
       </div>
 
-      {/* ── Filter bar (non-embedded only) ── */}
-      {!embedded && implementations.length > 0 && (
-        <div className="flex items-center gap-3">
-          <label className="text-xs font-medium text-muted-foreground">Filter by Application:</label>
-          <select
-            value={filterImplId}
-            onChange={(e) => setFilterImplId(e.target.value)}
-            className="rounded-lg border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
-          >
-            <option value="">All Applications</option>
-            {implementations.map((impl) => (
-              <option key={impl.id} value={impl.id}>{impl.name}</option>
-            ))}
-          </select>
+      {/* ── Filter bar ── */}
+      {((!embedded && implementations.length > 0) || projects.length > 0) && (
+        <div className="flex flex-wrap items-center gap-3">
+          {!embedded && implementations.length > 0 ? (
+            <>
+              <label className="text-xs font-medium text-muted-foreground">Filter by Application:</label>
+              <select
+                value={filterImplId}
+                onChange={(e) => setFilterImplId(e.target.value)}
+                className="rounded-lg border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+              >
+                <option value="">All Applications</option>
+                {implementations.map((impl) => (
+                  <option key={impl.id} value={impl.id}>{impl.name}</option>
+                ))}
+              </select>
+            </>
+          ) : null}
+
+          <label className="inline-flex items-center gap-2 rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground">
+            <input
+              type="checkbox"
+              checked={includeDoneProjects}
+              onChange={(event) => setIncludeDoneProjects(event.target.checked)}
+              className="h-4 w-4 accent-accent"
+            />
+            Include done projects
+          </label>
         </div>
       )}
 
@@ -358,11 +377,16 @@ export function ProjectsList({ implementationId, embedded = false }: ProjectsLis
           {" "}to group tasks under an application.
         </div>
       )}
+      {!loading && !error && projects.length > 0 && visibleProjects.length === 0 && !includeDoneProjects && (
+        <div className="rounded-card border border-stroke bg-panel p-8 text-center text-sm text-muted-foreground">
+          No active projects. Turn on <span className="font-medium text-foreground">Include done projects</span> to see completed items.
+        </div>
+      )}
 
       {/* ── Project grid ── */}
-      {!loading && !error && projects.length > 0 && (
+      {!loading && !error && visibleProjects.length > 0 && (
         <div className="grid gap-4 xl:grid-cols-2">
-          {projects.map((project) => (
+          {visibleProjects.map((project) => (
             <ProjectCard key={project.id} project={project} />
           ))}
         </div>
