@@ -22,6 +22,9 @@ interface WeeklyReviewPayloadLike {
   stalled?: unknown[];
   pending_decisions?: unknown[];
   cold_commitments?: unknown[];
+  project_rollups?: unknown[];
+  projects_needing_attention?: unknown[];
+  project_decisions?: unknown[];
   next_week_suggestions?: unknown[];
 }
 
@@ -57,9 +60,12 @@ export function buildWeeklyReviewSummary(payload: WeeklyReviewPayloadLike): stri
   const stalledCount = Array.isArray(payload.stalled) ? payload.stalled.length : 0;
   const pendingCount = Array.isArray(payload.pending_decisions) ? payload.pending_decisions.length : 0;
   const coldCommitmentCount = Array.isArray(payload.cold_commitments) ? payload.cold_commitments.length : 0;
+  const projectRollupCount = Array.isArray(payload.project_rollups) ? payload.project_rollups.length : 0;
+  const attentionCount = Array.isArray(payload.projects_needing_attention) ? payload.projects_needing_attention.length : 0;
+  const projectDecisionCount = Array.isArray(payload.project_decisions) ? payload.project_decisions.length : 0;
   const suggestionCount = Array.isArray(payload.next_week_suggestions) ? payload.next_week_suggestions.length : 0;
 
-  return `${shippedCount} shipped, ${stalledCount} stalled, ${pendingCount} pending decisions, ${coldCommitmentCount} cold commitments, ${suggestionCount} next-week suggestions.`;
+  return `${shippedCount} shipped, ${stalledCount} stalled active tasks, ${projectRollupCount} project updates, ${attentionCount} projects needing attention, ${projectDecisionCount} project decisions, ${pendingCount} pending task reviews, ${coldCommitmentCount} cold commitments, ${suggestionCount} next-week suggestions.`;
 }
 
 export async function upsertReviewSnapshot(
