@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { formatDateOnly, formatRelativeDate } from "@/components/utils/dates";
-import { getSprintWeekRange, isMondayToFridaySprintRange } from "@/lib/date-only";
+import { isDateOnlyAfter } from "@/lib/date-only";
 import type { ImplementationSummary, SprintDetail as SprintDetailType, SprintWithImplementation, TaskStatus } from "@/types/database";
 
 interface SprintDetailProps {
@@ -47,14 +47,10 @@ function statusTone(status: TaskStatus): string {
 }
 
 function toDraft(sprint: SprintWithImplementation | SprintDetailType): SprintDraft {
-  const sprintWeek = isMondayToFridaySprintRange(sprint.start_date, sprint.end_date)
-    ? { startDate: sprint.start_date, endDate: sprint.end_date }
-    : getSprintWeekRange(sprint.start_date);
-
   return {
     name: sprint.name,
-    startDate: sprintWeek?.startDate ?? sprint.start_date,
-    endDate: sprintWeek?.endDate ?? sprint.end_date,
+    startDate: sprint.start_date,
+    endDate: sprint.end_date,
     theme: sprint.theme,
     focusImplementationId: sprint.focus_implementation_id ?? "",
   };
@@ -140,15 +136,6 @@ export function SprintDetail({ id }: SprintDetailProps) {
     return STATUS_ORDER.filter((status) => (sprint.tasks_by_status[status] || []).length > 0);
   }, [sprint]);
 
-  function applySprintWeek(anchorDate: string) {
-    const sprintWeek = getSprintWeekRange(anchorDate);
-    setDraft((current) => ({
-      ...current,
-      startDate: sprintWeek?.startDate ?? anchorDate,
-      endDate: sprintWeek?.endDate ?? anchorDate,
-    }));
-  }
-
   async function handleSave() {
     if (!sprint) {
       return;
@@ -162,6 +149,11 @@ export function SprintDetail({ id }: SprintDetailProps) {
 
     if (!draft.startDate || !draft.endDate) {
       setError("Start and end dates are required");
+      return;
+    }
+
+    if (!isDateOnlyAfter(draft.endDate, draft.startDate)) {
+      setError("End date must be after start date");
       return;
     }
 
@@ -272,7 +264,7 @@ export function SprintDetail({ id }: SprintDetailProps) {
                     <input
                       type="date"
                       value={draft.startDate}
-                      onChange={(event) => applySprintWeek(event.target.value)}
+                      onChange={(event) => setDraft((current) => ({ ...current, startDate: event.target.value }))}
                       disabled={isSaving}
                       className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                     />
@@ -282,13 +274,13 @@ export function SprintDetail({ id }: SprintDetailProps) {
                     <input
                       type="date"
                       value={draft.endDate}
-                      onChange={(event) => applySprintWeek(event.target.value)}
+                      onChange={(event) => setDraft((current) => ({ ...current, endDate: event.target.value }))}
                       disabled={isSaving}
                       className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                     />
                   </label>
                 </div>
-                <p className="text-xs text-muted-foreground">Pick any date in the target week. Sprint dates snap to Monday through Friday.</p>
+                <p className="text-xs text-muted-foreground">End date must be after the start date.</p>
               </div>
             ) : (
               <>

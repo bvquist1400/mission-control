@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { formatDateOnly, localDateString } from "@/components/utils/dates";
-import { getSprintWeekRange } from "@/lib/date-only";
+import { getSprintWeekRange, isDateOnlyAfter } from "@/lib/date-only";
 import type { ImplementationSummary, SprintWithImplementation } from "@/types/database";
 
 interface SprintDraft {
@@ -136,6 +136,11 @@ export function SprintsList() {
       return;
     }
 
+    if (!isDateOnlyAfter(draft.endDate, draft.startDate)) {
+      setError("End date must be after start date");
+      return;
+    }
+
     setIsCreating(true);
     setError(null);
 
@@ -168,15 +173,6 @@ export function SprintsList() {
     }
   }
 
-  function applySprintWeek(anchorDate: string) {
-    const sprintWeek = getSprintWeekRange(anchorDate);
-    setDraft((current) => ({
-      ...current,
-      startDate: sprintWeek?.startDate ?? anchorDate,
-      endDate: sprintWeek?.endDate ?? anchorDate,
-    }));
-  }
-
   return (
     <div className="space-y-6">
       {error ? (
@@ -189,7 +185,7 @@ export function SprintsList() {
         <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="text-sm font-semibold text-foreground">Create Sprint</h2>
-            <p className="text-xs text-muted-foreground">Define a Monday-through-Friday planning window and optional focus app.</p>
+            <p className="text-xs text-muted-foreground">Define any sprint date range and optional focus app.</p>
           </div>
           <button
             type="button"
@@ -218,7 +214,7 @@ export function SprintsList() {
               <input
                 type="date"
                 value={draft.startDate}
-                onChange={(event) => applySprintWeek(event.target.value)}
+                onChange={(event) => setDraft((current) => ({ ...current, startDate: event.target.value }))}
                 disabled={isCreating}
                 className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
               />
@@ -229,7 +225,7 @@ export function SprintsList() {
               <input
                 type="date"
                 value={draft.endDate}
-                onChange={(event) => applySprintWeek(event.target.value)}
+                onChange={(event) => setDraft((current) => ({ ...current, endDate: event.target.value }))}
                 disabled={isCreating}
                 className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
               />
@@ -264,7 +260,7 @@ export function SprintsList() {
             </label>
 
             <p className="text-xs text-muted-foreground md:col-span-2 xl:col-span-4">
-              Pick any date in the target week. Sprint dates snap to Monday through Friday.
+              End date must be after the start date.
             </p>
 
             <div className="flex items-end justify-end gap-2 xl:col-span-1">
@@ -292,7 +288,7 @@ export function SprintsList() {
       ) : sprints.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-card border border-dashed border-stroke bg-panel py-16 text-center">
           <p className="text-lg font-medium text-foreground">No sprints yet</p>
-          <p className="mt-1 text-sm text-muted-foreground">Create your first sprint to start planning in weekly slices.</p>
+          <p className="mt-1 text-sm text-muted-foreground">Create your first sprint to start planning against a real delivery window.</p>
         </div>
       ) : (
         <div className="grid gap-4 xl:grid-cols-2">

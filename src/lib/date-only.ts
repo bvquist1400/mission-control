@@ -44,6 +44,13 @@ export function getDateOnlyWeekday(dateOnly: string): number | null {
   return dateMs === null ? null : new Date(dateMs).getUTCDay();
 }
 
+export function isDateOnlyAfter(dateOnly: string, otherDateOnly: string): boolean {
+  const dateMs = toUtcDateMs(dateOnly);
+  const otherDateMs = toUtcDateMs(otherDateOnly);
+
+  return dateMs !== null && otherDateMs !== null && dateMs > otherDateMs;
+}
+
 export function getSprintWeekRange(anchorDateOnly: string): SprintWeekRange | null {
   const anchorMs = toUtcDateMs(anchorDateOnly);
   if (anchorMs === null) {

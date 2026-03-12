@@ -6,7 +6,7 @@ export default function SprintsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Sprints"
-        description="Create week-level planning windows, review current scope, and jump straight into the filtered backlog."
+        description="Create sprint windows, review current scope, and jump straight into the filtered backlog."
       />
 
       <SprintsList />

@@ -860,7 +860,7 @@ function createMcpServer(): McpServer {
 
   mcp.tool(
     'create_sprint',
-    'Create a sprint for week-level planning.',
+    'Create a sprint for a custom planning window.',
     {
       name: z.string().describe('Sprint name'),
       start_date: z.string().describe('Start date YYYY-MM-DD'),

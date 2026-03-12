@@ -13,12 +13,28 @@ const dateOnly = await import(moduleUrl);
 const {
   addDateOnlyDays,
   getSprintWeekRange,
+  isDateOnlyAfter,
   isMondayToFridaySprintRange,
   resolveSprintWeekRange,
 } = dateOnly;
 
 assert.equal(addDateOnlyDays("2026-03-09", 7), "2026-03-16", "Date-only day math should stay on the same calendar day");
 assert.equal(addDateOnlyDays("2026-03-09", -7), "2026-03-02", "Negative date-only offsets should work");
+assert.equal(
+  isDateOnlyAfter("2026-03-17", "2026-02-25"),
+  true,
+  "Later dates should compare after earlier dates"
+);
+assert.equal(
+  isDateOnlyAfter("2026-02-25", "2026-02-25"),
+  false,
+  "Matching dates should not count as after"
+);
+assert.equal(
+  isDateOnlyAfter("2026-02-24", "2026-02-25"),
+  false,
+  "Earlier dates should not compare after later dates"
+);
 
 assert.deepEqual(
   getSprintWeekRange("2026-03-03"),

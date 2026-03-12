@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSprintWeekRange, isMondayToFridaySprintRange, resolveSprintWeekRange } from '@/lib/date-only';
+import { isDateOnlyAfter, normalizeDateOnly } from '@/lib/date-only';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
-
-const DATE_ONLY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
 function asStringOrNull(value: unknown): string | null {
   if (typeof value !== 'string') {
@@ -15,32 +13,11 @@ function asStringOrNull(value: unknown): string | null {
 
 function asDateOnlyOrNull(value: unknown): string | null {
   const normalized = asStringOrNull(value);
-  if (!normalized || !DATE_ONLY_REGEX.test(normalized)) {
+  if (!normalized) {
     return null;
   }
 
-  return normalized;
-}
-
-function asSprintWeekRange(startDate: string, endDate: string) {
-  return resolveSprintWeekRange(startDate, endDate);
-}
-
-function normalizeSprintWindow<T extends { start_date: string; end_date: string }>(sprint: T): T {
-  if (isMondayToFridaySprintRange(sprint.start_date, sprint.end_date)) {
-    return sprint;
-  }
-
-  const sprintWeek = getSprintWeekRange(sprint.start_date);
-  if (!sprintWeek) {
-    return sprint;
-  }
-
-  return {
-    ...sprint,
-    start_date: sprintWeek.startDate,
-    end_date: sprintWeek.endDate,
-  };
+  return normalizeDateOnly(normalized);
 }
 
 // GET /api/sprints - List sprints, most recent first
@@ -64,7 +41,7 @@ export async function GET(request: NextRequest) {
       throw error;
     }
 
-    return NextResponse.json((data || []).map((sprint) => normalizeSprintWindow(sprint)));
+    return NextResponse.json(data || []);
   } catch (error) {
     console.error('Error fetching sprints:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
@@ -93,9 +70,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'start_date and end_date must be valid YYYY-MM-DD strings' }, { status: 400 });
     }
 
-    const sprintWeek = asSprintWeekRange(startDate, endDate);
-    if (!sprintWeek) {
-      return NextResponse.json({ error: 'Sprint dates must resolve to the same Monday-Friday week' }, { status: 400 });
+    if (!isDateOnlyAfter(endDate, startDate)) {
+      return NextResponse.json({ error: 'end_date must be after start_date' }, { status: 400 });
     }
 
     const focusImplementationId = asStringOrNull(body.focus_implementation_id);
@@ -117,8 +93,8 @@ export async function POST(request: NextRequest) {
       .insert({
         user_id: userId,
         name: body.name.trim(),
-        start_date: sprintWeek.startDate,
-        end_date: sprintWeek.endDate,
+        start_date: startDate,
+        end_date: endDate,
         theme: asStringOrNull(body.theme) || '',
         focus_implementation_id: focusImplementationId,
       })
