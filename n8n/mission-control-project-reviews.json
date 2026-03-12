@@ -1,0 +1,628 @@
+{
+  "name": "Mission Control Project Reviews",
+  "nodes": [
+    {
+      "parameters": {
+        "color": 5,
+        "width": 620,
+        "height": 420,
+        "content": "## Setup\n\n1. Import this workflow.\n2. In workflow settings, confirm timezone is `America/New_York`.\n3. Attach your Gmail credential to `Send Weekly Review Email` and `Send Monthly Review Email`.\n4. Update the hardcoded `change-me@example.com` recipient in both Gmail nodes.\n5. Replace `REPLACE_WITH_MISSION_CONTROL_MACHINE_KEY` in each Mission Control HTTP node.\n6. Replace `REPLACE_WITH_ANTHROPIC_API_KEY` in `Generate Project Update`.\n\nBase URL is hardcoded in this export.\n\nDefaults baked into the code nodes:\n- project review model: `claude-sonnet-4-6`\n- daily project limit: `12`"
+      },
+      "id": "143db77a-2941-4e20-b5a5-a7f61cb20a2c",
+      "name": "Setup Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1440,
+        -700
+      ]
+    },
+    {
+      "parameters": {
+        "color": 7,
+        "width": 620,
+        "height": 360,
+        "content": "## Timing\n\n- Daily project status: `16:00` ET weekdays\n- Weekly review: `16:10` ET Fridays\n- Monthly review: `17:00` ET on weekdays from the 28th to the 31st, gated to the last business day of the month\n\nDaily branch:\n- fetches active projects with stats\n- pulls all tasks for each selected project\n- asks Claude for strict JSON\n- upserts `project_status_updates`\n- syncs `projects.status_summary`\n\nWeekly/monthly branches:\n- persist the structured review snapshots\n- send short email summaries"
+      },
+      "id": "0e2608fc-7de2-4fca-bd25-4af6ca1266d4",
+      "name": "Timing Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -760,
+        -700
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 16 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "a402b1bb-c519-4108-a87f-6a2c997db15e",
+      "name": "Daily Project Status Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1440,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://mission-control-orpin-chi.vercel.app/api/projects",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "with_stats",
+              "value": "true"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Mission-Control-Key",
+              "value": "REPLACE_WITH_MISSION_CONTROL_MACHINE_KEY"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "c4e56699-ed77-4a29-b75f-c9cd6f2745cb",
+      "name": "Fetch Review Projects",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1190,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const limit = 12;\n\nconst rawProjects = $input.all().flatMap((item, itemIndex) => {\n  const source = item.json;\n\n  if (Array.isArray(source)) {\n    return source.map((project) => ({ project, itemIndex }));\n  }\n\n  if (source && Array.isArray(source.data)) {\n    return source.data.map((project) => ({ project, itemIndex }));\n  }\n\n  if (source && Array.isArray(source.projects)) {\n    return source.projects.map((project) => ({ project, itemIndex }));\n  }\n\n  if (source && typeof source === 'object' && source.id) {\n    return [{ project: source, itemIndex }];\n  }\n\n  return [];\n});\n\nconst candidates = rawProjects\n  .filter(({ project }) => {\n    const stage = project.stage || '';\n    if (stage === 'Done' || stage === 'Cancelled') {\n      return false;\n    }\n\n    const openTaskCount = Number(project.open_task_count || 0);\n    const blockersCount = Number(project.blockers_count || 0);\n    const totalTaskCount = Number(project.total_task_count || 0);\n    return openTaskCount > 0 || blockersCount > 0 || totalTaskCount > 0;\n  })\n  .sort((left, right) => {\n    const blockerDiff = Number(right.project.blockers_count || 0) - Number(left.project.blockers_count || 0);\n    if (blockerDiff !== 0) return blockerDiff;\n    const openDiff = Number(right.project.open_task_count || 0) - Number(left.project.open_task_count || 0);\n    if (openDiff !== 0) return openDiff;\n    return String(left.project.name || '').localeCompare(String(right.project.name || ''));\n  })\n  .slice(0, limit);\n\nreturn candidates.map(({ project, itemIndex }) => ({\n  json: {\n    project_id: project.id,\n    project_name: project.name,\n    stage: project.stage,\n    rag: project.rag,\n    status_summary: project.status_summary || '',\n    blockers_count: Number(project.blockers_count || 0),\n    open_task_count: Number(project.open_task_count || 0),\n    completed_task_count: Number(project.completed_task_count || 0),\n    total_task_count: Number(project.total_task_count || 0),\n    completion_pct: Number(project.completion_pct || 0),\n    implementation: project.implementation || null\n  },\n  pairedItem: { item: itemIndex }\n}));"
+      },
+      "id": "91540aaa-5299-4c6f-870a-1dbf9e7c73b0",
+      "name": "Prepare Project Candidates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -930,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://mission-control-orpin-chi.vercel.app/api/tasks",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "project_id",
+              "value": "={{ $json.project_id }}"
+            },
+            {
+              "name": "include_done",
+              "value": "true"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Mission-Control-Key",
+              "value": "REPLACE_WITH_MISSION_CONTROL_MACHINE_KEY"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "374012d0-dcfd-43bc-9666-f7f4e18ed5f2",
+      "name": "Fetch Project Tasks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -650,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://mission-control-orpin-chi.vercel.app/api/project-status-updates",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "project_id",
+              "value": "={{ $('Prepare Project Candidates').item.json.project_id }}"
+            },
+            {
+              "name": "limit",
+              "value": "3"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Mission-Control-Key",
+              "value": "REPLACE_WITH_MISSION_CONTROL_MACHINE_KEY"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ca1f3ab7-9e58-4665-b4bb-96088cc10d67",
+      "name": "Fetch Prior Project Updates",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "alwaysOutputData": true,
+      "position": [
+        -370,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const candidateItems = $('Prepare Project Candidates').all();\nconst taskItems = $('Fetch Project Tasks').all();\nconst priorUpdateItems = $input.all();\n\nconst tasksByProjectId = new Map();\nfor (const item of taskItems) {\n  const task = item.json;\n  const projectId = typeof task.project_id === 'string' ? task.project_id : null;\n  if (!projectId) continue;\n\n  const current = tasksByProjectId.get(projectId) ?? [];\n  current.push(task);\n  tasksByProjectId.set(projectId, current);\n}\n\nconst priorUpdatesByProjectId = new Map();\nfor (const item of priorUpdateItems) {\n  const update = item.json;\n  const projectId = typeof update.project_id === 'string' ? update.project_id : null;\n  if (!projectId) continue;\n\n  const current = priorUpdatesByProjectId.get(projectId) ?? [];\n  current.push(update);\n  priorUpdatesByProjectId.set(projectId, current);\n}\n\nreturn candidateItems.map((candidateItem, index) => {\n  const project = candidateItem.json;\n\n  const tasks = (tasksByProjectId.get(project.project_id) ?? []).slice(0, 25).map((task) => ({\n    id: task.id,\n    title: task.title,\n    status: task.status,\n    blocker: Boolean(task.blocker || task.dependency_blocked),\n    due_at: task.due_at,\n    updated_at: task.updated_at,\n    waiting_on: task.waiting_on || null,\n    needs_review: Boolean(task.needs_review),\n    recent_update: task.recent_update || null,\n    dependencies: Array.isArray(task.dependencies)\n      ? task.dependencies\n          .filter((dependency) => dependency.unresolved)\n          .slice(0, 3)\n          .map((dependency) => ({\n            title: dependency.title,\n            status: dependency.status,\n          }))\n      : [],\n  }));\n\n  const priorUpdates = (priorUpdatesByProjectId.get(project.project_id) ?? []).slice(0, 3);\n\n  const context = {\n    project,\n    tasks,\n    prior_updates: priorUpdates.map((update) => ({\n      captured_for_date: update.captured_for_date,\n      summary: update.summary,\n      rag: update.rag,\n      blockers: update.blockers,\n      next_step: update.next_step,\n      needs_decision: update.needs_decision,\n    })),\n  };\n\n  const prompt = [\n    'Review this Mission Control project and return ONLY valid JSON.',\n    'Use exactly this schema:',\n    '{',\n    '  \"summary\": \"1-2 sentences, 2000 chars max\",',\n    '  \"rag\": \"Green|Yellow|Red\",',\n    '  \"changes_today\": [\"short bullet\", \"...\"],',\n    '  \"blockers\": [\"short blocker\", \"...\"],',\n    '  \"next_step\": \"single next step or null\",',\n    '  \"needs_decision\": \"single decision needed or null\",',\n    '  \"related_task_ids\": [\"uuid\", \"...\"]',\n    '}',\n    'Rules:',\n    '- Be concise and concrete.',\n    '- Prefer evidence from the provided tasks and prior updates only.',\n    '- If there are no blockers, return an empty blockers array.',\n    '- If no decision is needed, set needs_decision to null.',\n    '- related_task_ids must be drawn only from tasks in the context.',\n    '',\n    'Context JSON:',\n    JSON.stringify(context, null, 2),\n  ].join('\\n');\n\n  return {\n    json: {\n      project_id: project.project_id,\n      project_name: project.project_name,\n      anthropic_request: {\n        model: 'claude-sonnet-4-6',\n        max_tokens: 1000,\n        temperature: 0.2,\n        system: 'You are a rigorous project analyst. Return strict JSON only with no markdown fences or commentary.',\n        messages: [\n          {\n            role: 'user',\n            content: prompt,\n          },\n        ],\n      },\n      prompt_context: context,\n    },\n    pairedItem: { item: index },\n  };\n});"
+      },
+      "id": "c7bff058-4efc-46c3-b2be-8ed9c8bfad16",
+      "name": "Build Haiku Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -90,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "REPLACE_WITH_ANTHROPIC_API_KEY"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.anthropic_request) }}",
+        "options": {}
+      },
+      "id": "33af1978-954f-41a6-80be-563e5fc4c32d",
+      "name": "Generate Project Update",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        180,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "function extractText(response) {\n  if (!response || !Array.isArray(response.content)) return '';\n  return response.content\n    .filter((item) => item && item.type === 'text' && typeof item.text === 'string')\n    .map((item) => item.text)\n    .join('\\n')\n    .trim();\n}\n\nfunction parseJson(raw) {\n  if (!raw) return null;\n\n  const trimmed = raw.trim();\n  const fenced = trimmed.match(/```(?:json)?\\s*([\\s\\S]*?)```/i);\n  const candidate = fenced ? fenced[1].trim() : trimmed;\n\n  try {\n    return JSON.parse(candidate);\n  } catch {\n    const start = candidate.indexOf('{');\n    const end = candidate.lastIndexOf('}');\n    if (start >= 0 && end > start) {\n      try {\n        return JSON.parse(candidate.slice(start, end + 1));\n      } catch {\n        return null;\n      }\n    }\n    return null;\n  }\n}\n\nfunction normalizeString(value, maxLength) {\n  if (typeof value !== 'string') return null;\n  const trimmed = value.trim();\n  if (!trimmed) return null;\n  return trimmed.slice(0, maxLength);\n}\n\nfunction normalizeArray(value, maxItems, maxLength) {\n  if (!Array.isArray(value)) return [];\n  return value\n    .filter((item) => typeof item === 'string')\n    .map((item) => item.trim())\n    .filter(Boolean)\n    .slice(0, maxItems)\n    .map((item) => item.slice(0, maxLength));\n}\n\nfunction normalizeRag(value, fallback) {\n  return value === 'Green' || value === 'Yellow' || value === 'Red' ? value : fallback;\n}\n\nconst sourceItems = $('Build Haiku Request').all();\nconst responseItems = $input.all();\n\nreturn responseItems.map((responseItem, index) => {\n  const source = sourceItems[index].json;\n  const response = responseItem.json;\n  const responseText = extractText(response);\n  const parsed = parseJson(responseText) || {};\n  const project = source.prompt_context.project;\n  const tasks = Array.isArray(source.prompt_context.tasks) ? source.prompt_context.tasks : [];\n  const blockedTasks = tasks.filter((task) => task.blocker);\n\n  const fallbackSummary = blockedTasks.length > 0\n    ? `${project.project_name} is carrying ${tasks.length} tracked tasks with ${blockedTasks.length} active blocker${blockedTasks.length === 1 ? '' : 's'}, so progress is moving but constrained.`\n    : `${project.project_name} is active in ${project.stage} with ${tasks.length} tracked tasks and ${project.completion_pct}% completion across the current task set.`;\n\n  const fallbackRag = project.rag || (blockedTasks.length > 0 ? 'Yellow' : 'Green');\n\n  const relatedTaskIds = normalizeArray(parsed.related_task_ids, 10, 120)\n    .filter((taskId) => tasks.some((task) => task.id === taskId));\n\n  const fallbackRelatedTaskIds = relatedTaskIds.length > 0\n    ? relatedTaskIds\n    : tasks.slice(0, Math.min(3, tasks.length)).map((task) => task.id);\n\n  const blockers = normalizeArray(parsed.blockers, 8, 400);\n  const fallbackBlockers = blockers.length > 0\n    ? blockers\n    : blockedTasks.slice(0, 5).map((task) => task.title);\n\n  return {\n    json: {\n      project_id: source.project_id,\n      summary: normalizeString(parsed.summary, 2000) || fallbackSummary,\n      rag: normalizeRag(parsed.rag, fallbackRag),\n      changes_today: normalizeArray(parsed.changes_today, 8, 400),\n      blockers: fallbackBlockers,\n      next_step: normalizeString(parsed.next_step, 1000),\n      needs_decision: normalizeString(parsed.needs_decision, 1000),\n      related_task_ids: fallbackRelatedTaskIds,\n      source: 'n8n',\n      model: source.anthropic_request.model,\n      payload: {\n        prompt_context: source.prompt_context,\n        anthropic_response_text: responseText,\n        anthropic_response_id: response.id || null,\n      },\n      sync_project_status_summary: true,\n    },\n    pairedItem: { item: index },\n  };\n});"
+      },
+      "id": "c6b5ad7c-1f5e-4cdb-baf1-e7032c31b12d",
+      "name": "Build Project Status Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://mission-control-orpin-chi.vercel.app/api/project-status-updates",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Mission-Control-Key",
+              "value": "REPLACE_WITH_MISSION_CONTROL_MACHINE_KEY"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "996caa0c-5a8b-407d-a355-8628fe0f89ef",
+      "name": "Save Project Status Update",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        740,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "10 16 * * 5"
+            }
+          ]
+        }
+      },
+      "id": "36bca5b0-f2b6-4cbf-89b8-25c659468a5a",
+      "name": "Weekly Review Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1440,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://mission-control-orpin-chi.vercel.app/api/briefing/weekly-review",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "persist",
+              "value": "true"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Mission-Control-Key",
+              "value": "REPLACE_WITH_MISSION_CONTROL_MACHINE_KEY"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cdd83230-b106-4f25-b10c-61b2b319dbd3",
+      "name": "Fetch Weekly Review",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1190,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "function escapeHtml(value) {\n  return String(value)\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\\\"/g, '&quot;')\n    .replace(/'/g, '&#39;');\n}\n\nfunction truncate(value, maxLength = 280) {\n  const text = String(value || '').trim();\n  if (!text) return '';\n  if (text.length <= maxLength) return text;\n  return `${text.slice(0, maxLength - 1).trimEnd()}…`;\n}\n\nfunction ragMeta(rag) {\n  if (rag === 'Red') {\n    return { label: 'Red', fg: '#8A1C14', bg: '#FCE8E6', border: '#D93025' };\n  }\n  if (rag === 'Yellow') {\n    return { label: 'Yellow', fg: '#8A5A00', bg: '#FEF3C7', border: '#D97706' };\n  }\n  if (rag === 'Green') {\n    return { label: 'Green', fg: '#166534', bg: '#DCFCE7', border: '#16A34A' };\n  }\n  return { label: 'Unknown', fg: '#4B5563', bg: '#E5E7EB', border: '#9CA3AF' };\n}\n\nfunction renderMetricCard(label, value, accent) {\n  return `\n    <td width=\"50%\" style=\"padding:0 6px 12px 6px;vertical-align:top;\">\n      <div style=\"background:#fffdf8;border:1px solid #e7decf;border-top:4px solid ${accent};border-radius:16px;padding:16px 18px;\">\n        <div style=\"font-size:11px;line-height:1.4;letter-spacing:1.2px;text-transform:uppercase;color:#7b6f60;margin-bottom:10px;\">${escapeHtml(label)}</div>\n        <div style=\"font-size:30px;line-height:1;font-weight:700;color:#1f2937;\">${escapeHtml(value)}</div>\n      </div>\n    </td>`;\n}\n\nfunction renderSectionHeader(eyebrow, title) {\n  return `\n    <div style=\"margin-bottom:16px;\">\n      <div style=\"font-size:11px;line-height:1.4;letter-spacing:1.2px;text-transform:uppercase;color:#7b6f60;margin-bottom:6px;\">${escapeHtml(eyebrow)}</div>\n      <div style=\"font-size:22px;line-height:1.2;font-weight:700;color:#111827;\">${escapeHtml(title)}</div>\n    </div>`;\n}\n\nfunction renderEmpty(text) {\n  return `<div style=\"padding:14px 16px;border:1px dashed #d9cdb8;border-radius:14px;background:#fcf9f3;color:#6b6256;font-size:14px;line-height:1.6;\">${escapeHtml(text)}</div>`;\n}\n\nfunction renderShippedList(tasks) {\n  if (tasks.length === 0) {\n    return renderEmpty('No shipped tasks recorded this week.');\n  }\n\n  return `\n    <ul style=\"margin:0;padding:0;list-style:none;\">\n      ${tasks.slice(0, 5).map((task, index) => `\n        <li style=\"${index === 0 ? '' : 'border-top:1px solid #efe6d8;'}padding:${index === 0 ? '0 0 12px 0' : '12px 0'};\">\n          <div style=\"font-size:15px;line-height:1.5;color:#1f2937;\">\n            <span style=\"display:inline-block;width:8px;height:8px;border-radius:999px;background:#1f7a4d;margin-right:10px;\"></span>\n            <span style=\"font-weight:600;\">${escapeHtml(task.title || 'Untitled task')}</span>\n          </div>\n        </li>`).join('')}\n    </ul>`;\n}\n\nfunction renderAttentionCards(projects) {\n  if (projects.length === 0) {\n    return renderEmpty('No projects currently need elevated attention.');\n  }\n\n  return projects.slice(0, 5).map((project) => {\n    const meta = ragMeta(project.latest_rag);\n    const trend = project.trend ? `Trend: ${project.trend}` : '';\n\n    return `\n      <div style=\"background:#ffffff;border:1px solid #e7decf;border-left:6px solid ${meta.border};border-radius:18px;padding:16px 18px;margin-top:12px;\">\n        <div style=\"margin-bottom:10px;\">\n          <span style=\"display:inline-block;padding:5px 10px;border-radius:999px;background:${meta.bg};color:${meta.fg};font-size:12px;font-weight:700;line-height:1;\">${escapeHtml(meta.label)}</span>\n          ${trend ? `<span style=\"margin-left:8px;font-size:12px;color:#6b6256;\">${escapeHtml(trend)}</span>` : ''}\n        </div>\n        <div style=\"font-size:18px;line-height:1.35;font-weight:700;color:#111827;margin-bottom:8px;\">${escapeHtml(project.project_name || 'Unnamed project')}</div>\n        <div style=\"font-size:14px;line-height:1.65;color:#433b31;\">${escapeHtml(truncate(project.latest_summary || 'No summary available.', 280))}</div>\n      </div>`;\n  }).join('');\n}\n\nfunction renderDecisionCards(projects) {\n  if (projects.length === 0) {\n    return renderEmpty('No project decisions are waiting right now.');\n  }\n\n  return projects.slice(0, 5).map((project) => {\n    const meta = ragMeta(project.latest_rag);\n\n    return `\n      <div style=\"background:#fffdf8;border:1px solid #e7decf;border-left:6px solid ${meta.border};border-radius:16px;padding:16px 18px;margin-top:12px;\">\n        <div style=\"font-size:16px;line-height:1.35;font-weight:700;color:#111827;margin-bottom:8px;\">${escapeHtml(project.project_name || 'Unnamed project')}</div>\n        <div style=\"font-size:14px;line-height:1.65;color:#433b31;\">${escapeHtml(truncate(project.latest_needs_decision || 'No decision recorded.', 320))}</div>\n      </div>`;\n  }).join('');\n}\n\nfunction renderSuggestionList(items) {\n  if (items.length === 0) {\n    return renderEmpty('No next-week suggestions were generated.');\n  }\n\n  return `\n    <ol style=\"margin:0;padding:0 0 0 20px;\">\n      ${items.slice(0, 5).map((item) => `\n        <li style=\"margin:0 0 12px 0;padding-left:6px;color:#433b31;font-size:14px;line-height:1.6;\">${escapeHtml(item)}</li>`).join('')}\n    </ol>`;\n}\n\nconst shipped = Array.isArray($json.shipped) ? $json.shipped : [];\nconst projectRollups = Array.isArray($json.project_rollups) ? $json.project_rollups : [];\nconst attention = Array.isArray($json.projects_needing_attention) ? $json.projects_needing_attention : [];\nconst projectDecisions = Array.isArray($json.project_decisions) ? $json.project_decisions : [];\nconst suggestions = Array.isArray($json.next_week_suggestions) ? $json.next_week_suggestions : [];\nconst week = $json.week || {};\nconst subject = `Weekly Review • ${week.start_date || 'Unknown'} to ${week.end_date || 'Unknown'}`;\n\nconst text = [\n  subject,\n  '',\n  `Shipped tasks: ${shipped.length}`,\n  `Projects reviewed: ${projectRollups.length}`,\n  `Projects needing attention: ${attention.length}`,\n  `Project decisions: ${projectDecisions.length}`,\n  '',\n  'Top shipped:',\n  ...(shipped.length > 0 ? shipped.slice(0, 5).map((task) => `- ${task.title}`) : ['- None']),\n  '',\n  'Projects needing attention:',\n  ...(attention.length > 0\n    ? attention.slice(0, 5).map((project) => `- ${project.project_name} [${project.latest_rag || 'Unknown'}]: ${truncate(project.latest_summary || 'No summary available.', 220)}`)\n    : ['- None']),\n  '',\n  'Project decisions:',\n  ...(projectDecisions.length > 0\n    ? projectDecisions.slice(0, 5).map((project) => `- ${project.project_name}: ${truncate(project.latest_needs_decision || 'No decision recorded.', 220)}`)\n    : ['- None']),\n  '',\n  'Next-week suggestions:',\n  ...(suggestions.length > 0 ? suggestions.slice(0, 5).map((item) => `- ${item}`) : ['- None'])\n].join('\\n');\n\nconst html = `\n  <div style=\"margin:0;padding:24px 0;background:#f3efe6;font-family:Georgia, 'Avenir Next', 'Segoe UI', Arial, sans-serif;\">\n    <div style=\"max-width:760px;margin:0 auto;padding:0 16px;\">\n      <div style=\"background:#1f3b35;border-radius:24px;padding:28px 30px;color:#f8f4eb;\">\n        <div style=\"font-size:11px;line-height:1.4;letter-spacing:1.4px;text-transform:uppercase;color:#c8d5d1;margin-bottom:10px;\">Mission Control Weekly Review</div>\n        <div style=\"font-size:30px;line-height:1.15;font-weight:700;margin-bottom:10px;\">${escapeHtml(subject)}</div>\n        <div style=\"font-size:14px;line-height:1.7;color:#d8e3df;max-width:560px;\">A compact weekly readout of shipped work, projects that need attention, and decisions that should move next week.</div>\n      </div>\n\n      <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin-top:18px;border-collapse:separate;border-spacing:0;\">\n        <tr>\n          ${renderMetricCard('Shipped tasks', shipped.length, '#1f7a4d')}\n          ${renderMetricCard('Projects reviewed', projectRollups.length, '#315c8a')}\n        </tr>\n        <tr>\n          ${renderMetricCard('Need attention', attention.length, '#c76d1d')}\n          ${renderMetricCard('Decisions needed', projectDecisions.length, '#b42318')}\n        </tr>\n      </table>\n\n      <div style=\"background:#fffaf2;border:1px solid #e7decf;border-radius:22px;padding:22px 24px;margin-top:18px;\">\n        ${renderSectionHeader('Execution', 'Top shipped')}\n        ${renderShippedList(shipped)}\n      </div>\n\n      <div style=\"background:#fffaf2;border:1px solid #e7decf;border-radius:22px;padding:22px 24px;margin-top:18px;\">\n        ${renderSectionHeader('Attention', 'Projects needing attention')}\n        ${renderAttentionCards(attention)}\n      </div>\n\n      <div style=\"background:#fffaf2;border:1px solid #e7decf;border-radius:22px;padding:22px 24px;margin-top:18px;\">\n        ${renderSectionHeader('Decisions', 'Project decisions')}\n        ${renderDecisionCards(projectDecisions)}\n      </div>\n\n      <div style=\"background:#fffaf2;border:1px solid #e7decf;border-radius:22px;padding:22px 24px;margin-top:18px;\">\n        ${renderSectionHeader('Focus', 'Next-week suggestions')}\n        ${renderSuggestionList(suggestions)}\n      </div>\n\n      <div style=\"padding:16px 10px 0 10px;text-align:center;color:#7b6f60;font-size:12px;line-height:1.5;\">\n        Generated from weekly task activity and stored project status updates.\n      </div>\n    </div>\n  </div>`;\n\nreturn [{ json: { subject, text, html } }];"
+      },
+      "id": "40c5980c-f622-49fd-8876-e3fc1d1ca17a",
+      "name": "Build Weekly Review Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -920,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "change-me@example.com",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.html }}",
+        "emailType": "html",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "a92f14d1-1bd1-403d-bf95-c46cb6256758",
+      "name": "Send Weekly Review Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -650,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 17 28-31 * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "e0a64ec6-c3c0-42fc-a6bd-e06a45a6cc98",
+      "name": "Monthly Review Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1440,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "function getEtParts(date) {\n  const formatter = new Intl.DateTimeFormat('en-US', {\n    timeZone: 'America/New_York',\n    weekday: 'short',\n    year: 'numeric',\n    month: '2-digit',\n    day: '2-digit'\n  });\n  const parts = Object.fromEntries(formatter.formatToParts(date).map((part) => [part.type, part.value]));\n  return {\n    weekday: parts.weekday,\n    year: Number(parts.year),\n    month: Number(parts.month),\n    day: Number(parts.day),\n    iso: `${parts.year}-${parts.month}-${parts.day}`\n  };\n}\n\nfunction addDays(date, amount) {\n  const next = new Date(date.getTime());\n  next.setUTCDate(next.getUTCDate() + amount);\n  return next;\n}\n\nconst now = new Date();\nconst today = getEtParts(now);\nlet cursor = addDays(now, 1);\nlet nextBusiness = getEtParts(cursor);\nwhile (nextBusiness.weekday === 'Sat' || nextBusiness.weekday === 'Sun') {\n  cursor = addDays(cursor, 1);\n  nextBusiness = getEtParts(cursor);\n}\n\nif (nextBusiness.month !== today.month || nextBusiness.year !== today.year) {\n  return [{ json: { anchor_date: today.iso } }];\n}\n\nreturn [];"
+      },
+      "id": "0d00f1ea-df5e-4448-80c2-56f702e3ea22",
+      "name": "Last Business Day Gate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1190,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://mission-control-orpin-chi.vercel.app/api/briefing/monthly-review",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "persist",
+              "value": "true"
+            },
+            {
+              "name": "date",
+              "value": "={{ $json.anchor_date }}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Mission-Control-Key",
+              "value": "REPLACE_WITH_MISSION_CONTROL_MACHINE_KEY"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "45eecfd6-c70b-4858-a9a1-8d65fc79f818",
+      "name": "Fetch Monthly Review",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -930,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "function escapeHtml(value) {\n  return String(value)\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\\\"/g, '&quot;')\n    .replace(/'/g, '&#39;');\n}\n\nfunction truncate(value, maxLength = 260) {\n  const text = String(value || '').trim();\n  if (!text) return '';\n  if (text.length <= maxLength) return text;\n  return `${text.slice(0, maxLength - 1).trimEnd()}…`;\n}\n\nfunction unique(values) {\n  return [...new Set(values.filter(Boolean))];\n}\n\nfunction ragMeta(rag) {\n  if (rag === 'Red') {\n    return { label: 'Red', fg: '#8A1C14', bg: '#FCE8E6', border: '#D93025' };\n  }\n  if (rag === 'Yellow') {\n    return { label: 'Yellow', fg: '#8A5A00', bg: '#FEF3C7', border: '#D97706' };\n  }\n  if (rag === 'Green') {\n    return { label: 'Green', fg: '#166534', bg: '#DCFCE7', border: '#16A34A' };\n  }\n  return { label: 'Unknown', fg: '#4B5563', bg: '#E5E7EB', border: '#9CA3AF' };\n}\n\nfunction ragSeverity(rag) {\n  if (rag === 'Red') return 3;\n  if (rag === 'Yellow') return 2;\n  if (rag === 'Green') return 1;\n  return 0;\n}\n\nfunction comparePriority(left, right) {\n  return (\n    ragSeverity(right.latest_rag) - ragSeverity(left.latest_rag) ||\n    Number(right.blocker_days || 0) - Number(left.blocker_days || 0) ||\n    Number(right.decision_days || 0) - Number(left.decision_days || 0) ||\n    Number(right.updates_count || 0) - Number(left.updates_count || 0) ||\n    String(left.project_name || '').localeCompare(String(right.project_name || ''))\n  );\n}\n\nfunction renderMetricCard(label, value, accent) {\n  return `\n    <td width=\"50%\" style=\"padding:0 6px 12px 6px;vertical-align:top;\">\n      <div style=\"background:#fffdf8;border:1px solid #e7decf;border-top:4px solid ${accent};border-radius:16px;padding:16px 18px;\">\n        <div style=\"font-size:11px;line-height:1.4;letter-spacing:1.2px;text-transform:uppercase;color:#7b6f60;margin-bottom:10px;\">${escapeHtml(label)}</div>\n        <div style=\"font-size:28px;line-height:1.05;font-weight:700;color:#1f2937;\">${escapeHtml(value)}</div>\n      </div>\n    </td>`;\n}\n\nfunction renderSectionHeader(eyebrow, title) {\n  return `\n    <div style=\"margin-bottom:16px;\">\n      <div style=\"font-size:11px;line-height:1.4;letter-spacing:1.2px;text-transform:uppercase;color:#7b6f60;margin-bottom:6px;\">${escapeHtml(eyebrow)}</div>\n      <div style=\"font-size:22px;line-height:1.2;font-weight:700;color:#111827;\">${escapeHtml(title)}</div>\n    </div>`;\n}\n\nfunction renderEmpty(text) {\n  return `<div style=\"padding:14px 16px;border:1px dashed #d9cdb8;border-radius:14px;background:#fcf9f3;color:#6b6256;font-size:14px;line-height:1.6;\">${escapeHtml(text)}</div>`;\n}\n\nfunction renderWatchlistCards(projects) {\n  if (projects.length === 0) {\n    return renderEmpty('No material portfolio risks are standing out this month.');\n  }\n\n  return projects.slice(0, 5).map((project) => {\n    const meta = ragMeta(project.latest_rag);\n    const facts = [];\n    if (project.trend) facts.push(`${project.trend} trend`);\n    if (project.blocker_days) facts.push(`${project.blocker_days} blocker day${project.blocker_days === 1 ? '' : 's'}`);\n    if (project.decision_days) facts.push(`${project.decision_days} decision day${project.decision_days === 1 ? '' : 's'}`);\n    const blocker = Array.isArray(project.notable_blockers) ? project.notable_blockers[0] : null;\n\n    return `\n      <div style=\"background:#ffffff;border:1px solid #e7decf;border-left:6px solid ${meta.border};border-radius:18px;padding:16px 18px;margin-top:12px;\">\n        <div style=\"margin-bottom:10px;\">\n          <span style=\"display:inline-block;padding:5px 10px;border-radius:999px;background:${meta.bg};color:${meta.fg};font-size:12px;font-weight:700;line-height:1;\">${escapeHtml(meta.label)}</span>\n          ${facts.length > 0 ? `<span style=\"margin-left:8px;font-size:12px;color:#6b6256;\">${escapeHtml(facts.join(' • '))}</span>` : ''}\n        </div>\n        <div style=\"font-size:18px;line-height:1.35;font-weight:700;color:#111827;margin-bottom:8px;\">${escapeHtml(project.project_name || 'Unnamed project')}</div>\n        <div style=\"font-size:14px;line-height:1.65;color:#433b31;\">${escapeHtml(truncate(project.latest_summary || 'No summary available.', 280))}</div>\n        ${blocker ? `<div style=\"margin-top:10px;font-size:13px;line-height:1.6;color:#5f5548;background:#faf4ea;border-radius:12px;padding:10px 12px;\"><strong style=\"color:#332b22;\">Top blocker:</strong> ${escapeHtml(truncate(blocker, 180))}</div>` : ''}\n      </div>`;\n  }).join('');\n}\n\nfunction renderDecisionCards(projects) {\n  if (projects.length === 0) {\n    return renderEmpty('No executive decisions are waiting right now.');\n  }\n\n  return projects.slice(0, 5).map((project) => {\n    const meta = ragMeta(project.latest_rag);\n\n    return `\n      <div style=\"background:#fffdf8;border:1px solid #e7decf;border-left:6px solid ${meta.border};border-radius:16px;padding:16px 18px;margin-top:12px;\">\n        <div style=\"font-size:16px;line-height:1.35;font-weight:700;color:#111827;margin-bottom:8px;\">${escapeHtml(project.project_name || 'Unnamed project')}</div>\n        <div style=\"font-size:14px;line-height:1.65;color:#433b31;\">${escapeHtml(truncate(project.latest_needs_decision || 'No decision recorded.', 320))}</div>\n      </div>`;\n  }).join('');\n}\n\nfunction renderMomentumCards(projects) {\n  if (projects.length === 0) {\n    return renderEmpty('No strong momentum themes stand out yet this month.');\n  }\n\n  return projects.slice(0, 4).map((project) => `\n    <div style=\"background:#ffffff;border:1px solid #e7decf;border-left:6px solid #16A34A;border-radius:16px;padding:16px 18px;margin-top:12px;\">\n      <div style=\"font-size:16px;line-height:1.35;font-weight:700;color:#111827;margin-bottom:8px;\">${escapeHtml(project.project_name || 'Unnamed project')}</div>\n      <div style=\"font-size:14px;line-height:1.65;color:#433b31;\">${escapeHtml(truncate(project.latest_summary || 'No summary available.', 220))}</div>\n      ${project.latest_next_step ? `<div style=\"margin-top:10px;font-size:13px;line-height:1.6;color:#24543e;background:#edf8f1;border-radius:12px;padding:10px 12px;\"><strong style=\"color:#17422f;\">Next:</strong> ${escapeHtml(truncate(project.latest_next_step, 180))}</div>` : ''}\n    </div>`).join('');\n}\n\nfunction renderFocusList(items) {\n  if (items.length === 0) {\n    return renderEmpty('No month-close focus items were generated.');\n  }\n\n  return `\n    <ol style=\"margin:0;padding:0 0 0 20px;\">\n      ${items.slice(0, 5).map((item) => `\n        <li style=\"margin:0 0 12px 0;padding-left:6px;color:#433b31;font-size:14px;line-height:1.6;\">${escapeHtml(item)}</li>`).join('')}\n    </ol>`;\n}\n\nconst month = $json.month || {};\nconst totals = $json.totals || {};\nconst rollups = Array.isArray($json.project_rollups) ? $json.project_rollups : [];\nconst subject = `Monthly Review • ${month.start_date || 'Unknown'} to ${month.end_date || 'Unknown'}`;\n\nconst redProjects = rollups.filter((project) => project.latest_rag === 'Red');\nconst yellowProjects = rollups.filter((project) => project.latest_rag === 'Yellow');\nconst greenProjects = rollups.filter((project) => project.latest_rag === 'Green');\n\nconst attention = rollups\n  .filter((project) => project.latest_rag === 'Red' || project.latest_rag === 'Yellow' || Number(project.blocker_days || 0) > 0 || Boolean(project.latest_needs_decision))\n  .sort(comparePriority);\n\nconst decisions = rollups\n  .filter((project) => Boolean(project.latest_needs_decision))\n  .sort(comparePriority);\n\nconst momentum = rollups\n  .filter((project) => project.latest_rag === 'Green' && project.project_stage && !['Proposed', 'Planned'].includes(project.project_stage) && !project.latest_needs_decision)\n  .sort((left, right) => Number(right.updates_count || 0) - Number(left.updates_count || 0) || String(left.project_name || '').localeCompare(String(right.project_name || '')));\n\nconst blockerProjects = rollups\n  .filter((project) => Number(project.blocker_days || 0) > 0 || (Array.isArray(project.notable_blockers) && project.notable_blockers.length > 0))\n  .sort(comparePriority);\n\nconst focusItems = unique([\n  ...attention.slice(0, 3).map((project) => project.latest_next_step ? `${project.project_name}: ${project.latest_next_step}` : `Define the next concrete move for ${project.project_name}.`),\n  ...decisions.slice(0, 2).map((project) => `${project.project_name}: resolve decision — ${project.latest_needs_decision}`),\n  ...momentum.slice(0, 2).map((project) => project.latest_next_step ? `Protect momentum on ${project.project_name}: ${project.latest_next_step}` : `Protect momentum on ${project.project_name}.`),\n]).slice(0, 5);\n\nconst executiveSummary = redProjects.length > 0\n  ? `${redProjects.length} red project and ${yellowProjects.length} yellow project${yellowProjects.length === 1 ? '' : 's'} are driving portfolio risk this month across ${rollups.length} active projects. ${decisions.length} decision${decisions.length === 1 ? '' : 's'} and ${blockerProjects.length} blocker-shaped effort${blockerProjects.length === 1 ? '' : 's'} need movement before month close.`\n  : yellowProjects.length > 0\n    ? `The portfolio is broadly stable, with ${yellowProjects.length} yellow project${yellowProjects.length === 1 ? '' : 's'} to manage and ${decisions.length} open decision${decisions.length === 1 ? '' : 's'} across ${rollups.length} active projects this month.`\n    : `The portfolio is stable across ${rollups.length} active projects, with no red risks and ${totals.shipped_count || 0} shipped task${Number(totals.shipped_count || 0) === 1 ? '' : 's'} captured in stored weekly snapshots this month.`;\n\nconst text = [\n  subject,\n  '',\n  executiveSummary,\n  '',\n  `Weekly snapshots: ${totals.weekly_snapshot_count || 0}`,\n  `Project status updates: ${totals.project_status_update_count || 0}`,\n  `Projects with updates: ${totals.projects_with_updates || 0}`,\n  `Risk mix (R/Y/G): ${redProjects.length}/${yellowProjects.length}/${greenProjects.length}`,\n  `Decisions waiting: ${decisions.length}`,\n  '',\n  'Watchlist:',\n  ...(attention.length > 0\n    ? attention.slice(0, 5).map((project) => `- ${project.project_name} [${project.latest_rag || 'Unknown'}]: ${truncate(project.latest_summary || 'No summary available.', 220)}`)\n    : ['- None']),\n  '',\n  'Decisions to resolve:',\n  ...(decisions.length > 0\n    ? decisions.slice(0, 5).map((project) => `- ${project.project_name}: ${truncate(project.latest_needs_decision || 'No decision recorded.', 220)}`)\n    : ['- None']),\n  '',\n  'Month-close focus:',\n  ...(focusItems.length > 0 ? focusItems.map((item) => `- ${item}`) : ['- None'])\n].join('\\n');\n\nconst html = `\n  <div style=\"margin:0;padding:24px 0;background:#f3efe6;font-family:Georgia, 'Avenir Next', 'Segoe UI', Arial, sans-serif;\">\n    <div style=\"max-width:760px;margin:0 auto;padding:0 16px;\">\n      <div style=\"background:#1f3b35;border-radius:24px;padding:28px 30px;color:#f8f4eb;\">\n        <div style=\"font-size:11px;line-height:1.4;letter-spacing:1.4px;text-transform:uppercase;color:#c8d5d1;margin-bottom:10px;\">Mission Control Monthly Review</div>\n        <div style=\"font-size:30px;line-height:1.15;font-weight:700;margin-bottom:10px;\">${escapeHtml(subject)}</div>\n        <div style=\"font-size:15px;line-height:1.75;color:#d8e3df;max-width:620px;\">${escapeHtml(executiveSummary)}</div>\n        <div style=\"margin-top:14px;font-size:12px;line-height:1.6;color:#b9cbc6;\">${escapeHtml(`${totals.weekly_snapshot_count || 0} weekly snapshots • ${totals.project_status_update_count || 0} project updates captured • ${totals.projects_with_updates || 0} active projects in review window`)}</div>\n      </div>\n\n      <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin-top:18px;border-collapse:separate;border-spacing:0;\">\n        <tr>\n          ${renderMetricCard('Active projects', rollups.length, '#315c8a')}\n          ${renderMetricCard('Shipped tasks', totals.shipped_count || 0, '#1f7a4d')}\n        </tr>\n        <tr>\n          ${renderMetricCard('Risk mix R / Y / G', `${redProjects.length} / ${yellowProjects.length} / ${greenProjects.length}`, '#c76d1d')}\n          ${renderMetricCard('Decisions waiting', decisions.length, '#b42318')}\n        </tr>\n      </table>\n\n      <div style=\"background:#fffaf2;border:1px solid #e7decf;border-radius:22px;padding:22px 24px;margin-top:18px;\">\n        ${renderSectionHeader('Watchlist', 'Projects needing executive attention')}\n        ${renderWatchlistCards(attention)}\n      </div>\n\n      <div style=\"background:#fffaf2;border:1px solid #e7decf;border-radius:22px;padding:22px 24px;margin-top:18px;\">\n        ${renderSectionHeader('Decisions', 'Items to resolve before month close')}\n        ${renderDecisionCards(decisions)}\n      </div>\n\n      <div style=\"background:#fffaf2;border:1px solid #e7decf;border-radius:22px;padding:22px 24px;margin-top:18px;\">\n        ${renderSectionHeader('Momentum', 'Workstreams worth protecting')}\n        ${renderMomentumCards(momentum)}\n      </div>\n\n      <div style=\"background:#fffaf2;border:1px solid #e7decf;border-radius:22px;padding:22px 24px;margin-top:18px;\">\n        ${renderSectionHeader('Month Close', 'Recommended focus')}\n        ${renderFocusList(focusItems)}\n      </div>\n\n      <div style=\"padding:16px 10px 0 10px;text-align:center;color:#7b6f60;font-size:12px;line-height:1.5;\">\n        Generated from stored weekly snapshots and project status updates.\n      </div>\n    </div>\n  </div>`;\n\nreturn [{ json: { subject, text, html } }];"
+      },
+      "id": "d8cb8a57-7397-47e1-a6bc-bdbc4ed0d83f",
+      "name": "Build Monthly Review Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -660,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "change-me@example.com",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.html }}",
+        "emailType": "html",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "e4b56f4b-8a93-46de-90e0-17f04c1d6c06",
+      "name": "Send Monthly Review Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -390,
+        500
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Daily Project Status Schedule": {
+      "main": [
+        [
+          {
+            "node": "Fetch Review Projects",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Review Projects": {
+      "main": [
+        [
+          {
+            "node": "Prepare Project Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Project Candidates": {
+      "main": [
+        [
+          {
+            "node": "Fetch Project Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Project Tasks": {
+      "main": [
+        [
+          {
+            "node": "Fetch Prior Project Updates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Prior Project Updates": {
+      "main": [
+        [
+          {
+            "node": "Build Haiku Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Haiku Request": {
+      "main": [
+        [
+          {
+            "node": "Generate Project Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Project Update": {
+      "main": [
+        [
+          {
+            "node": "Build Project Status Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Project Status Payload": {
+      "main": [
+        [
+          {
+            "node": "Save Project Status Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Weekly Review Schedule": {
+      "main": [
+        [
+          {
+            "node": "Fetch Weekly Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Weekly Review": {
+      "main": [
+        [
+          {
+            "node": "Build Weekly Review Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Weekly Review Email": {
+      "main": [
+        [
+          {
+            "node": "Send Weekly Review Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Monthly Review Schedule": {
+      "main": [
+        [
+          {
+            "node": "Last Business Day Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Last Business Day Gate": {
+      "main": [
+        [
+          {
+            "node": "Fetch Monthly Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Monthly Review": {
+      "main": [
+        [
+          {
+            "node": "Build Monthly Review Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Monthly Review Email": {
+      "main": [
+        [
+          {
+            "node": "Send Monthly Review Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/New_York"
+  },
+  "versionId": "fc1b4b7a-71cb-4231-8cfc-c94c91d4c59d",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "id": "yXbHq9A4mCr2Kp7Q",
+  "tags": []
+}

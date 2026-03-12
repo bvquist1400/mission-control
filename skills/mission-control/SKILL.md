@@ -644,6 +644,7 @@ GET /api/briefing/weekly-review
 ```
 Optional query params:
 - `date` — ISO date `YYYY-MM-DD`; defaults to today and reviews the current week-to-date
+- `persist` — optional boolean; when `true`, also stores the weekly snapshot for later monthly review
 
 Returns:
 ```json
@@ -658,7 +659,29 @@ Returns:
 }
 ```
 
-**MCP tools:** `get_briefing`, `get_brief_digest`, `get_brief_render`, `get_weekly_review`
+#### Get monthly review
+```
+GET /api/briefing/monthly-review
+```
+Optional query params:
+- `date` — ISO date `YYYY-MM-DD`; defaults to today and reviews the current month-to-date
+- `persist` — optional boolean; when `true`, also stores the monthly snapshot
+
+Returns:
+```json
+{
+  "month": { "start_date": "2026-03-01", "end_date": "2026-03-31" },
+  "totals": {
+    "weekly_snapshot_count": 4,
+    "project_status_update_count": 18,
+    "projects_with_updates": 5
+  },
+  "weekly_snapshots": [...],
+  "project_rollups": [...]
+}
+```
+
+**MCP tools:** `get_briefing`, `get_brief_digest`, `get_brief_render`, `get_weekly_review`, `get_monthly_review`
 
 ---
 
@@ -755,6 +778,9 @@ Returns:
 
 **"Give me my weekly review"**
 → Call `GET /api/briefing/weekly-review` or use `get_weekly_review`
+
+**"Give me my monthly review"**
+→ Call `GET /api/briefing/monthly-review` or use `get_monthly_review`
 
 **"What did I commit to [person]?"**
 → First `GET /api/stakeholders?search=name`, then `GET /api/stakeholders/:id/commitments`

@@ -37,7 +37,7 @@ Implementation (Application) -> Project -> Task
 
 - RLS: 4-policy pattern (SELECT, INSERT, UPDATE, DELETE) on every table
 - `updated_at` triggers: reuse `set_updated_at()` function
-- Migrations: `supabase/migrations/` (latest: 027)
+- Migrations: `supabase/migrations/` (latest: 030)
 
 ### MCP Server
 
@@ -75,6 +75,11 @@ Implementation (Application) -> Project -> Task
 | Daily brief digest route | `src/app/api/briefing/digest/route.ts` |
 | Daily brief render builder | `src/lib/briefing/render.ts` |
 | Daily brief render route | `src/app/api/briefing/render/route.ts` |
+| Review snapshot rollups | `src/lib/briefing/review-snapshots.ts` |
+| Project status update route | `src/app/api/project-status-updates/route.ts` |
+| Weekly review route | `src/app/api/briefing/weekly-review/route.ts` |
+| Monthly review route | `src/app/api/briefing/monthly-review/route.ts` |
+| Review automation workflow export | `n8n/mission-control-project-reviews.json` |
 | Upstream API router | `src/app/api/mcp-upstream/[...path]/route.ts` |
 
 ## Briefing Model Note
@@ -82,6 +87,14 @@ Implementation (Application) -> Project -> Task
 - `briefing_narrative` is lib-controlled, not user-configured in the database.
 - To change the model used for daily brief email narration, edit `LIB_CONTROLLED_FEATURE_MODELS.briefing_narrative` in `src/lib/llm/catalog.ts`.
 - The current daily brief email flow expects Mission Control to generate the narrative server-side before n8n sends the email.
+
+## Review Automation Note
+
+- Daily project review history is stored in `project_status_updates`.
+- Weekly and monthly review snapshots are stored in `briefing_review_snapshots`.
+- The daily project review n8n branch calls Anthropic directly to generate strict JSON summaries per project.
+- Weekly and monthly review endpoints are deterministic server-side rollups; n8n only formats and sends the emails.
+- Never commit live machine keys or provider API keys into tracked n8n workflow exports.
 
 ## Calendar
 

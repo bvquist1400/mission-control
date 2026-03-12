@@ -148,7 +148,7 @@ You do not need an OpenAI API key for normal use inside ChatGPT. The only extra 
 2. Paste your adapted Mission Control instructions into the GPT Instructions field.
 3. Import the tracked OpenAPI schema from `/openapi/chatgpt-actions-v1.yaml`.
 4. Configure the action authentication header as `X-Mission-Control-Key` with `MISSION_CONTROL_ACTIONS_API_KEY`.
-5. Add prompt starters such as `morning brief`, `midday brief`, `eod brief`, `weekly review`, `recommend my today list but do not sync yet`, `review these meeting notes and suggest updates`, and `apply these meeting notes to Mission Control`.
+5. Add prompt starters such as `morning brief`, `midday brief`, `eod brief`, `weekly review`, `monthly review`, `recommend my today list but do not sync yet`, `review these meeting notes and suggest updates`, and `apply these meeting notes to Mission Control`.
 
 Notes:
 - The tracked schema file in this repo is [`/Users/owner/dev/Cooper Mission Control/mission-control/public/openapi/chatgpt-actions-v1.yaml`](/Users/owner/dev/Cooper%20Mission%20Control/mission-control/public/openapi/chatgpt-actions-v1.yaml).
@@ -172,6 +172,9 @@ Apply Supabase SQL migrations from `supabase/migrations/`:
 - `009_add_quick_capture_feature.sql` — Adds `quick_capture` to LLM feature CHECK constraints
 - `010_missing_rls_policies.sql` — Adds missing RLS policies for inbox_items and status_updates
 - `027_add_mcp_oauth.sql` — Adds OAuth client, authorization code, access token, and refresh token storage for public remote MCP
+- `028_add_project_focus_scope.sql` — Adds project-scoped focus directives
+- `029_add_task_tags.sql` — Adds tags for tasks
+- `030_add_project_review_history.sql` — Adds durable project status history and persisted weekly/monthly review snapshots
 
 ### Task status values
 

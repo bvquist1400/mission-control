@@ -8,7 +8,7 @@ Use `GET /api/briefing/render` as the email-facing endpoint for scheduled brief 
 - Facts stay deterministic through the digest layer.
 - A small LLM pass adds the candid chief-of-staff framing.
 - The response already includes `subject`, `html`, and `text`.
-- n8n only needs to schedule the call and hand the result to an email node.
+- n8n only needs to schedule the call and hand the result to a Gmail node.
 
 ## Auth
 
@@ -57,7 +57,7 @@ curl -s \
 
 1. Cron trigger at the chosen ET schedule.
 2. HTTP Request node to `/api/briefing/render`.
-3. Email node using `{{$json.subject}}`, `{{$json.html}}`, and `{{$json.text}}`.
+3. Gmail node using `{{$json.subject}}` plus the rendered HTML body.
 
 Do not auto-apply `suggested_sync_today`. The digest only recommends changes.
 
@@ -71,20 +71,18 @@ What it includes:
 
 - weekday morning, midday, and EOD schedule triggers
 - one HTTP Request node per brief mode
-- one SMTP Send Email node per brief mode
+- one Gmail Send node per brief mode
 - ET-based `since` calculation for midday and EOD using `08:05 ET`
+- EOD append step that adds the current day's `project_status_updates` into the outgoing email
 - workflow timezone set to `America/New_York`
 
 Setup after import:
 
 1. Import `n8n/mission-control-daily-briefs.json` into n8n.
-2. Attach your SMTP credential to each `Send ... Email` node.
-3. Either set these n8n environment variables or replace the placeholder expressions directly in the nodes:
-   - `MISSION_CONTROL_BASE_URL`
-   - `MISSION_CONTROL_ACTIONS_API_KEY` or `MISSION_CONTROL_API_KEY`
-   - `DAILY_BRIEF_TO_EMAIL`
-   - `DAILY_BRIEF_FROM_EMAIL`
-4. Save, test one branch manually, then activate the workflow.
+2. Attach your Gmail credential to each `Send ... Email` node.
+3. Replace the hardcoded `change-me@example.com` recipient in each Gmail node.
+4. Replace `REPLACE_WITH_MISSION_CONTROL_MACHINE_KEY` in each HTTP Request node before activation.
+5. Save, test one branch manually, then activate the workflow.
 
 The workflow is imported inactive on purpose.
 
