@@ -23,6 +23,7 @@ interface ApiProject {
   open_task_count: number;
   completed_task_count: number;
   total_task_count: number;
+  completion_pct: number;
   blockers_count?: number;
   implementation: {
     id: string;
@@ -79,6 +80,7 @@ function apiToCardData(project: ApiProject): ProjectCardData {
     openTaskCount: project.open_task_count,
     completedTaskCount: project.completed_task_count,
     totalTaskCount: project.total_task_count,
+    completionPct: project.completion_pct,
     blockersCount: project.blockers_count ?? 0,
     implementationName: project.implementation?.name ?? null,
     implementationId: project.implementation?.id ?? null,

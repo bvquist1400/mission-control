@@ -8,12 +8,19 @@ interface ProjectTaskStats {
   completedTaskCount: number;
   totalTaskCount: number;
   blockersCount: number;
+  completionPct: number;
 }
 
 interface ProjectTaskRow {
+  id: string;
   project_id: string | null;
   status: string;
   blocker: boolean | null;
+}
+
+interface TaskChecklistRow {
+  task_id: string;
+  is_done: boolean;
 }
 
 function createEmptyProjectTaskStats(): ProjectTaskStats {
@@ -22,6 +29,7 @@ function createEmptyProjectTaskStats(): ProjectTaskStats {
     completedTaskCount: 0,
     totalTaskCount: 0,
     blockersCount: 0,
+    completionPct: 0,
   };
 }
 
@@ -103,15 +111,25 @@ export async function GET(request: NextRequest) {
         .filter((id): id is string => typeof id === 'string' && id.length > 0)
     )];
 
+    const { data: taskRows, error: taskError } = await supabase
+      .from('tasks')
+      .select('id, project_id, status, blocker')
+      .eq('user_id', userId)
+      .in('project_id', projectIds);
+    if (taskError) throw taskError;
+
+    const taskIds = (taskRows || []).map((task) => task.id);
     const [
-      { data: taskRows, error: taskError },
+      { data: checklistRows, error: checklistError },
       { data: implementationRows, error: implementationError },
     ] = await Promise.all([
-      supabase
-        .from('tasks')
-        .select('project_id, status, blocker')
-        .eq('user_id', userId)
-        .in('project_id', projectIds),
+      taskIds.length > 0
+        ? supabase
+            .from('task_checklist_items')
+            .select('task_id, is_done')
+            .eq('user_id', userId)
+            .in('task_id', taskIds)
+        : Promise.resolve({ data: [], error: null }),
       implementationIds.length > 0
         ? supabase
             .from('implementations')
@@ -121,11 +139,26 @@ export async function GET(request: NextRequest) {
         : Promise.resolve({ data: [], error: null }),
     ]);
 
-    if (taskError) throw taskError;
+    if (checklistError) throw checklistError;
     if (implementationError) throw implementationError;
 
     const statsByProject = new Map<string, ProjectTaskStats>(
       projectIds.map((projectId) => [projectId, createEmptyProjectTaskStats()])
+    );
+
+    const checklistCountsByTask = new Map<string, { total: number; done: number }>();
+
+    for (const checklistItem of (checklistRows || []) as TaskChecklistRow[]) {
+      const current = checklistCountsByTask.get(checklistItem.task_id) ?? { total: 0, done: 0 };
+      current.total += 1;
+      if (checklistItem.is_done) {
+        current.done += 1;
+      }
+      checklistCountsByTask.set(checklistItem.task_id, current);
+    }
+
+    const progressUnitsByProject = new Map<string, { completed: number; total: number }>(
+      projectIds.map((projectId) => [projectId, { completed: 0, total: 0 }])
     );
 
     for (const task of (taskRows || []) as ProjectTaskRow[]) {
@@ -140,6 +173,7 @@ export async function GET(request: NextRequest) {
 
       const isDone = task.status === 'Done';
       const isParked = task.status === 'Parked';
+      const checklistCounts = checklistCountsByTask.get(task.id) ?? { total: 0, done: 0 };
 
       if (!isDone) {
         stats.openTaskCount += 1;
@@ -149,6 +183,16 @@ export async function GET(request: NextRequest) {
         stats.totalTaskCount += 1;
         if (isDone) {
           stats.completedTaskCount += 1;
+        }
+
+        const progress = progressUnitsByProject.get(task.project_id);
+        if (progress) {
+          progress.total += 1;
+          if (isDone) {
+            progress.completed += 1;
+          } else if (checklistCounts.total > 0) {
+            progress.completed += checklistCounts.done / (checklistCounts.total + 1);
+          }
         }
       }
 
@@ -163,6 +207,10 @@ export async function GET(request: NextRequest) {
 
     const enriched = projectList.map((project) => {
       const stats = statsByProject.get(project.id) ?? createEmptyProjectTaskStats();
+      const progress = progressUnitsByProject.get(project.id) ?? { completed: 0, total: 0 };
+      stats.completionPct = progress.total > 0
+        ? Math.round((progress.completed / progress.total) * 100)
+        : 0;
 
       return {
         ...withNormalizedProjectStage(project),
@@ -170,6 +218,7 @@ export async function GET(request: NextRequest) {
         completed_task_count: stats.completedTaskCount,
         total_task_count: stats.totalTaskCount,
         blockers_count: stats.blockersCount,
+        completion_pct: stats.completionPct,
         implementation:
           typeof project.implementation_id === 'string'
             ? implementationsById.get(project.implementation_id) ?? null

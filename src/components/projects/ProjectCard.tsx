@@ -18,6 +18,7 @@ export interface ProjectCardData {
   openTaskCount: number;
   completedTaskCount: number;
   totalTaskCount: number;
+  completionPct: number;
   blockersCount: number;
   implementationName: string | null;
   implementationId: string | null;
@@ -29,9 +30,11 @@ interface ProjectCardProps {
 
 export function ProjectCard({ project }: ProjectCardProps) {
   const hasTrackedTasks = project.totalTaskCount > 0;
-  const percentComplete = hasTrackedTasks
+  const doneOnlyPercent = hasTrackedTasks
     ? Math.round((project.completedTaskCount / project.totalTaskCount) * 100)
     : 0;
+  const percentComplete = hasTrackedTasks ? project.completionPct : 0;
+  const hasPartialProgress = percentComplete > doneOnlyPercent;
 
   return (
     <article className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
@@ -85,7 +88,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
             aria-valuenow={percentComplete}
             aria-valuetext={
               hasTrackedTasks
-                ? `${project.completedTaskCount} of ${project.totalTaskCount} tasks done`
+                ? `${project.completedTaskCount} of ${project.totalTaskCount} tasks done${hasPartialProgress ? ', plus checklist progress' : ''}`
                 : "No tasks yet"
             }
             className="mt-2 h-2 overflow-hidden rounded-full bg-panel-muted"
@@ -96,7 +99,9 @@ export function ProjectCard({ project }: ProjectCardProps) {
             />
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
-            {hasTrackedTasks ? `${project.completedTaskCount} of ${project.totalTaskCount} done` : "No tasks yet"}
+            {hasTrackedTasks
+              ? `${project.completedTaskCount} of ${project.totalTaskCount} done${hasPartialProgress ? " • includes checklist progress" : ""}`
+              : "No tasks yet"}
           </p>
         </div>
         {project.description && (
