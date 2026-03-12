@@ -1,4 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
+import {
+  buildReviewSnapshotTitle,
+  buildWeeklyReviewSummary,
+  upsertReviewSnapshot,
+} from '@/lib/briefing/review-snapshots';
 import { type IntelligenceCommitment, type IntelligenceImplementation, type IntelligenceRiskTask, normalizeCommitmentRows } from '@/lib/briefing/intelligence';
 import { computeImplementationHealthScores, persistImplementationHealthSnapshots } from '@/lib/health-scores';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
@@ -120,6 +125,7 @@ export async function GET(request: NextRequest) {
     const { supabase, userId } = auth.context;
     const { searchParams } = new URL(request.url);
     const anchorDate = getAnchorDate(searchParams.get('date'));
+    const shouldPersist = searchParams.get('persist') === 'true';
 
     if (!anchorDate) {
       return NextResponse.json({ error: 'date must be YYYY-MM-DD' }, { status: 400 });
@@ -199,7 +205,7 @@ export async function GET(request: NextRequest) {
     );
     await persistImplementationHealthSnapshots(supabase, userId, snapshots);
 
-    return NextResponse.json({
+    const responsePayload = {
       week: {
         start_date: getDateOnly(weekStart),
         end_date: getDateOnly(anchorDate),
@@ -210,6 +216,30 @@ export async function GET(request: NextRequest) {
       pending_decisions: pendingDecisions,
       health_scores: healthScores,
       next_week_suggestions: buildNextWeekSuggestions(shipped, stalled, pendingDecisions, coldCommitments),
+    };
+
+    let reviewSnapshotId: string | null = null;
+
+    if (shouldPersist) {
+      const snapshot = await upsertReviewSnapshot(supabase, {
+        userId,
+        reviewType: 'weekly',
+        anchorDate: getDateOnly(anchorDate),
+        periodStart: getDateOnly(weekStart),
+        periodEnd: getDateOnly(anchorDate),
+        title: buildReviewSnapshotTitle('weekly', getDateOnly(weekStart), getDateOnly(anchorDate)),
+        summary: buildWeeklyReviewSummary(responsePayload),
+        source: 'system',
+        payload: responsePayload as unknown as Record<string, unknown>,
+      });
+
+      reviewSnapshotId = snapshot.id;
+    }
+
+    return NextResponse.json({
+      ...responsePayload,
+      snapshot_persisted: shouldPersist,
+      review_snapshot_id: reviewSnapshotId,
     });
   } catch (error) {
     console.error('Error generating weekly review:', error);

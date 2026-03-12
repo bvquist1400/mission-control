@@ -9,6 +9,7 @@ export type RiskLevel = "green" | "yellow" | "red";
 export type TaskRecurrenceFrequency = "daily" | "weekly" | "biweekly" | "monthly";
 export type HealthTrend = "improving" | "stable" | "degrading" | "unknown";
 export type HealthLabel = "Healthy" | "Watch" | "At Risk" | "Critical";
+export type ReviewPeriod = "weekly" | "monthly";
 export type ImplPhase =
   | "Intake"
   | "Discovery"
@@ -349,6 +350,47 @@ export interface ProjectDetail extends Project {
   implementation: ImplementationSummary | null;
 }
 
+export interface ProjectStatusUpdate {
+  id: string;
+  user_id: string;
+  project_id: string;
+  implementation_id: string | null;
+  captured_for_date: string;
+  summary: string;
+  rag: RagStatus | null;
+  changes_today: string[];
+  blockers: string[];
+  next_step: string | null;
+  needs_decision: string | null;
+  related_task_ids: string[];
+  source: string;
+  model: string | null;
+  payload: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectStatusUpdateWithRelations extends ProjectStatusUpdate {
+  project: { id: string; name: string } | null;
+  implementation: ImplementationSummary | null;
+}
+
+export interface ProjectStatusUpdatePayload {
+  project_id: string;
+  captured_for_date?: string;
+  summary: string;
+  rag?: RagStatus | null;
+  changes_today?: string[];
+  blockers?: string[];
+  next_step?: string | null;
+  needs_decision?: string | null;
+  related_task_ids?: string[];
+  source?: string;
+  model?: string | null;
+  payload?: Record<string, unknown> | null;
+  sync_project_status_summary?: boolean;
+}
+
 export interface ProjectUpdatePayload {
   name?: string;
   description?: string | null;
@@ -382,6 +424,32 @@ export interface SprintDetail extends SprintWithImplementation {
   completed_tasks: number;
   completion_pct: number;
   tasks_by_status: Record<TaskStatus, TaskSummary[]>;
+}
+
+export interface ReviewSnapshot {
+  id: string;
+  user_id: string;
+  review_type: ReviewPeriod;
+  anchor_date: string;
+  period_start: string;
+  period_end: string;
+  title: string;
+  summary: string;
+  source: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ReviewSnapshotPayload {
+  review_type: ReviewPeriod;
+  anchor_date?: string;
+  period_start: string;
+  period_end: string;
+  title?: string;
+  summary?: string;
+  source?: string;
+  payload: Record<string, unknown>;
 }
 
 // Allowed fields for implementation updates via API

@@ -305,10 +305,33 @@ function createMcpServer(): McpServer {
     'Get the structured weekly review snapshot with shipped work, stalled work, pending decisions, health scores, and next-week suggestions.',
     {
       date: z.string().optional().describe('ISO date (YYYY-MM-DD). Defaults to today ET and reviews the current week-to-date.'),
+      persist: z.boolean().optional().describe('When true, also persist the weekly snapshot for later monthly review.'),
     },
-    async ({ date }) => {
+    async ({ date, persist }) => {
       const url = new URL('/api/briefing/weekly-review', 'https://mission-control-orpin-chi.vercel.app');
       if (date) url.searchParams.set('date', date);
+      if (persist) url.searchParams.set('persist', 'true');
+
+      const res = await fetch(url.toString(), {
+        headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
+      });
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  // ── GET MONTHLY REVIEW ───────────────────────────────────────────────
+  mcp.tool(
+    'get_monthly_review',
+    'Get a structured monthly review built from stored weekly reviews and project status updates.',
+    {
+      date: z.string().optional().describe('ISO date (YYYY-MM-DD). Defaults to today ET and reviews the current month-to-date.'),
+      persist: z.boolean().optional().describe('When true, also persist the monthly snapshot.'),
+    },
+    async ({ date, persist }) => {
+      const url = new URL('/api/briefing/monthly-review', 'https://mission-control-orpin-chi.vercel.app');
+      if (date) url.searchParams.set('date', date);
+      if (persist) url.searchParams.set('persist', 'true');
 
       const res = await fetch(url.toString(), {
         headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
