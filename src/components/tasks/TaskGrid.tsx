@@ -135,6 +135,7 @@ export function TaskGrid({
 }: TaskGridProps) {
   const [error, setError] = useState<string | null>(null);
   const [savingIds, setSavingIds] = useState<Record<string, number>>({});
+  const [deletingIds, setDeletingIds] = useState<Record<string, boolean>>({});
   const [estimateDrafts, setEstimateDrafts] = useState<Record<string, string>>({});
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(initialExpandedTaskId);
@@ -515,6 +516,41 @@ export function TaskGrid({
     });
   }
 
+  function clearTaskLocalState(taskId: string) {
+    setExpandedTaskId((current) => (current === taskId ? null : current));
+    setTaskDetailsById((current) => {
+      if (!(taskId in current)) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[taskId];
+      return next;
+    });
+    setLoadingDetailIds((current) => {
+      if (!(taskId in current)) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[taskId];
+      return next;
+    });
+    setEstimateDrafts((current) => {
+      if (!(taskId in current)) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[taskId];
+      return next;
+    });
+
+    const nextRequests = { ...activeDetailRequestIdsRef.current };
+    delete nextRequests[taskId];
+    activeDetailRequestIdsRef.current = nextRequests;
+  }
+
   async function updateTask(taskId: string, updates: TaskUpdatePayload): Promise<void> {
     const previousTask = tasks.find((task) => task.id === taskId);
     markSaving(taskId);
@@ -596,6 +632,43 @@ export function TaskGrid({
   function handleToggleDone(task: TaskWithImplementation) {
     const nextStatus: TaskStatus = task.status === "Done" ? "Backlog" : "Done";
     void updateTask(task.id, { status: nextStatus });
+  }
+
+  async function deleteTask(taskId: string): Promise<void> {
+    const task = tasks.find((item) => item.id === taskId);
+    if (!task || deletingIds[taskId]) {
+      return;
+    }
+
+    if (!window.confirm(`Delete task "${task.title}"? This cannot be undone.`)) {
+      return;
+    }
+
+    setDeletingIds((current) => ({ ...current, [taskId]: true }));
+    setError(null);
+
+    try {
+      const response = await fetch(`/api/tasks/${taskId}`, { method: "DELETE" });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({ error: "Delete failed" }));
+        throw new Error(typeof data.error === "string" ? data.error : "Delete failed");
+      }
+
+      clearTaskLocalState(taskId);
+      setTasks((current) => current.filter((item) => item.id !== taskId));
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Failed to delete task");
+    } finally {
+      setDeletingIds((current) => {
+        if (!current[taskId]) {
+          return current;
+        }
+
+        const next = { ...current };
+        delete next[taskId];
+        return next;
+      });
+    }
   }
 
   async function commitEstimatedMinutes(task: TaskWithImplementation): Promise<void> {
@@ -839,6 +912,8 @@ export function TaskGrid({
             <tbody>
               {sortedTasks.map((task) => {
                 const isSaving = Boolean(savingIds[task.id]);
+                const isDeleting = Boolean(deletingIds[task.id]);
+                const isBusy = isSaving || isDeleting;
                 const isExpanded = expandedTaskId === task.id;
                 const details = taskDetailsById[task.id];
                 const isLoadingDetails = Boolean(loadingDetailIds[task.id]);
@@ -848,7 +923,7 @@ export function TaskGrid({
                   <Fragment key={task.id}>
                     <tr
                       id={`task-${task.id}`}
-                      className={`border-b border-solid border-stroke [&>td]:border-r [&>td]:border-solid [&>td]:border-stroke [&>td:last-child]:border-r-0 ${isSaving ? "opacity-70" : ""} ${isExpanded ? "bg-accent/10" : "hover:bg-panel-muted/40"}`}
+                      className={`border-b border-solid border-stroke [&>td]:border-r [&>td]:border-solid [&>td]:border-stroke [&>td:last-child]:border-r-0 ${isBusy ? "opacity-70" : ""} ${isExpanded ? "bg-accent/10" : "hover:bg-panel-muted/40"}`}
                     >
                       <td className="w-10 px-2 py-2.5 align-middle text-center">
                         <button
@@ -913,7 +988,7 @@ export function TaskGrid({
                             onChange={(event) =>
                               void updateTask(task.id, { implementation_id: event.target.value || null })
                             }
-                            disabled={isSaving}
+                            disabled={isBusy}
                             className="w-full rounded border border-stroke bg-transparent px-1.5 py-1 text-xs text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             <option value="">—</option>
@@ -933,7 +1008,7 @@ export function TaskGrid({
                             onChange={(event) =>
                               void updateTask(task.id, { sprint_id: event.target.value || null })
                             }
-                            disabled={isSaving}
+                            disabled={isBusy}
                             className="w-full rounded border border-stroke bg-transparent px-1.5 py-1 text-xs text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             <option value="">—</option>
@@ -950,7 +1025,7 @@ export function TaskGrid({
                         <StatusSelector
                           value={task.status}
                           onChange={(status) => {
-                            if (isSaving) {
+                            if (isBusy) {
                               return;
                             }
                             void updateTask(task.id, { status });
@@ -986,7 +1061,7 @@ export function TaskGrid({
                               event.currentTarget.blur();
                             }
                           }}
-                          disabled={isSaving}
+                          disabled={isBusy}
                           className="w-full rounded border border-stroke bg-transparent px-1.5 py-1 text-center text-xs text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
                         />
                       </td>
@@ -999,7 +1074,7 @@ export function TaskGrid({
                             const nextDue = event.target.value;
                             void updateTask(task.id, { due_at: nextDue ? localDateInputToEndOfDayIso(nextDue) : null });
                           }}
-                          disabled={isSaving}
+                          disabled={isBusy}
                           className="w-full rounded border border-stroke bg-transparent px-1 py-1 text-xs text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
                         />
                       </td>
@@ -1031,7 +1106,7 @@ export function TaskGrid({
                           <button
                             type="button"
                             onClick={() => handleToggleDone(task)}
-                            disabled={isSaving}
+                            disabled={isBusy}
                             className="rounded border border-stroke bg-panel px-2.5 py-1 text-xs font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             {task.status === "Done" ? "Reopen" : "Done"}
@@ -1039,7 +1114,7 @@ export function TaskGrid({
                           <button
                             type="button"
                             onClick={() => void updateTask(task.id, { blocker: !task.blocker })}
-                            disabled={isSaving}
+                            disabled={isBusy}
                             className={`rounded border px-2 py-1 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
                               task.blocker
                                 ? "border-red-500/40 bg-red-500/15 text-red-400"
@@ -1062,10 +1137,22 @@ export function TaskGrid({
                             </div>
                           ) : details ? (
                             <div className="space-y-4">
+                              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-stroke bg-panel-muted px-3 py-2">
+                                <p className="text-xs text-muted-foreground">Manage task details, checklist, dependencies, and comments.</p>
+                                <button
+                                  type="button"
+                                  onClick={() => void deleteTask(task.id)}
+                                  disabled={isBusy}
+                                  className="rounded border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  {isDeleting ? "Deleting..." : "Delete Task"}
+                                </button>
+                              </div>
+
                               <TaskMetaEditor
                                 key={`${task.id}:${task.updated_at}`}
                                 task={task}
-                                isSaving={isSaving}
+                                isSaving={isBusy}
                                 onUpdate={updateTask}
                               />
 

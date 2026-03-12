@@ -39,6 +39,10 @@ export default function PlannerPage() {
     setModalTask((prev) => (prev?.id === taskId ? { ...prev, ...updates } : prev));
   }
 
+  function handleTaskDeleted(taskId: string) {
+    setModalTask((prev) => (prev?.id === taskId ? null : prev));
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -52,6 +56,7 @@ export default function PlannerPage() {
         commitments={commitments}
         onClose={() => setModalTask(null)}
         onTaskUpdated={handleTaskUpdated}
+        onTaskDeleted={handleTaskDeleted}
       />
     </div>
   );

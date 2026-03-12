@@ -842,6 +842,23 @@ export default function TodayPage() {
     });
   }, [timeZone]);
 
+  const handleTaskDeleted = useCallback((taskId: string) => {
+    setModalTaskId((current) => (current === taskId ? null : current));
+    setData((prev) => {
+      if (!prev) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        topThree: prev.topThree.filter((task) => task.id !== taskId),
+        dueSoon: prev.dueSoon.filter((task) => task.id !== taskId),
+        topThreeRaw: prev.topThreeRaw.filter((task) => task.id !== taskId),
+        dueSoonRaw: prev.dueSoonRaw.filter((task) => task.id !== taskId),
+      };
+    });
+  }, []);
+
   async function handleTogglePinned(taskId: string, nextPinned: boolean) {
     if (!data || pinningIds.has(taskId)) return;
 
@@ -1275,6 +1292,7 @@ export default function TodayPage() {
         commitments={commitments}
         onClose={() => setModalTaskId(null)}
         onTaskUpdated={handleTaskUpdated}
+        onTaskDeleted={handleTaskDeleted}
       />
     </div>
   );
