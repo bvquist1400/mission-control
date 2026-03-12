@@ -325,6 +325,7 @@ function createMcpServer(): McpServer {
     {
       status: z.enum(['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done']).optional().describe('Filter by status'),
       needs_review: z.boolean().optional().describe('Only tasks flagged for review'),
+      tag: z.string().optional().describe('Filter to tasks containing this lowercase tag'),
       implementation_id: z.string().optional().describe('Filter by application UUID'),
       project_id: z.string().optional().describe('Filter by project UUID'),
       due_soon: z.boolean().optional().describe('Due within 48 hours, excluding Done and Parked'),
@@ -337,6 +338,7 @@ function createMcpServer(): McpServer {
       const url = new URL('/api/tasks', 'https://mission-control-orpin-chi.vercel.app');
       if (args.status) url.searchParams.set('status', args.status);
       if (args.needs_review) url.searchParams.set('needs_review', 'true');
+      if (args.tag) url.searchParams.set('tag', args.tag);
       if (args.implementation_id) url.searchParams.set('implementation_id', args.implementation_id);
       if (args.project_id) url.searchParams.set('project_id', args.project_id);
       if (args.due_soon) url.searchParams.set('due_soon', 'true');
@@ -413,6 +415,7 @@ function createMcpServer(): McpServer {
       waiting_on: z.string().optional().describe('Who/what is this waiting on'),
       implementation_id: z.string().optional().describe('Application UUID to link to'),
       project_id: z.string().optional().describe('Project UUID to link to'),
+      tags: z.array(z.string()).optional().describe('Freeform lowercase tags'),
       stakeholder_mentions: z.array(z.string()).optional().describe('Stakeholder names'),
       source_type: z.string().optional().describe('Source label, e.g. Manual or Recurring'),
       source_url: z.string().optional().describe('Source URL for traceability'),
@@ -456,6 +459,7 @@ function createMcpServer(): McpServer {
       implementation_id: z.string().nullable().optional(),
       project_id: z.string().nullable().optional().describe('Project UUID or null to unlink'),
       sprint_id: z.string().nullable().optional().describe('Sprint UUID or null to unlink'),
+      tags: z.array(z.string()).optional(),
       pinned_excerpt: z.string().nullable().optional(),
       pinned: z.boolean().optional(),
     },

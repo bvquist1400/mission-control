@@ -126,6 +126,7 @@ function taskToCardData(
   return {
     id: task.id,
     title: task.title,
+    tags: task.tags ?? [],
     estimatedMinutes: task.estimated_minutes,
     dueAt: task.due_at,
     dueState,
@@ -820,6 +821,7 @@ export default function TodayPage() {
         return {
           ...task,
           ...(typeof updates.title === "string" ? { title: updates.title } : {}),
+          ...(Array.isArray(updates.tags) ? { tags: updates.tags } : {}),
           ...(typeof updates.estimated_minutes === "number" ? { estimatedMinutes: updates.estimated_minutes } : {}),
           ...(typeof updates.status === "string" ? { status: updates.status } : {}),
           ...(typeof updates.blocker === "boolean" ? { blocker: updates.blocker } : {}),

@@ -60,6 +60,10 @@ export function TaskDetailModal({
     await updateTask(updates);
   }
 
+  function handleTaskReplace(updatedTask: TaskWithImplementation) {
+    onTaskUpdated(updatedTask.id, updatedTask as unknown as TaskUpdatePayload);
+  }
+
   async function handleDelete() {
     if (!task || isDeleting) {
       return;
@@ -149,6 +153,7 @@ export function TaskDetailModal({
             task={task}
             isSaving={isSaving || isDeleting}
             onUpdate={handleUpdate}
+            onReplaceTask={handleTaskReplace}
           />
 
           {/* Detail sections */}

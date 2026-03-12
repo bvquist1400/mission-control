@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { normalizeTaskTag, normalizeTaskTags } from '@/lib/task-tags';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import { fetchTaskDependencySummaries } from '@/lib/task-dependencies';
 import type { TaskStatus, TaskType, EstimateSource } from '@/types/database';
@@ -57,6 +58,7 @@ export async function GET(request: NextRequest) {
     const status = searchParams.get('status');
     const implementationId = searchParams.get('implementation_id');
     const sprintId = searchParams.get('sprint_id');
+    const tag = normalizeTaskTag(searchParams.get('tag') ?? '');
     const dueSoon = searchParams.get('due_soon');
     const includeDone = searchParams.get('include_done') === 'true';
     const includeParked = searchParams.get('include_parked') === 'true';
@@ -185,6 +187,10 @@ export async function GET(request: NextRequest) {
 
     if (sprintId) {
       query = query.eq('sprint_id', sprintId);
+    }
+
+    if (tag) {
+      query = query.contains('tags', [tag]);
     }
 
     const projectId = searchParams.get('project_id');
@@ -386,6 +392,7 @@ export async function POST(request: NextRequest) {
         blocker: typeof body.blocker === 'boolean' ? body.blocker : false,
         waiting_on: asStringOrNull(body.waiting_on),
         stakeholder_mentions: toStringArray(body.stakeholder_mentions),
+        tags: normalizeTaskTags(body.tags),
         source_type: asStringOrNull(body.source_type) || 'Manual',
         source_url: asStringOrNull(body.source_url),
         pinned_excerpt: asStringOrNull(body.pinned_excerpt),

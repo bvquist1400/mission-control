@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { normalizeTaskTags } from '@/lib/task-tags';
 import { recalculateTaskPriority } from '@/lib/priority';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import type { TaskStatus, TaskType } from '@/types/database';
@@ -91,6 +92,7 @@ export async function PATCH(
       'blocker',
       'waiting_on',
       'follow_up_at',
+      'tags',
       'pinned_excerpt',
       'pinned',
     ];
@@ -112,6 +114,8 @@ export async function PATCH(
         updates[field] = asStringOrNull(value);
       } else if (field === 'description') {
         updates[field] = asStringOrNull(value);
+      } else if (field === 'tags') {
+        updates[field] = normalizeTaskTags(value);
       } else if (field === 'title' && typeof value === 'string') {
         updates[field] = value.trim();
       } else {

@@ -82,6 +82,7 @@ export interface Task {
   waiting_on: string | null;
   follow_up_at: string | null;
   stakeholder_mentions: string[];
+  tags: string[];
   source_type: string;
   source_url: string | null;
   inbox_item_id: string | null;
@@ -284,6 +285,7 @@ export interface TaskUpdatePayload {
   blocker?: boolean;
   waiting_on?: string | null;
   follow_up_at?: string | null;
+  tags?: string[];
   pinned_excerpt?: string | null;
   pinned?: boolean;
 }

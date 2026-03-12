@@ -15,6 +15,7 @@ import { ChecklistSection } from "@/components/tasks/ChecklistSection";
 import { TaskComments } from "@/components/tasks/TaskComments";
 import { TaskDependencies } from "@/components/tasks/TaskDependencies";
 import { TaskMetaEditor } from "@/components/tasks/TaskMetaEditor";
+import { TaskTagChips } from "@/components/tasks/TaskTagChips";
 import {
   localDateInputToEndOfDayIso,
   timestampToLocalDateInputValue,
@@ -551,6 +552,21 @@ export function TaskGrid({
     activeDetailRequestIdsRef.current = nextRequests;
   }
 
+  function replaceTaskSnapshot(updatedTask: TaskWithImplementation) {
+    setTasks((current) =>
+      current.map((task) =>
+        task.id === updatedTask.id
+          ? {
+              ...task,
+              ...updatedTask,
+              dependencies: task.dependencies || [],
+              dependency_blocked: task.dependency_blocked ?? false,
+            }
+          : task
+      )
+    );
+  }
+
   async function updateTask(taskId: string, updates: TaskUpdatePayload): Promise<void> {
     const previousTask = tasks.find((task) => task.id === taskId);
     markSaving(taskId);
@@ -608,17 +624,7 @@ export function TaskGrid({
       }
 
       const updatedTask = (await response.json()) as TaskWithImplementation;
-      setTasks((current) =>
-        current.map((task) =>
-          task.id === taskId
-            ? {
-                ...updatedTask,
-                dependencies: task.dependencies || [],
-                dependency_blocked: task.dependency_blocked ?? false,
-              }
-            : task
-        )
-      );
+      replaceTaskSnapshot(updatedTask);
     } catch (updateError) {
       if (previousTask) {
         setTasks((current) => current.map((task) => (task.id === taskId ? previousTask : task)));
@@ -955,6 +961,9 @@ export function TaskGrid({
                         {task.description ? (
                           <p className="mt-1 break-all whitespace-normal text-xs text-muted-foreground">{task.description}</p>
                         ) : null}
+                        {(task.tags?.length ?? 0) > 0 ? (
+                          <TaskTagChips tags={task.tags ?? []} className="mt-2" />
+                        ) : null}
                         {dependencyWaitingLabel ? (
                           <p className="mt-1 flex items-start gap-1.5 break-words text-xs text-muted-foreground">
                             <svg
@@ -1154,6 +1163,7 @@ export function TaskGrid({
                                 task={task}
                                 isSaving={isBusy}
                                 onUpdate={updateTask}
+                                onReplaceTask={replaceTaskSnapshot}
                               />
 
                               <div className="grid gap-6 xl:grid-cols-3">

@@ -63,6 +63,7 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
   const [targetDateDraft, setTargetDateDraft] = useState("");
   const [spmIdDraft, setSpmIdDraft] = useState("");
   const [descriptionDraft, setDescriptionDraft] = useState("");
@@ -129,6 +130,30 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
       setError(err instanceof Error ? err.message : "Failed to update");
     } finally {
       setSaving(false);
+    }
+  }
+
+  function loadDrafts(nextProject: ProjectDetailType) {
+    setNameDraft(nextProject.name);
+    setTargetDateDraft(dateOnlyToInputValue(nextProject.target_date));
+    setSpmIdDraft(nextProject.servicenow_spm_id ?? "");
+    setDescriptionDraft(nextProject.description ?? "");
+    setStatusSummaryDraft(nextProject.status_summary ?? "");
+  }
+
+  function commitNameEdit() {
+    if (!project) {
+      return;
+    }
+
+    const normalizedName = nameDraft.trim();
+    if (!normalizedName) {
+      setNameDraft(project.name);
+      return;
+    }
+
+    if (normalizedName !== project.name) {
+      void updateField({ name: normalizedName });
     }
   }
 
@@ -206,7 +231,30 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
 
       {/* ── Header Section ── */}
       <section className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
-        <h2 className="text-lg font-semibold text-foreground">{project.name}</h2>
+        {isEditing ? (
+          <input
+            value={nameDraft}
+            onChange={(event) => setNameDraft(event.target.value)}
+            onBlur={commitNameEdit}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                commitNameEdit();
+                event.currentTarget.blur();
+              }
+
+              if (event.key === "Escape") {
+                setNameDraft(project.name);
+                event.currentTarget.blur();
+              }
+            }}
+            disabled={saving}
+            placeholder="Project name"
+            className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-lg font-semibold text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
+          />
+        ) : (
+          <h2 className="text-lg font-semibold text-foreground">{project.name}</h2>
+        )}
 
         <div className="mt-4 flex flex-wrap items-start justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -232,10 +280,7 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
               setIsEditing((current) => {
                 const next = !current;
                 if (next && project) {
-                  setTargetDateDraft(dateOnlyToInputValue(project.target_date));
-                  setSpmIdDraft(project.servicenow_spm_id ?? "");
-                  setDescriptionDraft(project.description ?? "");
-                  setStatusSummaryDraft(project.status_summary ?? "");
+                  loadDrafts(project);
                 }
                 return next;
               });
