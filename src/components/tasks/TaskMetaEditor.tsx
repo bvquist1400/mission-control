@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { TaskTagChips } from "@/components/tasks/TaskTagChips";
 import {
   dateOnlyToInputValue,
@@ -17,7 +17,13 @@ import type {
   TaskType,
   TaskUpdatePayload,
   TaskWithImplementation,
+  ImplementationSummary,
 } from "@/types/database";
+
+interface ProjectOption {
+  id: string;
+  name: string;
+}
 
 export const TASK_TYPE_OPTIONS: Array<{ value: TaskType; label: string }> = [
   { value: "Task", label: "Task" },
@@ -97,6 +103,8 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
   const [descriptionDraft, setDescriptionDraft] = useState(task.description ?? "");
   const [taskTypeDraft, setTaskTypeDraft] = useState<TaskType>(task.task_type);
   const [waitingOnDraft, setWaitingOnDraft] = useState(task.waiting_on ?? "");
+  const [implementationIdDraft, setImplementationIdDraft] = useState(task.implementation_id ?? "");
+  const [projectIdDraft, setProjectIdDraft] = useState(task.project_id ?? "");
   const [sprintIdDraft, setSprintIdDraft] = useState(task.sprint_id ?? "");
   const [dueDateDraft, setDueDateDraft] = useState(timestampToLocalDateInputValue(task.due_at));
   const [tagsDraft, setTagsDraft] = useState(currentTags);
@@ -114,12 +122,72 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
   );
   const [recurrenceError, setRecurrenceError] = useState<string | null>(null);
   const [isUpdatingRecurrence, setIsUpdatingRecurrence] = useState(false);
+  const [implementations, setImplementations] = useState<ImplementationSummary[]>([]);
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
+  const [loadingAssignments, setLoadingAssignments] = useState(true);
+
+  useEffect(() => {
+    setTitleDraft(task.title);
+    setDescriptionDraft(task.description ?? "");
+    setTaskTypeDraft(task.task_type);
+    setWaitingOnDraft(task.waiting_on ?? "");
+    setImplementationIdDraft(task.implementation_id ?? "");
+    setProjectIdDraft(task.project_id ?? "");
+    setSprintIdDraft(task.sprint_id ?? "");
+  }, [task]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadAssignmentOptions() {
+      setLoadingAssignments(true);
+
+      try {
+        const [implementationsResponse, projectsResponse] = await Promise.all([
+          fetch("/api/applications", { cache: "no-store" }),
+          fetch("/api/projects", { cache: "no-store" }),
+        ]);
+
+        if (!isMounted) {
+          return;
+        }
+
+        if (!implementationsResponse.ok || !projectsResponse.ok) {
+          return;
+        }
+
+        const [implementationsPayload, projectsPayload] = await Promise.all([
+          implementationsResponse.json() as Promise<ImplementationSummary[]>,
+          projectsResponse.json() as Promise<ProjectOption[]>,
+        ]);
+
+        if (!isMounted) {
+          return;
+        }
+
+        setImplementations(implementationsPayload);
+        setProjects(projectsPayload);
+      } finally {
+        if (isMounted) {
+          setLoadingAssignments(false);
+        }
+      }
+    }
+
+    void loadAssignmentOptions();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const normalizedTitle = titleDraft.trim();
   const normalizedDescription = descriptionDraft.trim();
   const normalizedWaitingOn = waitingOnDraft.trim();
   const nextWaitingOn = normalizedWaitingOn.length > 0 ? normalizedWaitingOn : null;
   const nextDescription = normalizedDescription.length > 0 ? normalizedDescription : null;
+  const nextImplementationId = implementationIdDraft || null;
+  const nextProjectId = projectIdDraft || null;
   const nextSprintId = sprintIdDraft || null;
   const currentDueDate = timestampToLocalDateInputValue(task.due_at);
   const dueDateResolution = resolveDueDateInput(dueDateDraft);
@@ -145,6 +213,8 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
     || taskTypeDraft !== task.task_type
     || nextWaitingOn !== task.waiting_on
     || nextDescription !== task.description
+    || nextImplementationId !== task.implementation_id
+    || nextProjectId !== task.project_id
     || nextSprintId !== task.sprint_id
     || hasTagChanges
     || hasDueDateChange;
@@ -194,6 +264,12 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
     }
     if (nextDescription !== task.description) {
       updates.description = nextDescription;
+    }
+    if (nextImplementationId !== task.implementation_id) {
+      updates.implementation_id = nextImplementationId;
+    }
+    if (nextProjectId !== task.project_id) {
+      updates.project_id = nextProjectId;
     }
     if (nextSprintId !== task.sprint_id) {
       updates.sprint_id = nextSprintId;
@@ -290,7 +366,7 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
         </button>
       </div>
 
-      <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+      <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-7">
         <label className="space-y-1">
           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Title</span>
           <input
@@ -373,6 +449,40 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
             placeholder={task.status === "Blocked/Waiting" ? "Who or what is this waiting on?" : "Optional context"}
             className="w-full rounded border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
           />
+        </label>
+
+        <label className="space-y-1">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Application</span>
+          <select
+            value={implementationIdDraft}
+            onChange={(event) => setImplementationIdDraft(event.target.value)}
+            disabled={isMutating || loadingAssignments}
+            className="w-full rounded border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <option value="">{loadingAssignments ? "Loading..." : "Unassigned"}</option>
+            {implementations.map((implementation) => (
+              <option key={implementation.id} value={implementation.id}>
+                {implementation.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="space-y-1">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Project</span>
+          <select
+            value={projectIdDraft}
+            onChange={(event) => setProjectIdDraft(event.target.value)}
+            disabled={isMutating || loadingAssignments}
+            className="w-full rounded border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <option value="">{loadingAssignments ? "Loading..." : "Unassigned"}</option>
+            {projects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name}
+              </option>
+            ))}
+          </select>
         </label>
 
         <label className="space-y-1">
