@@ -149,7 +149,6 @@ export function TaskDetailModal({
 
           {/* Meta editor */}
           <TaskMetaEditor
-            key={`${task.id}:${task.updated_at}`}
             task={task}
             isSaving={isSaving || isDeleting}
             onUpdate={handleUpdate}

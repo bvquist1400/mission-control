@@ -127,6 +127,10 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
   const [loadingAssignments, setLoadingAssignments] = useState(true);
 
   useEffect(() => {
+    const nextDueDateDraft = timestampToLocalDateInputValue(task.due_at);
+    const nextRecurrence = isGeneratedRecurringInstance(task) ? null : task.recurrence;
+    const nextDefaultRecurrenceDate = getDefaultRecurrenceNextDue(task);
+
     setTitleDraft(task.title);
     setDescriptionDraft(task.description ?? "");
     setTaskTypeDraft(task.task_type);
@@ -134,7 +138,16 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
     setImplementationIdDraft(task.implementation_id ?? "");
     setProjectIdDraft(task.project_id ?? "");
     setSprintIdDraft(task.sprint_id ?? "");
-  }, [task]);
+    setDueDateDraft(nextDueDateDraft);
+    setTagsDraft(task.tags ?? []);
+    setTagInput("");
+    setRecurrenceEnabledDraft(Boolean(nextRecurrence));
+    setRecurrenceFrequencyDraft(nextRecurrence?.frequency ?? "weekly");
+    setRecurrenceNextDueDraft(nextDefaultRecurrenceDate);
+    setRecurrenceDayOfWeekDraft(String(nextRecurrence?.day_of_week ?? getDayOfWeekFromDate(nextDefaultRecurrenceDate)));
+    setRecurrenceDayOfMonthDraft(String(nextRecurrence?.day_of_month ?? getDayOfMonthFromDate(nextDefaultRecurrenceDate)));
+    setRecurrenceError(null);
+  }, [task.id, task.updated_at]);
 
   useEffect(() => {
     let isMounted = true;
