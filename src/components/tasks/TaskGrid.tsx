@@ -959,13 +959,13 @@ export function TaskGrid({
                           </p>
                         ) : null}
                         {task.description ? (
-                          <p className="mt-1 break-all whitespace-normal text-xs text-muted-foreground">{task.description}</p>
+                          <p className="mt-1 line-clamp-3 break-words whitespace-pre-wrap text-xs text-muted-foreground">{task.description}</p>
                         ) : null}
                         {(task.tags?.length ?? 0) > 0 ? (
                           <TaskTagChips tags={task.tags ?? []} className="mt-2" />
                         ) : null}
                         {dependencyWaitingLabel ? (
-                          <p className="mt-1 flex items-start gap-1.5 break-words text-xs text-muted-foreground">
+                          <p className="mt-1 flex items-start gap-1.5 break-words text-xs text-amber-300">
                             <svg
                               className="mt-0.5 h-3 w-3 shrink-0"
                               viewBox="0 0 20 20"
