@@ -46,6 +46,7 @@ export function TaskDetailModal({
     deleteComment,
     toggleChecklistItem,
     addChecklistItem,
+    updateChecklistItem,
     deleteChecklistItem,
     addDependency,
     removeDependency,
@@ -166,6 +167,7 @@ export function TaskDetailModal({
                 checklist={checklist}
                 onToggle={(item) => void toggleChecklistItem(item)}
                 onAdd={(text) => void addChecklistItem(text)}
+                onUpdate={(itemId, text) => void updateChecklistItem(itemId, text)}
                 onDelete={(itemId) => void deleteChecklistItem(itemId)}
               />
               <TaskDependencies

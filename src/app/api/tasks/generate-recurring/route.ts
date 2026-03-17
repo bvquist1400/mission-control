@@ -27,6 +27,16 @@ interface RecurringTaskRow {
   recurrence: unknown;
 }
 
+interface TemplateChecklistItemRow {
+  task_id: string;
+  text: string;
+  sort_order: number;
+}
+
+interface CreatedTaskRow {
+  id: string;
+}
+
 function getTodayDateOnly(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -76,6 +86,7 @@ async function runGeneration(request: NextRequest): Promise<NextResponse> {
 
     const rows = (data || []) as RecurringTaskRow[];
     const templates: Array<RecurringTaskRow & { normalizedRecurrence: TaskRecurrence }> = [];
+    const checklistItemsByTemplateId = new Map<string, TemplateChecklistItemRow[]>();
     const existingInstanceKeys = new Set<string>();
     let skippedInvalid = 0;
 
@@ -99,6 +110,28 @@ async function runGeneration(request: NextRequest): Promise<NextResponse> {
       templates.push({ ...row, normalizedRecurrence: recurrence });
     }
 
+    if (templates.length > 0) {
+      const { data: checklistData, error: checklistError } = await supabase
+        .from('task_checklist_items')
+        .select('task_id, text, sort_order')
+        .in('task_id', templates.map((template) => template.id))
+        .order('sort_order', { ascending: true });
+
+      if (checklistError) {
+        throw checklistError;
+      }
+
+      for (const checklistItem of (checklistData || []) as TemplateChecklistItemRow[]) {
+        const existingItems = checklistItemsByTemplateId.get(checklistItem.task_id);
+        if (existingItems) {
+          existingItems.push(checklistItem);
+          continue;
+        }
+
+        checklistItemsByTemplateId.set(checklistItem.task_id, [checklistItem]);
+      }
+    }
+
     let createdTasks = 0;
     let advancedTemplates = 0;
     let skippedExisting = 0;
@@ -115,7 +148,7 @@ async function runGeneration(request: NextRequest): Promise<NextResponse> {
         if (existingInstanceKeys.has(instanceKey)) {
           skippedExisting += 1;
         } else {
-          const { error: insertError } = await supabase
+          const { data: createdTask, error: insertError } = await supabase
             .from('tasks')
             .insert({
               user_id: template.user_id,
@@ -140,11 +173,45 @@ async function runGeneration(request: NextRequest): Promise<NextResponse> {
               pinned_excerpt: template.pinned_excerpt,
               pinned: false,
               recurrence: buildGeneratedTaskRecurrenceMarker(recurrence, recurrence.next_due),
-            });
+            })
+            .select('id')
+            .single();
 
           if (insertError) {
             errors.push(`Failed to generate ${template.id} for ${recurrence.next_due}: ${insertError.message}`);
             break;
+          }
+
+          const templateChecklistItems = checklistItemsByTemplateId.get(template.id) || [];
+          if (templateChecklistItems.length > 0) {
+            const { error: checklistInsertError } = await supabase.from('task_checklist_items').insert(
+              templateChecklistItems.map((checklistItem) => ({
+                user_id: template.user_id,
+                task_id: (createdTask as CreatedTaskRow).id,
+                text: checklistItem.text,
+                is_done: false,
+                sort_order: checklistItem.sort_order,
+              }))
+            );
+
+            if (checklistInsertError) {
+              const { error: rollbackError } = await supabase
+                .from('tasks')
+                .delete()
+                .eq('id', (createdTask as CreatedTaskRow).id)
+                .eq('user_id', template.user_id);
+
+              if (rollbackError) {
+                errors.push(
+                  `Failed to rollback ${template.id} for ${recurrence.next_due} after checklist copy error: ${rollbackError.message}`
+                );
+              }
+
+              errors.push(
+                `Failed to clone checklist for ${template.id} on ${recurrence.next_due}: ${checklistInsertError.message}`
+              );
+              break;
+            }
           }
 
           existingInstanceKeys.add(instanceKey);

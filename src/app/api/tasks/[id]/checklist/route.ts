@@ -129,7 +129,9 @@ export async function PATCH(
 
       const updates: Record<string, unknown> = {};
       if ('is_done' in item && typeof item.is_done === 'boolean') updates.is_done = item.is_done;
-      if ('text' in item && typeof item.text === 'string') updates.text = item.text.trim();
+      if ('text' in item && typeof item.text === 'string' && item.text.trim().length > 0) {
+        updates.text = item.text.trim();
+      }
       if ('sort_order' in item && typeof item.sort_order === 'number') updates.sort_order = item.sort_order;
 
       if (Object.keys(updates).length === 0) {

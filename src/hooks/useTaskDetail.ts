@@ -28,6 +28,7 @@ interface UseTaskDetailResult {
   deleteComment: (commentId: string) => void;
   toggleChecklistItem: (item: TaskChecklistItem) => Promise<void>;
   addChecklistItem: (text: string) => Promise<void>;
+  updateChecklistItem: (itemId: string, text: string) => Promise<void>;
   deleteChecklistItem: (itemId: string) => Promise<void>;
   addDependency: (dependency: TaskDependencySummary) => void;
   removeDependency: (dependencyId: string) => void;
@@ -184,6 +185,44 @@ export function useTaskDetail({ taskId, onTaskUpdated }: UseTaskDetailOptions): 
     [taskId]
   );
 
+  const updateChecklistItem = useCallback(
+    async (itemId: string, text: string) => {
+      if (!taskId) return;
+
+      const nextText = text.trim();
+      if (!nextText) return;
+
+      const existingItem = checklist.find((ci) => ci.id === itemId);
+      if (!existingItem) {
+        return;
+      }
+
+      const previousText = existingItem.text;
+      if (previousText === nextText) {
+        return;
+      }
+
+      setChecklist((current) => current.map((ci) => (ci.id === itemId ? { ...ci, text: nextText } : ci)));
+
+      try {
+        const response = await fetch(`/api/tasks/${taskId}/checklist`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ items: [{ id: itemId, text: nextText }] }),
+        });
+
+        if (!response.ok) {
+          throw new Error("Failed to update checklist item");
+        }
+      } catch {
+        setChecklist((current) =>
+          current.map((ci) => (ci.id === itemId ? { ...ci, text: previousText ?? ci.text } : ci))
+        );
+      }
+    },
+    [taskId, checklist]
+  );
+
   const deleteChecklistItem = useCallback(
     async (itemId: string) => {
       if (!taskId) return;
@@ -192,7 +231,10 @@ export function useTaskDetail({ taskId, onTaskUpdated }: UseTaskDetailOptions): 
       setChecklist((current) => current.filter((ci) => ci.id !== itemId));
 
       try {
-        await fetch(`/api/tasks/${taskId}/checklist?itemId=${itemId}`, { method: "DELETE" });
+        const response = await fetch(`/api/tasks/${taskId}/checklist?itemId=${itemId}`, { method: "DELETE" });
+        if (!response.ok) {
+          throw new Error("Failed to delete checklist item");
+        }
       } catch {
         // Reload on error
         fetchTaskDetails(taskId).then((data) => {
@@ -242,6 +284,7 @@ export function useTaskDetail({ taskId, onTaskUpdated }: UseTaskDetailOptions): 
     deleteComment,
     toggleChecklistItem,
     addChecklistItem,
+    updateChecklistItem,
     deleteChecklistItem,
     addDependency,
     removeDependency,

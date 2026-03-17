@@ -468,6 +468,70 @@ export function TaskGrid({
     }
   }, []);
 
+  const handleUpdateChecklistItem = useCallback(async (taskId: string, itemId: string, text: string) => {
+    const nextText = text.trim();
+    if (!nextText) {
+      return;
+    }
+
+    const details = taskDetailsById[taskId];
+    const existingItem = details?.checklist.find((checklistItem) => checklistItem.id === itemId);
+    if (!existingItem) {
+      return;
+    }
+
+    const previousText = existingItem.text;
+    if (previousText === nextText) {
+      return;
+    }
+
+    setTaskDetailsById((current) => {
+      const currentDetails = current[taskId];
+      if (!currentDetails) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [taskId]: {
+          ...currentDetails,
+          checklist: currentDetails.checklist.map((checklistItem) =>
+            checklistItem.id === itemId ? { ...checklistItem, text: nextText } : checklistItem
+          ),
+        },
+      };
+    });
+
+    try {
+      const response = await fetch(`/api/tasks/${taskId}/checklist`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: [{ id: itemId, text: nextText }] }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to update checklist item");
+      }
+    } catch {
+      setTaskDetailsById((current) => {
+        const details = current[taskId];
+        if (!details) {
+          return current;
+        }
+
+        return {
+          ...current,
+          [taskId]: {
+            ...details,
+            checklist: details.checklist.map((checklistItem) =>
+              checklistItem.id === itemId ? { ...checklistItem, text: previousText ?? checklistItem.text } : checklistItem
+            ),
+          },
+        };
+      });
+    }
+  }, [taskDetailsById]);
+
   const handleDeleteChecklistItem = useCallback(async (taskId: string, itemId: string) => {
     setTaskDetailsById((current) => {
       const details = current[taskId];
@@ -485,9 +549,13 @@ export function TaskGrid({
     });
 
     try {
-      await fetch(`/api/tasks/${taskId}/checklist?itemId=${itemId}`, {
+      const response = await fetch(`/api/tasks/${taskId}/checklist?itemId=${itemId}`, {
         method: "DELETE",
       });
+
+      if (!response.ok) {
+        throw new Error("Failed to delete checklist item");
+      }
     } catch {
       const details = await fetchTaskDetails(taskId);
       setTaskDetailsById((current) => ({ ...current, [taskId]: details }));
@@ -1171,6 +1239,7 @@ export function TaskGrid({
                                   checklist={details.checklist}
                                   onToggle={(item) => void handleChecklistToggle(task.id, item)}
                                   onAdd={(text) => void handleAddChecklistItem(task.id, text)}
+                                  onUpdate={(itemId, text) => void handleUpdateChecklistItem(task.id, itemId, text)}
                                   onDelete={(itemId) => void handleDeleteChecklistItem(task.id, itemId)}
                                 />
 
