@@ -1463,9 +1463,12 @@ async function runConfiguredMcpRequest(
     // For non-initialize requests, pre-set the transport as initialized
     // so it accepts the session ID from the client. This allows stateless
     // per-request transports to work with session-aware clients.
-    const body = await request.text();
+    const body = request.method === 'GET' || request.method === 'HEAD'
+      ? undefined
+      : await request.text();
+    const parsedBody = body ?? '';
     let parsed: unknown;
-    try { parsed = JSON.parse(body); } catch { parsed = null; }
+    try { parsed = JSON.parse(parsedBody); } catch { parsed = null; }
     const isInit = parsed && typeof parsed === 'object' && 'method' in parsed && (parsed as { method: string }).method === 'initialize';
 
     if (!isInit) {
