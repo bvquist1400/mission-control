@@ -1,7 +1,18 @@
-import { NextRequest, NextResponse } from 'next/server';
+import type { NextRequest, NextResponse } from 'next/server';
 
 const CORS_ALLOWED_METHODS = 'GET, POST, PATCH, DELETE, OPTIONS';
-const CORS_ALLOWED_HEADERS = 'Authorization, Content-Type, X-Mission-Control-Key';
+const CORS_ALLOWED_HEADERS = [
+  'Authorization',
+  'Content-Type',
+  'MCP-Protocol-Version',
+  'MCP-Session-Id',
+  'X-Mission-Control-Key',
+].join(', ');
+const CORS_EXPOSED_HEADERS = [
+  'MCP-Protocol-Version',
+  'MCP-Session-Id',
+  'WWW-Authenticate',
+].join(', ');
 
 function isAllowedClaudeOrigin(origin: string): boolean {
   try {
@@ -47,6 +58,7 @@ export function getAllowedCorsOrigin(origin: string | null): string | null {
 export function applyCorsHeaders(headers: Headers, origin: string | null): void {
   headers.set('Access-Control-Allow-Methods', CORS_ALLOWED_METHODS);
   headers.set('Access-Control-Allow-Headers', CORS_ALLOWED_HEADERS);
+  headers.set('Access-Control-Expose-Headers', CORS_EXPOSED_HEADERS);
   appendVaryHeader(headers, 'Origin');
 
   if (origin) {
