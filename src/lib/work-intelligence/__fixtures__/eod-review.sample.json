@@ -1,0 +1,274 @@
+{
+  "reviewType": "eod",
+  "requestedDate": "2026-03-24",
+  "dayOutcome": {
+    "label": "mixed_close",
+    "summary": "The day produced real output, but it did not close cleanly."
+  },
+  "completedToday": [
+    {
+      "taskId": "done-launch",
+      "title": "Ship launch checklist",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "reason": "Closed today.",
+      "updatedAt": "2026-03-24T20:15:00.000Z",
+      "dueAt": null
+    },
+    {
+      "taskId": "done-note",
+      "title": "Publish rollout note",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "reason": "Closed today.",
+      "updatedAt": "2026-03-24T18:30:00.000Z",
+      "dueAt": null
+    }
+  ],
+  "rolledForward": [
+    {
+      "taskId": "roll-cutover",
+      "title": "Finish cutover runbook",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "reason": "Still open at close of day and likely to reopen tomorrow.",
+      "updatedAt": "2026-03-24T17:30:00.000Z",
+      "dueAt": "2026-03-24T21:00:00.000Z"
+    }
+  ],
+  "openBlockers": [
+    {
+      "taskId": "block-vendor",
+      "title": "Vendor signoff follow-up",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "reason": "Still waiting on Vendor signoff.",
+      "updatedAt": "2026-03-21T16:00:00.000Z",
+      "dueAt": null
+    }
+  ],
+  "coldFollowups": [
+    {
+      "id": "block-vendor",
+      "kind": "task",
+      "title": "Vendor signoff follow-up",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "owner": "Vendor signoff",
+      "reason": "Follow-up date has already passed.",
+      "updatedAt": "2026-03-21T16:00:00.000Z",
+      "dueAt": "2026-03-24T16:00:00.000Z"
+    },
+    {
+      "id": "Casey:Get pricing answer back to Casey",
+      "kind": "commitment",
+      "title": "Get pricing answer back to Casey",
+      "context": null,
+      "owner": "Casey",
+      "reason": "7 days open with no fresh close loop.",
+      "updatedAt": null,
+      "dueAt": null
+    }
+  ],
+  "tomorrowFirstThings": [
+    {
+      "taskId": "prep-demo",
+      "title": "Prep customer demo deck",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "reason": "Tomorrow starts with customer-facing time, so the deck should be ready before the first open block.",
+      "updatedAt": "2026-03-24T15:20:00.000Z",
+      "dueAt": "2026-03-25T15:00:00.000Z"
+    },
+    {
+      "taskId": "roll-cutover",
+      "title": "Finish cutover runbook",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "reason": "Still open heading into tomorrow, so it needs a deliberate restart instead of another warm-up lap.",
+      "updatedAt": "2026-03-24T17:30:00.000Z",
+      "dueAt": "2026-03-24T21:00:00.000Z"
+    }
+  ],
+  "statusUpdateRecommendations": [
+    {
+      "key": "project:proj-1:completed_thread_reporting_hygiene",
+      "entityType": "project",
+      "entityId": "proj-1",
+      "entityName": "Quarterly Launch",
+      "reasonCode": "completed_thread_reporting_hygiene",
+      "summary": "Quarterly Launch likely needs a status refresh because completed work changed the thread.",
+      "reason": "2 completed threads changed Quarterly Launch today, so the last project status is probably stale.",
+      "latestMovementAt": "2026-03-24T20:15:00.000Z",
+      "lastStatusArtifactAt": "2026-03-23T12:00:00.000Z",
+      "relatedTaskIds": [
+        "done-launch",
+        "done-note",
+        "roll-cutover"
+      ],
+      "relatedTaskTitles": [
+        "Ship launch checklist",
+        "Publish rollout note",
+        "Finish cutover runbook"
+      ]
+    }
+  ],
+  "operatingRisks": [
+    {
+      "label": "Overdue delivery pressure",
+      "severity": "medium",
+      "summary": "1 overdue task led by Finish cutover runbook.",
+      "relatedTaskIds": [
+        "roll-cutover"
+      ]
+    },
+    {
+      "label": "Cold follow-up risk",
+      "severity": "medium",
+      "summary": "1 waiting thread already need a follow-up refresh.",
+      "relatedTaskIds": [
+        "block-vendor"
+      ]
+    },
+    {
+      "label": "Incoming commitments cooling off",
+      "severity": "low",
+      "summary": "1 inbound commitment have gone cold enough to turn into trust debt if they sit another day.",
+      "relatedTaskIds": []
+    }
+  ],
+  "narrativeHints": [
+    "The day produced real output, but it did not close cleanly.",
+    "1 item are still rolling, led by Finish cutover runbook, so tomorrow cannot open wide.",
+    "Vendor signoff follow-up is still sitting in a wait state, so send one clearing follow-up before opening more work.",
+    "Tomorrow should start with Prep customer demo deck, not another round of inbox archaeology."
+  ],
+  "confidence": "medium",
+  "freshness": {
+    "evaluatedAt": "2026-03-24T22:30:00.000Z",
+    "overall": "mixed",
+    "sources": [
+      {
+        "source": "tasks",
+        "latestAt": "2026-03-24T20:15:00.000Z",
+        "ageHours": 2.3,
+        "stale": false,
+        "missing": false,
+        "required": true,
+        "note": null
+      },
+      {
+        "source": "task_comments",
+        "latestAt": "2026-03-24T17:30:00.000Z",
+        "ageHours": 5,
+        "stale": false,
+        "missing": false,
+        "required": false,
+        "note": null
+      },
+      {
+        "source": "calendar",
+        "latestAt": null,
+        "ageHours": null,
+        "stale": false,
+        "missing": false,
+        "required": false,
+        "note": null
+      },
+      {
+        "source": "commitments",
+        "latestAt": "2026-03-18T14:00:00.000Z",
+        "ageHours": 152.5,
+        "stale": true,
+        "missing": false,
+        "required": false,
+        "note": null
+      },
+      {
+        "source": "tomorrow_calendar",
+        "latestAt": "2026-03-25T18:00:00.000Z",
+        "ageHours": 0,
+        "stale": false,
+        "missing": false,
+        "required": false,
+        "note": null
+      },
+      {
+        "source": "status_artifacts",
+        "latestAt": "2026-03-23T12:00:00.000Z",
+        "ageHours": 34.5,
+        "stale": false,
+        "missing": false,
+        "required": false,
+        "note": null
+      }
+    ]
+  },
+  "caveats": [
+    "1 active status look stale or uncertain, so the day-close read is less clean than it looks.",
+    "2 follow-up threads have already started cooling off.",
+    "1 project or implementation status artifact likely now lag today's movement."
+  ],
+  "supportingSignals": [
+    {
+      "kind": "completed_today",
+      "summary": "2 tasks closed today.",
+      "relatedTaskIds": [
+        "done-launch",
+        "done-note"
+      ]
+    },
+    {
+      "kind": "rollover",
+      "summary": "1 item still rolling into tomorrow.",
+      "relatedTaskIds": [
+        "roll-cutover"
+      ]
+    },
+    {
+      "kind": "blockers",
+      "summary": "1 blocked or waiting item remain open at close.",
+      "relatedTaskIds": [
+        "block-vendor"
+      ]
+    },
+    {
+      "kind": "tomorrow_prep",
+      "summary": "2 clear first-thing candidates for tomorrow.",
+      "relatedTaskIds": [
+        "prep-demo",
+        "roll-cutover"
+      ]
+    },
+    {
+      "kind": "status_hygiene",
+      "summary": "1 status update reminder surfaced from project or implementation movement.",
+      "relatedTaskIds": [
+        "done-launch",
+        "done-note",
+        "roll-cutover"
+      ]
+    }
+  ],
+  "generatedAt": "2026-03-24T22:30:00.000Z",
+  "rawSignals": {
+    "completedTaskIds": [
+      "done-launch",
+      "done-note"
+    ],
+    "rolledForwardTaskIds": [
+      "roll-cutover"
+    ],
+    "blockerTaskIds": [
+      "block-vendor"
+    ],
+    "followUpRiskTaskIds": [
+      "block-vendor"
+    ],
+    "coldCommitmentIds": [
+      "Casey:Get pricing answer back to Casey"
+    ],
+    "tomorrowFirstTaskIds": [
+      "prep-demo",
+      "roll-cutover"
+    ],
+    "statusUpdateRecommendationKeys": [
+      "project:proj-1:completed_thread_reporting_hygiene"
+    ],
+    "momentum": "steady",
+    "loadStatus": "manageable"
+  }
+}

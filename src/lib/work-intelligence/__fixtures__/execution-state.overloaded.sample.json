@@ -1,0 +1,154 @@
+{
+  "window": {
+    "requestedDate": "2026-03-24",
+    "since": "2026-03-24T13:00:00.000Z",
+    "dayStartIso": "2026-03-24T04:00:00.000Z",
+    "dayEndExclusiveIso": "2026-03-25T04:00:00.000Z",
+    "timezone": "America/New_York"
+  },
+  "summary": "2 things moved in the current window, 3 items look stuck, and status freshness looks serviceable. Load reads overloaded.",
+  "topRisk": {
+    "label": "Overdue delivery pressure",
+    "summary": "2 overdue tasks led by Send client contract redlines.",
+    "relatedTaskIds": [
+      "overdue-contract",
+      "overdue-cutover"
+    ]
+  },
+  "momentum": {
+    "score": 28,
+    "label": "stalled",
+    "assessment": "The operating picture is closer to churn than traction. Unblock or finish something before adding scope."
+  },
+  "whatMoved": [
+    {
+      "taskId": "done-note",
+      "title": "Publish migration status note",
+      "status": "Done",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "reason": "Marked done today.",
+      "updatedAt": "2026-03-24T13:10:00.000Z"
+    },
+    {
+      "taskId": "active-qa",
+      "title": "Close QA regression set",
+      "status": "In Progress",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "reason": "Updated during the current brief window.",
+      "updatedAt": "2026-03-24T14:10:00.000Z"
+    }
+  ],
+  "whatIsStuck": [
+    {
+      "taskId": "blocked-security",
+      "title": "Security review handoff",
+      "status": "Blocked/Waiting",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "reason": "Waiting on Security review.",
+      "updatedAt": "2026-03-24T13:30:00.000Z"
+    },
+    {
+      "taskId": "overdue-contract",
+      "title": "Send client contract redlines",
+      "status": "Planned",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "reason": "Overdue and still unresolved.",
+      "updatedAt": "2026-03-24T14:45:00.000Z"
+    },
+    {
+      "taskId": "overdue-cutover",
+      "title": "Finalize cutover checklist",
+      "status": "In Progress",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "reason": "Overdue and still unresolved.",
+      "updatedAt": "2026-03-24T15:30:00.000Z"
+    }
+  ],
+  "whatLooksStale": [],
+  "loadAssessment": {
+    "status": "overloaded",
+    "isOverloaded": true,
+    "capacityRag": "Red",
+    "availableMinutes": 190,
+    "requiredMinutes": 330,
+    "meetingHeavyAfternoon": true,
+    "assessment": "The remaining work is heavier than the day can hold without dropping something."
+  },
+  "confidence": "high",
+  "freshness": {
+    "evaluatedAt": "2026-03-24T17:30:00.000Z",
+    "overall": "fresh",
+    "sources": [
+      {
+        "source": "tasks",
+        "latestAt": "2026-03-24T15:30:00.000Z",
+        "ageHours": 2,
+        "stale": false,
+        "missing": false,
+        "required": true,
+        "note": null
+      },
+      {
+        "source": "task_comments",
+        "latestAt": "2026-03-24T14:20:00.000Z",
+        "ageHours": 3.2,
+        "stale": false,
+        "missing": false,
+        "required": false,
+        "note": null
+      },
+      {
+        "source": "calendar",
+        "latestAt": "2026-03-24T21:15:00.000Z",
+        "ageHours": 0,
+        "stale": false,
+        "missing": false,
+        "required": false,
+        "note": null
+      }
+    ]
+  },
+  "caveats": [],
+  "supportingSignals": [
+    {
+      "kind": "movement",
+      "summary": "1 done today, 2 still in progress.",
+      "relatedTaskIds": [
+        "done-note"
+      ]
+    },
+    {
+      "kind": "blockers",
+      "summary": "1 blocked or waiting item.",
+      "relatedTaskIds": [
+        "blocked-security"
+      ]
+    },
+    {
+      "kind": "load",
+      "summary": "Capacity is Red with 3 remaining meetings."
+    }
+  ],
+  "generatedAt": "2026-03-24T17:30:00.000Z",
+  "rawSignals": {
+    "counts": {
+      "overdue": 2,
+      "dueSoon": 2,
+      "blocked": 1,
+      "inProgress": 2,
+      "doneToday": 1,
+      "followUpRisks": 0,
+      "statusUncertain": 0,
+      "quietInProgress": 0,
+      "waitingOnOthers": 1
+    },
+    "remainingMeetings": 3,
+    "followUpRiskTaskIds": [],
+    "statusUncertainTaskIds": [],
+    "quietInProgressTaskIds": [],
+    "rolledOverTaskIds": [
+      "overdue-contract",
+      "overdue-cutover"
+    ]
+  }
+}

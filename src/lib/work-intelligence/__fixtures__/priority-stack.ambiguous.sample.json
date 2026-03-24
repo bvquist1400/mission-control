@@ -1,0 +1,164 @@
+{
+  "window": {
+    "requestedDate": "2026-03-24",
+    "since": "2026-03-24T13:00:00.000Z",
+    "dayStartIso": "2026-03-24T04:00:00.000Z",
+    "dayEndExclusiveIso": "2026-03-25T04:00:00.000Z",
+    "timezone": "America/New_York"
+  },
+  "topItems": [
+    {
+      "taskId": "ambiguous-protect",
+      "title": "Finalize launch notes",
+      "rank": 1,
+      "recommendedAction": "protect",
+      "whyNow": [
+        "Due within 48 hours."
+      ],
+      "riskIfIgnored": "Delivery drift gets harder to recover the longer this sits.",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "statusFreshness": {
+        "updatedAt": "2026-03-24T15:00:00.000Z",
+        "stale": false
+      }
+    },
+    {
+      "taskId": "ambiguous-finish",
+      "title": "Close migration checklist",
+      "rank": 2,
+      "recommendedAction": "finish",
+      "whyNow": [
+        "Already in motion."
+      ],
+      "riskIfIgnored": "Restart cost and context loss go up if this slips again.",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "statusFreshness": {
+        "updatedAt": "2026-03-24T15:15:00.000Z",
+        "stale": false
+      }
+    },
+    {
+      "taskId": "ambiguous-third",
+      "title": "Draft stakeholder FAQ",
+      "rank": 3,
+      "recommendedAction": "advance",
+      "whyNow": [
+        "High-leverage work in the current stack."
+      ],
+      "riskIfIgnored": "Restart cost and context loss go up if this slips again.",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "statusFreshness": {
+        "updatedAt": "2026-03-24T12:00:00.000Z",
+        "stale": false
+      }
+    }
+  ],
+  "deferForNow": [],
+  "primaryTradeoff": "No single dominant priority. Finalize launch notes and Close migration checklist are effectively tied, so pick the cleaner next move and avoid splitting attention.",
+  "confidence": "high",
+  "freshness": {
+    "evaluatedAt": "2026-03-24T17:30:00.000Z",
+    "overall": "fresh",
+    "sources": [
+      {
+        "source": "tasks",
+        "latestAt": "2026-03-24T15:15:00.000Z",
+        "ageHours": 2.3,
+        "stale": false,
+        "missing": false,
+        "required": true,
+        "note": null
+      },
+      {
+        "source": "task_comments",
+        "latestAt": null,
+        "ageHours": null,
+        "stale": false,
+        "missing": false,
+        "required": false,
+        "note": null
+      },
+      {
+        "source": "calendar",
+        "latestAt": null,
+        "ageHours": null,
+        "stale": false,
+        "missing": false,
+        "required": false,
+        "note": null
+      }
+    ]
+  },
+  "caveats": [],
+  "supportingSignals": [
+    {
+      "kind": "due_soon",
+      "summary": "1 task due within 48 hours.",
+      "relatedTaskIds": [
+        "ambiguous-protect"
+      ]
+    },
+    {
+      "kind": "in_progress",
+      "summary": "1 active thread already in motion.",
+      "relatedTaskIds": [
+        "ambiguous-finish"
+      ]
+    },
+    {
+      "kind": "capacity",
+      "summary": "Capacity is Green at 165/370 minutes."
+    }
+  ],
+  "generatedAt": "2026-03-24T17:30:00.000Z",
+  "rawSignals": {
+    "noSingleDominantPriority": true,
+    "topScoreGap": 2,
+    "topItems": [
+      {
+        "taskId": "ambiguous-protect",
+        "score": 98,
+        "scoreBreakdown": [
+          {
+            "label": "base priority",
+            "delta": 80,
+            "reason": "Baseline task priority score."
+          },
+          {
+            "label": "due within 48h",
+            "delta": 18,
+            "reason": "Due within 48 hours."
+          }
+        ]
+      },
+      {
+        "taskId": "ambiguous-finish",
+        "score": 96,
+        "scoreBreakdown": [
+          {
+            "label": "base priority",
+            "delta": 78,
+            "reason": "Baseline task priority score."
+          },
+          {
+            "label": "active momentum",
+            "delta": 18,
+            "reason": "Already in motion."
+          }
+        ]
+      },
+      {
+        "taskId": "ambiguous-third",
+        "score": 62,
+        "scoreBreakdown": [
+          {
+            "label": "base priority",
+            "delta": 62,
+            "reason": "Baseline task priority score."
+          }
+        ]
+      }
+    ],
+    "deferForNowTaskIds": []
+  }
+}

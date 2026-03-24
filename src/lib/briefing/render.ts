@@ -10,6 +10,7 @@ import type {
   DailyBriefDigestCommitmentGroup,
   DailyBriefDigestMeetingItem,
   DailyBriefDigestResponse,
+  DailyBriefStatusUpdateRecommendation,
   DailyBriefDigestTaskItem,
 } from "@/lib/briefing/digest";
 
@@ -208,12 +209,18 @@ function buildRenderPromptContext(digest: DailyBriefDigestResponse): Record<stri
       completed_today: digest.tasks.completed_today.slice(0, 2).map(formatPromptTask),
       stale_followups: digest.tasks.stale_followups.slice(0, 2).map(formatPromptTask),
       rolled_to_tomorrow: digest.tasks.rolled_to_tomorrow.slice(0, 3).map(formatPromptTask),
+      tomorrow_prep: digest.tasks.tomorrow_prep.slice(0, 3).map(formatPromptTask),
     },
     meetings: digest.meetings.slice(0, 3).map(formatPromptMeeting),
     commitments: {
       theirs: digest.commitments.theirs.slice(0, 3).map(formatPromptCommitment),
       ours: digest.commitments.ours.slice(0, 1).map(formatPromptCommitment),
     },
+    status_update_recommendations: digest.status_update_recommendations.slice(0, 3).map((item) => ({
+      entity: `${item.entity_type}:${item.entity_name}`,
+      reason: truncatePromptValue(item.reason, 160),
+      related_tasks: item.related_tasks.map((task) => `${task.title} [${task.id}]`),
+    })),
     suggested_sync_today: digest.suggested_sync_today.slice(0, 3),
   };
 }
@@ -285,9 +292,13 @@ function buildReferencePool(digest: DailyBriefDigestResponse): string[] {
     group.stakeholder_name,
     ...group.commitments.map((item) => item.title),
   ]);
+  const statusUpdateRefs = digest.status_update_recommendations.flatMap((item) => [
+    item.entity_name,
+    ...item.related_tasks.map((task) => task.title),
+  ]);
   const riskRefs = digest.signals.top_risk ? [digest.signals.top_risk] : [];
 
-  return [...taskRefs, ...meetingRefs, ...commitmentRefs, ...riskRefs]
+  return [...taskRefs, ...meetingRefs, ...commitmentRefs, ...statusUpdateRefs, ...riskRefs]
     .map((item) => item.trim().toLowerCase())
     .filter((item) => item.length >= 4);
 }
@@ -480,6 +491,17 @@ function formatDateOnlyLabel(dateOnly: string): string {
     month: "short",
     day: "numeric",
   });
+}
+
+function formatEtDateTimeLabel(iso: string): string {
+  return `${new Date(iso).toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  })} ET`;
 }
 
 function truncatePreview(value: string, max = 140): string {
@@ -853,6 +875,43 @@ function renderStaleFollowupsCard(digest: DailyBriefDigestResponse): string {
     </table>`;
 }
 
+function renderDigestTaskListCard(
+  title: string,
+  items: DailyBriefDigestTaskItem[],
+  emptyMessage: string
+): string {
+  if (items.length === 0) {
+    return sectionFrame(title, `<div style="color:${EMAIL_COLORS.muted};">${escapeHtml(emptyMessage)}</div>`);
+  }
+
+  const body = items.slice(0, 3).map((task, index) => {
+    return `<div style="padding-top:${index === 0 ? "0" : "12px"};"><strong>${escapeHtml(task.title)}</strong><div style="color:${EMAIL_COLORS.muted};padding-top:4px;">${escapeHtml(renderPriorityTaskContext(task))}</div></div>`;
+  }).join("");
+
+  return sectionFrame(title, body);
+}
+
+function renderStatusUpdateRecommendationsCard(items: DailyBriefStatusUpdateRecommendation[]): string {
+  if (items.length === 0) {
+    return "";
+  }
+
+  const body = items.slice(0, 3).map((item, index) => {
+    const relatedTasks =
+      item.related_tasks.length > 0
+        ? `Related threads: ${item.related_tasks.map((task) => `${task.title} [${task.id}]`).join("; ")}`
+        : null;
+    const staleText = item.last_status_artifact_at
+      ? `Last status artifact: ${formatEtDateTimeLabel(item.last_status_artifact_at)}`
+      : "No current status artifact";
+    const detail = [item.reason, staleText, relatedTasks].filter((value): value is string => Boolean(value)).join(". ");
+
+    return `<div style="padding-top:${index === 0 ? "0" : "12px"};"><strong>${escapeHtml(`${item.entity_type === "project" ? "Project" : "Implementation"}: ${item.entity_name}`)}</strong><div style="color:${EMAIL_COLORS.muted};padding-top:4px;">${escapeHtml(detail)}</div></div>`;
+  }).join("");
+
+  return sectionFrame("Status update reminders", body);
+}
+
 function renderBriefHtml(
   digest: DailyBriefDigestResponse,
   copy: DailyBriefRenderCopy,
@@ -976,6 +1035,24 @@ function renderBriefHtml(
                   </tr>
                 </table>
 
+                ${digest.mode === "eod" ? `
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                  <tr>
+                    <td style="padding:18px 32px 0 32px;">
+                      ${renderDigestTaskListCard("Tomorrow prep", digest.tasks.tomorrow_prep, "No special tomorrow-prep items surfaced.")}
+                    </td>
+                  </tr>
+                </table>` : ""}
+
+                ${digest.mode === "eod" && digest.status_update_recommendations.length > 0 ? `
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                  <tr>
+                    <td style="padding:18px 32px 0 32px;">
+                      ${renderStatusUpdateRecommendationsCard(digest.status_update_recommendations)}
+                    </td>
+                  </tr>
+                </table>` : ""}
+
                 ${digest.tasks.stale_followups.length > 0 ? `
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
                   <tr>
@@ -1045,6 +1122,23 @@ function renderTextMeetingItems(meetings: DailyBriefDigestMeetingItem[]): string
   });
 }
 
+function renderTextStatusUpdateItems(items: DailyBriefStatusUpdateRecommendation[]): string[] {
+  if (items.length === 0) {
+    return ["- No status update reminders surfaced."];
+  }
+
+  return items.map((item) => {
+    const relatedTasks =
+      item.related_tasks.length > 0
+        ? `Related threads: ${item.related_tasks.map((task) => `${task.title} [${task.id}]`).join("; ")}`
+        : null;
+    const staleText = item.last_status_artifact_at
+      ? `Last status artifact: ${formatEtDateTimeLabel(item.last_status_artifact_at)}`
+      : "No current status artifact";
+    return `- ${item.entity_type === "project" ? "Project" : "Implementation"}: ${item.entity_name}. ${[item.reason, staleText, relatedTasks].filter((value): value is string => Boolean(value)).join(". ")}`;
+  });
+}
+
 function renderTextCommitmentGroups(groups: DailyBriefDigestCommitmentGroup[], emptyMessage: string): string[] {
   if (groups.length === 0) {
     return [`- ${emptyMessage}`];
@@ -1084,6 +1178,10 @@ function renderBriefText(
   } else {
     lines.push("", "Done Today:", ...renderTextTaskItems(digest.tasks.completed_today, "Nothing is marked done today."));
     lines.push("", "Rolls to Tomorrow:", ...renderTextTaskItems(digest.tasks.rolled_to_tomorrow, "No obvious rollover items."));
+    lines.push("", "Tomorrow Prep:", ...renderTextTaskItems(digest.tasks.tomorrow_prep, "No special tomorrow-prep items surfaced."));
+    if (digest.status_update_recommendations.length > 0) {
+      lines.push("", "Status Update Reminders:", ...renderTextStatusUpdateItems(digest.status_update_recommendations));
+    }
   }
 
   lines.push("", digest.mode === "morning" ? "Meetings:" : "Remaining Meetings:", ...renderTextMeetingItems(digest.meetings));

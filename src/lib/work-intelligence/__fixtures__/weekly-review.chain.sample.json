@@ -1,0 +1,332 @@
+{
+  "reviewType": "weekly",
+  "period": {
+    "startDate": "2026-03-23",
+    "endDate": "2026-03-27",
+    "anchorDate": "2026-03-27",
+    "timezone": "America/New_York"
+  },
+  "dailyReviewCount": 3,
+  "weekPattern": {
+    "label": "traction_with_drag",
+    "summary": "There was real forward motion, but the same loose edges kept sneaking back into the close-of-day picture."
+  },
+  "whatMoved": [
+    {
+      "key": "task:done-deck",
+      "title": "Finalize customer demo deck",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "summary": "Finalize customer demo deck landed cleanly in one stored day-end close.",
+      "occurrences": 1,
+      "daysSeen": [
+        "2026-03-26"
+      ],
+      "relatedTaskIds": [
+        "done-deck"
+      ]
+    },
+    {
+      "key": "task:roll-cutover",
+      "title": "Finish cutover runbook",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "summary": "Finish cutover runbook landed cleanly in one stored day-end close.",
+      "occurrences": 1,
+      "daysSeen": [
+        "2026-03-25"
+      ],
+      "relatedTaskIds": [
+        "roll-cutover"
+      ]
+    },
+    {
+      "key": "task:done-note",
+      "title": "Publish rollout note",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "summary": "Publish rollout note landed cleanly in one stored day-end close.",
+      "occurrences": 1,
+      "daysSeen": [
+        "2026-03-24"
+      ],
+      "relatedTaskIds": [
+        "done-note"
+      ]
+    },
+    {
+      "key": "task:done-launch",
+      "title": "Ship launch checklist",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "summary": "Ship launch checklist landed cleanly in one stored day-end close.",
+      "occurrences": 1,
+      "daysSeen": [
+        "2026-03-24"
+      ],
+      "relatedTaskIds": [
+        "done-launch"
+      ]
+    }
+  ],
+  "whatKeptSlipping": [
+    {
+      "key": "task:slip-qa",
+      "title": "Close QA regression set",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "summary": "Close QA regression set rolled across 2 closes, so it kept surviving the daily cut instead of actually getting cleared.",
+      "occurrences": 2,
+      "daysSeen": [
+        "2026-03-25",
+        "2026-03-26"
+      ],
+      "relatedTaskIds": [
+        "slip-qa"
+      ]
+    },
+    {
+      "key": "task:roll-cutover",
+      "title": "Finish cutover runbook",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "summary": "Finish cutover runbook still rolled at close, which puts it on next week's watch list.",
+      "occurrences": 1,
+      "daysSeen": [
+        "2026-03-24"
+      ],
+      "relatedTaskIds": [
+        "roll-cutover"
+      ]
+    },
+    {
+      "key": "task:decision-pilot",
+      "title": "Decide pilot scope",
+      "context": "Pilot Workstream",
+      "summary": "Still looks unresolved in the weekly raw read, which usually means it kept surviving the daily cut.",
+      "occurrences": 1,
+      "daysSeen": [
+        "2026-03-26"
+      ],
+      "relatedTaskIds": [
+        "decision-pilot"
+      ]
+    }
+  ],
+  "recurringRisks": [
+    {
+      "key": "risk:cold follow-up risk",
+      "label": "Cold follow-up risk",
+      "summary": "Cold follow-up risk showed up on 3 stored closes, so it was not a one-off wobble.",
+      "occurrences": 3,
+      "daysSeen": [
+        "2026-03-24",
+        "2026-03-25",
+        "2026-03-26"
+      ],
+      "relatedTaskIds": [
+        "block-vendor"
+      ]
+    },
+    {
+      "key": "blocker:block-vendor",
+      "label": "Vendor signoff follow-up",
+      "summary": "Vendor signoff follow-up kept showing up as a blocker on 3 days, which means the wait state kept surviving close of day.",
+      "occurrences": 3,
+      "daysSeen": [
+        "2026-03-24",
+        "2026-03-25",
+        "2026-03-26"
+      ],
+      "relatedTaskIds": [
+        "block-vendor"
+      ]
+    },
+    {
+      "key": "risk:incoming commitments cooling off",
+      "label": "Incoming commitments cooling off",
+      "summary": "Incoming commitments cooling off showed up on 1 stored close, so it was not a one-off wobble.",
+      "occurrences": 1,
+      "daysSeen": [
+        "2026-03-24"
+      ],
+      "relatedTaskIds": []
+    },
+    {
+      "key": "risk:overdue delivery pressure",
+      "label": "Overdue delivery pressure",
+      "summary": "Overdue delivery pressure showed up on 1 stored close, so it was not a one-off wobble.",
+      "occurrences": 1,
+      "daysSeen": [
+        "2026-03-24"
+      ],
+      "relatedTaskIds": [
+        "roll-cutover"
+      ]
+    },
+    {
+      "key": "commitments:cold",
+      "label": "Cold incoming commitments",
+      "summary": "1 incoming commitment still need attention, which means follow-through softness is already building.",
+      "occurrences": 1,
+      "daysSeen": [],
+      "relatedTaskIds": []
+    }
+  ],
+  "projectRollups": [
+    {
+      "project_id": "proj-1",
+      "project_name": "Quarterly Launch",
+      "project_stage": "In Progress",
+      "implementation_name": "Alpha Platform",
+      "updates_count": 2,
+      "first_update_date": "2026-03-24",
+      "latest_update_date": "2026-03-25",
+      "first_rag": "Yellow",
+      "latest_rag": "Yellow",
+      "trend": "stable",
+      "latest_summary": "Tightened the launch path and exposed one unresolved blocker.",
+      "latest_next_step": "Finish QA and prep release note.",
+      "latest_needs_decision": null,
+      "notable_changes": [
+        "Tightened launch scope",
+        "Closed cutover runbook"
+      ],
+      "notable_blockers": [
+        "Waiting on vendor signoff"
+      ]
+    },
+    {
+      "project_id": "proj-2",
+      "project_name": "Customer Pilot",
+      "project_stage": "In Progress",
+      "implementation_name": "Pilot Workstream",
+      "updates_count": 1,
+      "first_update_date": "2026-03-26",
+      "latest_update_date": "2026-03-26",
+      "first_rag": "Green",
+      "latest_rag": "Green",
+      "trend": "new",
+      "latest_summary": "Customer demo thread improved after deck cleanup.",
+      "latest_next_step": "Use demo momentum to lock next customer call.",
+      "latest_needs_decision": "Decide whether to expand the pilot scope.",
+      "notable_changes": [
+        "Finished demo deck"
+      ],
+      "notable_blockers": []
+    }
+  ],
+  "nextWeekCalls": [
+    "Stop reloading Close QA regression set every day. Narrow it, escalate it, or explicitly park it on Monday.",
+    "Clear cold follow-up risk early next week before it burns another close-of-day cycle.",
+    "Customer Pilot needs a decision before more work piles onto it: Decide whether to expand the pilot scope."
+  ],
+  "narrativeHints": [
+    "There was real forward motion, but the same loose edges kept sneaking back into the close-of-day picture.",
+    "Finalize customer demo deck was one of the clearest movement threads across the week, so it is worth protecting instead of restarting from scratch.",
+    "Close QA regression set kept surviving the daily cut, which is usually a sign that the shape of the work is wrong, not just the timing.",
+    "Cold follow-up risk was not a one-day wobble. It kept showing back up in the stored closes."
+  ],
+  "confidence": "medium",
+  "freshness": {
+    "evaluatedAt": "2026-03-26T23:59:59.999Z",
+    "overall": "mixed",
+    "sources": [
+      {
+        "source": "eod_reviews",
+        "latestAt": "2026-03-26T22:55:00.000Z",
+        "ageHours": 1.1,
+        "stale": false,
+        "missing": false,
+        "required": true,
+        "note": null
+      },
+      {
+        "source": "project_status_updates",
+        "latestAt": "2026-03-26T23:59:59.999Z",
+        "ageHours": 0,
+        "stale": false,
+        "missing": false,
+        "required": false,
+        "note": null
+      },
+      {
+        "source": "tasks",
+        "latestAt": "2026-03-26T18:45:00.000Z",
+        "ageHours": 5.2,
+        "stale": false,
+        "missing": false,
+        "required": false,
+        "note": null
+      },
+      {
+        "source": "commitments",
+        "latestAt": "2026-03-18T14:00:00.000Z",
+        "ageHours": 202,
+        "stale": true,
+        "missing": false,
+        "required": false,
+        "note": null
+      }
+    ]
+  },
+  "caveats": [
+    "2 business days had no stored EOD review, so parts of the week were supplemented from raw data."
+  ],
+  "supportingSignals": [
+    {
+      "kind": "daily_review_coverage",
+      "summary": "3/5 expected stored EOD reviews were available for the week."
+    },
+    {
+      "kind": "movement",
+      "summary": "4 clear movement threads stood out across the week.",
+      "relatedTaskIds": [
+        "done-deck",
+        "roll-cutover",
+        "done-note",
+        "done-launch"
+      ]
+    },
+    {
+      "kind": "slip",
+      "summary": "3 items kept slipping or staying unresolved.",
+      "relatedTaskIds": [
+        "slip-qa",
+        "roll-cutover",
+        "decision-pilot"
+      ]
+    },
+    {
+      "kind": "project_pressure",
+      "summary": "2 projects still need explicit attention."
+    }
+  ],
+  "generatedAt": "2026-03-26T23:59:59.999Z",
+  "rawSignals": {
+    "expectedDailyReviewDates": [
+      "2026-03-23",
+      "2026-03-24",
+      "2026-03-25",
+      "2026-03-26",
+      "2026-03-27"
+    ],
+    "storedDailyReviewDates": [
+      "2026-03-24",
+      "2026-03-25",
+      "2026-03-26"
+    ],
+    "missingDailyReviewDates": [
+      "2026-03-23",
+      "2026-03-27"
+    ],
+    "supplementalFallbackUsed": true,
+    "shippedTaskIds": [
+      "done-launch",
+      "done-deck"
+    ],
+    "stalledTaskIds": [
+      "slip-qa"
+    ],
+    "pendingDecisionTaskIds": [
+      "decision-pilot"
+    ],
+    "coldCommitmentIds": [
+      "commitment-cold"
+    ]
+  }
+}

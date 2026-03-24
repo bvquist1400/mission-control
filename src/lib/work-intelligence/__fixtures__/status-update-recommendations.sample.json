@@ -1,0 +1,39 @@
+{
+  "recommendations": [
+    {
+      "key": "project:proj-1:completed_thread_reporting_hygiene",
+      "entityType": "project",
+      "entityId": "proj-1",
+      "entityName": "Quarterly Launch",
+      "reasonCode": "completed_thread_reporting_hygiene",
+      "summary": "Quarterly Launch likely needs a status refresh because completed work changed the thread.",
+      "reason": "Close launch checklist closed today, so the last project status probably underreports where Quarterly Launch now stands.",
+      "latestMovementAt": "2026-03-24T19:00:00.000Z",
+      "lastStatusArtifactAt": "2026-03-20T12:00:00.000Z",
+      "relatedTaskIds": [
+        "project-done"
+      ],
+      "relatedTaskTitles": [
+        "Close launch checklist"
+      ]
+    },
+    {
+      "key": "implementation:impl-1:movement_outpaced_status_artifact",
+      "entityType": "implementation",
+      "entityId": "impl-1",
+      "entityName": "Alpha Platform",
+      "reasonCode": "movement_outpaced_status_artifact",
+      "summary": "Alpha Platform moved enough today that the current implementation status likely lags reality.",
+      "reason": "Tighten implementation note moved after the last implementation status, so the recorded status probably needs a refresh.",
+      "latestMovementAt": "2026-03-24T17:20:00.000Z",
+      "lastStatusArtifactAt": "2026-03-23T12:00:00.000Z",
+      "relatedTaskIds": [
+        "implementation-thread"
+      ],
+      "relatedTaskTitles": [
+        "Tighten implementation note"
+      ]
+    }
+  ],
+  "latestStatusArtifactAt": "2026-03-23T12:00:00.000Z"
+}

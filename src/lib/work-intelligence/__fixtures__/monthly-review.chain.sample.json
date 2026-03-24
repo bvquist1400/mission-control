@@ -1,0 +1,220 @@
+{
+  "reviewType": "monthly",
+  "period": {
+    "startDate": "2026-03-01",
+    "endDate": "2026-03-20",
+    "anchorDate": "2026-03-20",
+    "timezone": "America/New_York"
+  },
+  "weeklyReviewCount": 3,
+  "monthPattern": {
+    "label": "pressure_month",
+    "summary": "The month had real pressure accumulation. Too many problems repeated long enough to become the default operating soundtrack."
+  },
+  "directionChanges": [
+    {
+      "key": "project:proj-1",
+      "label": "Quarterly Launch",
+      "summary": "Quarterly Launch ended the month worse than it started.",
+      "relatedProjectIds": [
+        "proj-1"
+      ]
+    }
+  ],
+  "recurringPressurePoints": [
+    {
+      "key": "slip:close qa regression set",
+      "label": "Close QA regression set",
+      "summary": "Close QA regression set kept showing up across 3 weekly reviews, so the problem was not confined to one messy week.",
+      "occurrences": 3,
+      "weeksSeen": [
+        "2026-03-20",
+        "2026-03-27",
+        "2026-04-03"
+      ],
+      "relatedTaskIds": [
+        "slip-qa"
+      ]
+    },
+    {
+      "key": "risk:cold follow-up risk",
+      "label": "Cold follow-up risk",
+      "summary": "Cold follow-up risk kept showing back up across 3 weekly reviews, which makes it a month-level pressure point, not a passing blip.",
+      "occurrences": 3,
+      "weeksSeen": [
+        "2026-03-20",
+        "2026-03-27",
+        "2026-04-03"
+      ],
+      "relatedTaskIds": [
+        "block-vendor"
+      ]
+    },
+    {
+      "key": "slip:decide pilot scope",
+      "label": "Decide pilot scope",
+      "summary": "Decide pilot scope kept showing up across 2 weekly reviews, so the problem was not confined to one messy week.",
+      "occurrences": 2,
+      "weeksSeen": [
+        "2026-03-20",
+        "2026-03-27"
+      ],
+      "relatedTaskIds": [
+        "decision-pilot"
+      ]
+    },
+    {
+      "key": "slip:finish cutover runbook",
+      "label": "Finish cutover runbook",
+      "summary": "Finish cutover runbook kept showing up across 2 weekly reviews, so the problem was not confined to one messy week.",
+      "occurrences": 2,
+      "weeksSeen": [
+        "2026-03-20",
+        "2026-03-27"
+      ],
+      "relatedTaskIds": [
+        "roll-cutover"
+      ]
+    },
+    {
+      "key": "risk:cold incoming commitments",
+      "label": "Cold incoming commitments",
+      "summary": "Cold incoming commitments kept showing back up across 1 weekly review, which makes it a month-level pressure point, not a passing blip.",
+      "occurrences": 1,
+      "weeksSeen": [
+        "2026-03-27"
+      ],
+      "relatedTaskIds": []
+    }
+  ],
+  "projectRollups": [
+    {
+      "project_id": "proj-1",
+      "project_name": "Quarterly Launch",
+      "project_stage": "In Progress",
+      "updates_count": 2,
+      "first_update_date": "2026-03-04",
+      "latest_update_date": "2026-03-11",
+      "first_rag": "Green",
+      "latest_rag": "Yellow",
+      "trend": "worsening",
+      "blocker_days": 1,
+      "decision_days": 1,
+      "latest_summary": "Tightened the launch path and exposed one unresolved blocker.",
+      "latest_next_step": "Reset QA scope and force a vendor answer.",
+      "latest_needs_decision": "Decide whether to cut the last QA edge cases from the release.",
+      "notable_changes": [
+        "Shipped onboarding improvements",
+        "QA slipped into next week"
+      ],
+      "notable_blockers": [
+        "Vendor signoff still open"
+      ]
+    },
+    {
+      "project_id": "proj-2",
+      "project_name": "Customer Pilot",
+      "project_stage": "In Progress",
+      "updates_count": 1,
+      "first_update_date": "2026-03-18",
+      "latest_update_date": "2026-03-18",
+      "first_rag": "Green",
+      "latest_rag": "Green",
+      "trend": "stable",
+      "blocker_days": 0,
+      "decision_days": 0,
+      "latest_summary": "Pilot work improved after the demo deck cleanup.",
+      "latest_next_step": "Use the pilot momentum to widen the customer thread.",
+      "latest_needs_decision": null,
+      "notable_changes": [
+        "Closed demo prep",
+        "Scheduled customer follow-up"
+      ],
+      "notable_blockers": []
+    }
+  ],
+  "nextMonthCalls": [
+    "Do not let Close QA regression set become the default soundtrack next month. Reset the shape of that work in week one.",
+    "Treat Quarterly Launch as a deliberate month-opening decision, not something to let drift another week.",
+    "Protect the next move on Quarterly Launch: Reset QA scope and force a vendor answer."
+  ],
+  "narrativeHints": [
+    "The month had real pressure accumulation. Too many problems repeated long enough to become the default operating soundtrack.",
+    "Close QA regression set did not stay contained to one week. It kept coming back into the review ladder.",
+    "Quarterly Launch ended the month worse than it started.",
+    "Do not let Close QA regression set become the default soundtrack next month. Reset the shape of that work in week one."
+  ],
+  "confidence": "medium",
+  "freshness": {
+    "evaluatedAt": "2026-04-03T23:00:00.000Z",
+    "overall": "mixed",
+    "sources": [
+      {
+        "source": "weekly_reviews",
+        "latestAt": "2026-04-03T23:00:00.000Z",
+        "ageHours": 0,
+        "stale": false,
+        "missing": false,
+        "required": true,
+        "note": null
+      },
+      {
+        "source": "project_status_updates",
+        "latestAt": "2026-03-18T23:59:59.999Z",
+        "ageHours": 383,
+        "stale": true,
+        "missing": false,
+        "required": false,
+        "note": null
+      }
+    ]
+  },
+  "caveats": [
+    "3 expected weeks had no stored weekly review, so the month read is only partially chained."
+  ],
+  "supportingSignals": [
+    {
+      "kind": "weekly_review_coverage",
+      "summary": "3/4 expected stored weekly reviews were available for the month."
+    },
+    {
+      "kind": "pressure_points",
+      "summary": "5 recurring pressure points stood out across the month.",
+      "relatedTaskIds": [
+        "slip-qa",
+        "block-vendor",
+        "decision-pilot",
+        "roll-cutover"
+      ]
+    },
+    {
+      "kind": "direction_changes",
+      "summary": "1 notable direction change were identified."
+    }
+  ],
+  "generatedAt": "2026-04-03T23:00:00.000Z",
+  "rawSignals": {
+    "expectedWeekStartDates": [
+      "2026-02-23",
+      "2026-03-02",
+      "2026-03-09",
+      "2026-03-16"
+    ],
+    "storedWeekStartDates": [
+      "2026-03-16",
+      "2026-03-23",
+      "2026-03-30"
+    ],
+    "missingWeekStartDates": [
+      "2026-02-23",
+      "2026-03-02",
+      "2026-03-09"
+    ],
+    "supplementalFallbackUsed": true,
+    "weeklySnapshotIds": [
+      "weekly-2026-03-23",
+      "weekly-2026-03-30",
+      "weekly-2026-03-16"
+    ]
+  }
+}

@@ -1,0 +1,211 @@
+{
+  "window": {
+    "requestedDate": "2026-03-24",
+    "since": "2026-03-24T13:00:00.000Z",
+    "dayStartIso": "2026-03-24T04:00:00.000Z",
+    "dayEndExclusiveIso": "2026-03-25T04:00:00.000Z",
+    "timezone": "America/New_York"
+  },
+  "topItems": [
+    {
+      "taskId": "task-due",
+      "title": "Send launch checklist",
+      "rank": 1,
+      "recommendedAction": "protect",
+      "whyNow": [
+        "Due within 24 hours.",
+        "Sprint 12 is off pace."
+      ],
+      "riskIfIgnored": "Delivery drift gets harder to recover the longer this sits.",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "statusFreshness": {
+        "updatedAt": "2026-03-24T15:00:00.000Z",
+        "stale": false
+      }
+    },
+    {
+      "taskId": "task-active",
+      "title": "Finalize migration notes",
+      "rank": 2,
+      "recommendedAction": "finish",
+      "whyNow": [
+        "Already in motion.",
+        "Sprint 12 is off pace."
+      ],
+      "riskIfIgnored": "Restart cost and context loss go up if this slips again.",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "statusFreshness": {
+        "updatedAt": "2026-03-24T14:15:00.000Z",
+        "stale": false
+      }
+    },
+    {
+      "taskId": "task-followup",
+      "title": "Vendor approval follow-up",
+      "rank": 3,
+      "recommendedAction": "follow_up",
+      "whyNow": [
+        "Follow-up date has passed.",
+        "Sprint 12 is off pace.",
+        "Status may be stale."
+      ],
+      "riskIfIgnored": "The wait state on Vendor approval will keep aging.",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "statusFreshness": {
+        "updatedAt": "2026-03-21T16:00:00.000Z",
+        "stale": true
+      }
+    }
+  ],
+  "deferForNow": [
+    {
+      "taskId": "task-defer",
+      "title": "Legal dependency review",
+      "reason": "Important, but it is still waiting on Legal review and does not need another touch yet.",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12"
+    },
+    {
+      "taskId": "task-backlog",
+      "title": "Polish dashboard copy",
+      "reason": "Potentially important, but the current day is already overloaded.",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12"
+    }
+  ],
+  "primaryTradeoff": "Finish Send launch checklist before opening Finalize migration notes; the current load does not support both cleanly.",
+  "confidence": "medium",
+  "freshness": {
+    "evaluatedAt": "2026-03-24T17:30:00.000Z",
+    "overall": "fresh",
+    "sources": [
+      {
+        "source": "tasks",
+        "latestAt": "2026-03-24T15:00:00.000Z",
+        "ageHours": 2.5,
+        "stale": false,
+        "missing": false,
+        "required": true,
+        "note": null
+      },
+      {
+        "source": "task_comments",
+        "latestAt": "2026-03-24T14:40:00.000Z",
+        "ageHours": 2.8,
+        "stale": false,
+        "missing": false,
+        "required": false,
+        "note": null
+      },
+      {
+        "source": "calendar",
+        "latestAt": "2026-03-24T21:15:00.000Z",
+        "ageHours": 0,
+        "stale": false,
+        "missing": false,
+        "required": false,
+        "note": null
+      }
+    ]
+  },
+  "caveats": [
+    "The day is already over capacity, so lower-ranked work is easier to defer."
+  ],
+  "supportingSignals": [
+    {
+      "kind": "due_soon",
+      "summary": "1 task due within 48 hours.",
+      "relatedTaskIds": [
+        "task-due"
+      ]
+    },
+    {
+      "kind": "in_progress",
+      "summary": "1 active thread already in motion.",
+      "relatedTaskIds": [
+        "task-active"
+      ]
+    },
+    {
+      "kind": "capacity",
+      "summary": "Capacity is Red at 270/190 minutes."
+    }
+  ],
+  "generatedAt": "2026-03-24T17:30:00.000Z",
+  "rawSignals": {
+    "noSingleDominantPriority": false,
+    "topScoreGap": 18,
+    "topItems": [
+      {
+        "taskId": "task-due",
+        "score": 120,
+        "scoreBreakdown": [
+          {
+            "label": "base priority",
+            "delta": 82,
+            "reason": "Baseline task priority score."
+          },
+          {
+            "label": "due within 24h",
+            "delta": 28,
+            "reason": "Due within 24 hours."
+          },
+          {
+            "label": "sprint slip pressure",
+            "delta": 10,
+            "reason": "Sprint 12 is off pace."
+          }
+        ]
+      },
+      {
+        "taskId": "task-active",
+        "score": 102,
+        "scoreBreakdown": [
+          {
+            "label": "base priority",
+            "delta": 74,
+            "reason": "Baseline task priority score."
+          },
+          {
+            "label": "active momentum",
+            "delta": 18,
+            "reason": "Already in motion."
+          },
+          {
+            "label": "sprint slip pressure",
+            "delta": 10,
+            "reason": "Sprint 12 is off pace."
+          }
+        ]
+      },
+      {
+        "taskId": "task-followup",
+        "score": 96,
+        "scoreBreakdown": [
+          {
+            "label": "base priority",
+            "delta": 76,
+            "reason": "Baseline task priority score."
+          },
+          {
+            "label": "follow-up due",
+            "delta": 16,
+            "reason": "Follow-up date has passed."
+          },
+          {
+            "label": "sprint slip pressure",
+            "delta": 10,
+            "reason": "Sprint 12 is off pace."
+          },
+          {
+            "label": "status uncertainty",
+            "delta": -6,
+            "reason": "Status may be stale."
+          }
+        ]
+      }
+    ],
+    "deferForNowTaskIds": [
+      "task-defer",
+      "task-backlog"
+    ]
+  }
+}

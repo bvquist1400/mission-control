@@ -1,0 +1,142 @@
+{
+  "window": {
+    "requestedDate": "2026-03-24",
+    "since": "2026-03-24T13:00:00.000Z",
+    "dayStartIso": "2026-03-24T04:00:00.000Z",
+    "dayEndExclusiveIso": "2026-03-25T04:00:00.000Z",
+    "timezone": "America/New_York"
+  },
+  "summary": "there is little explicit movement logged in the current window, 1 item look stuck, and 2 active statuses look stale or uncertain. Load reads manageable.",
+  "topRisk": {
+    "label": "Stale follow-up risk",
+    "summary": "1 follow-up have gone stale, led by Vendor reply on timeline risk.",
+    "relatedTaskIds": [
+      "stale-followup"
+    ]
+  },
+  "momentum": {
+    "score": 29,
+    "label": "stalled",
+    "assessment": "The operating picture is closer to churn than traction. Unblock or finish something before adding scope."
+  },
+  "whatMoved": [],
+  "whatIsStuck": [
+    {
+      "taskId": "stale-followup",
+      "title": "Vendor reply on timeline risk",
+      "status": "Blocked/Waiting",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "reason": "Waiting on a follow-up that is already overdue.",
+      "updatedAt": "2026-03-20T16:00:00.000Z"
+    }
+  ],
+  "whatLooksStale": [
+    {
+      "taskId": "stale-followup",
+      "title": "Vendor reply on timeline risk",
+      "status": "Blocked/Waiting",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "reason": "Blocked follow-up is overdue, so both the dependency and the task status need refresh.",
+      "updatedAt": "2026-03-20T16:00:00.000Z"
+    },
+    {
+      "taskId": "quiet-active",
+      "title": "Refine launch runbook",
+      "status": "In Progress",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "reason": "Marked In Progress, but there has been no fresh movement signal in the current window and the status is aging.",
+      "updatedAt": "2026-03-18T15:30:00.000Z"
+    }
+  ],
+  "loadAssessment": {
+    "status": "manageable",
+    "isOverloaded": false,
+    "capacityRag": "Green",
+    "availableMinutes": 380,
+    "requiredMinutes": 120,
+    "meetingHeavyAfternoon": false,
+    "assessment": "The load looks manageable if the current priorities stay stable."
+  },
+  "confidence": "medium",
+  "freshness": {
+    "evaluatedAt": "2026-03-24T17:30:00.000Z",
+    "overall": "fresh",
+    "sources": [
+      {
+        "source": "tasks",
+        "latestAt": "2026-03-24T12:20:00.000Z",
+        "ageHours": 5.2,
+        "stale": false,
+        "missing": false,
+        "required": true,
+        "note": null
+      },
+      {
+        "source": "task_comments",
+        "latestAt": null,
+        "ageHours": null,
+        "stale": false,
+        "missing": false,
+        "required": false,
+        "note": null
+      },
+      {
+        "source": "calendar",
+        "latestAt": null,
+        "ageHours": null,
+        "stale": false,
+        "missing": false,
+        "required": false,
+        "note": null
+      }
+    ]
+  },
+  "caveats": [
+    "2 active task statuses look stale or uncertain, so progress confidence is reduced.",
+    "1 in-progress task have no fresh movement signal in the current window."
+  ],
+  "supportingSignals": [
+    {
+      "kind": "movement",
+      "summary": "0 done today, 1 still in progress.",
+      "relatedTaskIds": []
+    },
+    {
+      "kind": "blockers",
+      "summary": "1 blocked or waiting item.",
+      "relatedTaskIds": [
+        "stale-followup"
+      ]
+    },
+    {
+      "kind": "load",
+      "summary": "Capacity is Green with 0 remaining meetings."
+    }
+  ],
+  "generatedAt": "2026-03-24T17:30:00.000Z",
+  "rawSignals": {
+    "counts": {
+      "overdue": 0,
+      "dueSoon": 1,
+      "blocked": 1,
+      "inProgress": 1,
+      "doneToday": 0,
+      "followUpRisks": 1,
+      "statusUncertain": 2,
+      "quietInProgress": 1,
+      "waitingOnOthers": 1
+    },
+    "remainingMeetings": 0,
+    "followUpRiskTaskIds": [
+      "stale-followup"
+    ],
+    "statusUncertainTaskIds": [
+      "stale-followup",
+      "quiet-active"
+    ],
+    "quietInProgressTaskIds": [
+      "quiet-active"
+    ],
+    "rolledOverTaskIds": []
+  }
+}

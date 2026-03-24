@@ -33,7 +33,7 @@ function isObjectPayload(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-// GET /api/briefing/review-snapshots - List persisted weekly/monthly review snapshots
+// GET /api/briefing/review-snapshots - List persisted eod/weekly/monthly review snapshots
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireAuthenticatedRoute(request);
@@ -50,7 +50,7 @@ export async function GET(request: NextRequest) {
     const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 20;
 
     if (reviewType && !isReviewPeriod(reviewType)) {
-      return NextResponse.json({ error: 'review_type must be weekly or monthly' }, { status: 400 });
+      return NextResponse.json({ error: 'review_type must be eod, weekly, or monthly' }, { status: 400 });
     }
 
     if (from && !normalizeDateOnly(from)) {
@@ -97,7 +97,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST /api/briefing/review-snapshots - Persist a weekly or monthly review snapshot
+// POST /api/briefing/review-snapshots - Persist an eod, weekly, or monthly review snapshot
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireAuthenticatedRoute(request);
@@ -109,7 +109,7 @@ export async function POST(request: NextRequest) {
     const body = (await request.json()) as Partial<ReviewSnapshotPayload>;
 
     if (!isReviewPeriod(body.review_type)) {
-      return NextResponse.json({ error: 'review_type is required and must be weekly or monthly' }, { status: 400 });
+      return NextResponse.json({ error: 'review_type is required and must be eod, weekly, or monthly' }, { status: 400 });
     }
 
     const periodStart = normalizeDateOnly(body.period_start);

@@ -1,0 +1,152 @@
+{
+  "window": {
+    "requestedDate": "2026-03-24",
+    "since": "2026-03-24T13:00:00.000Z",
+    "dayStartIso": "2026-03-24T04:00:00.000Z",
+    "dayEndExclusiveIso": "2026-03-25T04:00:00.000Z",
+    "timezone": "America/New_York"
+  },
+  "summary": "there is little explicit movement logged in the current window, 1 item look stuck, and 3 active statuses look stale or uncertain. Load reads manageable.",
+  "topRisk": {
+    "label": "Stale follow-up risk",
+    "summary": "1 follow-up have gone stale, led by Waiting on design signoff.",
+    "relatedTaskIds": [
+      "stale-c"
+    ]
+  },
+  "momentum": {
+    "score": 29,
+    "label": "stalled",
+    "assessment": "The operating picture is closer to churn than traction. Unblock or finish something before adding scope."
+  },
+  "whatMoved": [],
+  "whatIsStuck": [
+    {
+      "taskId": "stale-c",
+      "title": "Waiting on design signoff",
+      "status": "Blocked/Waiting",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "reason": "Waiting on a follow-up that is already overdue.",
+      "updatedAt": "2026-03-14T14:00:00.000Z"
+    }
+  ],
+  "whatLooksStale": [
+    {
+      "taskId": "stale-a",
+      "title": "Reconcile launch metrics",
+      "status": "In Progress",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "reason": "Marked In Progress, but there has been no fresh movement signal in the current window and the status is aging.",
+      "updatedAt": "2026-03-15T14:00:00.000Z"
+    },
+    {
+      "taskId": "stale-c",
+      "title": "Waiting on design signoff",
+      "status": "Blocked/Waiting",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "reason": "Blocked follow-up is overdue, so both the dependency and the task status need refresh.",
+      "updatedAt": "2026-03-14T14:00:00.000Z"
+    },
+    {
+      "taskId": "stale-b",
+      "title": "Draft stakeholder note",
+      "status": "Planned",
+      "context": "Alpha Platform / Quarterly Launch / Sprint 12",
+      "reason": "Task status has not been refreshed in 5+ days.",
+      "updatedAt": "2026-03-16T14:00:00.000Z"
+    }
+  ],
+  "loadAssessment": {
+    "status": "manageable",
+    "isOverloaded": false,
+    "capacityRag": "Green",
+    "availableMinutes": 380,
+    "requiredMinutes": 120,
+    "meetingHeavyAfternoon": false,
+    "assessment": "The load looks manageable if the current priorities stay stable."
+  },
+  "confidence": "low",
+  "freshness": {
+    "evaluatedAt": "2026-03-24T17:30:00.000Z",
+    "overall": "stale",
+    "sources": [
+      {
+        "source": "tasks",
+        "latestAt": "2026-03-16T14:00:00.000Z",
+        "ageHours": 195.5,
+        "stale": true,
+        "missing": false,
+        "required": true,
+        "note": null
+      },
+      {
+        "source": "task_comments",
+        "latestAt": null,
+        "ageHours": null,
+        "stale": false,
+        "missing": false,
+        "required": false,
+        "note": null
+      },
+      {
+        "source": "calendar",
+        "latestAt": null,
+        "ageHours": null,
+        "stale": false,
+        "missing": false,
+        "required": false,
+        "note": null
+      }
+    ]
+  },
+  "caveats": [
+    "3 active task statuses look stale or uncertain, so progress confidence is reduced.",
+    "1 in-progress task have no fresh movement signal in the current window.",
+    "No current sprint matched this date, so slip detection is task-level only."
+  ],
+  "supportingSignals": [
+    {
+      "kind": "movement",
+      "summary": "0 done today, 1 still in progress.",
+      "relatedTaskIds": []
+    },
+    {
+      "kind": "blockers",
+      "summary": "1 blocked or waiting item.",
+      "relatedTaskIds": [
+        "stale-c"
+      ]
+    },
+    {
+      "kind": "load",
+      "summary": "Capacity is Green with 0 remaining meetings."
+    }
+  ],
+  "generatedAt": "2026-03-24T17:30:00.000Z",
+  "rawSignals": {
+    "counts": {
+      "overdue": 0,
+      "dueSoon": 1,
+      "blocked": 1,
+      "inProgress": 1,
+      "doneToday": 0,
+      "followUpRisks": 1,
+      "statusUncertain": 3,
+      "quietInProgress": 1,
+      "waitingOnOthers": 1
+    },
+    "remainingMeetings": 0,
+    "followUpRiskTaskIds": [
+      "stale-c"
+    ],
+    "statusUncertainTaskIds": [
+      "stale-a",
+      "stale-c",
+      "stale-b"
+    ],
+    "quietInProgressTaskIds": [
+      "stale-a"
+    ],
+    "rolledOverTaskIds": []
+  }
+}

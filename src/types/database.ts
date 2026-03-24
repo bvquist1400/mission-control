@@ -9,7 +9,7 @@ export type RiskLevel = "green" | "yellow" | "red";
 export type TaskRecurrenceFrequency = "daily" | "weekly" | "biweekly" | "monthly";
 export type HealthTrend = "improving" | "stable" | "degrading" | "unknown";
 export type HealthLabel = "Healthy" | "Watch" | "At Risk" | "Critical";
-export type ReviewPeriod = "weekly" | "monthly";
+export type ReviewPeriod = "eod" | "weekly" | "monthly";
 export type ImplPhase =
   | "Intake"
   | "Discovery"
