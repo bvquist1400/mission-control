@@ -16,9 +16,15 @@ import { identifyPrepTasks, type TaskInput } from "@/lib/briefing/prep-tasks";
 import { normalizeDateOnly } from "@/lib/date-only";
 import {
   buildWorkEodReview,
+  type PersistedEodReviewPayload,
   type WorkEodReviewRead,
   type WorkEodReviewTaskItem,
 } from "@/lib/work-intelligence/eod-review";
+import {
+  buildReviewSnapshotSummary,
+  buildReviewSnapshotTitle,
+  upsertReviewSnapshot,
+} from "@/lib/briefing/review-snapshots";
 import { workExecutionStateRead } from "@/lib/work-intelligence/execution-state";
 import { workPriorityStackRead, type WorkPriorityStackItem } from "@/lib/work-intelligence/priority-stack";
 import { readStatusUpdateRecommendations, type WorkStatusUpdateRecommendation } from "@/lib/work-intelligence/status-update-recommendations";
@@ -1357,6 +1363,23 @@ export async function buildDailyBriefDigest({
           includeNarrativeHints: true,
         })
       : null;
+
+  if (eodReview) {
+    const eodPayload: PersistedEodReviewPayload = { review: eodReview };
+    upsertReviewSnapshot(supabase, {
+      userId,
+      reviewType: "eod",
+      anchorDate: requestedDate,
+      periodStart: requestedDate,
+      periodEnd: requestedDate,
+      title: buildReviewSnapshotTitle("eod", requestedDate, requestedDate),
+      summary: buildReviewSnapshotSummary("eod", eodPayload as unknown as Record<string, unknown>),
+      source: "system",
+      payload: eodPayload as unknown as Record<string, unknown>,
+    }).catch((err: unknown) => {
+      console.error("[digest] EOD snapshot persistence failed:", err);
+    });
+  }
 
   const dueSoonDigest = dueSoonTasks.map((task) => toTaskDigestItem(task, now, requestedDate, commentActivity, effectiveSince));
   const blockedDigest =
