@@ -1,12 +1,13 @@
 "use client";
 
-import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import type { BrowserSearchResult } from "@/lib/search/browser";
 
 interface UniversalSearchPaletteProps {
   onClose: () => void;
+  onOpenTask: (taskId: string) => void;
 }
 
 interface SearchResponse {
@@ -24,7 +25,7 @@ function truncatePreview(value: string, maxLength = 180): string {
   return `${normalized.slice(0, maxLength - 3)}...`;
 }
 
-export function UniversalSearchPalette({ onClose }: UniversalSearchPaletteProps) {
+export function UniversalSearchPalette({ onClose, onOpenTask }: UniversalSearchPaletteProps) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
@@ -39,6 +40,17 @@ export function UniversalSearchPalette({ onClose }: UniversalSearchPaletteProps)
 
   const trimmedQuery = useMemo(() => deferredQuery.trim(), [deferredQuery]);
   const selectedResult = results[selectedIndex] ?? null;
+
+  const openResult = useCallback((result: BrowserSearchResult) => {
+    if (result.entity === "task" && result.recordId) {
+      onOpenTask(result.recordId);
+      onClose();
+      return;
+    }
+
+    router.push(result.href);
+    onClose();
+  }, [onClose, onOpenTask, router]);
 
   useEffect(() => {
     previousFocusRef.current = document.activeElement as HTMLElement;
@@ -81,14 +93,13 @@ export function UniversalSearchPalette({ onClose }: UniversalSearchPaletteProps)
 
       if (event.key === "Enter" && selectedResult) {
         event.preventDefault();
-        router.push(selectedResult.href);
-        onClose();
+        openResult(selectedResult);
       }
     }
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [onClose, results.length, router, selectedResult]);
+  }, [onClose, openResult, results.length, selectedResult]);
 
   useEffect(() => {
     if (trimmedQuery.length < 2) {
@@ -248,10 +259,7 @@ export function UniversalSearchPalette({ onClose }: UniversalSearchPaletteProps)
                         role="option"
                         aria-selected={active}
                         onMouseEnter={() => setSelectedIndex(index)}
-                        onClick={() => {
-                          router.push(result.href);
-                          onClose();
-                        }}
+                        onClick={() => openResult(result)}
                         className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
                           active
                             ? "border-accent/50 bg-accent-soft shadow-[0_10px_25px_rgba(196,30,58,0.12)]"

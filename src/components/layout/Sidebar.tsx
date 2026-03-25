@@ -1,9 +1,66 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { UniversalSearchPalette } from "@/components/layout/UniversalSearchPalette";
+import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
+import { Modal } from "@/components/ui/Modal";
+import type { CommitmentSummary, TaskUpdatePayload, TaskWithImplementation } from "@/types/database";
+
+const TASK_MODAL_PAGE_SIZE = 200;
+
+async function fetchTaskById(taskId: string): Promise<TaskWithImplementation> {
+  const response = await fetch(`/api/tasks/${taskId}`, { cache: "no-store" });
+
+  if (!response.ok) {
+    throw new Error("Failed to fetch task");
+  }
+
+  return response.json();
+}
+
+async function fetchTaskModalPage(offset: number): Promise<TaskWithImplementation[]> {
+  const searchParams = new URLSearchParams({
+    include_done: "true",
+    include_parked: "true",
+    limit: String(TASK_MODAL_PAGE_SIZE),
+    offset: String(offset),
+  });
+  const response = await fetch(`/api/tasks?${searchParams.toString()}`, { cache: "no-store" });
+
+  if (!response.ok) {
+    throw new Error("Failed to fetch tasks");
+  }
+
+  return response.json();
+}
+
+async function fetchAllTaskModalTasks(): Promise<TaskWithImplementation[]> {
+  const tasks: TaskWithImplementation[] = [];
+  let offset = 0;
+
+  while (true) {
+    const page = await fetchTaskModalPage(offset);
+    tasks.push(...page);
+
+    if (page.length < TASK_MODAL_PAGE_SIZE) {
+      return tasks;
+    }
+
+    offset += TASK_MODAL_PAGE_SIZE;
+  }
+}
+
+async function fetchTaskModalCommitments(): Promise<CommitmentSummary[]> {
+  const response = await fetch("/api/commitments?include_done=true", { cache: "no-store" });
+
+  if (!response.ok) {
+    throw new Error("Failed to fetch commitments");
+  }
+
+  return response.json();
+}
 
 const navItems = [
   { href: "/", label: "Today", hint: "Daily operating view" },
@@ -62,8 +119,15 @@ function SearchLauncherButton({
 
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [taskModalTask, setTaskModalTask] = useState<TaskWithImplementation | null>(null);
+  const [taskModalAllTasks, setTaskModalAllTasks] = useState<TaskWithImplementation[] | null>(null);
+  const [taskModalCommitments, setTaskModalCommitments] = useState<CommitmentSummary[] | null>(null);
+  const [taskModalLoading, setTaskModalLoading] = useState(false);
+  const isMountedRef = useRef(true);
+  const taskModalRequestRef = useRef(0);
 
   const openSearch = useCallback(() => {
     setMobileOpen(false);
@@ -74,7 +138,86 @@ export function Sidebar() {
     setSearchOpen(false);
   }, []);
 
+  const closeTaskModal = useCallback(() => {
+    taskModalRequestRef.current += 1;
+    setTaskModalLoading(false);
+    setTaskModalTask(null);
+  }, []);
+
+  const openTaskFromSearch = useCallback((taskId: string) => {
+    const requestId = taskModalRequestRef.current + 1;
+    taskModalRequestRef.current = requestId;
+    setTaskModalLoading(true);
+
+    if (!taskModalAllTasks) {
+      void fetchAllTaskModalTasks()
+        .then((allTasks) => {
+          if (!isMountedRef.current) {
+            return;
+          }
+
+          setTaskModalAllTasks(allTasks);
+        })
+        .catch(() => {
+          // Non-blocking cache warmup.
+        });
+    }
+
+    if (!taskModalCommitments) {
+      void fetchTaskModalCommitments()
+        .then((commitments) => {
+          if (!isMountedRef.current) {
+            return;
+          }
+
+          setTaskModalCommitments(commitments);
+        })
+        .catch(() => {
+          // Non-blocking cache warmup.
+        });
+    }
+
+    void fetchTaskById(taskId)
+      .then((task) => {
+        if (!isMountedRef.current || taskModalRequestRef.current !== requestId) {
+          return;
+        }
+
+        setTaskModalTask(task);
+      })
+      .catch(() => {
+        if (!isMountedRef.current || taskModalRequestRef.current !== requestId) {
+          return;
+        }
+
+        router.push(`/backlog?expand=${taskId}`);
+      })
+      .finally(() => {
+        if (!isMountedRef.current || taskModalRequestRef.current !== requestId) {
+          return;
+        }
+
+        setTaskModalLoading(false);
+      });
+  }, [router, taskModalAllTasks, taskModalCommitments]);
+
+  const handleTaskModalUpdated = useCallback((taskId: string, updates: TaskUpdatePayload) => {
+    setTaskModalTask((current) => (current?.id === taskId ? { ...current, ...updates } : current));
+    setTaskModalAllTasks((current) => (
+      current
+        ? current.map((task) => (task.id === taskId ? { ...task, ...updates } : task))
+        : current
+    ));
+  }, []);
+
+  const handleTaskModalDeleted = useCallback((taskId: string) => {
+    setTaskModalTask((current) => (current?.id === taskId ? null : current));
+    setTaskModalAllTasks((current) => (current ? current.filter((task) => task.id !== taskId) : current));
+  }, []);
+
   useEffect(() => {
+    isMountedRef.current = true;
+
     function handleKeyDown(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
@@ -84,7 +227,10 @@ export function Sidebar() {
     }
 
     document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
+    return () => {
+      isMountedRef.current = false;
+      document.removeEventListener("keydown", handleKeyDown);
+    };
   }, []);
 
   return (
@@ -209,7 +355,23 @@ export function Sidebar() {
         </nav>
       </aside>
 
-      {searchOpen ? <UniversalSearchPalette onClose={closeSearch} /> : null}
+      {searchOpen ? <UniversalSearchPalette onClose={closeSearch} onOpenTask={openTaskFromSearch} /> : null}
+      {taskModalLoading ? (
+        <Modal open={taskModalLoading} onClose={closeTaskModal} title="Loading task" size="wide">
+          <div className="flex min-h-40 flex-col items-center justify-center gap-3 py-8 text-sm text-muted-foreground">
+            <div className="h-6 w-6 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+            <p>Opening task details...</p>
+          </div>
+        </Modal>
+      ) : null}
+      <TaskDetailModal
+        task={taskModalTask}
+        allTasks={taskModalAllTasks ?? (taskModalTask ? [taskModalTask] : [])}
+        commitments={taskModalCommitments ?? []}
+        onClose={closeTaskModal}
+        onTaskUpdated={handleTaskModalUpdated}
+        onTaskDeleted={handleTaskModalDeleted}
+      />
     </>
   );
 }

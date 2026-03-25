@@ -12,6 +12,7 @@ export type BrowserSearchEntity =
 
 export interface BrowserSearchResult {
   id: string;
+  recordId: string | null;
   title: string;
   text: string;
   href: string;
@@ -203,9 +204,11 @@ function buildContext(result: MissionControlSearchResult, entity: BrowserSearchE
 
 export function toBrowserSearchResult(result: MissionControlSearchResult): BrowserSearchResult {
   const entity = inferEntity(result);
+  const recordId = parseRecordId(result.id);
 
   return {
     id: result.id,
+    recordId: recordId?.rawId ?? null,
     title: result.title,
     text: result.text,
     href: buildBrowserHref(result, entity),
