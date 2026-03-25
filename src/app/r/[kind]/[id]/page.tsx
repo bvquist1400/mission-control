@@ -24,6 +24,11 @@ function prettyPrint(value: unknown): string {
 
 export default async function ReaderPage({ params }: ReaderPageProps) {
   const { kind, id } = await params;
+
+  if (kind === 'calendar') {
+    redirect(`/calendar/events/${encodeURIComponent(id)}`);
+  }
+
   const typedId = mapRouteKindToTypedId(kind, decodeURIComponent(id));
   if (!typedId) {
     notFound();

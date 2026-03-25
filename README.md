@@ -35,7 +35,7 @@ If you want MCP access outside the browser app, or you still maintain the legacy
   - `none`: skip ingest and only serve already-stored sanitized rows
 - `WORK_ICAL_URL=` optional remote Outlook/M365 ICS feed URL
 - `CALENDAR_LOCAL_ICS_PATH=data/calendar/work-calendar.ics`
-- `CALENDAR_RETENTION_DAYS=14`
+- `CALENDAR_RETENTION_DAYS=183`
 - `CALENDAR_FUTURE_HORIZON_DAYS=30`
 - `CALENDAR_BODY_MAX_CHARS=4000`
 - `CALENDAR_STORE_BODY=false` (default privacy mode)

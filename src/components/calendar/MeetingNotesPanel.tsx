@@ -73,6 +73,7 @@ export function MeetingNotesPanel({ event, implementationId }: MeetingNotesPanel
             key={note.id}
             note={note}
             actionInFlight={controller.actionNoteId === note.id}
+            onView={controller.openViewNoteEditor}
             onEdit={controller.openEditNoteEditor}
             onTogglePin={controller.togglePin}
             onToggleArchived={controller.toggleArchived}
@@ -85,6 +86,8 @@ export function MeetingNotesPanel({ event, implementationId }: MeetingNotesPanel
       <NoteEditorDialog
         open={controller.editorOpen}
         note={controller.editorNote}
+        mode={controller.editorMode}
+        onEditRequest={controller.openEditNoteEditor}
         defaultNoteType={DEFAULT_MEETING_NOTE_TYPE}
         linkingDescription="This note will be linked to the current meeting as its primary context."
         onClose={controller.closeEditor}

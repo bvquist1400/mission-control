@@ -67,6 +67,7 @@ export function TaskNotesPanel({ taskId }: TaskNotesPanelProps) {
             note={note}
             actionInFlight={controller.actionNoteId === note.id}
             showCreateTaskAction={false}
+            onView={controller.openViewNoteEditor}
             onEdit={controller.openEditNoteEditor}
             onTogglePin={controller.togglePin}
             onToggleArchived={controller.toggleArchived}
@@ -78,6 +79,8 @@ export function TaskNotesPanel({ taskId }: TaskNotesPanelProps) {
       <NoteEditorDialog
         open={controller.editorOpen}
         note={controller.editorNote}
+        mode={controller.editorMode}
+        onEditRequest={controller.openEditNoteEditor}
         defaultNoteType={DEFAULT_TASK_NOTE_TYPE}
         linkingDescription="This note will be linked to the current task as its primary context."
         onClose={controller.closeEditor}

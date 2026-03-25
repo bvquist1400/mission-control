@@ -16,6 +16,8 @@ import type {
   UpdateNotePayload,
 } from "@/types/database";
 
+type NoteEditorMode = "create" | "edit" | "view";
+
 interface UseNotesPanelControllerOptions {
   sourceKey: string;
   loadNotes: () => Promise<NoteWithDetails[]>;
@@ -39,6 +41,7 @@ export function useNotesPanelController({
   const [showArchived, setShowArchived] = useState(false);
   const [editorNote, setEditorNote] = useState<NoteWithDetails | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [editorMode, setEditorMode] = useState<NoteEditorMode>("create");
   const [taskDialogNote, setTaskDialogNote] = useState<NoteWithDetails | null>(null);
   const [decisionDialogNote, setDecisionDialogNote] = useState<NoteWithDetails | null>(null);
   const [actionNoteId, setActionNoteId] = useState<string | null>(null);
@@ -84,17 +87,26 @@ export function useNotesPanelController({
 
   function openCreateNoteEditor(): void {
     setEditorNote(null);
+    setEditorMode("create");
     setEditorOpen(true);
   }
 
   function openEditNoteEditor(note: NoteWithDetails): void {
     setEditorNote(note);
+    setEditorMode("edit");
+    setEditorOpen(true);
+  }
+
+  function openViewNoteEditor(note: NoteWithDetails): void {
+    setEditorNote(note);
+    setEditorMode("view");
     setEditorOpen(true);
   }
 
   function closeEditor(): void {
     setEditorOpen(false);
     setEditorNote(null);
+    setEditorMode("create");
   }
 
   async function submitEditor(payload: CreateNotePayload | UpdateNotePayload): Promise<void> {
@@ -183,11 +195,13 @@ export function useNotesPanelController({
     actionNoteId,
     editorNote,
     editorOpen,
+    editorMode,
     taskDialogNote,
     decisionDialogNote,
     setShowArchived,
     openCreateNoteEditor,
     openEditNoteEditor,
+    openViewNoteEditor,
     closeEditor,
     submitEditor,
     togglePin,

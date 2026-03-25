@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { MeetingNotesPanel } from '@/components/calendar/MeetingNotesPanel';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { localDateString } from '@/components/utils/dates';
+import { encodeCalendarEventIdentity } from '@/lib/calendar-event-identity';
 import { addDateOnlyDays } from '@/lib/date-only';
 
 interface CalendarEvent {
@@ -107,6 +108,14 @@ function LoadingSkeleton() {
 
 function getEventKey(event: Pick<CalendarEvent, 'source' | 'external_event_id' | 'start_at'>): string {
   return `${event.source}::${event.external_event_id}::${event.start_at}`;
+}
+
+function getMeetingDetailHref(event: Pick<CalendarEvent, 'source' | 'external_event_id' | 'start_at'>): string {
+  return `/calendar/events/${encodeURIComponent(encodeCalendarEventIdentity({
+    source: event.source,
+    externalEventId: event.external_event_id,
+    startAt: event.start_at,
+  }))}`;
 }
 
 const MAX_MEETING_CONTEXT_CHARS = 8000;
@@ -400,7 +409,12 @@ export default function CalendarPage() {
                         className="grid min-w-[1050px] grid-cols-[1.35fr_1fr_1fr_1.4fr_1.8fr] gap-3 px-4 py-3 text-sm"
                       >
                       <div>
-                        <p className="font-semibold text-foreground">{event.title}</p>
+                        <Link
+                          href={getMeetingDetailHref(event)}
+                          className="font-semibold text-foreground transition hover:text-accent hover:underline"
+                        >
+                          {event.title}
+                        </Link>
                         <p className="mt-1 text-xs text-muted-foreground">{event.is_all_day ? 'All day' : 'Timed event'}</p>
                       </div>
 

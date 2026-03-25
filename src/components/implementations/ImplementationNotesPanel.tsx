@@ -70,6 +70,7 @@ export function ImplementationNotesPanel({ implementationId }: ImplementationNot
             key={note.id}
             note={note}
             actionInFlight={controller.actionNoteId === note.id}
+            onView={controller.openViewNoteEditor}
             onEdit={controller.openEditNoteEditor}
             onTogglePin={controller.togglePin}
             onToggleArchived={controller.toggleArchived}
@@ -82,6 +83,8 @@ export function ImplementationNotesPanel({ implementationId }: ImplementationNot
       <NoteEditorDialog
         open={controller.editorOpen}
         note={controller.editorNote}
+        mode={controller.editorMode}
+        onEditRequest={controller.openEditNoteEditor}
         onClose={controller.closeEditor}
         onSubmit={controller.submitEditor}
       />

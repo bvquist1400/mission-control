@@ -336,7 +336,7 @@ function getCalendarRuntimeConfig(): CalendarRuntimeConfig {
     source: getCalendarSource(process.env.CALENDAR_SOURCE),
     workIcalUrl: process.env.WORK_ICAL_URL?.trim() || null,
     localIcsPath: process.env.CALENDAR_LOCAL_ICS_PATH?.trim() || 'data/calendar/work-calendar.ics',
-    retentionDays: parsePositiveIntEnv('CALENDAR_RETENTION_DAYS', 14),
+    retentionDays: parsePositiveIntEnv('CALENDAR_RETENTION_DAYS', 183),
     futureHorizonDays: parsePositiveIntEnv('CALENDAR_FUTURE_HORIZON_DAYS', 30),
     bodyMaxChars: parsePositiveIntEnv('CALENDAR_BODY_MAX_CHARS', 4000),
     storeBody: parseBooleanEnv('CALENDAR_STORE_BODY', false),

@@ -71,6 +71,15 @@ function parseRecordId(typedId: string): { entity: BrowserSearchEntity; rawId: s
   }
 }
 
+function parseCalendarId(typedId: string): string | null {
+  if (!typedId.startsWith('calendar:')) {
+    return null;
+  }
+
+  const rawId = typedId.slice('calendar:'.length).trim();
+  return rawId.length > 0 ? rawId : null;
+}
+
 function inferEntity(result: MissionControlSearchResult): BrowserSearchEntity {
   const metadataEntity = readString(result.metadata?.entity);
   if (
@@ -149,9 +158,13 @@ function buildBrowserHref(result: MissionControlSearchResult, entity: BrowserSea
     case 'stakeholder':
       return recordId ? `/stakeholders/${encodeURIComponent(recordId.rawId)}` : toRelativeHref(result.url);
     case 'commitment':
-    case 'email':
-    case 'calendar':
       return toRelativeHref(result.url);
+    case 'email':
+      return toRelativeHref(result.url);
+    case 'calendar': {
+      const calendarId = parseCalendarId(result.id);
+      return calendarId ? `/calendar/events/${encodeURIComponent(calendarId)}` : toRelativeHref(result.url);
+    }
   }
 }
 
