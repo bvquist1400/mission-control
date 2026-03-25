@@ -94,7 +94,7 @@ export function TaskDetailModal({
   }
 
   return (
-    <Modal open={!!task} onClose={onClose} title={task?.title}>
+    <Modal open={!!task} onClose={onClose} title={task?.title} size="wide">
       {task && (
         <div className="space-y-4">
           {/* Quick-action bar */}
@@ -164,7 +164,7 @@ export function TaskDetailModal({
             </div>
           ) : (
             <div className="space-y-6">
-              <div className="grid gap-6 xl:grid-cols-3">
+              <div className="grid gap-6 lg:grid-cols-3">
                 <ChecklistSection
                   checklist={checklist}
                   onToggle={(item) => void toggleChecklistItem(item)}

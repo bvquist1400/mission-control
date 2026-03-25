@@ -7,12 +7,14 @@ interface ModalProps {
   open: boolean;
   onClose: () => void;
   title?: string;
+  size?: "default" | "wide";
   children: React.ReactNode;
 }
 
-export function Modal({ open, onClose, title, children }: ModalProps) {
+export function Modal({ open, onClose, title, size = "default", children }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  const panelWidthClass = size === "wide" ? "max-w-[min(94vw,88rem)]" : "max-w-3xl";
 
   // Scroll lock + focus management
   useEffect(() => {
@@ -60,7 +62,7 @@ export function Modal({ open, onClose, title, children }: ModalProps) {
       <div
         ref={panelRef}
         tabIndex={-1}
-        className="relative z-10 w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-card border border-stroke bg-panel shadow-lg outline-none"
+        className={`relative z-10 max-h-[90vh] w-full overflow-y-auto rounded-card border border-stroke bg-panel shadow-lg outline-none ${panelWidthClass}`}
       >
         {/* Header */}
         <div className="flex items-start justify-between gap-3 border-b border-stroke px-5 py-4">

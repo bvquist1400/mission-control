@@ -9,6 +9,9 @@
   --stroke: #30363d;
   --accent: #c41e3a;
   --accent-soft: rgba(196, 30, 58, 0.15);
+  --scrollbar-track: color-mix(in oklab, var(--panel) 88%, black);
+  --scrollbar-thumb: color-mix(in oklab, var(--accent) 52%, var(--panel-muted));
+  --scrollbar-thumb-hover: color-mix(in oklab, var(--accent) 68%, var(--panel-muted));
 }
 
 @theme inline {
@@ -27,6 +30,39 @@
 
 * {
   box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 3px solid var(--scrollbar-track);
+  border-radius: 999px;
+  background: linear-gradient(
+    180deg,
+    var(--scrollbar-thumb) 0%,
+    color-mix(in oklab, var(--scrollbar-thumb) 76%, black) 100%
+  );
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(
+    180deg,
+    var(--scrollbar-thumb-hover) 0%,
+    color-mix(in oklab, var(--scrollbar-thumb-hover) 78%, black) 100%
+  );
+}
+
+*::-webkit-scrollbar-corner {
+  background: var(--scrollbar-track);
 }
 
 body {
