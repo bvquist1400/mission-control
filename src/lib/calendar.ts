@@ -53,6 +53,7 @@ export interface CalendarRangeInput {
 }
 
 export interface ApiCalendarEvent {
+  source?: 'local' | 'ical' | 'graph';
   start_at: string;
   end_at: string;
   title: string;
@@ -61,6 +62,7 @@ export interface ApiCalendarEvent {
   is_all_day: boolean;
   external_event_id: string;
   meeting_context?: string | null;
+  note_count?: number;
   date_et?: string;
   start_time_et?: string;
   end_time_et?: string;

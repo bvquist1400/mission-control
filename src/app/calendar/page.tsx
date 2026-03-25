@@ -2,17 +2,20 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { MeetingNotesPanel } from '@/components/calendar/MeetingNotesPanel';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { localDateString } from '@/components/utils/dates';
 import { addDateOnlyDays } from '@/lib/date-only';
 
 interface CalendarEvent {
+  source: 'local' | 'ical' | 'graph';
   start_at: string;
   end_at: string;
   title: string;
   with_display: string[];
   body_scrubbed_preview: string | null;
   meeting_context: string | null;
+  note_count: number;
   is_all_day: boolean;
   external_event_id: string;
 }
@@ -102,8 +105,8 @@ function LoadingSkeleton() {
   );
 }
 
-function getEventKey(event: Pick<CalendarEvent, 'external_event_id' | 'start_at'>): string {
-  return `${event.external_event_id}::${event.start_at}`;
+function getEventKey(event: Pick<CalendarEvent, 'source' | 'external_event_id' | 'start_at'>): string {
+  return `${event.source}::${event.external_event_id}::${event.start_at}`;
 }
 
 const MAX_MEETING_CONTEXT_CHARS = 8000;
@@ -118,6 +121,7 @@ export default function CalendarPage() {
   const [contextErrors, setContextErrors] = useState<Record<string, string>>({});
   const [savedContextAt, setSavedContextAt] = useState<Record<string, string>>({});
   const [savingContextKey, setSavingContextKey] = useState<string | null>(null);
+  const [expandedNotesKey, setExpandedNotesKey] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -160,6 +164,13 @@ export default function CalendarPage() {
           setContextDrafts(nextDrafts);
           setContextErrors({});
           setSavedContextAt({});
+          setExpandedNotesKey((current) => {
+            if (!current) {
+              return current;
+            }
+
+            return payload.events.some((event) => getEventKey(event) === current) ? current : null;
+          });
         }
       } catch (loadError) {
         if (isMounted) {
@@ -376,12 +387,18 @@ export default function CalendarPage() {
                   const isDirty = draft.trim() !== (event.meeting_context ?? '').trim();
                   const errorMessage = contextErrors[eventKey];
                   const savedAt = savedContextAt[eventKey];
+                  const notesOpen = expandedNotesKey === eventKey;
+                  const notesButtonLabel = event.note_count > 0
+                    ? `${notesOpen ? 'Hide Notes' : 'Show Notes'} (${event.note_count})`
+                    : notesOpen
+                      ? 'Hide Notes'
+                      : 'Show Notes';
 
                   return (
-                    <li
-                      key={`${event.external_event_id}-${event.start_at}`}
-                      className="grid min-w-[1050px] grid-cols-[1.35fr_1fr_1fr_1.4fr_1.8fr] gap-3 px-4 py-3 text-sm"
-                    >
+                      <li
+                        key={getEventKey(event)}
+                        className="grid min-w-[1050px] grid-cols-[1.35fr_1fr_1fr_1.4fr_1.8fr] gap-3 px-4 py-3 text-sm"
+                      >
                       <div>
                         <p className="font-semibold text-foreground">{event.title}</p>
                         <p className="mt-1 text-xs text-muted-foreground">{event.is_all_day ? 'All day' : 'Timed event'}</p>
@@ -432,18 +449,39 @@ export default function CalendarPage() {
                             {draft.length}/{MAX_MEETING_CONTEXT_CHARS}
                             {savedAt && !isDirty ? ` • Saved ${formatDateTime(savedAt)}` : ''}
                           </span>
-                          <button
-                            type="button"
-                            onClick={() => void saveMeetingContext(event)}
-                            disabled={isSaving || !isDirty}
-                            className="rounded-lg border border-stroke px-2.5 py-1 text-xs font-semibold text-foreground transition hover:bg-panel-muted disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            {isSaving ? 'Saving...' : 'Save'}
-                          </button>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setExpandedNotesKey((current) => (current === eventKey ? null : eventKey))}
+                              className="rounded-lg border border-stroke px-2.5 py-1 text-xs font-semibold text-foreground transition hover:bg-panel-muted"
+                            >
+                              {notesButtonLabel}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void saveMeetingContext(event)}
+                              disabled={isSaving || !isDirty}
+                              className="rounded-lg border border-stroke px-2.5 py-1 text-xs font-semibold text-foreground transition hover:bg-panel-muted disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {isSaving ? 'Saving...' : 'Save'}
+                            </button>
+                          </div>
                         </div>
 
                         {errorMessage ? <p className="text-xs text-red-600">{errorMessage}</p> : null}
                       </div>
+
+                      {notesOpen ? (
+                        <div className="col-span-full pt-1">
+                          <MeetingNotesPanel
+                            event={{
+                              source: event.source,
+                              externalEventId: event.external_event_id,
+                              startAt: event.start_at,
+                            }}
+                          />
+                        </div>
+                      ) : null}
                     </li>
                   );
                 })}

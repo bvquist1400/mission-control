@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { buildCalendarEntityId } from '@/lib/calendar-event-identity';
 import {
   buildDayWindows,
   buildSnapshotPayload,
@@ -33,6 +34,11 @@ interface CalendarEventContextRow {
   source: CalendarEventSource;
   external_event_id: string;
   meeting_context: string;
+}
+
+interface NoteLinkCountRow {
+  entity_id: string;
+  note_id: string;
 }
 
 const MAX_MEETING_CONTEXT_CHARS = 8000;
@@ -99,7 +105,15 @@ export async function GET(request: NextRequest) {
 
     const calendarRows = (rows || []) as CalendarEventRow[];
     const contextByEvent = new Map<string, string>();
+    const noteCountByEntityId = new Map<string, number>();
     const externalEventIds = [...new Set(calendarRows.map((row) => row.external_event_id).filter(Boolean))];
+    const calendarEntityIds = calendarRows.map((row) =>
+      buildCalendarEntityId({
+        source: row.source,
+        externalEventId: row.external_event_id,
+        startAt: row.start_at,
+      })
+    );
 
     if (externalEventIds.length > 0) {
       const { data: contextRows, error: contextError } = await supabase
@@ -123,8 +137,42 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    if (calendarEntityIds.length > 0) {
+      const { data: noteLinkRows, error: noteLinkError } = await supabase
+        .from('note_links')
+        .select('entity_id, note_id')
+        .eq('user_id', userId)
+        .eq('entity_type', 'calendar_event')
+        .in('entity_id', calendarEntityIds);
+
+      if (noteLinkError) {
+        if (!isMissingRelationError(noteLinkError)) {
+          throw noteLinkError;
+        }
+      } else {
+        const noteIdsByEntity = new Map<string, Set<string>>();
+
+        for (const row of (noteLinkRows || []) as NoteLinkCountRow[]) {
+          const entityId = row.entity_id;
+          const noteId = row.note_id;
+          if (!entityId || !noteId) {
+            continue;
+          }
+
+          const noteIds = noteIdsByEntity.get(entityId) ?? new Set<string>();
+          noteIds.add(noteId);
+          noteIdsByEntity.set(entityId, noteIds);
+        }
+
+        for (const [entityId, noteIds] of noteIdsByEntity.entries()) {
+          noteCountByEntityId.set(entityId, noteIds.size);
+        }
+      }
+    }
+
     // Allowed fields contract: never return raw body, URLs, emails, or provider-only sensitive fields.
     const events = calendarRows.map((row) => decorateCalendarEvent({
+      source: row.source,
       start_at: row.start_at,
       end_at: row.end_at,
       title: row.title,
@@ -133,6 +181,14 @@ export async function GET(request: NextRequest) {
       is_all_day: row.is_all_day,
       external_event_id: row.external_event_id,
       meeting_context: contextByEvent.get(buildContextKey(row.source, row.external_event_id)) ?? null,
+      note_count:
+        noteCountByEntityId.get(
+          buildCalendarEntityId({
+            source: row.source,
+            externalEventId: row.external_event_id,
+            startAt: row.start_at,
+          })
+        ) ?? 0,
     }));
 
     const busyBlocks = mergeBusyBlocks(events, rangeContext.windows);

@@ -1,4 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import {
+  decodeCalendarEventIdentity,
+  encodeCalendarEventIdentity,
+} from '../calendar-event-identity';
 
 export interface MissionControlSearchResult {
   id: string;
@@ -17,12 +21,6 @@ type SearchEntityKind =
   | 'commitment'
   | 'email'
   | 'calendar';
-
-interface CalendarKey {
-  source: string;
-  externalEventId: string;
-  startAt: string;
-}
 
 interface SearchCandidate extends MissionControlSearchResult {
   score: number;
@@ -224,22 +222,20 @@ function buildRecordId(entity: Exclude<SearchEntityKind, 'email' | 'calendar'>, 
   return `record:${entity}:${id}`;
 }
 
-export function encodeCalendarSearchId(key: CalendarKey): string {
-  return Buffer.from(`${key.source}|${key.externalEventId}|${key.startAt}`, 'utf8').toString('base64url');
+export function encodeCalendarSearchId(key: {
+  source: 'local' | 'ical' | 'graph';
+  externalEventId: string;
+  startAt: string;
+}): string {
+  return encodeCalendarEventIdentity(key);
 }
 
-export function decodeCalendarSearchId(input: string): CalendarKey | null {
-  try {
-    const decoded = Buffer.from(input, 'base64url').toString('utf8');
-    const [source, externalEventId, startAt] = decoded.split('|');
-    if (!source || !externalEventId || !startAt) {
-      return null;
-    }
-
-    return { source, externalEventId, startAt };
-  } catch {
-    return null;
-  }
+export function decodeCalendarSearchId(input: string): {
+  source: 'local' | 'ical' | 'graph';
+  externalEventId: string;
+  startAt: string;
+} | null {
+  return decodeCalendarEventIdentity(input);
 }
 
 export function isMissionControlSearchResult(value: unknown): value is MissionControlSearchResult {

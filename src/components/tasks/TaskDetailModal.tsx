@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { TaskMetaEditor } from "@/components/tasks/TaskMetaEditor";
+import { TaskNotesPanel } from "@/components/tasks/TaskNotesPanel";
 import { ChecklistSection } from "@/components/tasks/ChecklistSection";
 import { TaskComments } from "@/components/tasks/TaskComments";
 import { TaskDependencies } from "@/components/tasks/TaskDependencies";
@@ -162,29 +163,33 @@ export function TaskDetailModal({
               <div className="h-5 w-5 animate-spin rounded-full border-2 border-accent border-t-transparent" />
             </div>
           ) : (
-            <div className="grid gap-6 xl:grid-cols-3">
-              <ChecklistSection
-                checklist={checklist}
-                onToggle={(item) => void toggleChecklistItem(item)}
-                onAdd={(text) => void addChecklistItem(text)}
-                onUpdate={(itemId, text) => void updateChecklistItem(itemId, text)}
-                onDelete={(itemId) => void deleteChecklistItem(itemId)}
-              />
-              <TaskDependencies
-                taskId={task.id}
-                dependencies={dependencies}
-                availableTasks={allTasks}
-                availableCommitments={commitments}
-                onDependencyAdded={addDependency}
-                onDependencyRemoved={removeDependency}
-              />
-              <TaskComments
-                taskId={task.id}
-                comments={comments}
-                onCommentAdded={addComment}
-                onCommentUpdated={updateComment}
-                onCommentDeleted={deleteComment}
-              />
+            <div className="space-y-6">
+              <div className="grid gap-6 xl:grid-cols-3">
+                <ChecklistSection
+                  checklist={checklist}
+                  onToggle={(item) => void toggleChecklistItem(item)}
+                  onAdd={(text) => void addChecklistItem(text)}
+                  onUpdate={(itemId, text) => void updateChecklistItem(itemId, text)}
+                  onDelete={(itemId) => void deleteChecklistItem(itemId)}
+                />
+                <TaskDependencies
+                  taskId={task.id}
+                  dependencies={dependencies}
+                  availableTasks={allTasks}
+                  availableCommitments={commitments}
+                  onDependencyAdded={addDependency}
+                  onDependencyRemoved={removeDependency}
+                />
+                <TaskComments
+                  taskId={task.id}
+                  comments={comments}
+                  onCommentAdded={addComment}
+                  onCommentUpdated={updateComment}
+                  onCommentDeleted={deleteComment}
+                />
+              </div>
+
+              <TaskNotesPanel taskId={task.id} />
             </div>
           )}
         </div>

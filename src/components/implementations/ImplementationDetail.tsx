@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { ImplementationNotesPanel } from "@/components/implementations/ImplementationNotesPanel";
 import { ProjectsList } from "@/components/projects/ProjectsList";
 import { ScopedTaskGrid } from "@/components/tasks/ScopedTaskGrid";
 import { dateOnlyToInputValue, formatDateOnly } from "@/components/utils/dates";
@@ -583,6 +584,8 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
         </div>
         <ProjectsList implementationId={id} embedded />
       </section>
+
+      <ImplementationNotesPanel implementationId={id} />
 
       {/* Status Updates Log */}
       <section className="rounded-card border border-stroke bg-panel p-5 shadow-sm">

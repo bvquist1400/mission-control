@@ -37,7 +37,7 @@ Implementation (Application) -> Project -> Task
 
 - RLS: 4-policy pattern (SELECT, INSERT, UPDATE, DELETE) on every table
 - `updated_at` triggers: reuse `set_updated_at()` function
-- Migrations: `supabase/migrations/` (latest: 030)
+- Migrations: `supabase/migrations/` (latest: 032)
 
 ### MCP Server
 
@@ -63,6 +63,10 @@ Implementation (Application) -> Project -> Task
 | Purpose | Path |
 |---|---|
 | Database types | `src/types/database.ts` |
+| Notes service surface | `src/lib/notes.ts` |
+| Notes shared helpers | `src/lib/notes-shared.ts` |
+| Notes relation helpers | `src/lib/notes-relations.ts` |
+| Calendar event identity helper | `src/lib/calendar-event-identity.ts` |
 | Sidebar nav | `src/components/layout/Sidebar.tsx` |
 | MCP server (all tools) | `src/app/api/mcp/route.ts` |
 | MCP OAuth | `src/lib/mcp/oauth.ts` |
@@ -80,6 +84,7 @@ Implementation (Application) -> Project -> Task
 | Weekly review route | `src/app/api/briefing/weekly-review/route.ts` |
 | Monthly review route | `src/app/api/briefing/monthly-review/route.ts` |
 | Review automation workflow export | `n8n/mission-control-project-reviews.json` |
+| Notes schema migration | `supabase/migrations/032_add_notes.sql` |
 | Upstream API router | `src/app/api/mcp-upstream/[...path]/route.ts` |
 
 ## Briefing Model Note

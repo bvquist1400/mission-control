@@ -12,7 +12,11 @@
     "test:calendar-api": "node scripts/test-calendar-api-contract.mjs",
     "test:sprint-dates": "node --experimental-strip-types scripts/test-sprint-date-ranges.mjs",
     "test:today-sprint": "node --experimental-strip-types scripts/test-today-sprint-progress.mjs",
-    "test:mcp-oauth": "node --experimental-strip-types scripts/test-mcp-oauth.mjs",
+    "test:mcp-oauth": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-mcp-oauth.mjs",
+    "test:notes": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-notes.mjs",
+    "test:implementation-notes-ui": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-implementation-notes-panel.mjs",
+    "test:meeting-notes-ui": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-meeting-notes-panel.mjs",
+    "test:task-notes-ui": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-task-notes-panel.mjs",
     "test:work-intelligence": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-work-intelligence.mjs"
   },
   "dependencies": {

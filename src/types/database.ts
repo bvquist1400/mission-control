@@ -452,6 +452,171 @@ export interface ReviewSnapshotPayload {
   payload: Record<string, unknown>;
 }
 
+export type NoteType =
+  | "working_note"
+  | "meeting_note"
+  | "application_note"
+  | "decision_note"
+  | "prep_note"
+  | "retrospective_note";
+export type NoteStatus = "active" | "archived";
+export type NoteLinkEntityType =
+  | "task"
+  | "calendar_event"
+  | "implementation"
+  | "project"
+  | "stakeholder"
+  | "commitment"
+  | "sprint";
+export type NoteLinkRole =
+  | "primary_context"
+  | "meeting_for"
+  | "related_task"
+  | "decision_about"
+  | "prep_for"
+  | "reference";
+export type NoteTaskRelationshipType = "linked" | "created_from" | "discussed_in";
+export type NoteDecisionStatus = "active" | "superseded" | "reversed";
+
+export interface Note {
+  id: string;
+  user_id: string;
+  title: string;
+  body_markdown: string;
+  note_type: NoteType;
+  status: NoteStatus;
+  pinned: boolean;
+  last_reviewed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NoteLink {
+  id: string;
+  user_id: string;
+  note_id: string;
+  entity_type: NoteLinkEntityType;
+  entity_id: string;
+  link_role: NoteLinkRole;
+  created_at: string;
+}
+
+export interface NoteTask {
+  id: string;
+  user_id: string;
+  note_id: string;
+  task_id: string;
+  relationship_type: NoteTaskRelationshipType;
+  created_at: string;
+}
+
+export interface NoteTaskWithTask extends NoteTask {
+  task: TaskSummary | null;
+}
+
+export interface NoteDecision {
+  id: string;
+  user_id: string;
+  note_id: string;
+  title: string;
+  summary: string;
+  decision_status: NoteDecisionStatus;
+  decided_at: string | null;
+  decided_by_stakeholder_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NoteWithDetails extends Note {
+  links: NoteLink[];
+  task_links: NoteTaskWithTask[];
+  decisions: NoteDecision[];
+}
+
+export interface CreateNotePayload {
+  title: string;
+  body_markdown?: string;
+  note_type?: NoteType;
+  status?: NoteStatus;
+  pinned?: boolean;
+  last_reviewed_at?: string | null;
+}
+
+export interface UpdateNotePayload {
+  title?: string;
+  body_markdown?: string;
+  note_type?: NoteType;
+  status?: NoteStatus;
+  pinned?: boolean;
+  last_reviewed_at?: string | null;
+}
+
+export interface ListNotesOptions {
+  note_type?: NoteType;
+  status?: NoteStatus;
+  pinned?: boolean;
+  entity_type?: NoteLinkEntityType;
+  entity_id?: string;
+  link_role?: NoteLinkRole;
+  limit?: number;
+  offset?: number;
+}
+
+export interface LinkNoteToEntityPayload {
+  entity_type: NoteLinkEntityType;
+  entity_id: string;
+  link_role?: NoteLinkRole;
+}
+
+export interface LinkTaskToNotePayload {
+  task_id: string;
+  relationship_type?: NoteTaskRelationshipType;
+}
+
+export interface CreateTaskFromNotePayload {
+  title: string;
+  description?: string | null;
+  implementation_id?: string | null;
+  project_id?: string | null;
+  sprint_id?: string | null;
+  status?: TaskStatus;
+  task_type?: TaskType;
+  estimated_minutes?: number;
+  estimate_source?: EstimateSource;
+  due_at?: string | null;
+  priority_score?: number;
+  blocker?: boolean;
+  needs_review?: boolean;
+  waiting_on?: string | null;
+  relationship_type?: NoteTaskRelationshipType;
+}
+
+export interface CreateNoteDecisionPayload {
+  title: string;
+  summary: string;
+  decision_status?: NoteDecisionStatus;
+  decided_at?: string | null;
+  decided_by_stakeholder_id?: string | null;
+}
+
+export interface UpdateNoteDecisionStatusPayload {
+  decision_status: NoteDecisionStatus;
+  decided_at?: string | null;
+  decided_by_stakeholder_id?: string | null;
+}
+
+export interface CreateMeetingNotePayload {
+  calendar_event: {
+    source: "local" | "ical" | "graph";
+    external_event_id: string;
+    start_at: string;
+  };
+  implementation_id?: string | null;
+  project_id?: string | null;
+  body_markdown?: string;
+  pinned?: boolean;
+}
+
 // Allowed fields for implementation updates via API
 export interface ImplementationUpdatePayload {
   name?: string;
