@@ -64,7 +64,6 @@ async function fetchTaskModalCommitments(): Promise<CommitmentSummary[]> {
 
 const navItems = [
   { href: "/", label: "Today", hint: "Daily operating view" },
-  { href: "/weekly-review", label: "Weekly Review", hint: "Shipped work, drag, and next-week calls" },
   { href: "/llm", label: "AI Playbooks", hint: "Prompt patterns and workflow tips" },
   { href: "/backlog", label: "Backlog", hint: "All tasks with filters and edits" },
   { href: "/sprints", label: "Sprints", hint: "Week-level planning and sprint snapshots" },
@@ -72,7 +71,6 @@ const navItems = [
   { href: "/projects", label: "Projects", hint: "Track work within applications" },
   { href: "/stakeholders", label: "Stakeholders", hint: "People and commitments" },
   { href: "/focus", label: "Focus", hint: "Planner directives" },
-  { href: "/planner", label: "Planner", hint: "Plan generation and refresh" },
   { href: "/calendar", label: "Calendar", hint: "Imported schedule metadata" },
 ];
 

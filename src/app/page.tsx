@@ -48,6 +48,7 @@ interface TodayData {
   dueSoon: TaskCardData[];
   waitingOn: WaitingTask[];
   needsReviewCount: number;
+  openArtifactCount: number;
   capacity: CapacityResult;
   meetings: MeetingEvent[];
   latestSync: SyncTodaySummary | null;
@@ -78,6 +79,12 @@ interface SyncTodaySummary {
 
 interface LatestSyncResponse {
   sync?: SyncTodaySummary | null;
+}
+
+interface IntelligenceInboxResponse {
+  counts?: {
+    open?: number;
+  };
 }
 
 interface SprintProgressSummary {
@@ -404,10 +411,11 @@ async function fetchExecutionSlices(
 
 async function fetchTodayData(timeZone: string): Promise<TodayData> {
   const calendarTodayUrl = `/api/calendar/today?${new URLSearchParams({ tz: timeZone }).toString()}`;
-  const [calendarRes, latestSyncRes, sprintRes] = await Promise.allSettled([
+  const [calendarRes, latestSyncRes, sprintRes, inboxRes] = await Promise.allSettled([
     fetchJson<CalendarTodayResponse>(calendarTodayUrl, "Failed to fetch today's meetings"),
     fetchJson<LatestSyncResponse>("/api/planner/sync-today/latest", "Failed to fetch sync summary"),
     fetchCurrentSprintProgress(timeZone),
+    fetchJson<IntelligenceInboxResponse>("/api/intelligence/artifacts", "Failed to fetch artifact inbox"),
   ]);
 
   const sectionErrors: TodaySectionErrors = {};
@@ -450,6 +458,12 @@ async function fetchTodayData(timeZone: string): Promise<TodayData> {
     sectionErrors.sprint = message;
   }
 
+  const openArtifactCount = inboxRes.status === "fulfilled"
+    ? typeof inboxRes.value?.counts?.open === "number"
+      ? inboxRes.value.counts.open
+      : 0
+    : 0;
+
   const syncedTaskIds = new Set(latestSync?.task_ids || []);
   const meetingMinutes = normalizeBusyMinutes(calendarPayload.busyMinutes);
   const execution = await fetchExecutionSlices(timeZone, meetingMinutes, syncedTaskIds, null, sectionUpdatedAt);
@@ -461,6 +475,7 @@ async function fetchTodayData(timeZone: string): Promise<TodayData> {
   return {
     ...execution.slices,
     meetings,
+    openArtifactCount,
     latestSync,
     currentSprint,
     sectionErrors: {
@@ -533,19 +548,6 @@ function getMeetingTemporalStatus(event: MeetingEvent, nowMs: number): MeetingTe
   }
 
   return "Upcoming";
-}
-
-function formatSyncTime(syncAt: string, timeZone: string): string {
-  const syncDate = new Date(syncAt);
-  if (Number.isNaN(syncDate.getTime())) {
-    return "Unknown time";
-  }
-
-  return new Intl.DateTimeFormat("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    timeZone,
-  }).format(syncDate);
 }
 
 function formatUpdatedTime(updatedAt: string, timeZone: string): string {
@@ -891,10 +893,14 @@ export default function TodayPage() {
         actions={
           <div className="flex items-center gap-3">
             <Link
-              href="/planner"
-              className="rounded-full border border-stroke bg-panel px-3 py-1.5 text-sm font-medium text-muted-foreground transition hover:bg-panel-muted hover:text-foreground"
+              href="/backlog?review=intelligence"
+              className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
+                (data?.openArtifactCount ?? 0) > 0
+                  ? "border-red-500/30 bg-red-500/10 text-red-300 hover:border-red-400/40 hover:bg-red-500/15"
+                  : "border-stroke bg-panel text-muted-foreground hover:bg-panel-muted hover:text-foreground"
+              }`}
             >
-              Open Planner
+              Artifact Inbox ({data?.openArtifactCount ?? 0})
             </Link>
             {data && <CapacityMeter capacity={data.capacity} />}
             <p className="rounded-full bg-panel-muted px-3 py-1.5 text-sm font-medium text-muted-foreground">{today}</p>
@@ -909,34 +915,6 @@ export default function TodayPage() {
       )}
 
       <FocusStatusBar />
-
-      {data ? (
-        <section className="rounded-lg border border-stroke bg-panel-muted px-4 py-3 text-sm">
-          {data.sectionErrors.sync ? (
-            <p className="text-muted-foreground">Sync status is temporarily unavailable.</p>
-          ) : data.latestSync ? (
-            <p className="text-muted-foreground">
-              Last sync at{" "}
-              <span className="font-semibold text-foreground">{formatSyncTime(data.latestSync.synced_at, timeZone)}</span>
-              {" · "}
-              promoted <span className="font-semibold text-foreground">{data.latestSync.promoted}</span>
-              {", "}
-              demoted <span className="font-semibold text-foreground">{data.latestSync.demoted}</span>
-              {", "}
-              pinned protected <span className="font-semibold text-foreground">{data.latestSync.skipped_pinned}</span>
-            </p>
-          ) : (
-            <p className="text-muted-foreground">
-              No recent sync found. Top 3 is rank-ordered from active work; sync selects the planned set.
-            </p>
-          )}
-          {data.sectionUpdatedAt.sync ? (
-            <p className="mt-1 text-xs text-muted-foreground">
-              Updated {formatUpdatedTime(data.sectionUpdatedAt.sync, timeZone)}
-            </p>
-          ) : null}
-        </section>
-      ) : null}
 
       {loading ? (
         <LoadingSkeleton />

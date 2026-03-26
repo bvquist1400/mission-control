@@ -37,12 +37,16 @@ interface FaqItem {
 
 const QUICK_TIPS: QuickTip[] = [
   {
-    title: "Start read-only",
+    title: "Start review-first",
     body: "Ask for recommendations first. Add `do not apply yet` when you want analysis without writes.",
   },
   {
     title: "Prefer MCP",
     body: "ChatGPT and Claude should both use Mission Control through MCP. Keep the older custom GPT Actions path only as a fallback.",
+  },
+  {
+    title: "Use the inbox",
+    body: "Open artifacts now surface in the morning brief and the Artifact Inbox. Accept or dismiss there instead of inventing tags or side notes.",
   },
   {
     title: "Use exact scope",
@@ -53,62 +57,62 @@ const QUICK_TIPS: QuickTip[] = [
     body: "Say `for 2026-03-13` instead of `this Friday` when timing matters.",
   },
   {
-    title: "Ask for IDs",
-    body: "When you may approve follow-up actions, ask for task IDs in the recommendation so approval is one step later.",
+    title: "Preserve decisions",
+    body: "If notes contain actual decisions, ask the LLM to preserve them explicitly instead of flattening them into generic note context.",
   },
 ];
 
 const PLAYBOOK_SECTIONS: PlaybookSection[] = [
   {
     title: "Cadence",
-    description: "Best prompts for daily and weekly operating reviews.",
+    description: "Best prompts for the daily operating loop now that open review items and the artifact inbox are live.",
     playbooks: [
       {
         id: "daily-briefs",
-        title: "Daily Briefs",
-        summary: "Use the exact brief phrases, then ask for the recommended today list without applying it.",
-        prompt: "morning brief. Then recommend a sync_today list with task IDs and one short reason each, but do not apply it yet.",
+        title: "Morning Brief + Open Review",
+        summary: "Use the standard brief phrase, then explicitly ask for the open review items and what needs a decision first.",
+        prompt: "morning brief. Then show the open review items, grouped by what needs a decision today, but do not apply anything yet.",
         alternates: [
-          "midday brief. Call out what is done, what is still active, and whether I should replan.",
-          "eod brief. Focus on rollover risk and tomorrow prep.",
+          "midday brief. Call out what is done, what is still active, and which accepted artifacts are still awaiting action.",
+          "eod brief. Focus on rollover risk, open artifacts, and tomorrow prep.",
         ],
-        uses: ["get_calendar", "list_tasks", "list_sprints", "list_commitments", "sync_today"],
+        uses: ["get_calendar", "list_tasks", "list_sprints", "list_commitments", "get_briefing"],
         surfaces: ["MCP", "Legacy Actions"],
         href: "/",
         hrefLabel: "Open Today",
-        note: "Approving `sync_today` should be explicit. If you want only the recommendation, say `do not apply yet` every time.",
+        note: "The morning brief is now the first place open artifacts surface. Use the inbox for the actual accept or dismiss decision.",
       },
       {
-        id: "weekly-review",
-        title: "Weekly Review",
-        summary: "This is the fastest way to spot stalled work, pending decisions, and next-week actions.",
-        prompt: "Run a weekly review for this week. Focus on stalled work, pending decisions, cold commitments, and end with the top 3 next-week actions.",
+        id: "artifact-inbox-triage",
+        title: "Artifact Inbox Triage",
+        summary: "Best for decision passes when you want the LLM to help reason about open artifacts before you accept or dismiss them.",
+        prompt: "Review the open artifacts in Mission Control. For each one, tell me whether I should accept or dismiss it, why, and what evidence matters most. Do not apply any status changes yet.",
         alternates: [
-          "Run a weekly review for 2026-03-09 and tell me what to escalate, park, or finish next week.",
-          "Give me a weekly review focused only on shipped work and stalled work.",
+          "Walk the artifact inbox and rank the open items by urgency and confidence.",
+          "Show me which accepted artifacts are still awaiting action and which open artifacts need a decision first.",
         ],
-        uses: ["get_weekly_review"],
-        surfaces: ["MCP", "Legacy Actions"],
-        href: "/weekly-review",
-        hrefLabel: "Open Weekly Review",
-        note: "If you still use the legacy private custom GPT and weekly review is missing, re-import the latest OpenAPI schema in the GPT builder.",
+        uses: ["get_briefing", "list_tasks", "search", "fetch"],
+        surfaces: ["MCP"],
+        href: "/backlog?review=intelligence",
+        hrefLabel: "Open Artifact Inbox",
+        note: "The inbox already has the persisted summary, reason, evidence, and task linkage. The LLM should read that state, not recompute detector logic in the chat layer.",
       },
     ],
   },
   {
     title: "Notes To Action",
-    description: "Use these when you are pasting meeting notes, email threads, or rough action lists.",
+    description: "Use these when you are pasting meeting notes, email threads, or rough action lists into the notes-first workflow.",
     playbooks: [
       {
         id: "meeting-notes-review",
         title: "Review Notes Before Writing",
         summary: "Best default for pasted notes. It should suggest tasks, checklist items, stakeholder updates, and commitments without changing data yet.",
-        prompt: "Review these meeting notes and suggest tasks, checklist items, stakeholder updates, and commitments, but do not apply anything yet:\n\n[paste notes here]",
+        prompt: "Review these meeting notes and suggest tasks, checklist items, stakeholder updates, commitments, and any explicit decisions that should be preserved, but do not apply anything yet:\n\n[paste notes here]",
         alternates: [
-          "Summarize the exact Mission Control updates you recommend from these notes, including assumptions.",
+          "Summarize the exact Mission Control updates you recommend from these notes, including assumptions and any decisions that should be first-class.",
           "Turn this into action items and commitment follow-ups, but wait for approval before writing.",
         ],
-        uses: ["parse_notes", "create_task", "update_stakeholder", "create_commitment"],
+        uses: ["parse_notes", "create_task", "update_stakeholder", "create_commitment", "create_note_decision"],
         surfaces: ["MCP", "Legacy Actions"],
         href: "/backlog",
         hrefLabel: "Open Backlog",
@@ -117,12 +121,12 @@ const PLAYBOOK_SECTIONS: PlaybookSection[] = [
         id: "meeting-notes-apply",
         title: "Apply Notes",
         summary: "Use only after you have reviewed the suggested changes and want the writes to happen.",
-        prompt: "Apply these meeting notes to Mission Control. Create the tasks, update stakeholder context, and create any implied commitments:\n\n[paste notes here]",
+        prompt: "Apply these meeting notes to Mission Control. Create the tasks, update stakeholder context, create any implied commitments, and preserve explicit decisions as decisions rather than burying them in prose:\n\n[paste notes here]",
         alternates: [
           "Apply the suggested updates from the notes we just reviewed.",
           "Create the tasks and commitment follow-ups from this thread, then summarize what changed.",
         ],
-        uses: ["parse_notes", "create_task", "update_stakeholder", "create_commitment"],
+        uses: ["parse_notes", "create_task", "update_stakeholder", "create_commitment", "create_note_decision"],
         surfaces: ["MCP", "Legacy Actions"],
         href: "/stakeholders",
         hrefLabel: "Open Stakeholders",
@@ -131,22 +135,22 @@ const PLAYBOOK_SECTIONS: PlaybookSection[] = [
     ],
   },
   {
-    title: "Planning And Focus",
-    description: "Prompts that work well with the planner and focus-directive system.",
+    title: "Execution Control",
+    description: "Prompts for steering active work now that detection, promotion, reminder comments, and the inbox are all live.",
     playbooks: [
       {
-        id: "planner-recommendation",
-        title: "Planner Recommendation",
-        summary: "Ask for the plan plus a human-readable recommendation before anything is synced.",
-        prompt: "Use the planner to recommend my today list. Include task IDs, explain why each task made the list, and wait for approval before sync_today.",
+        id: "accepted-artifact-follow-through",
+        title: "Accepted Artifact Follow-through",
+        summary: "Use this when you want to inspect accepted artifacts that represent committed work still awaiting action.",
+        prompt: "Show me the accepted artifacts that are still awaiting action. For each one, tell me what concrete next step would actually resolve it and whether the underlying task state supports that action.",
         alternates: [
-          "Show me the planner recommendation for today and what should probably come off the list.",
-          "Give me the now, next 3, and exceptions from the planner in plain English.",
+          "Review accepted artifacts and tell me which ones are genuinely still active versus already resolved by newer task context.",
+          "Walk the accepted queue and tell me what Brent has effectively committed to doing.",
         ],
-        uses: ["get_plan", "sync_today"],
-        surfaces: ["MCP", "Legacy Actions"],
-        href: "/planner",
-        hrefLabel: "Open Planner",
+        uses: ["search", "fetch", "list_tasks"],
+        surfaces: ["MCP"],
+        href: "/backlog?review=intelligence",
+        hrefLabel: "Open Artifact Inbox",
       },
       {
         id: "focus-directive",
@@ -225,8 +229,8 @@ const FAQ_ITEMS: FaqItem[] = [
     answer: "That is the safer path. If you want the write to happen, say `apply these changes` after you review the recommendation.",
   },
   {
-    question: "Why did it recommend sync_today but not run it?",
-    answer: "The planner workflow is designed to wait for explicit approval before calling `sync_today`.",
+    question: "Why is something in the morning brief but not in the accepted inbox yet?",
+    answer: "Open artifacts surface in the brief first. They only move to the accepted queue after you explicitly accept them in the Artifact Inbox.",
   },
   {
     question: "Should I use MCP or the legacy custom GPT?",
@@ -237,8 +241,12 @@ const FAQ_ITEMS: FaqItem[] = [
     answer: "The custom GPT keeps its own imported schema copy. Re-import the latest OpenAPI schema after tool changes.",
   },
   {
-    question: "When should I use weekly review versus the planner?",
-    answer: "Use weekly review for shipped work, drag, and next-week calls. Use the planner for the current day and the next ranked tasks.",
+    question: "Why did a reminder show up as a system comment on a task?",
+    answer: "That is the v1 reminder output. Accepted follow-up artifacts can be applied as durable `source='system'` task comments so the action is visible on the underlying task and auditable in the ledger.",
+  },
+  {
+    question: "Why does the GPT need to preserve note decisions separately from notes?",
+    answer: "Because decisions are stronger than generic note context. The intelligence layer reads both, but it should not flatten explicit decisions into undifferentiated evidence soup.",
   },
 ];
 
@@ -281,14 +289,15 @@ export default function LlmPage() {
     <div className="space-y-8">
       <PageHeader
         title="AI Playbooks"
-        description="Prompt patterns and workflow shortcuts for Mission Control over MCP, with notes for the legacy ChatGPT Actions fallback. Start read-only, use explicit scope and dates, and only say apply when you want writes."
+        description="Prompt patterns and workflow shortcuts for Mission Control over MCP, updated for the live intelligence layer, morning brief review items, artifact inbox, and notes-plus-decisions workflow."
       />
 
       <section className="rounded-card border border-amber-500/30 bg-amber-500/10 p-4 shadow-sm">
         <p className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-200">Important</p>
         <p className="mt-2 text-sm text-amber-100">
           Mission Control now treats MCP as the default path for both ChatGPT and Claude. If you still use the older private custom GPT
-          Actions setup, re-import the latest OpenAPI schema after workflow changes because that fallback schema does not auto-refresh.
+          Actions setup, re-import the latest OpenAPI schema after workflow changes because that fallback schema does not auto-refresh. The
+          current operating loop is brief first, inbox decision second, then reminder/apply paths through the existing artifact ledger.
         </p>
       </section>
 
