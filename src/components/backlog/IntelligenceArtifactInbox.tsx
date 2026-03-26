@@ -244,6 +244,7 @@ export function IntelligenceArtifactInbox() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actingById, setActingById] = useState<Record<string, boolean>>({});
+  const [showDismissed, setShowDismissed] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -367,13 +368,34 @@ export function IntelligenceArtifactInbox() {
             actingById={actingById}
           />
 
-          <QueueSection
-            title="Recently Dismissed"
-            description="Recent dismissals for context."
-            emptyLabel="No recently dismissed artifacts yet."
-            items={payload.dismissed}
-            actingById={actingById}
-          />
+          <section className="space-y-3">
+            <div className="flex flex-col gap-3 rounded-card border border-stroke bg-panel p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-foreground">Recently Dismissed</h2>
+                <p className="text-sm text-muted-foreground">
+                  Hidden by default to keep the inbox focused. Expand when you need recent dismissal context.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDismissed((current) => !current)}
+                className="inline-flex items-center justify-center rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm font-semibold text-foreground transition hover:bg-panel"
+                aria-expanded={showDismissed}
+              >
+                {showDismissed ? "Hide dismissed" : `Show dismissed (${payload.dismissed.length})`}
+              </button>
+            </div>
+
+            {showDismissed ? (
+              <QueueSection
+                title="Dismissed History"
+                description="Recent dismissals for context."
+                emptyLabel="No recently dismissed artifacts yet."
+                items={payload.dismissed}
+                actingById={actingById}
+              />
+            ) : null}
+          </section>
         </>
       )}
     </div>
