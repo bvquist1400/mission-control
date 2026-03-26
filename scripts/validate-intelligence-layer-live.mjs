@@ -349,6 +349,10 @@ class LiveValidationPromotionStore {
     return this.baseStore.listActiveArtifactsByFamily(userId, promotionFamilyKey);
   }
 
+  getLatestUserDismissalTransitionByFamily(userId, promotionFamilyKey) {
+    return this.baseStore.getLatestUserDismissalTransitionByFamily(userId, promotionFamilyKey);
+  }
+
   listActiveArtifactsBySubject(userId, subjectKey) {
     return this.baseStore.listActiveArtifactsBySubject(userId, subjectKey);
   }

@@ -164,6 +164,7 @@ export interface IntelligenceArtifactCandidate {
 export interface PromoteIntelligenceContractsOptions {
   now?: Date;
   enableTaskStalenessClarityGrouping?: boolean;
+  dismissalCooldownDays?: number;
 }
 
 export interface TransitionIntelligenceArtifactStatusOptions {
@@ -181,6 +182,10 @@ export interface PromoteIntelligenceContractsResult {
 export interface IntelligencePromotionStore {
   createContractSnapshot(input: Omit<PersistedIntelligenceContractSnapshot, "id" | "createdAt">): Promise<PersistedIntelligenceContractSnapshot>;
   listActiveArtifactsByFamily(userId: string, promotionFamilyKey: string): Promise<IntelligenceArtifactBundle[]>;
+  getLatestUserDismissalTransitionByFamily(
+    userId: string,
+    promotionFamilyKey: string
+  ): Promise<PersistedIntelligenceArtifactStatusTransition | null>;
   listActiveArtifactsBySubject(userId: string, subjectKey: string): Promise<IntelligenceArtifactBundle[]>;
   createArtifact(input: Omit<PersistedIntelligenceArtifact, "id" | "createdAt" | "updatedAt">): Promise<PersistedIntelligenceArtifact>;
   updateArtifact(

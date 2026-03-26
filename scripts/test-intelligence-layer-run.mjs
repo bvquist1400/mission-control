@@ -189,6 +189,24 @@ class MemoryPromotionStore {
     return this.buildBundles(active);
   }
 
+  async getLatestUserDismissalTransitionByFamily(userId, promotionFamilyKey) {
+    const artifactIds = this.coverages
+      .filter((coverage) => coverage.userId === userId && coverage.promotionFamilyKey === promotionFamilyKey)
+      .map((coverage) => coverage.artifactId);
+
+    const latest = this.statusTransitions
+      .filter(
+        (transition) =>
+          transition.userId === userId &&
+          artifactIds.includes(transition.artifactId) &&
+          transition.toStatus === "dismissed" &&
+          transition.triggeredBy === "user"
+      )
+      .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)))[0];
+
+    return latest ? { ...latest } : null;
+  }
+
   async listActiveArtifactsBySubject(userId, subjectKey) {
     const active = this.artifacts.filter(
       (artifact) =>

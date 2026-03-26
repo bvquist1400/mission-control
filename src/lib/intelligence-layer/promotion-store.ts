@@ -235,6 +235,52 @@ export class SupabaseIntelligencePromotionStore implements IntelligencePromotion
     return hydrateBundles(this.supabase, userId, artifacts);
   }
 
+  async getLatestUserDismissalTransitionByFamily(
+    userId: string,
+    promotionFamilyKey: string
+  ): Promise<PersistedIntelligenceArtifactStatusTransition | null> {
+    const coverageResult = await this.supabase
+      .from("intelligence_artifact_family_coverage")
+      .select("artifact_id")
+      .eq("user_id", userId)
+      .eq("promotion_family_key", promotionFamilyKey);
+
+    if (coverageResult.error) {
+      throw coverageResult.error;
+    }
+
+    const artifactIds = [
+      ...new Set(
+        ((coverageResult.data || []) as Array<Record<string, unknown>>)
+          .map((row) => (typeof row.artifact_id === "string" ? row.artifact_id : null))
+          .filter((value): value is string => Boolean(value))
+      ),
+    ];
+
+    if (artifactIds.length === 0) {
+      return null;
+    }
+
+    const transitionResult = await this.supabase
+      .from("intelligence_artifact_status_transitions")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("to_status", "dismissed")
+      .eq("triggered_by", "user")
+      .in("artifact_id", artifactIds)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (transitionResult.error) {
+      throw transitionResult.error;
+    }
+
+    return transitionResult.data
+      ? normalizeStatusTransitionRow(transitionResult.data as Record<string, unknown>)
+      : null;
+  }
+
   async listActiveArtifactsBySubject(userId: string, subjectKey: string): Promise<IntelligenceArtifactBundle[]> {
     const artifactResult = await this.supabase
       .from("intelligence_artifacts")

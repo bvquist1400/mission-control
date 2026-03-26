@@ -20,6 +20,8 @@ const GROUPABLE_TASK_PAIR = new Set<IntelligenceV1ContractType>(["stale_task", "
 const OPEN_ACTIONS: IntelligenceArtifactAction[] = ["accept", "dismiss"];
 const ACCEPTED_ACTIONS: IntelligenceArtifactAction[] = ["apply", "expire"];
 const RESOLVED_ACTIONS: IntelligenceArtifactAction[] = [];
+const DEFAULT_DISMISSAL_COOLDOWN_DAYS = 7;
+const DISMISSAL_COOLDOWN_ENV_KEY = "INTELLIGENCE_DISMISSAL_COOLDOWN_DAYS";
 
 const ALLOWED_STATUS_TRANSITIONS: Record<IntelligenceArtifactStatus, IntelligenceArtifactStatus[]> = {
   open: ["accepted", "dismissed", "expired"],
@@ -48,6 +50,47 @@ function stableValue(value: unknown): unknown {
 
 function hashValue(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(stableValue(value))).digest("hex");
+}
+
+function resolveDismissalCooldownDays(options: PromoteIntelligenceContractsOptions): number {
+  if (typeof options.dismissalCooldownDays === "number" && Number.isFinite(options.dismissalCooldownDays)) {
+    return Math.max(0, options.dismissalCooldownDays);
+  }
+
+  const fromEnv = process.env[DISMISSAL_COOLDOWN_ENV_KEY];
+  if (!fromEnv) {
+    return DEFAULT_DISMISSAL_COOLDOWN_DAYS;
+  }
+
+  const parsed = Number.parseFloat(fromEnv);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : DEFAULT_DISMISSAL_COOLDOWN_DAYS;
+}
+
+function buildCooldownExpirationIso(dismissedAtIso: string, dismissalCooldownDays: number): string | null {
+  const dismissedAtMs = Date.parse(dismissedAtIso);
+  if (!Number.isFinite(dismissedAtMs)) {
+    return null;
+  }
+
+  return new Date(dismissedAtMs + (dismissalCooldownDays * 24 * 60 * 60 * 1000)).toISOString();
+}
+
+function isWithinDismissalCooldown(
+  dismissedAtIso: string,
+  nowIso: string,
+  dismissalCooldownDays: number
+): boolean {
+  if (dismissalCooldownDays <= 0) {
+    return false;
+  }
+
+  const dismissedAtMs = Date.parse(dismissedAtIso);
+  const nowMs = Date.parse(nowIso);
+  if (!Number.isFinite(dismissedAtMs) || !Number.isFinite(nowMs)) {
+    return false;
+  }
+
+  return nowMs < dismissedAtMs + (dismissalCooldownDays * 24 * 60 * 60 * 1000);
 }
 
 function contractSubjectKey(contract: IntelligenceV1Contract): string {
@@ -394,6 +437,7 @@ export async function promoteIntelligenceContracts(
   options: PromoteIntelligenceContractsOptions = {}
 ): Promise<PromoteIntelligenceContractsResult> {
   const nowIso = (options.now ?? new Date()).toISOString();
+  const dismissalCooldownDays = resolveDismissalCooldownDays(options);
   const contractSnapshots: PersistedIntelligenceContractSnapshot[] = [];
   const snapshotByFamilyKey = new Map<string, PersistedIntelligenceContractSnapshot>();
 
@@ -421,7 +465,59 @@ export async function promoteIntelligenceContracts(
 
   const promotionEvents: PersistedIntelligencePromotionEvent[] = [];
   const touchedArtifacts = new Map<string, PersistedIntelligenceArtifact>();
-  const candidates = buildPromotionCandidates(contracts, {
+  const activeFamilyState = new Map<string, boolean>();
+  const latestDismissalByFamily = new Map<string, Awaited<ReturnType<IntelligencePromotionStore["getLatestUserDismissalTransitionByFamily"]>>>();
+  const uniqueFamilyKeys = [...new Set(contracts.map((contract) => contract.promotionFamilyKey))];
+
+  for (const promotionFamilyKey of uniqueFamilyKeys) {
+    const activeMatches = await store.listActiveArtifactsByFamily(userId, promotionFamilyKey);
+    const hasActiveArtifact = activeMatches.length > 0;
+    activeFamilyState.set(promotionFamilyKey, hasActiveArtifact);
+
+    if (!hasActiveArtifact && dismissalCooldownDays > 0) {
+      latestDismissalByFamily.set(
+        promotionFamilyKey,
+        await store.getLatestUserDismissalTransitionByFamily(userId, promotionFamilyKey)
+      );
+    }
+  }
+
+  const promotableContracts: IntelligenceV1Contract[] = [];
+
+  for (const contract of contracts) {
+    if (activeFamilyState.get(contract.promotionFamilyKey) === true) {
+      promotableContracts.push(contract);
+      continue;
+    }
+
+    const latestDismissal = latestDismissalByFamily.get(contract.promotionFamilyKey) ?? null;
+    const snapshot = snapshotByFamilyKey.get(contract.promotionFamilyKey);
+
+    if (latestDismissal && snapshot && isWithinDismissalCooldown(latestDismissal.createdAt, nowIso, dismissalCooldownDays)) {
+      promotionEvents.push(
+        await store.insertPromotionEvent({
+          userId,
+          contractSnapshotId: snapshot.id,
+          artifactId: latestDismissal.artifactId,
+          promotionFamilyKey: snapshot.promotionFamilyKey,
+          eventType: "noop",
+          suppressionReason: "dismissed_within_cooldown_window",
+          details: {
+            dismissalCooldownDays,
+            dismissedAt: latestDismissal.createdAt,
+            cooldownExpiresAt: buildCooldownExpirationIso(latestDismissal.createdAt, dismissalCooldownDays),
+            dismissalTransitionId: latestDismissal.id,
+            dismissedArtifactId: latestDismissal.artifactId,
+          },
+        })
+      );
+      continue;
+    }
+
+    promotableContracts.push(contract);
+  }
+
+  const candidates = buildPromotionCandidates(promotableContracts, {
     enableTaskStalenessClarityGrouping: options.enableTaskStalenessClarityGrouping === true,
   });
 

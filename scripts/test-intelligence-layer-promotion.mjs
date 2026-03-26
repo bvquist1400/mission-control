@@ -77,6 +77,24 @@ class MemoryIntelligencePromotionStore {
     return this.buildBundles(active);
   }
 
+  async getLatestUserDismissalTransitionByFamily(userId, promotionFamilyKey) {
+    const artifactIds = this.coverages
+      .filter((coverage) => coverage.userId === userId && coverage.promotionFamilyKey === promotionFamilyKey)
+      .map((coverage) => coverage.artifactId);
+
+    const latest = this.statusTransitions
+      .filter(
+        (transition) =>
+          transition.userId === userId &&
+          artifactIds.includes(transition.artifactId) &&
+          transition.toStatus === "dismissed" &&
+          transition.triggeredBy === "user"
+      )
+      .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)))[0];
+
+    return latest ? { ...latest } : null;
+  }
+
   async listActiveArtifactsBySubject(userId, subjectKey) {
     const active = this.artifacts.filter(
       (artifact) =>
@@ -467,6 +485,87 @@ function makeFollowUpRiskContract(taskId, waitingOn, overrides = {}) {
 
   assert.equal(store.artifacts.length, 2);
   assert.notEqual(second.artifacts[0].id, artifactId);
+}
+
+{
+  const store = new MemoryIntelligencePromotionStore();
+  const first = await promoteIntelligenceContracts(store, USER_ID, [makeFollowUpRiskContract("task-dismissed", "Vendor")], {
+    now: new Date(NOW_ISO),
+    dismissalCooldownDays: 7,
+  });
+  const artifactId = first.artifacts[0].id;
+
+  await transitionIntelligenceArtifactStatus(store, USER_ID, artifactId, "dismissed", {
+    triggeredBy: "user",
+    note: "User dismissed this from the inbox.",
+  });
+
+  const second = await promoteIntelligenceContracts(store, USER_ID, [makeFollowUpRiskContract("task-dismissed", "Vendor")], {
+    now: new Date("2026-03-27T15:00:00.000Z"),
+    dismissalCooldownDays: 7,
+  });
+
+  assert.equal(store.artifacts.length, 1);
+  assert.equal(second.artifacts.length, 0);
+  assert.equal(store.promotionEvents.at(-1).eventType, "noop");
+  assert.equal(store.promotionEvents.at(-1).suppressionReason, "dismissed_within_cooldown_window");
+  assert.equal(store.promotionEvents.at(-1).artifactId, artifactId);
+}
+
+{
+  const store = new MemoryIntelligencePromotionStore();
+  const first = await promoteIntelligenceContracts(store, USER_ID, [makeFollowUpRiskContract("task-dismissed-expired", "Vendor")], {
+    now: new Date(NOW_ISO),
+    dismissalCooldownDays: 7,
+  });
+  const artifactId = first.artifacts[0].id;
+
+  await transitionIntelligenceArtifactStatus(store, USER_ID, artifactId, "dismissed", {
+    triggeredBy: "user",
+    note: "User dismissed this from the inbox.",
+  });
+
+  const second = await promoteIntelligenceContracts(
+    store,
+    USER_ID,
+    [makeFollowUpRiskContract("task-dismissed-expired", "Vendor")],
+    {
+      now: new Date("2026-04-03T15:00:00.000Z"),
+      dismissalCooldownDays: 7,
+    }
+  );
+
+  assert.equal(store.artifacts.length, 2);
+  assert.notEqual(second.artifacts[0].id, artifactId);
+  assert.equal(store.promotionEvents.at(-1).eventType, "created");
+}
+
+{
+  const store = new MemoryIntelligencePromotionStore();
+  const first = await promoteIntelligenceContracts(store, USER_ID, [makeFollowUpRiskContract("task-system-dismissed", "Vendor")], {
+    now: new Date(NOW_ISO),
+    dismissalCooldownDays: 7,
+  });
+  const artifactId = first.artifacts[0].id;
+
+  await transitionIntelligenceArtifactStatus(store, USER_ID, artifactId, "dismissed", {
+    triggeredBy: "system",
+    note: "System resolved this artifact historically.",
+  });
+
+  const second = await promoteIntelligenceContracts(
+    store,
+    USER_ID,
+    [makeFollowUpRiskContract("task-system-dismissed", "Vendor")],
+    {
+      now: new Date("2026-03-27T15:00:00.000Z"),
+      dismissalCooldownDays: 7,
+    }
+  );
+
+  assert.equal(store.artifacts.length, 2);
+  assert.notEqual(second.artifacts[0].id, artifactId);
+  assert.equal(store.promotionEvents.at(-1).eventType, "created");
 }
 
 console.log("Intelligence layer promotion tests passed.");
