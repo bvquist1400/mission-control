@@ -59,6 +59,27 @@ async function postMcpMessage(apiKey, message, sessionId = null) {
   };
 }
 
+async function requestJson(apiKey, pathname, init = {}) {
+  const response = await fetch(`${PROD_BASE_URL}${pathname}`, {
+    ...init,
+    headers: {
+      "X-Mission-Control-Key": apiKey,
+      ...(init.body ? { "Content-Type": "application/json" } : {}),
+      ...(init.headers || {}),
+    },
+  });
+
+  const bodyText = await response.text();
+  let body;
+  try {
+    body = JSON.parse(bodyText);
+  } catch {
+    throw new Error(`API ${pathname} returned non-JSON output (${response.status}): ${bodyText}`);
+  }
+
+  return { status: response.status, body };
+}
+
 function parseToolData(body) {
   const text = body?.result?.content?.[0]?.text;
   if (typeof text !== "string") {
@@ -70,9 +91,14 @@ function parseToolData(body) {
 
 const env = loadEnvFile();
 const apiKey = env.MISSION_CONTROL_API_KEY?.trim();
+const actionsApiKey = env.MISSION_CONTROL_ACTIONS_API_KEY?.trim() || apiKey;
 
 if (!apiKey) {
   throw new Error("Missing MISSION_CONTROL_API_KEY in .env.local");
+}
+
+if (!actionsApiKey) {
+  throw new Error("Missing MISSION_CONTROL_ACTIONS_API_KEY or MISSION_CONTROL_API_KEY in .env.local");
 }
 
 const init = await postMcpMessage(apiKey, {
@@ -114,122 +140,185 @@ for (const requiredTool of [
   assert.ok(toolNames.includes(requiredTool), `Missing MCP tool ${requiredTool}`);
 }
 
-const listBefore = await postMcpMessage(
-  apiKey,
-  {
-    jsonrpc: "2.0",
-    id: "call-list-before-1",
-    method: "tools/call",
-    params: {
-      name: "list_open_artifacts",
-      arguments: {},
-    },
-  },
-  init.sessionId
-);
+let temporaryTaskId = null;
+let temporaryTaskTitle = null;
 
-assert.equal(listBefore.status, 200, "list_open_artifacts should succeed");
-const listBeforeData = parseToolData(listBefore.body);
-const openArtifactsBefore = Array.isArray(listBeforeData?.data?.artifacts) ? listBeforeData.data.artifacts : [];
-assert.ok(openArtifactsBefore.length > 0, "Need at least one open artifact for live MCP validation");
+try {
+  const validationTitle = `[Codex MCP Validation] Artifact Tool ${new Date().toISOString()}`;
+  const overdueFollowUpAt = new Date(Date.now() - (96 * 60 * 60 * 1000)).toISOString();
+  const createTaskResult = await requestJson(actionsApiKey, "/api/tasks", {
+    method: "POST",
+    body: JSON.stringify({
+      title: validationTitle,
+      status: "Blocked/Waiting",
+      task_type: "FollowUp",
+      waiting_on: "Codex MCP validation response",
+      source_type: "Validation",
+      description: "Temporary task created to validate MCP intelligence artifact tools. Safe to mark done after validation.",
+    }),
+  });
 
-const selectedArtifact = openArtifactsBefore[0];
-assert.equal(typeof selectedArtifact.artifact_id, "string", "Selected artifact must include artifact_id");
+  assert.equal(createTaskResult.status, 201, "Temporary validation task should be created");
+  temporaryTaskId = createTaskResult.body?.id;
+  temporaryTaskTitle = createTaskResult.body?.title ?? validationTitle;
+  assert.equal(typeof temporaryTaskId, "string", "Temporary validation task must include an id");
 
-const dismissResult = await postMcpMessage(
-  apiKey,
-  {
-    jsonrpc: "2.0",
-    id: "call-dismiss-1",
-    method: "tools/call",
-    params: {
-      name: "dismiss_artifact",
-      arguments: {
-        artifact_id: selectedArtifact.artifact_id,
+  const patchTaskResult = await requestJson(actionsApiKey, `/api/tasks/${temporaryTaskId}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      follow_up_at: overdueFollowUpAt,
+    }),
+  });
+  assert.equal(patchTaskResult.status, 200, "Temporary validation task should accept a follow_up_at update");
+
+  const initialRun = await postMcpMessage(
+    apiKey,
+    {
+      jsonrpc: "2.0",
+      id: "call-run-initial-1",
+      method: "tools/call",
+      params: {
+        name: "trigger_intelligence_run",
+        arguments: {},
       },
     },
-  },
-  init.sessionId
-);
+    init.sessionId
+  );
 
-assert.equal(dismissResult.status, 200, "dismiss_artifact should succeed");
-const dismissData = parseToolData(dismissResult.body);
-assert.equal(dismissData?.data?.status, "dismissed", "Artifact should transition to dismissed through MCP");
+  assert.equal(initialRun.status, 200, "Initial trigger_intelligence_run should succeed");
+  const initialRunData = parseToolData(initialRun.body);
+  assert.equal(typeof initialRunData?.data?.contractCount, "number", "Initial run summary should include contractCount");
+  assert.equal(typeof initialRunData?.data?.promotionEventCount, "number", "Initial run summary should include promotionEventCount");
 
-const listAfter = await postMcpMessage(
-  apiKey,
-  {
-    jsonrpc: "2.0",
-    id: "call-list-after-1",
-    method: "tools/call",
-    params: {
-      name: "list_open_artifacts",
-      arguments: {},
+  const listBefore = await postMcpMessage(
+    apiKey,
+    {
+      jsonrpc: "2.0",
+      id: "call-list-before-1",
+      method: "tools/call",
+      params: {
+        name: "list_open_artifacts",
+        arguments: {},
+      },
     },
-  },
-  init.sessionId
-);
+    init.sessionId
+  );
 
-assert.equal(listAfter.status, 200, "Second list_open_artifacts should succeed");
-const listAfterData = parseToolData(listAfter.body);
-const openArtifactsAfter = Array.isArray(listAfterData?.data?.artifacts) ? listAfterData.data.artifacts : [];
-assert.ok(
-  !openArtifactsAfter.some((artifact) => artifact.artifact_id === selectedArtifact.artifact_id),
-  "Dismissed artifact should no longer appear in open artifacts"
-);
+  assert.equal(listBefore.status, 200, "list_open_artifacts should succeed");
+  const listBeforeData = parseToolData(listBefore.body);
+  const openArtifactsBefore = Array.isArray(listBeforeData?.data?.artifacts) ? listBeforeData.data.artifacts : [];
 
-const runResult = await postMcpMessage(
-  apiKey,
-  {
-    jsonrpc: "2.0",
-    id: "call-run-1",
-    method: "tools/call",
-    params: {
-      name: "trigger_intelligence_run",
-      arguments: {},
+  const selectedArtifact = openArtifactsBefore.find((artifact) => artifact.subject_task?.task_id === temporaryTaskId);
+  assert.ok(selectedArtifact, "Temporary validation task should produce an open artifact through MCP");
+  assert.equal(typeof selectedArtifact.artifact_id, "string", "Selected artifact must include artifact_id");
+
+  const dismissResult = await postMcpMessage(
+    apiKey,
+    {
+      jsonrpc: "2.0",
+      id: "call-dismiss-1",
+      method: "tools/call",
+      params: {
+        name: "dismiss_artifact",
+        arguments: {
+          artifact_id: selectedArtifact.artifact_id,
+        },
+      },
     },
-  },
-  init.sessionId
-);
+    init.sessionId
+  );
 
-assert.equal(runResult.status, 200, "trigger_intelligence_run should succeed");
-const runData = parseToolData(runResult.body);
-assert.equal(typeof runData?.data?.contractCount, "number", "Run summary should include contractCount");
-assert.equal(typeof runData?.data?.promotionEventCount, "number", "Run summary should include promotionEventCount");
+  assert.equal(dismissResult.status, 200, "dismiss_artifact should succeed");
+  const dismissData = parseToolData(dismissResult.body);
+  assert.equal(dismissData?.data?.status, "dismissed", "Artifact should transition to dismissed through MCP");
 
-const listAfterRun = await postMcpMessage(
-  apiKey,
-  {
-    jsonrpc: "2.0",
-    id: "call-list-after-run-1",
-    method: "tools/call",
-    params: {
-      name: "list_open_artifacts",
-      arguments: {},
+  const listAfter = await postMcpMessage(
+    apiKey,
+    {
+      jsonrpc: "2.0",
+      id: "call-list-after-1",
+      method: "tools/call",
+      params: {
+        name: "list_open_artifacts",
+        arguments: {},
+      },
     },
-  },
-  init.sessionId
-);
+    init.sessionId
+  );
 
-assert.equal(listAfterRun.status, 200, "Post-run list_open_artifacts should succeed");
-const listAfterRunData = parseToolData(listAfterRun.body);
-const openArtifactsAfterRun = Array.isArray(listAfterRunData?.data?.artifacts) ? listAfterRunData.data.artifacts : [];
-assert.ok(
-  !openArtifactsAfterRun.some((artifact) => artifact.artifact_id === selectedArtifact.artifact_id),
-  "Dismissed artifact should remain suppressed after an immediate MCP-triggered intelligence run"
-);
+  assert.equal(listAfter.status, 200, "Second list_open_artifacts should succeed");
+  const listAfterData = parseToolData(listAfter.body);
+  const openArtifactsAfter = Array.isArray(listAfterData?.data?.artifacts) ? listAfterData.data.artifacts : [];
+  assert.ok(
+    !openArtifactsAfter.some((artifact) => artifact.artifact_id === selectedArtifact.artifact_id),
+    "Dismissed artifact should no longer appear in open artifacts"
+  );
 
-console.log(JSON.stringify({
-  toolsVerified: [
-    "list_open_artifacts",
-    "accept_artifact",
-    "dismiss_artifact",
-    "trigger_intelligence_run",
-  ],
-  selectedArtifactId: selectedArtifact.artifact_id,
-  selectedArtifactSummary: selectedArtifact.summary ?? null,
-  openCountBefore: openArtifactsBefore.length,
-  openCountAfterDismiss: openArtifactsAfter.length,
-  openCountAfterRun: openArtifactsAfterRun.length,
-  runSummary: runData.data,
-}, null, 2));
+  const runResult = await postMcpMessage(
+    apiKey,
+    {
+      jsonrpc: "2.0",
+      id: "call-run-1",
+      method: "tools/call",
+      params: {
+        name: "trigger_intelligence_run",
+        arguments: {},
+      },
+    },
+    init.sessionId
+  );
+
+  assert.equal(runResult.status, 200, "trigger_intelligence_run should succeed");
+  const runData = parseToolData(runResult.body);
+  assert.equal(typeof runData?.data?.contractCount, "number", "Run summary should include contractCount");
+  assert.equal(typeof runData?.data?.promotionEventCount, "number", "Run summary should include promotionEventCount");
+
+  const listAfterRun = await postMcpMessage(
+    apiKey,
+    {
+      jsonrpc: "2.0",
+      id: "call-list-after-run-1",
+      method: "tools/call",
+      params: {
+        name: "list_open_artifacts",
+        arguments: {},
+      },
+    },
+    init.sessionId
+  );
+
+  assert.equal(listAfterRun.status, 200, "Post-run list_open_artifacts should succeed");
+  const listAfterRunData = parseToolData(listAfterRun.body);
+  const openArtifactsAfterRun = Array.isArray(listAfterRunData?.data?.artifacts) ? listAfterRunData.data.artifacts : [];
+  assert.ok(
+    !openArtifactsAfterRun.some((artifact) => artifact.artifact_id === selectedArtifact.artifact_id),
+    "Dismissed artifact should remain suppressed after an immediate MCP-triggered intelligence run"
+  );
+
+  console.log(JSON.stringify({
+    toolsVerified: [
+      "list_open_artifacts",
+      "accept_artifact",
+      "dismiss_artifact",
+      "trigger_intelligence_run",
+    ],
+    temporaryTaskId,
+    temporaryTaskTitle,
+    selectedArtifactId: selectedArtifact.artifact_id,
+    selectedArtifactSummary: selectedArtifact.summary ?? null,
+    openCountBefore: openArtifactsBefore.length,
+    openCountAfterDismiss: openArtifactsAfter.length,
+    openCountAfterRun: openArtifactsAfterRun.length,
+    initialRunSummary: initialRunData.data,
+    runSummary: runData.data,
+  }, null, 2));
+} finally {
+  if (temporaryTaskId) {
+    await requestJson(actionsApiKey, `/api/tasks/${temporaryTaskId}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        status: "Done",
+      }),
+    }).catch(() => null);
+  }
+}
