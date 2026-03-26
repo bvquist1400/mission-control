@@ -1387,6 +1387,104 @@ function createMcpServer(): McpServer {
   );
 
   mcp.tool(
+    'list_open_artifacts',
+    'List open intelligence artifacts that currently need a review decision.',
+    {},
+    async () => {
+      const runtime = getRuntimeConfig();
+      const res = await fetch(`${LEGACY_APP_ORIGIN}/api/intelligence/artifacts`);
+      const data = await res.json();
+      const payload = data as {
+        open?: Array<{
+          artifact_id?: string;
+          artifact_type?: string;
+          summary?: string;
+          task_id?: string | null;
+          task_title?: string;
+          task_status?: string | null;
+          task_href?: string | null;
+          suggested_action?: string;
+          available_actions?: string[];
+        }>;
+        counts?: { open?: number };
+      };
+
+      const artifacts = Array.isArray(payload.open)
+        ? payload.open.map((item) => ({
+            artifact_id: item.artifact_id ?? null,
+            artifact_type: item.artifact_type ?? null,
+            title: item.task_title ?? item.summary ?? 'Artifact',
+            summary: item.summary ?? null,
+            subject_task: {
+              task_id: item.task_id ?? null,
+              task_title: item.task_title ?? null,
+              task_status: item.task_status ?? null,
+              task_url: item.task_href ? `${runtime.canonicalAppUrl}${item.task_href}` : null,
+            },
+            suggested_action: item.suggested_action ?? null,
+            available_actions: Array.isArray(item.available_actions) ? item.available_actions : [],
+          }))
+        : [];
+
+      return toMcpResponse({
+        count: typeof payload.counts?.open === 'number' ? payload.counts.open : artifacts.length,
+        artifacts,
+      });
+    }
+  );
+
+  mcp.tool(
+    'accept_artifact',
+    'Accept an open intelligence artifact by id using the existing transition and ledger path.',
+    {
+      artifact_id: z.string().uuid().describe('Open artifact UUID'),
+    },
+    async ({ artifact_id }) => {
+      const res = await fetch(`${LEGACY_APP_ORIGIN}/api/intelligence/artifacts/${artifact_id}/status`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'accept' }),
+      });
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  mcp.tool(
+    'dismiss_artifact',
+    'Dismiss an open intelligence artifact by id using the existing transition and ledger path.',
+    {
+      artifact_id: z.string().uuid().describe('Open artifact UUID'),
+    },
+    async ({ artifact_id }) => {
+      const res = await fetch(`${LEGACY_APP_ORIGIN}/api/intelligence/artifacts/${artifact_id}/status`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'dismiss' }),
+      });
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  mcp.tool(
+    'trigger_intelligence_run',
+    'Trigger the full intelligence pipeline now and return the run summary counts.',
+    {},
+    async () => {
+      const res = await fetch(`${LEGACY_APP_ORIGIN}/api/intelligence/run`, {
+        method: 'POST',
+      });
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  mcp.tool(
     'search',
     'Search Mission Control records using a single free-text query. Returns up to 10 results with stable URLs.',
     {
