@@ -3,6 +3,7 @@ import {
   normalizeCommitmentRows,
   type IntelligenceCommitment,
 } from "@/lib/briefing/intelligence";
+import { readBriefingOpenReviewItems, type BriefingOpenReviewItem } from "@/lib/briefing/open-review-items";
 import {
   buildDayWindows,
   decorateCalendarEvent,
@@ -155,6 +156,8 @@ export interface DailyBriefStatusUpdateRecommendation {
   }>;
 }
 
+export interface DailyBriefOpenReviewItem extends BriefingOpenReviewItem {}
+
 export type DailyBriefSprintSummary = WorkSprintSummary;
 
 export interface DailyBriefDigestCounts {
@@ -206,6 +209,7 @@ export interface DailyBriefDigestResponse {
     theirs: DailyBriefDigestCommitmentGroup[];
     ours: DailyBriefDigestCommitmentGroup[];
   };
+  open_review_items: DailyBriefOpenReviewItem[];
   status_update_recommendations: DailyBriefStatusUpdateRecommendation[];
   guidance_title: "Where to Start" | "Afternoon Focus" | "Tomorrow Prep";
   guidance: string[];
@@ -872,6 +876,10 @@ function formatStatusUpdateRecommendationLine(item: DailyBriefStatusUpdateRecomm
   return `- ${pieces.join(". ")}`;
 }
 
+function formatOpenReviewItemLine(item: DailyBriefOpenReviewItem): string {
+  return `- ${item.artifact_type} — ${item.task_title} [${item.task_id}] — ${item.suggested_action}`;
+}
+
 function renderMarkdown(payload: {
   requestedDate: string;
   currentTimeET: string;
@@ -887,6 +895,7 @@ function renderMarkdown(payload: {
   tomorrowPrep: DailyBriefDigestTaskItem[];
   meetings: DailyBriefDigestMeetingItem[];
   commitmentsTheirs: DailyBriefDigestCommitmentGroup[];
+  openReviewItems: DailyBriefOpenReviewItem[];
   statusUpdateRecommendations: DailyBriefStatusUpdateRecommendation[];
   guidanceTitle: "Where to Start" | "Afternoon Focus" | "Tomorrow Prep";
   guidance: string[];
@@ -920,6 +929,15 @@ function renderMarkdown(payload: {
         ...(payload.inProgress.length > 0 ? payload.inProgress.map(formatTaskLine) : []),
       ].join("\n")
     );
+
+    if (payload.openReviewItems.length > 0) {
+      sections.push(
+        [
+          "## ⚠️ Open Review Items",
+          ...payload.openReviewItems.map(formatOpenReviewItemLine),
+        ].join("\n")
+      );
+    }
   }
 
   if (payload.mode === "midday") {
@@ -1299,7 +1317,7 @@ export async function buildDailyBriefDigest({
   const sinceIso = safeIso(since);
   const effectiveSince = sinceIso ?? dayWindows.utcRangeStart;
 
-  const [todayEvents, tomorrowEvents, allTasks, openCommitments, stakeholders, commentsToday, currentSprint] = await Promise.all([
+  const [todayEvents, tomorrowEvents, allTasks, openCommitments, stakeholders, commentsToday, currentSprint, openReviewItems] = await Promise.all([
     fetchCalendarEvents(supabase, userId, requestedDate),
     resolvedMode === "eod" ? fetchCalendarEvents(supabase, userId, tomorrowDate) : Promise.resolve([]),
     fetchTasks(supabase, userId),
@@ -1307,6 +1325,7 @@ export async function buildDailyBriefDigest({
     fetchStakeholders(supabase, userId),
     fetchTaskCommentsForDay(supabase, userId, dayWindows.utcRangeStart, dayWindows.utcRangeEndExclusive),
     fetchCurrentSprint(supabase, userId, requestedDate),
+    resolvedMode === "morning" ? readBriefingOpenReviewItems(supabase, userId) : Promise.resolve([]),
   ]);
 
   const snapshot = buildWorkIntelligenceSnapshot({
@@ -1493,6 +1512,7 @@ export async function buildDailyBriefDigest({
     tomorrowPrep: resolvedMode === "eod" ? tomorrowPrepDigest : [],
     meetings,
     commitmentsTheirs,
+    openReviewItems,
     statusUpdateRecommendations,
     guidanceTitle,
     guidance,
@@ -1525,6 +1545,7 @@ export async function buildDailyBriefDigest({
       theirs: commitmentsTheirs,
       ours: commitmentsOurs,
     },
+    open_review_items: openReviewItems,
     status_update_recommendations: statusUpdateRecommendations,
     guidance_title: guidanceTitle,
     guidance,

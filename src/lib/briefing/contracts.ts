@@ -60,6 +60,14 @@ export interface BriefingTomorrowContextItem {
   open_commitments: BriefingTomorrowCommitmentItem[];
 }
 
+export interface BriefingOpenReviewItem {
+  artifact_id: string;
+  artifact_type: string;
+  task_id: string;
+  task_title: string;
+  suggested_action: string;
+}
+
 export interface TodayBriefingData {
   calendar: BriefingCalendarData;
   tasks: BriefingTaskData;
@@ -85,6 +93,7 @@ export interface BriefingResponse {
   commitments: BriefingCommitmentData;
   risk_radar: BriefingRiskRadarItem[];
   health_scores: ImplementationHealthScore[];
+  open_review_items: BriefingOpenReviewItem[];
   tomorrow?: TomorrowBriefingData;
 }
 

@@ -1,7 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { IntelligenceArtifactInbox } from "@/components/backlog/IntelligenceArtifactInbox";
 import { useSprints } from "@/hooks/useSprints";
 import { TaskCreateForm } from "@/components/tasks/TaskCreateForm";
 import { TaskGrid, TaskGridLoadingSkeleton } from "@/components/tasks/TaskGrid";
@@ -149,6 +151,22 @@ export function BacklogList() {
   const [projectFilter, setProjectFilter] = useState<ProjectFilter>("All");
   const [sprintFilter, setSprintFilter] = useState<SprintFilter>(() => sprintFilterFromParam(sprintParam));
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>(() => reviewFilterFromParam(reviewParam));
+  const isArtifactInboxView = reviewParam === "intelligence";
+
+  const backlogHref = useMemo(() => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("review");
+    params.delete("expand");
+    const query = params.toString();
+    return query ? `/backlog?${query}` : "/backlog";
+  }, [searchParams]);
+
+  const artifactInboxHref = useMemo(() => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("review", "intelligence");
+    params.delete("expand");
+    return `/backlog?${params.toString()}`;
+  }, [searchParams]);
 
   useEffect(() => {
     setReviewFilter(reviewFilterFromParam(reviewParam));
@@ -159,6 +177,12 @@ export function BacklogList() {
   }, [sprintParam]);
 
   useEffect(() => {
+    if (isArtifactInboxView) {
+      setLoading(false);
+      setError(null);
+      return;
+    }
+
     let isMounted = true;
 
     async function loadData() {
@@ -199,9 +223,13 @@ export function BacklogList() {
     return () => {
       isMounted = false;
     };
-  }, [includeCompleted]);
+  }, [includeCompleted, isArtifactInboxView]);
 
   useEffect(() => {
+    if (isArtifactInboxView) {
+      return;
+    }
+
     let isMounted = true;
 
     async function refreshData() {
@@ -230,7 +258,7 @@ export function BacklogList() {
       isMounted = false;
       window.clearInterval(intervalId);
     };
-  }, [includeCompleted]);
+  }, [includeCompleted, isArtifactInboxView]);
 
   function handleTaskCreated(task: TaskWithImplementation) {
     setTasks((current) => [{ ...task, dependencies: [], dependency_blocked: false }, ...current]);
@@ -295,118 +323,157 @@ export function BacklogList() {
 
   return (
     <div className="space-y-4">
-      <TaskCreateForm
-        implementations={implementations}
-        sprints={sprints}
-        onTaskCreated={handleTaskCreated}
-        defaultNeedsReview={false}
-      />
-
       <section className="rounded-card border border-stroke bg-panel p-4 shadow-sm">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
-          <label className="space-y-1 xl:col-span-2">
-            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Search</span>
-            <input
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search title or description"
-              className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
-            />
-          </label>
-
-          <label className="space-y-1">
-            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</span>
-            <select
-              value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
-              className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-foreground">Review Surface</h2>
+            <p className="text-sm text-muted-foreground">
+              Switch between the task backlog and the artifact inbox without mixing artifact state into task-level review flags.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Link
+              href={backlogHref}
+              className={`rounded-lg border px-3 py-2 text-sm font-semibold transition ${
+                isArtifactInboxView
+                  ? "border-stroke bg-panel text-foreground hover:bg-panel-muted"
+                  : "border-accent bg-accent text-white hover:opacity-90"
+              }`}
             >
-              {STATUS_FILTER_OPTIONS.map((status) => (
-                <option key={status} value={status}>
-                  {status}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="space-y-1">
-            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Application</span>
-            <select
-              value={implementationFilter}
-              onChange={(event) => setImplementationFilter(event.target.value as ImplementationFilter)}
-              className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
+              Task Backlog
+            </Link>
+            <Link
+              href={artifactInboxHref}
+              className={`rounded-lg border px-3 py-2 text-sm font-semibold transition ${
+                isArtifactInboxView
+                  ? "border-accent bg-accent text-white hover:opacity-90"
+                  : "border-stroke bg-panel text-foreground hover:bg-panel-muted"
+              }`}
             >
-              <option value="All">All</option>
-              <option value="Unassigned">Unassigned</option>
-              {implementations.map((implementation) => (
-                <option key={implementation.id} value={implementation.id}>
-                  {implementation.name}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="space-y-1">
-            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Project</span>
-            <select
-              value={projectFilter}
-              onChange={(event) => setProjectFilter(event.target.value as ProjectFilter)}
-              className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
-            >
-              <option value="All">All</option>
-              <option value="Unassigned">Unassigned</option>
-              {projects.map((project) => (
-                <option key={project.id} value={project.id}>
-                  {project.name}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="space-y-1">
-            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Sprint</span>
-            <select
-              value={sprintFilter}
-              onChange={(event) => setSprintFilter(event.target.value as SprintFilter)}
-              className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
-            >
-              <option value="All">All</option>
-              <option value="Unassigned">Unassigned</option>
-              {sprintsLoading && sprints.length === 0 ? <option value="All">Loading...</option> : null}
-              {sprints.map((sprint) => (
-                <option key={sprint.id} value={sprint.id}>
-                  {sprint.name}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="space-y-1">
-            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Review</span>
-            <select
-              value={reviewFilter}
-              onChange={(event) => setReviewFilter(event.target.value as ReviewFilter)}
-              className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
-            >
-              {REVIEW_FILTER_OPTIONS.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </label>
+              Artifact Inbox
+            </Link>
+          </div>
         </div>
-
-        <label className="mt-3 inline-flex items-center gap-2 rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground">
-          <input
-            type="checkbox"
-            checked={includeCompleted}
-            onChange={(event) => setIncludeCompleted(event.target.checked)}
-            className="h-4 w-4 accent-accent"
-          />
-          Include completed tasks
-        </label>
       </section>
+
+      {isArtifactInboxView ? (
+        <IntelligenceArtifactInbox />
+      ) : (
+        <>
+          <TaskCreateForm
+            implementations={implementations}
+            sprints={sprints}
+            onTaskCreated={handleTaskCreated}
+            defaultNeedsReview={false}
+          />
+
+          <section className="rounded-card border border-stroke bg-panel p-4 shadow-sm">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
+              <label className="space-y-1 xl:col-span-2">
+                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Search</span>
+                <input
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Search title or description"
+                  className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
+                />
+              </label>
+
+              <label className="space-y-1">
+                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</span>
+                <select
+                  value={statusFilter}
+                  onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
+                  className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
+                >
+                  {STATUS_FILTER_OPTIONS.map((status) => (
+                    <option key={status} value={status}>
+                      {status}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="space-y-1">
+                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Application</span>
+                <select
+                  value={implementationFilter}
+                  onChange={(event) => setImplementationFilter(event.target.value as ImplementationFilter)}
+                  className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
+                >
+                  <option value="All">All</option>
+                  <option value="Unassigned">Unassigned</option>
+                  {implementations.map((implementation) => (
+                    <option key={implementation.id} value={implementation.id}>
+                      {implementation.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="space-y-1">
+                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Project</span>
+                <select
+                  value={projectFilter}
+                  onChange={(event) => setProjectFilter(event.target.value as ProjectFilter)}
+                  className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
+                >
+                  <option value="All">All</option>
+                  <option value="Unassigned">Unassigned</option>
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="space-y-1">
+                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Sprint</span>
+                <select
+                  value={sprintFilter}
+                  onChange={(event) => setSprintFilter(event.target.value as SprintFilter)}
+                  className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
+                >
+                  <option value="All">All</option>
+                  <option value="Unassigned">Unassigned</option>
+                  {sprintsLoading && sprints.length === 0 ? <option value="All">Loading...</option> : null}
+                  {sprints.map((sprint) => (
+                    <option key={sprint.id} value={sprint.id}>
+                      {sprint.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="space-y-1">
+                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Review</span>
+                <select
+                  value={reviewFilter}
+                  onChange={(event) => setReviewFilter(event.target.value as ReviewFilter)}
+                  className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
+                >
+                  {REVIEW_FILTER_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <label className="mt-3 inline-flex items-center gap-2 rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground">
+              <input
+                type="checkbox"
+                checked={includeCompleted}
+                onChange={(event) => setIncludeCompleted(event.target.checked)}
+                className="h-4 w-4 accent-accent"
+              />
+              Include completed tasks
+            </label>
+          </section>
+        </>
+      )}
 
       {error ? (
         <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
@@ -414,21 +481,23 @@ export function BacklogList() {
         </p>
       ) : null}
 
-      {loading ? (
-        <TaskGridLoadingSkeleton />
-      ) : (
-        <TaskGrid
-          tasks={tasks}
-          visibleTasks={filteredTasks}
-          setTasks={setTasks}
-          implementations={implementations}
-          commitments={commitments}
-          scopeMode="global"
-          emptyStateTitle="No matching tasks"
-          emptyStateBody="Adjust your filters or add a new task above."
-          initialExpandedTaskId={expandParam}
-        />
-      )}
+      {!isArtifactInboxView ? (
+        loading ? (
+          <TaskGridLoadingSkeleton />
+        ) : (
+          <TaskGrid
+            tasks={tasks}
+            visibleTasks={filteredTasks}
+            setTasks={setTasks}
+            implementations={implementations}
+            commitments={commitments}
+            scopeMode="global"
+            emptyStateTitle="No matching tasks"
+            emptyStateBody="Adjust your filters or add a new task above."
+            initialExpandedTaskId={expandParam}
+          />
+        )
+      ) : null}
     </div>
   );
 }

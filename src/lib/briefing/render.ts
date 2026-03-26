@@ -9,6 +9,7 @@ import {
 import type {
   DailyBriefDigestCommitmentGroup,
   DailyBriefDigestMeetingItem,
+  DailyBriefOpenReviewItem,
   DailyBriefDigestResponse,
   DailyBriefStatusUpdateRecommendation,
   DailyBriefDigestTaskItem,
@@ -875,6 +876,18 @@ function renderStaleFollowupsCard(digest: DailyBriefDigestResponse): string {
     </table>`;
 }
 
+function renderOpenReviewItemsCard(items: DailyBriefOpenReviewItem[]): string {
+  if (items.length === 0) {
+    return "";
+  }
+
+  const body = items.map((item, index) => {
+    return `<div style="padding-top:${index === 0 ? "0" : "12px"};"><strong>${escapeHtml(item.artifact_type)}</strong> — ${escapeHtml(item.task_title)} [${escapeHtml(item.task_id)}] — <span style="color:${EMAIL_COLORS.muted};">${escapeHtml(item.suggested_action)}</span></div>`;
+  }).join("");
+
+  return sectionFrame("⚠️ Open Review Items", body);
+}
+
 function renderDigestTaskListCard(
   title: string,
   items: DailyBriefDigestTaskItem[],
@@ -1010,6 +1023,15 @@ function renderBriefHtml(
                     </td>
                   </tr>
                 </table>
+
+                ${digest.mode === "morning" && digest.open_review_items.length > 0 ? `
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                  <tr>
+                    <td style="padding:18px 32px 0 32px;">
+                      ${renderOpenReviewItemsCard(digest.open_review_items)}
+                    </td>
+                  </tr>
+                </table>` : ""}
 
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
                   <tr>
@@ -1171,6 +1193,13 @@ function renderBriefText(
     lines.push("", "Tasks Due Soon:", ...renderTextTaskItems(digest.tasks.due_soon, "No overdue or due-soon tasks."));
     lines.push("", "Blocked:", ...renderTextTaskItems(digest.tasks.blocked, "No blocked work."));
     lines.push("", "In Progress:", ...renderTextTaskItems(digest.tasks.in_progress, "Nothing is marked In Progress."));
+    if (digest.open_review_items.length > 0) {
+      lines.push(
+        "",
+        "⚠️ Open Review Items:",
+        ...digest.open_review_items.map((item) => `- ${item.artifact_type} — ${item.task_title} [${item.task_id}] — ${item.suggested_action}`)
+      );
+    }
   } else if (digest.mode === "midday") {
     lines.push("", "Done Today:", ...renderTextTaskItems(digest.tasks.completed_today, "Nothing is marked done today."));
     lines.push("", "Still In Progress:", ...renderTextTaskItems(digest.tasks.in_progress, "Nothing is marked In Progress."));

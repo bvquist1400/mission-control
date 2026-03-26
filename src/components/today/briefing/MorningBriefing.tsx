@@ -6,7 +6,7 @@ import { CalendarSummary, CalendarStats } from "./CalendarSummary";
 import { FocusBlockDisplay } from "./FocusBlockDisplay";
 import type { CapacityResult } from "@/types/database";
 import type { ApiCalendarEvent, BusyStats } from "@/lib/calendar";
-import type { FocusBlock, TaskSummary } from "@/lib/briefing";
+import type { BriefingOpenReviewItem, FocusBlock, TaskSummary } from "@/lib/briefing";
 
 interface MorningBriefingProps {
   calendar: {
@@ -19,9 +19,10 @@ interface MorningBriefingProps {
     remaining: TaskSummary[];
   };
   capacity: CapacityResult;
+  openReviewItems: BriefingOpenReviewItem[];
 }
 
-export function MorningBriefing({ calendar, tasks, capacity }: MorningBriefingProps) {
+export function MorningBriefing({ calendar, tasks, capacity, openReviewItems }: MorningBriefingProps) {
   // Get top tasks to recommend
   const topTasks = tasks.remaining.slice(0, 4);
   const sundownTasks = tasks.remaining.filter((task) => task.implementation_phase === "Sundown");
@@ -105,6 +106,27 @@ export function MorningBriefing({ calendar, tasks, capacity }: MorningBriefingPr
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {openReviewItems.length > 0 && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
+          <h3 className="mb-3 text-sm font-semibold text-amber-200">⚠️ Open Review Items</h3>
+          <ul className="space-y-2">
+            {openReviewItems.map((item) => (
+              <li key={item.artifact_id} className="text-sm text-foreground">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="rounded-full border border-amber-400/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-200">
+                    {item.artifact_type}
+                  </span>
+                  <Link href={`/tasks/${item.task_id}`} className="font-medium hover:text-accent">
+                    {item.task_title}
+                  </Link>
+                  <span className="text-xs text-muted-foreground">{item.suggested_action}</span>
+                </div>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 

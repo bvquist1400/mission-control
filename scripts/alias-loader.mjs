@@ -29,6 +29,16 @@ function resolveCandidatePath(target) {
 }
 
 export async function resolve(specifier, context, nextResolve) {
+  if (specifier.startsWith("next/")) {
+    const nextPath = resolveCandidatePath(path.join(projectRoot, "node_modules", specifier));
+    if (nextPath) {
+      return {
+        url: pathToFileURL(nextPath).href,
+        shortCircuit: true,
+      };
+    }
+  }
+
   if (specifier.startsWith("@/")) {
     const aliasPath = resolveCandidatePath(path.join(srcRoot, specifier.slice(2)));
     if (aliasPath) {

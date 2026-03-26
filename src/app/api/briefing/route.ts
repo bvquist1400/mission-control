@@ -24,7 +24,6 @@ import {
 } from "@/lib/briefing/intelligence";
 import { computeImplementationHealthScores, persistImplementationHealthSnapshots } from "@/lib/health-scores";
 import {
-  BriefingMode,
   detectBriefingMode,
   formatETTime,
   getTodayET,
@@ -32,11 +31,15 @@ import {
   calculateFocusBlocks,
   identifyPrepTasks,
   findRolledOverTasks,
-  type TaskInput,
-  type TaskSummary,
-  type BriefingResponse,
-  type TodayBriefingData,
 } from "@/lib/briefing";
+import type {
+  BriefingMode,
+  TaskInput,
+  TaskSummary,
+  BriefingResponse,
+  TodayBriefingData,
+} from "@/lib/briefing";
+import { readBriefingOpenReviewItems } from "@/lib/briefing/open-review-items";
 import { calculateCapacity } from "@/lib/capacity";
 import { requireAuthenticatedRoute } from "@/lib/supabase/route-auth";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
@@ -254,12 +257,13 @@ export async function GET(request: NextRequest) {
     const autoDetectedMode = detectBriefingMode(now);
     const mode: BriefingMode = modeParam === "auto" ? autoDetectedMode : (modeParam as BriefingMode);
 
-    const [todayCalendar, allTasks, implementations, openCommitments, stakeholders] = await Promise.all([
+    const [todayCalendar, allTasks, implementations, openCommitments, stakeholders, openReviewItems] = await Promise.all([
       fetchCalendarData(supabase, userId, todayET, todayET),
       fetchTasks(supabase, userId),
       fetchImplementations(supabase, userId),
       fetchOpenCommitments(supabase, userId),
       fetchStakeholders(supabase, userId),
+      mode === "morning" ? readBriefingOpenReviewItems(supabase, userId) : Promise.resolve([]),
     ]);
 
     const todayRange = normalizeRequestedRange(todayET, todayET);
@@ -351,6 +355,7 @@ export async function GET(request: NextRequest) {
       },
       risk_radar: riskRadar,
       health_scores: healthScores,
+      open_review_items: openReviewItems,
     };
 
     // Add tomorrow data for EOD mode

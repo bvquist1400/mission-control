@@ -438,6 +438,7 @@ export function DailyBriefing({ replanSignal }: DailyBriefingProps) {
             calendar={data.today.calendar}
             tasks={data.today.tasks}
             capacity={data.today.capacity}
+            openReviewItems={data.open_review_items}
           />
         )}
 

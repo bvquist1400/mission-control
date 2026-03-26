@@ -39,6 +39,7 @@ export type {
   BriefingCalendarData,
   BriefingColdCommitment,
   BriefingCommitmentData,
+  BriefingOpenReviewItem,
   BriefingRiskRadarItem,
   BriefingTomorrowCommitmentItem,
   BriefingTomorrowContextItem,
