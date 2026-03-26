@@ -1,6 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
+    "src/app/api/intelligence/run/route.ts": {
+      "maxDuration": 60
+    },
     "src/app/api/mcp/route.ts": {
       "maxDuration": 60
     },
@@ -12,6 +15,22 @@
     {
       "path": "/api/tasks/generate-recurring",
       "schedule": "0 11 * * *"
+    },
+    {
+      "path": "/api/intelligence/run",
+      "schedule": "0 9 * * 1-5"
+    },
+    {
+      "path": "/api/intelligence/run",
+      "schedule": "0 10 * * 1-5"
+    },
+    {
+      "path": "/api/intelligence/run",
+      "schedule": "0 15 * * 1-5"
+    },
+    {
+      "path": "/api/intelligence/run",
+      "schedule": "0 16 * * 1-5"
     }
   ]
 }

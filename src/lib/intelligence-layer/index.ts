@@ -7,10 +7,19 @@ export {
   promoteIntelligenceContracts,
   transitionIntelligenceArtifactStatus,
 } from "./promotion";
+export {
+  describeScheduledIntelligenceCronWindow,
+  executeIntelligencePipeline,
+} from "./run";
 export { SupabaseIntelligencePromotionStore } from "./promotion-store";
 export { executeAcceptedReminderArtifactsForUser } from "./reminders";
 export { SupabaseIntelligenceReminderStore } from "./reminder-store";
 export { readIntelligenceArtifactInbox } from "./inbox";
+export type {
+  ExecuteIntelligencePipelineOptions,
+  ExecuteIntelligencePipelineResult,
+  ScheduledIntelligenceCronWindow,
+} from "./run";
 export type {
   AmbiguousTaskContract,
   BlockedWaitingStaleContract,

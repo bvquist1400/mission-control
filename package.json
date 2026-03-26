@@ -15,6 +15,7 @@
     "test:mcp-oauth": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-mcp-oauth.mjs",
     "test:notes": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-notes.mjs",
     "test:intelligence-layer": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-intelligence-layer.mjs",
+    "test:intelligence-layer-run": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-intelligence-layer-run.mjs",
     "test:intelligence-layer-promotion": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-intelligence-layer-promotion.mjs",
     "test:intelligence-layer-inbox": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-intelligence-layer-inbox.mjs",
     "test:intelligence-layer-reminders": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-intelligence-layer-reminders.mjs",
