@@ -875,18 +875,18 @@ export function TaskGrid({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4">
       {error ? (
         <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
           {error}
         </p>
       ) : null}
 
-      <section className="overflow-hidden rounded-card border border-stroke bg-panel shadow-sm">
+      <section className="max-w-full overflow-hidden rounded-card border border-stroke bg-panel shadow-sm">
         <p className="border-b border-stroke px-4 py-2 text-[11px] font-medium text-muted-foreground sm:hidden">
           Scroll for more &rarr;
         </p>
-        <div className="overflow-x-auto">
+        <div className="max-w-full overflow-x-auto">
           <table className="w-full min-w-[1280px]">
             <thead className="border-b-2 border-stroke bg-panel-muted">
               <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground [&>th]:border-r [&>th]:border-solid [&>th]:border-stroke [&>th:last-child]:border-r-0">

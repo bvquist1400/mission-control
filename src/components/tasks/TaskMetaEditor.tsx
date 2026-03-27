@@ -18,6 +18,7 @@ import type {
   TaskUpdatePayload,
   TaskWithImplementation,
   ImplementationSummary,
+  ProjectSection,
 } from "@/types/database";
 
 interface ProjectOption {
@@ -105,6 +106,7 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
   const [waitingOnDraft, setWaitingOnDraft] = useState(task.waiting_on ?? "");
   const [implementationIdDraft, setImplementationIdDraft] = useState(task.implementation_id ?? "");
   const [projectIdDraft, setProjectIdDraft] = useState(task.project_id ?? "");
+  const [sectionIdDraft, setSectionIdDraft] = useState(task.section_id ?? "");
   const [sprintIdDraft, setSprintIdDraft] = useState(task.sprint_id ?? "");
   const [dueDateDraft, setDueDateDraft] = useState(timestampToLocalDateInputValue(task.due_at));
   const [tagsDraft, setTagsDraft] = useState(currentTags);
@@ -124,7 +126,9 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
   const [isUpdatingRecurrence, setIsUpdatingRecurrence] = useState(false);
   const [implementations, setImplementations] = useState<ImplementationSummary[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
+  const [projectSections, setProjectSections] = useState<ProjectSection[]>([]);
   const [loadingAssignments, setLoadingAssignments] = useState(true);
+  const [loadingProjectSections, setLoadingProjectSections] = useState(false);
 
   useEffect(() => {
     const nextDueDateDraft = timestampToLocalDateInputValue(task.due_at);
@@ -137,6 +141,7 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
     setWaitingOnDraft(task.waiting_on ?? "");
     setImplementationIdDraft(task.implementation_id ?? "");
     setProjectIdDraft(task.project_id ?? "");
+    setSectionIdDraft(task.section_id ?? "");
     setSprintIdDraft(task.sprint_id ?? "");
     setDueDateDraft(nextDueDateDraft);
     setTagsDraft(task.tags ?? []);
@@ -194,6 +199,60 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
     };
   }, []);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadProjectSections() {
+      if (!projectIdDraft) {
+        setProjectSections([]);
+        setLoadingProjectSections(false);
+        return;
+      }
+
+      setLoadingProjectSections(true);
+
+      try {
+        const response = await fetch(`/api/projects/${projectIdDraft}/sections`, { cache: "no-store" });
+
+        if (!isMounted) {
+          return;
+        }
+
+        if (!response.ok) {
+          setProjectSections([]);
+          return;
+        }
+
+        const payload = await response.json() as ProjectSection[];
+        if (!isMounted) {
+          return;
+        }
+
+        setProjectSections(payload);
+      } finally {
+        if (isMounted) {
+          setLoadingProjectSections(false);
+        }
+      }
+    }
+
+    void loadProjectSections();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [projectIdDraft]);
+
+  useEffect(() => {
+    if (!projectIdDraft || !sectionIdDraft || loadingProjectSections) {
+      return;
+    }
+
+    if (!projectSections.some((section) => section.id === sectionIdDraft)) {
+      setSectionIdDraft("");
+    }
+  }, [loadingProjectSections, projectIdDraft, projectSections, sectionIdDraft]);
+
   const normalizedTitle = titleDraft.trim();
   const normalizedDescription = descriptionDraft.trim();
   const normalizedWaitingOn = waitingOnDraft.trim();
@@ -201,6 +260,7 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
   const nextDescription = normalizedDescription.length > 0 ? normalizedDescription : null;
   const nextImplementationId = implementationIdDraft || null;
   const nextProjectId = projectIdDraft || null;
+  const nextSectionId = sectionIdDraft || null;
   const nextSprintId = sprintIdDraft || null;
   const currentDueDate = timestampToLocalDateInputValue(task.due_at);
   const dueDateResolution = resolveDueDateInput(dueDateDraft);
@@ -228,6 +288,7 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
     || nextDescription !== task.description
     || nextImplementationId !== task.implementation_id
     || nextProjectId !== task.project_id
+    || nextSectionId !== task.section_id
     || nextSprintId !== task.sprint_id
     || hasTagChanges
     || hasDueDateChange;
@@ -283,6 +344,9 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
     }
     if (nextProjectId !== task.project_id) {
       updates.project_id = nextProjectId;
+    }
+    if (nextSectionId !== task.section_id) {
+      updates.section_id = nextSectionId;
     }
     if (nextSprintId !== task.sprint_id) {
       updates.sprint_id = nextSprintId;
@@ -379,7 +443,7 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
         </button>
       </div>
 
-      <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-7">
+      <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-8">
         <label className="space-y-1">
           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Title</span>
           <input
@@ -485,7 +549,13 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Project</span>
           <select
             value={projectIdDraft}
-            onChange={(event) => setProjectIdDraft(event.target.value)}
+            onChange={(event) => {
+              const nextProjectIdValue = event.target.value;
+              if (nextProjectIdValue !== projectIdDraft) {
+                setSectionIdDraft("");
+              }
+              setProjectIdDraft(nextProjectIdValue);
+            }}
             disabled={isMutating || loadingAssignments}
             className="w-full rounded border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
           >
@@ -493,6 +563,31 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
             {projects.map((project) => (
               <option key={project.id} value={project.id}>
                 {project.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="space-y-1">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Section</span>
+          <select
+            value={sectionIdDraft}
+            onChange={(event) => setSectionIdDraft(event.target.value)}
+            disabled={isMutating || !projectIdDraft || loadingProjectSections}
+            className="w-full rounded border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <option value="">
+              {!projectIdDraft
+                ? "Select a project first"
+                : loadingProjectSections
+                  ? "Loading..."
+                  : projectSections.length === 0
+                    ? "No sections"
+                    : "No section"}
+            </option>
+            {projectSections.map((section) => (
+              <option key={section.id} value={section.id}>
+                {section.name}
               </option>
             ))}
           </select>
