@@ -149,6 +149,8 @@ export interface TaskDependency {
   task_id: string;
   depends_on_task_id: string | null;
   depends_on_commitment_id: string | null;
+  resolved_at: string | null;
+  is_resolved: boolean;
   created_at: string;
 }
 
@@ -161,6 +163,29 @@ export interface TaskDependencySummary {
   title: string;
   status: TaskDependencyStatus;
   unresolved: boolean;
+  resolved_at?: string | null;
+  created_at: string;
+}
+
+export interface RecentlyResolvedTaskDependencySummary {
+  id: string;
+  task_id: string;
+  depends_on_task_id: string | null;
+  depends_on_commitment_id: string | null;
+  type: TaskDependencyType;
+  title: string;
+  status: TaskDependencyStatus;
+  resolved_at: string;
+  created_at: string;
+}
+
+export interface TaskStatusTransition {
+  id: string;
+  user_id: string;
+  task_id: string;
+  from_status: string | null;
+  to_status: string;
+  transitioned_at: string;
   created_at: string;
 }
 

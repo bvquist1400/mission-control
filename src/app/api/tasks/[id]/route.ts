@@ -9,6 +9,7 @@ import {
   normalizeTaskWithRelations,
   TASK_WITH_RELATIONS_SELECT,
 } from '@/lib/task-relations';
+import { queueTaskStatusTransition } from '@/lib/task-status-transitions';
 import { recalculateTaskPriority } from '@/lib/priority';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import type { Task, TaskStatus, TaskType } from '@/types/database';
@@ -303,6 +304,15 @@ export async function PATCH(
         return NextResponse.json({ error: 'Task not found' }, { status: 404 });
       }
       throw error;
+    }
+
+    if (currentTask && typeof updates.status === 'string' && updates.status !== currentTask.status) {
+      queueTaskStatusTransition(supabase, {
+        userId,
+        taskId: id,
+        fromStatus: currentTask.status,
+        toStatus: updates.status as typeof currentTask.status,
+      });
     }
 
     return NextResponse.json(normalizeTaskWithRelations(data as Record<string, unknown>));

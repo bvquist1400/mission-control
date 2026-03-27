@@ -17,6 +17,7 @@ import type {
 
 const RENDER_CACHE_TTL_MS = 30 * 60 * 1000;
 const RENDER_LLM_TIMEOUT_MS = 15000;
+const RECENTLY_UNBLOCKED_FAMILY = "recently_unblocked";
 
 interface RenderCacheEntry {
   copy: DailyBriefRenderCopy;
@@ -888,6 +889,56 @@ function renderOpenReviewItemsCard(items: DailyBriefOpenReviewItem[]): string {
   return sectionFrame("⚠️ Open Review Items", body);
 }
 
+function partitionOpenReviewItems(items: DailyBriefOpenReviewItem[]): {
+  generic: DailyBriefOpenReviewItem[];
+  recentlyUnblocked: DailyBriefOpenReviewItem[];
+} {
+  return {
+    generic: items.filter((item) => item.family !== RECENTLY_UNBLOCKED_FAMILY),
+    recentlyUnblocked: items.filter((item) => item.family === RECENTLY_UNBLOCKED_FAMILY),
+  };
+}
+
+function formatRecentlyUnblockedAgeLabel(unblockedAt: string | null, referenceIso: string): string {
+  if (!unblockedAt) {
+    return "recently";
+  }
+
+  const unblockedMs = Date.parse(unblockedAt);
+  const referenceMs = Date.parse(referenceIso);
+  if (!Number.isFinite(unblockedMs) || !Number.isFinite(referenceMs) || referenceMs < unblockedMs) {
+    return "recently";
+  }
+
+  const hoursAgo = Math.max(0, Math.floor((referenceMs - unblockedMs) / (60 * 60 * 1000)));
+  if (hoursAgo <= 0) {
+    return "less than 1 hour ago";
+  }
+
+  return `${hoursAgo} hour${hoursAgo === 1 ? "" : "s"} ago`;
+}
+
+function renderRecentlyUnblockedCard(
+  items: DailyBriefOpenReviewItem[],
+  digest: DailyBriefDigestResponse
+): string {
+  if (items.length === 0) {
+    return "";
+  }
+
+  const body = items.map((item, index) => {
+    const detail = [
+      `Unblocked ${formatRecentlyUnblockedAgeLabel(item.unblocked_at, digest.generatedAt)}`,
+      item.current_status ? `Status: ${item.current_status}` : null,
+      item.recommended_action_window ? `Action window: ${item.recommended_action_window}` : null,
+    ].filter((value): value is string => Boolean(value)).join(" • ");
+
+    return `<div style="padding-top:${index === 0 ? "0" : "12px"};"><strong>${escapeHtml(item.task_title)}</strong> [${escapeHtml(item.task_id)}]<div style="color:${EMAIL_COLORS.muted};padding-top:4px;">${escapeHtml(detail)}</div></div>`;
+  }).join("");
+
+  return sectionFrame("🔓 Recently Unblocked", body);
+}
+
 function renderDigestTaskListCard(
   title: string,
   items: DailyBriefDigestTaskItem[],
@@ -929,6 +980,7 @@ function renderBriefHtml(
   preheader: string,
   syncApprovalText: string | null
 ): string {
+  const { generic: genericOpenReviewItems, recentlyUnblocked } = partitionOpenReviewItems(digest.open_review_items);
   const modeLabel = getModeLabel(digest.mode);
   const headline = modeLabel;
   const headerSubtitle = buildHeaderSubtitle(digest, copy);
@@ -1022,11 +1074,20 @@ function renderBriefHtml(
                   </tr>
                 </table>
 
-                ${digest.mode === "morning" && digest.open_review_items.length > 0 ? `
+                ${digest.mode === "morning" && genericOpenReviewItems.length > 0 ? `
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
                   <tr>
                     <td style="padding:18px 32px 0 32px;">
-                      ${renderOpenReviewItemsCard(digest.open_review_items)}
+                      ${renderOpenReviewItemsCard(genericOpenReviewItems)}
+                    </td>
+                  </tr>
+                </table>` : ""}
+
+                ${((digest.mode === "morning" || digest.mode === "midday") && recentlyUnblocked.length > 0) ? `
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                  <tr>
+                    <td style="padding:18px 32px 0 32px;">
+                      ${renderRecentlyUnblockedCard(recentlyUnblocked, digest)}
                     </td>
                   </tr>
                 </table>` : ""}
@@ -1286,6 +1347,7 @@ function renderBriefText(
   copy: DailyBriefRenderCopy,
   syncApprovalText: string | null
 ): string {
+  const { generic: genericOpenReviewItems, recentlyUnblocked } = partitionOpenReviewItems(digest.open_review_items);
   const lines: string[] = [
     `${digest.subject}`,
     `${formatDateOnlyLabel(digest.requestedDate)} · Generated ${digest.currentTimeET}`,
@@ -1305,17 +1367,45 @@ function renderBriefText(
     lines.push("", "Tasks Due Soon:", ...renderTextTaskItems(digest.tasks.due_soon, "No overdue or due-soon tasks."));
     lines.push("", "Blocked:", ...renderTextTaskItems(digest.tasks.blocked, "No blocked work."));
     lines.push("", "In Progress:", ...renderTextTaskItems(digest.tasks.in_progress, "Nothing is marked In Progress."));
-    if (digest.open_review_items.length > 0) {
+    if (genericOpenReviewItems.length > 0) {
       lines.push(
         "",
         "⚠️ Open Review Items:",
-        ...digest.open_review_items.map((item) => `- ${item.artifact_type} — ${item.task_title} [${item.task_id}] — ${item.suggested_action}`)
+        ...genericOpenReviewItems.map((item) => `- ${item.artifact_type} — ${item.task_title} [${item.task_id}] — ${item.suggested_action}`)
+      );
+    }
+    if (recentlyUnblocked.length > 0) {
+      lines.push(
+        "",
+        "🔓 Recently Unblocked:",
+        ...recentlyUnblocked.map((item) => {
+          const detail = [
+            `unblocked ${formatRecentlyUnblockedAgeLabel(item.unblocked_at, digest.generatedAt)}`,
+            item.current_status ? `now ${item.current_status}` : null,
+            item.recommended_action_window ? `restart ${item.recommended_action_window}` : null,
+          ].filter((value): value is string => Boolean(value)).join(" — ");
+          return `- ${item.task_title} [${item.task_id}] — ${detail}`;
+        })
       );
     }
   } else if (digest.mode === "midday") {
     lines.push("", "Done Today:", ...renderTextTaskItems(digest.tasks.completed_today, "Nothing is marked done today."));
     lines.push("", "Still In Progress:", ...renderTextTaskItems(digest.tasks.in_progress, "Nothing is marked In Progress."));
     lines.push("", "Still Blocked:", ...renderTextTaskItems(digest.tasks.blocked, "No blocked work."));
+    if (recentlyUnblocked.length > 0) {
+      lines.push(
+        "",
+        "🔓 Recently Unblocked:",
+        ...recentlyUnblocked.map((item) => {
+          const detail = [
+            `unblocked ${formatRecentlyUnblockedAgeLabel(item.unblocked_at, digest.generatedAt)}`,
+            item.current_status ? `now ${item.current_status}` : null,
+            item.recommended_action_window ? `restart ${item.recommended_action_window}` : null,
+          ].filter((value): value is string => Boolean(value)).join(" — ");
+          return `- ${item.task_title} [${item.task_id}] — ${detail}`;
+        })
+      );
+    }
   } else {
     lines.push("", "Done Today:", ...renderTextTaskItems(digest.tasks.completed_today, "Nothing is marked done today."));
     lines.push("", "Rolls to Tomorrow:", ...renderTextTaskItems(digest.tasks.rolled_to_tomorrow, "No obvious rollover items."));

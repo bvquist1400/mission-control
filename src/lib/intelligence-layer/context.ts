@@ -1,6 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { normalizeNoteDecisionRow, normalizeNoteLinkRow, normalizeNoteRow } from "@/lib/notes-shared";
-import { fetchTaskDependencySummaries } from "@/lib/task-dependencies";
+import {
+  fetchRecentlyResolvedTaskDependencySummaries,
+  fetchTaskDependencySummaries,
+} from "@/lib/task-dependencies";
 import type {
   Commitment,
   ImplementationSummary,
@@ -12,17 +15,21 @@ import type {
   Stakeholder,
   Task,
   TaskComment,
+  TaskStatusTransition,
 } from "@/types/database";
 import type {
   IntelligenceContextNote,
+  IntelligenceResolvedDependencyContext,
   IntelligenceTaskCommentContext,
   IntelligenceTaskCommitmentContext,
   IntelligenceTaskContext,
   IntelligenceTaskRecord,
+  IntelligenceTaskStatusTransitionContext,
   ReadIntelligenceTaskContextsOptions,
 } from "./types";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const RECENTLY_UNBLOCKED_LOOKBACK_HOURS = 72;
 const NOTE_EXCERPT_LENGTH = 240;
 const COMMENT_EXCERPT_LENGTH = 180;
 const ACTIVE_TASK_STATUSES = new Set(["Backlog", "Planned", "In Progress", "Blocked/Waiting"]);
@@ -38,6 +45,11 @@ interface NoteTaskRow {
 interface CommitmentRow extends Commitment {
   stakeholder_id: string;
 }
+
+type TaskStatusTransitionRow = Pick<
+  TaskStatusTransition,
+  "id" | "task_id" | "from_status" | "to_status" | "transitioned_at" | "created_at"
+>;
 
 function isNonEmptyString(value: string | null | undefined): value is string {
   return typeof value === "string" && value.length > 0;
@@ -381,6 +393,108 @@ async function fetchTaskCommitments(
   return byTaskId;
 }
 
+function normalizeTaskStatusTransition(
+  row: TaskStatusTransitionRow
+): IntelligenceTaskStatusTransitionContext {
+  return {
+    id: row.id,
+    task_id: row.task_id,
+    from_status: row.from_status,
+    to_status: row.to_status,
+    transitioned_at: row.transitioned_at,
+    created_at: row.created_at,
+  };
+}
+
+async function fetchRecentTaskStatusTransitions(
+  supabase: SupabaseClient,
+  userId: string,
+  taskIds: string[],
+  windowStartIso: string
+): Promise<Map<string, IntelligenceTaskStatusTransitionContext[]>> {
+  const byTaskId = new Map<string, IntelligenceTaskStatusTransitionContext[]>();
+
+  if (taskIds.length === 0) {
+    return byTaskId;
+  }
+
+  const recentResult = await supabase
+    .from("task_status_transitions")
+    .select("id, task_id, from_status, to_status, transitioned_at, created_at")
+    .eq("user_id", userId)
+    .in("task_id", taskIds)
+    .gte("transitioned_at", windowStartIso)
+    .order("transitioned_at", { ascending: false });
+
+  if (recentResult.error) {
+    throw recentResult.error;
+  }
+
+  const recentRows = (recentResult.data || []) as TaskStatusTransitionRow[];
+  const latestBlockedExitByTaskId = new Map<string, TaskStatusTransitionRow>();
+
+  for (const row of recentRows) {
+    const existing = byTaskId.get(row.task_id) ?? [];
+    existing.push(normalizeTaskStatusTransition(row));
+    byTaskId.set(row.task_id, existing);
+
+    if (row.from_status === "Blocked/Waiting" && !latestBlockedExitByTaskId.has(row.task_id)) {
+      latestBlockedExitByTaskId.set(row.task_id, row);
+    }
+  }
+
+  const candidateTaskIds = [...latestBlockedExitByTaskId.keys()];
+  if (candidateTaskIds.length === 0) {
+    return byTaskId;
+  }
+
+  const entryResult = await supabase
+    .from("task_status_transitions")
+    .select("id, task_id, from_status, to_status, transitioned_at, created_at")
+    .eq("user_id", userId)
+    .eq("to_status", "Blocked/Waiting")
+    .in("task_id", candidateTaskIds)
+    .order("transitioned_at", { ascending: false });
+
+  if (entryResult.error) {
+    throw entryResult.error;
+  }
+
+  const entryRows = (entryResult.data || []) as TaskStatusTransitionRow[];
+  const supplementalByTaskId = new Map<string, IntelligenceTaskStatusTransitionContext>();
+
+  for (const row of entryRows) {
+    if (supplementalByTaskId.has(row.task_id)) {
+      continue;
+    }
+
+    const latestExit = latestBlockedExitByTaskId.get(row.task_id);
+    if (!latestExit) {
+      continue;
+    }
+
+    const entryMs = parseIso(row.transitioned_at);
+    const exitMs = parseIso(latestExit.transitioned_at);
+    if (entryMs === null || exitMs === null || entryMs > exitMs) {
+      continue;
+    }
+
+    const alreadyPresent = (byTaskId.get(row.task_id) ?? []).some((transition) => transition.id === row.id);
+    if (!alreadyPresent) {
+      supplementalByTaskId.set(row.task_id, normalizeTaskStatusTransition(row));
+    }
+  }
+
+  for (const [taskId, transition] of supplementalByTaskId.entries()) {
+    const existing = byTaskId.get(taskId) ?? [];
+    existing.push(transition);
+    existing.sort((left, right) => (parseIso(right.transitioned_at) ?? 0) - (parseIso(left.transitioned_at) ?? 0));
+    byTaskId.set(taskId, existing);
+  }
+
+  return byTaskId;
+}
+
 async function fetchNoteTaskRows(
   supabase: SupabaseClient,
   userId: string,
@@ -433,6 +547,7 @@ export async function readIntelligenceTaskContexts(
   options: ReadIntelligenceTaskContextsOptions = {}
 ): Promise<IntelligenceTaskContext[]> {
   const now = options.now ?? new Date();
+  const windowStartIso = new Date(now.getTime() - (RECENTLY_UNBLOCKED_LOOKBACK_HOURS * 60 * 60 * 1000)).toISOString();
   const tasks = await fetchTasks(supabase, userId, options.taskIds);
   const taskIds = tasks.map((task) => task.id);
 
@@ -449,6 +564,8 @@ export async function readIntelligenceTaskContexts(
     projectById,
     sprintById,
     dependencyMap,
+    recentTransitionsByTaskId,
+    recentlyResolvedDepsByTaskId,
     commentsByTaskId,
     commitmentsByTaskId,
   ] = await Promise.all([
@@ -456,6 +573,8 @@ export async function readIntelligenceTaskContexts(
     fetchProjects(supabase, userId, projectIds),
     fetchSprints(supabase, userId, sprintIds),
     fetchTaskDependencySummaries(supabase, userId, taskIds),
+    fetchRecentTaskStatusTransitions(supabase, userId, taskIds, windowStartIso),
+    fetchRecentlyResolvedTaskDependencySummaries(supabase, userId, taskIds, windowStartIso),
     fetchTaskComments(supabase, userId, taskIds),
     fetchTaskCommitments(supabase, userId, taskIds),
   ]);
@@ -664,6 +783,8 @@ export async function readIntelligenceTaskContexts(
       comments,
       notes,
       openCommitments: commitmentsByTaskId.get(task.id) ?? [],
+      recentTransitions: recentTransitionsByTaskId.get(task.id) ?? [],
+      recentlyResolvedDeps: (recentlyResolvedDepsByTaskId.get(task.id) ?? []) as IntelligenceResolvedDependencyContext[],
     };
   });
 }

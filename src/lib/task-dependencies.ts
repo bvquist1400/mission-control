@@ -1,5 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { CommitmentStatus, TaskStatus } from '@/types/database';
+import type {
+  CommitmentStatus,
+  RecentlyResolvedTaskDependencySummary,
+  TaskStatus,
+} from '@/types/database';
 
 export type DependencyType = 'task' | 'commitment';
 export type DependencyStatus = TaskStatus | CommitmentStatus;
@@ -9,6 +13,8 @@ interface TaskDependencyRow {
   task_id: string;
   depends_on_task_id: string | null;
   depends_on_commitment_id: string | null;
+  resolved_at: string | null;
+  is_resolved: boolean;
   created_at: string;
 }
 
@@ -33,6 +39,7 @@ export interface TaskDependencySummary {
   title: string;
   status: DependencyStatus;
   unresolved: boolean;
+  resolved_at?: string | null;
   created_at: string;
 }
 
@@ -59,8 +66,9 @@ export async function fetchTaskDependencySummaries(
   const uniqueTaskIds = [...new Set(taskIds)];
   const { data: dependencyRows, error: dependencyError } = await supabase
     .from('task_dependencies')
-    .select('id, task_id, depends_on_task_id, depends_on_commitment_id, created_at')
+    .select('id, task_id, depends_on_task_id, depends_on_commitment_id, resolved_at, is_resolved, created_at')
     .eq('user_id', userId)
+    .eq('is_resolved', false)
     .in('task_id', uniqueTaskIds);
 
   if (dependencyError) {
@@ -142,6 +150,7 @@ export async function fetchTaskDependencySummaries(
         title: target?.title ?? UNKNOWN_TASK_TITLE,
         status,
         unresolved: !isDependencyResolved(status),
+        resolved_at: row.resolved_at,
         created_at: row.created_at,
       };
     } else if (row.depends_on_commitment_id) {
@@ -156,6 +165,7 @@ export async function fetchTaskDependencySummaries(
         title: target?.title ?? UNKNOWN_COMMITMENT_TITLE,
         status,
         unresolved: !isDependencyResolved(status),
+        resolved_at: row.resolved_at,
         created_at: row.created_at,
       };
     }
@@ -183,6 +193,144 @@ export async function fetchTaskDependencySummaries(
       return a.title.localeCompare(b.title);
     });
 
+    byTaskId.set(taskId, list);
+  }
+
+  return byTaskId;
+}
+
+export async function fetchRecentlyResolvedTaskDependencySummaries(
+  supabase: SupabaseClient,
+  userId: string,
+  taskIds: string[],
+  resolvedAfterIso: string
+): Promise<Map<string, RecentlyResolvedTaskDependencySummary[]>> {
+  const byTaskId = new Map<string, RecentlyResolvedTaskDependencySummary[]>();
+
+  if (taskIds.length === 0) {
+    return byTaskId;
+  }
+
+  const uniqueTaskIds = [...new Set(taskIds)];
+  const { data: dependencyRows, error: dependencyError } = await supabase
+    .from('task_dependencies')
+    .select('id, task_id, depends_on_task_id, depends_on_commitment_id, resolved_at, is_resolved, created_at')
+    .eq('user_id', userId)
+    .eq('is_resolved', true)
+    .not('resolved_at', 'is', null)
+    .gte('resolved_at', resolvedAfterIso)
+    .in('task_id', uniqueTaskIds);
+
+  if (dependencyError) {
+    throw dependencyError;
+  }
+
+  const dependencies = (dependencyRows || []) as TaskDependencyRow[];
+  if (dependencies.length === 0) {
+    return byTaskId;
+  }
+
+  const dependencyTaskIds = [
+    ...new Set(
+      dependencies
+        .map((row) => row.depends_on_task_id)
+        .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    ),
+  ];
+  const dependencyCommitmentIds = [
+    ...new Set(
+      dependencies
+        .map((row) => row.depends_on_commitment_id)
+        .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    ),
+  ];
+
+  let dependencyTasks: DependencyTaskRow[] = [];
+  if (dependencyTaskIds.length > 0) {
+    const { data, error } = await supabase
+      .from('tasks')
+      .select('id, title, status')
+      .eq('user_id', userId)
+      .in('id', dependencyTaskIds);
+
+    if (error) {
+      throw error;
+    }
+
+    dependencyTasks = (data || []) as DependencyTaskRow[];
+  }
+
+  let dependencyCommitments: DependencyCommitmentRow[] = [];
+  if (dependencyCommitmentIds.length > 0) {
+    const { data, error } = await supabase
+      .from('commitments')
+      .select('id, title, status')
+      .eq('user_id', userId)
+      .in('id', dependencyCommitmentIds);
+
+    if (error) {
+      throw error;
+    }
+
+    dependencyCommitments = (data || []) as DependencyCommitmentRow[];
+  }
+
+  const taskById = new Map<string, DependencyTaskRow>();
+  for (const row of dependencyTasks) {
+    taskById.set(row.id, row);
+  }
+
+  const commitmentById = new Map<string, DependencyCommitmentRow>();
+  for (const row of dependencyCommitments) {
+    commitmentById.set(row.id, row);
+  }
+
+  for (const row of dependencies) {
+    if (!row.resolved_at) {
+      continue;
+    }
+
+    let summary: RecentlyResolvedTaskDependencySummary | null = null;
+
+    if (row.depends_on_task_id) {
+      const target = taskById.get(row.depends_on_task_id);
+      summary = {
+        id: row.id,
+        task_id: row.task_id,
+        depends_on_task_id: row.depends_on_task_id,
+        depends_on_commitment_id: null,
+        type: 'task',
+        title: target?.title ?? UNKNOWN_TASK_TITLE,
+        status: target?.status ?? UNKNOWN_TASK_STATUS,
+        resolved_at: row.resolved_at,
+        created_at: row.created_at,
+      };
+    } else if (row.depends_on_commitment_id) {
+      const target = commitmentById.get(row.depends_on_commitment_id);
+      summary = {
+        id: row.id,
+        task_id: row.task_id,
+        depends_on_task_id: null,
+        depends_on_commitment_id: row.depends_on_commitment_id,
+        type: 'commitment',
+        title: target?.title ?? UNKNOWN_COMMITMENT_TITLE,
+        status: target?.status ?? UNKNOWN_COMMITMENT_STATUS,
+        resolved_at: row.resolved_at,
+        created_at: row.created_at,
+      };
+    }
+
+    if (!summary) {
+      continue;
+    }
+
+    const list = byTaskId.get(row.task_id) || [];
+    list.push(summary);
+    byTaskId.set(row.task_id, list);
+  }
+
+  for (const [taskId, list] of byTaskId.entries()) {
+    list.sort((a, b) => Date.parse(b.resolved_at) - Date.parse(a.resolved_at));
     byTaskId.set(taskId, list);
   }
 

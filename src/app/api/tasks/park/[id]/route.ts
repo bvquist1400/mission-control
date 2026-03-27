@@ -4,6 +4,7 @@ import {
   normalizeTaskWithRelations,
   TASK_WITH_RELATIONS_SELECT,
 } from '@/lib/task-relations';
+import { queueTaskStatusTransition } from '@/lib/task-status-transitions';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 
 // POST /api/tasks/park/[id] - Convenience endpoint to move a task into Parked
@@ -57,6 +58,15 @@ export async function POST(
       }
 
       throw error;
+    }
+
+    if (currentTask.status !== 'Parked') {
+      queueTaskStatusTransition(supabase, {
+        userId,
+        taskId: id,
+        fromStatus: currentTask.status,
+        toStatus: 'Parked',
+      });
     }
 
     return NextResponse.json(normalizeTaskWithRelations(data as Record<string, unknown>));

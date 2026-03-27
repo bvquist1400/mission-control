@@ -151,7 +151,8 @@ export async function POST(
       .from('task_dependencies')
       .select('id')
       .eq('task_id', id)
-      .eq('user_id', userId);
+      .eq('user_id', userId)
+      .eq('is_resolved', false);
 
     if (type === 'task') {
       existingQuery = existingQuery.eq('depends_on_task_id', dependsOnTaskId).is('depends_on_commitment_id', null);
@@ -232,10 +233,14 @@ export async function DELETE(
 
     const { data, error } = await supabase
       .from('task_dependencies')
-      .delete()
+      .update({
+        is_resolved: true,
+        resolved_at: new Date().toISOString(),
+      })
       .eq('id', dependencyId)
       .eq('task_id', id)
       .eq('user_id', userId)
+      .eq('is_resolved', false)
       .select('id');
 
     if (error) {

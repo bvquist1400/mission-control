@@ -4,6 +4,8 @@ import type {
   NoteDecisionStatus,
   NoteStatus,
   NoteType,
+  RecentlyResolvedTaskDependencySummary,
+  TaskStatusTransition,
   TaskDependencySummary,
   TaskStatus,
   TaskWithImplementation,
@@ -14,6 +16,7 @@ export const INTELLIGENCE_V1_CONTRACT_TYPES = [
   "blocked_waiting_stale",
   "stale_task",
   "ambiguous_task",
+  "recently_unblocked",
 ] as const;
 
 export type IntelligenceV1ContractType = typeof INTELLIGENCE_V1_CONTRACT_TYPES[number];
@@ -65,6 +68,13 @@ export interface IntelligenceTaskRecord extends TaskWithImplementation {
   dependency_blocked: boolean;
 }
 
+export interface IntelligenceTaskStatusTransitionContext extends Pick<
+  TaskStatusTransition,
+  "id" | "task_id" | "from_status" | "to_status" | "transitioned_at" | "created_at"
+> {}
+
+export interface IntelligenceResolvedDependencyContext extends RecentlyResolvedTaskDependencySummary {}
+
 export interface IntelligenceTaskContext {
   task: IntelligenceTaskRecord;
   latestActivityAt: string;
@@ -72,6 +82,8 @@ export interface IntelligenceTaskContext {
   comments: IntelligenceTaskCommentContext[];
   notes: IntelligenceContextNote[];
   openCommitments: IntelligenceTaskCommitmentContext[];
+  recentTransitions: IntelligenceTaskStatusTransitionContext[];
+  recentlyResolvedDeps: IntelligenceResolvedDependencyContext[];
 }
 
 export interface IntelligenceContractEvidenceItem {
@@ -166,11 +178,26 @@ export interface AmbiguousTaskContract extends IntelligenceContractBase<
   }
 > {}
 
+export interface RecentlyUnblockedContract extends IntelligenceContractBase<
+  "recently_unblocked",
+  {
+    taskId: string;
+    taskTitle: string;
+    currentStatus: TaskStatus;
+  },
+  {
+    unblockedAt: string;
+    hoursBlocked: number | null;
+    recommendedActionWindow: "within 24 hours";
+  }
+> {}
+
 export type IntelligenceV1Contract =
   | FollowUpRiskContract
   | BlockedWaitingStaleContract
   | StaleTaskContract
-  | AmbiguousTaskContract;
+  | AmbiguousTaskContract
+  | RecentlyUnblockedContract;
 
 export interface IntelligencePhaseOneRunResult {
   detectedAt: string;

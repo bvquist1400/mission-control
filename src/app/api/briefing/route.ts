@@ -330,7 +330,11 @@ export async function GET(request: NextRequest) {
       fetchImplementations(supabase, userId),
       fetchOpenCommitments(supabase, userId),
       fetchStakeholders(supabase, userId),
-      mode === "morning" ? readBriefingOpenReviewItems(supabase, userId) : Promise.resolve([]),
+      mode === "morning"
+        ? readBriefingOpenReviewItems(supabase, userId)
+        : mode === "midday"
+          ? readBriefingOpenReviewItems(supabase, userId, { families: ["recently_unblocked"] })
+          : Promise.resolve([]),
     ]);
     const projectSections = await listOwnedProjectSections(
       supabase,

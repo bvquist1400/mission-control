@@ -1,4 +1,5 @@
 import type { ApiCalendarEvent, BusyBlock, BusyStats } from "@/lib/calendar";
+import type { IntelligenceV1ContractType } from "@/lib/intelligence-layer";
 import type { CapacityResult, CommitmentDirection, ImplementationHealthScore, RiskLevel } from "@/types/database";
 import type { BriefingMode } from "./time-detection";
 import type { FocusBlock } from "./focus-blocks";
@@ -84,9 +85,13 @@ export interface BriefingTomorrowContextItem {
 export interface BriefingOpenReviewItem {
   artifact_id: string;
   artifact_type: string;
+  family: IntelligenceV1ContractType;
   task_id: string;
   task_title: string;
   suggested_action: string;
+  current_status: string | null;
+  unblocked_at: string | null;
+  recommended_action_window: string | null;
 }
 
 export interface TodayBriefingData {

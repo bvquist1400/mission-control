@@ -36,8 +36,11 @@ export type {
   IntelligenceTaskCommitmentContext,
   IntelligenceTaskContext,
   IntelligenceTaskRecord,
+  IntelligenceResolvedDependencyContext,
+  IntelligenceTaskStatusTransitionContext,
   IntelligenceV1Contract,
   IntelligenceV1ContractType,
+  RecentlyUnblockedContract,
   ReadIntelligenceTaskContextsOptions,
   StaleTaskContract,
 } from "./types";

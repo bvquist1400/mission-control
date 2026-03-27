@@ -22,6 +22,8 @@ export function formatIntelligenceArtifactTypeLabel(
       return "Stale task";
     case "ambiguous_task":
       return "Ambiguous task";
+    case "recently_unblocked":
+      return "Recently unblocked";
   }
 }
 
@@ -42,6 +44,8 @@ export function formatIntelligenceSuggestedActionLabel(
       return "Review and refresh the task";
     case "ambiguous_task":
       return "Clarify the task";
+    case "recently_unblocked":
+      return "Restart the task within 24 hours";
   }
 }
 

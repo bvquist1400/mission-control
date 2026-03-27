@@ -3,7 +3,8 @@ import {
   normalizeCommitmentRows,
   type IntelligenceCommitment,
 } from "@/lib/briefing/intelligence";
-import { readBriefingOpenReviewItems, type BriefingOpenReviewItem } from "@/lib/briefing/open-review-items";
+import { readBriefingOpenReviewItems } from "@/lib/briefing/open-review-items";
+import type { BriefingOpenReviewItem } from "@/lib/briefing/contracts";
 import {
   buildDayWindows,
   decorateCalendarEvent,
@@ -53,6 +54,7 @@ import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
 import type { CommitmentDirection, TaskStatus } from "@/types/database";
 
 const ET_TIMEZONE = DEFAULT_WORKDAY_CONFIG.timezone;
+const RECENTLY_UNBLOCKED_FAMILY = "recently_unblocked";
 
 export type DailyBriefMode = BriefingMode | "auto";
 
@@ -966,9 +968,50 @@ function formatOpenReviewItemLine(item: DailyBriefOpenReviewItem): string {
   return `- ${item.artifact_type} — ${item.task_title} [${item.task_id}] — ${item.suggested_action}`;
 }
 
+function partitionOpenReviewItems(items: DailyBriefOpenReviewItem[]): {
+  generic: DailyBriefOpenReviewItem[];
+  recentlyUnblocked: DailyBriefOpenReviewItem[];
+} {
+  return {
+    generic: items.filter((item) => item.family !== RECENTLY_UNBLOCKED_FAMILY),
+    recentlyUnblocked: items.filter((item) => item.family === RECENTLY_UNBLOCKED_FAMILY),
+  };
+}
+
+function formatRelativeUnblockedAge(unblockedAt: string | null, referenceIso: string): string {
+  if (!unblockedAt) {
+    return "recently";
+  }
+
+  const unblockedMs = Date.parse(unblockedAt);
+  const referenceMs = Date.parse(referenceIso);
+  if (!Number.isFinite(unblockedMs) || !Number.isFinite(referenceMs) || referenceMs < unblockedMs) {
+    return "recently";
+  }
+
+  const hoursAgo = Math.max(0, Math.floor((referenceMs - unblockedMs) / (60 * 60 * 1000)));
+  if (hoursAgo <= 0) {
+    return "less than 1 hour ago";
+  }
+
+  return `${hoursAgo} hour${hoursAgo === 1 ? "" : "s"} ago`;
+}
+
+function formatRecentlyUnblockedItemLine(item: DailyBriefOpenReviewItem, referenceIso: string): string {
+  const pieces = [
+    `${item.task_title} [${item.task_id}]`,
+    `unblocked ${formatRelativeUnblockedAge(item.unblocked_at, referenceIso)}`,
+    item.current_status ? `now ${item.current_status}` : null,
+    item.recommended_action_window ? `restart ${item.recommended_action_window}` : null,
+  ].filter((value): value is string => Boolean(value));
+
+  return `- ${pieces.join(" — ")}`;
+}
+
 function renderMarkdown(payload: {
   requestedDate: string;
   currentTimeET: string;
+  generatedAt: string;
   mode: BriefingMode;
   narrative: string;
   sprint: DailyBriefSprintSummary | null;
@@ -997,6 +1040,7 @@ function renderMarkdown(payload: {
   }>;
 }): string {
   const modeLabel = payload.mode === "eod" ? "EOD" : `${payload.mode[0].toUpperCase()}${payload.mode.slice(1)}`;
+  const { generic: genericOpenReviewItems, recentlyUnblocked } = partitionOpenReviewItems(payload.openReviewItems);
   const sections: string[] = [
     `# ${modeLabel} Brief`,
     `_For ${formatDateOnlyLabel(payload.requestedDate)} · Generated ${payload.currentTimeET}_`,
@@ -1025,11 +1069,20 @@ function renderMarkdown(payload: {
       ].join("\n")
     );
 
-    if (payload.openReviewItems.length > 0) {
+    if (genericOpenReviewItems.length > 0) {
       sections.push(
         [
           "## ⚠️ Open Review Items",
-          ...payload.openReviewItems.map(formatOpenReviewItemLine),
+          ...genericOpenReviewItems.map(formatOpenReviewItemLine),
+        ].join("\n")
+      );
+    }
+
+    if (recentlyUnblocked.length > 0) {
+      sections.push(
+        [
+          "## 🔓 Recently Unblocked",
+          ...recentlyUnblocked.map((item) => formatRecentlyUnblockedItemLine(item, payload.generatedAt)),
         ].join("\n")
       );
     }
@@ -1066,6 +1119,15 @@ function renderMarkdown(payload: {
         ),
       ].join("\n")
     );
+
+    if (recentlyUnblocked.length > 0) {
+      sections.push(
+        [
+          "## 🔓 Recently Unblocked",
+          ...recentlyUnblocked.map((item) => formatRecentlyUnblockedItemLine(item, payload.generatedAt)),
+        ].join("\n")
+      );
+    }
   }
 
   if (payload.mode === "eod") {
@@ -1444,7 +1506,11 @@ export async function buildDailyBriefDigest({
     fetchStakeholders(supabase, userId),
     fetchTaskCommentsForDay(supabase, userId, dayWindows.utcRangeStart, dayWindows.utcRangeEndExclusive),
     fetchCurrentSprint(supabase, userId, requestedDate),
-    resolvedMode === "morning" ? readBriefingOpenReviewItems(supabase, userId) : Promise.resolve([]),
+    resolvedMode === "morning"
+      ? readBriefingOpenReviewItems(supabase, userId)
+      : resolvedMode === "midday"
+        ? readBriefingOpenReviewItems(supabase, userId, { families: [RECENTLY_UNBLOCKED_FAMILY] })
+        : Promise.resolve([]),
   ]);
 
   const snapshot = buildWorkIntelligenceSnapshot({
@@ -1666,6 +1732,7 @@ export async function buildDailyBriefDigest({
     guidance,
     syncRecommendations: suggestedSyncToday,
     projectSections,
+    generatedAt: now.toISOString(),
   });
 
   return {

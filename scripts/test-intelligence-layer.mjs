@@ -42,6 +42,18 @@ class MemoryQueryBuilder {
     return this;
   }
 
+  gte(field, value) {
+    this.filters.push((row) => String(row[field] ?? "") >= String(value));
+    return this;
+  }
+
+  not(field, operator, value) {
+    if (operator === "is") {
+      this.filters.push((row) => row[field] !== value);
+    }
+    return this;
+  }
+
   order(field, options = {}) {
     this.orders.push({ field, ascending: options.ascending !== false, nullsFirst: options.nullsFirst });
     return this;
@@ -112,6 +124,7 @@ class MemorySupabase {
       note_tasks: [],
       note_decisions: [],
       task_dependencies: [],
+      task_status_transitions: [],
       ...seed,
     };
   }
@@ -299,6 +312,17 @@ const supabase = new MemorySupabase({
       needs_review: true,
       updated_at: isoDaysAgo(4),
     }),
+    makeTask("task-unblocked", {
+      title: "Resume import dry run",
+      status: "In Progress",
+      updated_at: isoDaysAgo(1),
+      due_at: "2026-03-27T14:00:00.000Z",
+    }),
+    makeTask("task-resolved-blocker", {
+      title: "Deliver blocker handoff",
+      status: "Done",
+      updated_at: isoDaysAgo(1),
+    }),
   ],
   task_comments: [
     {
@@ -324,7 +348,39 @@ const supabase = new MemorySupabase({
       task_id: "task-followup",
       depends_on_task_id: null,
       depends_on_commitment_id: "commitment-followup",
+      resolved_at: null,
+      is_resolved: false,
       created_at: isoDaysAgo(6),
+    },
+    {
+      id: "dep-unblocked",
+      user_id: USER_ID,
+      task_id: "task-unblocked",
+      depends_on_task_id: "task-resolved-blocker",
+      depends_on_commitment_id: null,
+      resolved_at: isoDaysAgo(1),
+      is_resolved: true,
+      created_at: isoDaysAgo(8),
+    },
+  ],
+  task_status_transitions: [
+    {
+      id: "transition-unblocked-entry",
+      user_id: USER_ID,
+      task_id: "task-unblocked",
+      from_status: "Planned",
+      to_status: "Blocked/Waiting",
+      transitioned_at: isoDaysAgo(8),
+      created_at: isoDaysAgo(8),
+    },
+    {
+      id: "transition-unblocked-exit",
+      user_id: USER_ID,
+      task_id: "task-unblocked",
+      from_status: "Blocked/Waiting",
+      to_status: "In Progress",
+      transitioned_at: isoDaysAgo(1),
+      created_at: isoDaysAgo(1),
     },
   ],
   notes: [
@@ -386,7 +442,7 @@ const supabase = new MemorySupabase({
 });
 
 const contexts = await readIntelligenceTaskContexts(supabase, USER_ID, { now: new Date(NOW_ISO) });
-assert.equal(contexts.length, 4);
+assert.equal(contexts.length, 5);
 
 const followupContext = contexts.find((context) => context.task.id === "task-followup");
 assert.ok(followupContext);
@@ -411,6 +467,7 @@ assert.equal(contractKeys.has("stale_task|task:task-stale"), true);
 assert.equal(contractKeys.has("stale_task|task:task-multi"), true);
 assert.equal(contractKeys.has("ambiguous_task|task:task-multi"), true);
 assert.equal(contractKeys.has("ambiguous_task|task:task-clear"), false);
+assert.equal(contractKeys.has("recently_unblocked|unblocked:task-unblocked"), true);
 
 const followUpContract = contracts.find((contract) => contract.promotionFamilyKey === "follow_up_risk|waiting_on:task-followup:vendor-signoff");
 assert.ok(followUpContract);
@@ -425,9 +482,17 @@ assert.deepEqual(
 );
 assert.notEqual(multiContracts[0].promotionFamilyKey, multiContracts[1].promotionFamilyKey);
 
+const recentlyUnblockedContract = contracts.find((contract) => contract.promotionFamilyKey === "recently_unblocked|unblocked:task-unblocked");
+assert.ok(recentlyUnblockedContract);
+assert.equal(recentlyUnblockedContract.contractType, "recently_unblocked");
+assert.equal(recentlyUnblockedContract.subject.currentStatus, "In Progress");
+assert.equal(recentlyUnblockedContract.metrics.hoursBlocked, 168);
+assert.equal(recentlyUnblockedContract.metrics.recommendedActionWindow, "within 24 hours");
+
 const runResult = await runIntelligencePhaseOne(supabase, USER_ID, { now: new Date(NOW_ISO) });
 assert.equal(runResult.detectedAt, NOW_ISO);
 assert.equal(runResult.taskContexts.length, contexts.length);
 assert.equal(runResult.contracts.length, contracts.length);
+assert.equal(runResult.contracts.length, 6);
 
 console.log("Intelligence layer phase 1 tests passed.");

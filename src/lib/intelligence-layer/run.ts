@@ -43,6 +43,7 @@ function emptyContractCounts(): Record<IntelligenceV1ContractType, number> {
     blocked_waiting_stale: 0,
     stale_task: 0,
     ambiguous_task: 0,
+    recently_unblocked: 0,
   };
 }
 

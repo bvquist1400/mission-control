@@ -14,11 +14,13 @@ import type {
   IntelligenceTaskCommentContext,
   IntelligenceTaskContext,
   IntelligenceV1Contract,
+  RecentlyUnblockedContract,
   ReadIntelligenceTaskContextsOptions,
   StaleTaskContract,
 } from "./types";
 
 const FOLLOW_UP_RISK_AFTER_HOURS = 72;
+const RECENTLY_UNBLOCKED_WINDOW_HOURS = 72;
 const BLOCKED_WAITING_STALE_AFTER_DAYS = 5;
 const STALE_TASK_AFTER_DAYS = 7;
 const HIGH_STALE_TASK_AFTER_DAYS = 14;
@@ -67,6 +69,10 @@ function truncate(value: string, maxLength = 160): string {
 
 function makeProvenance(context: IntelligenceTaskContext): IntelligenceContractProvenance {
   const relatedDecisionIds = context.notes.flatMap((note) => note.decisions.map((decision) => decision.id));
+  const relatedDependencyIds = [
+    ...context.task.dependencies.map((dependency) => dependency.id),
+    ...context.recentlyResolvedDeps.map((dependency) => dependency.id),
+  ];
 
   return {
     taskId: context.task.id,
@@ -74,7 +80,7 @@ function makeProvenance(context: IntelligenceTaskContext): IntelligenceContractP
     relatedNoteIds: context.notes.map((note) => note.id),
     relatedDecisionIds,
     relatedCommitmentIds: context.openCommitments.map((commitment) => commitment.id),
-    relatedDependencyIds: context.task.dependencies.map((dependency) => dependency.id),
+    relatedDependencyIds: [...new Set(relatedDependencyIds)],
   };
 }
 
@@ -170,6 +176,16 @@ function dueEvidence(dueAt: string | null, now: Date): IntelligenceContractEvide
     relatedId: null,
     recordedAt: dueAt,
   };
+}
+
+function hoursBetween(startIso: string | null | undefined, endIso: string | null | undefined): number | null {
+  const startMs = parseIso(startIso);
+  const endMs = parseIso(endIso);
+  if (startMs === null || endMs === null || endMs < startMs) {
+    return null;
+  }
+
+  return Math.max(0, Math.floor((endMs - startMs) / (60 * 60 * 1000)));
 }
 
 function buildFollowUpRiskContract(
@@ -323,6 +339,129 @@ function buildBlockedWaitingStaleContract(
       daysSinceActivity: context.daysSinceActivity,
       waitingOn: context.task.waiting_on,
       unresolvedDependencyCount,
+    },
+    evidence,
+    provenance: makeProvenance(context),
+  };
+}
+
+function buildRecentlyResolvedDependencyEvidence(
+  context: IntelligenceTaskContext
+): IntelligenceContractEvidenceItem | null {
+  const dependency = context.recentlyResolvedDeps[0];
+  if (!dependency) {
+    return null;
+  }
+
+  return {
+    code: "recent_dependency_cleared",
+    kind: "dependency",
+    summary: `Recently cleared ${dependency.type} dependency "${dependency.title}".`,
+    relatedId: dependency.id,
+    recordedAt: dependency.resolved_at,
+  };
+}
+
+function buildRecentlyUnblockedContract(
+  context: IntelligenceTaskContext,
+  now: Date
+): RecentlyUnblockedContract | null {
+  const recentlyResolvedDeps = context.recentlyResolvedDeps.filter((dependency) => {
+    const resolvedHoursAgo = hoursSince(now, dependency.resolved_at);
+    return resolvedHoursAgo !== null && resolvedHoursAgo <= RECENTLY_UNBLOCKED_WINDOW_HOURS;
+  });
+  if (recentlyResolvedDeps.length === 0) {
+    return null;
+  }
+
+  const exitTransition = context.recentTransitions.find((transition) => {
+    if (transition.from_status !== "Blocked/Waiting") {
+      return false;
+    }
+
+    const hoursAgo = hoursSince(now, transition.transitioned_at);
+    return hoursAgo !== null && hoursAgo <= RECENTLY_UNBLOCKED_WINDOW_HOURS;
+  });
+
+  if (!exitTransition) {
+    return null;
+  }
+
+  if (
+    context.task.status === "Blocked/Waiting"
+    || context.task.blocker
+    || context.task.dependency_blocked
+    || context.task.status === "Done"
+    || context.task.status === "Parked"
+  ) {
+    return null;
+  }
+
+  const exitMs = parseIso(exitTransition.transitioned_at);
+  const blockedEntryTransition =
+    exitMs === null
+      ? null
+      : context.recentTransitions.find((transition) => {
+          if (transition.to_status !== "Blocked/Waiting") {
+            return false;
+          }
+
+          const transitionMs = parseIso(transition.transitioned_at);
+          return transitionMs !== null && transitionMs <= exitMs;
+        }) ?? null;
+  const hoursBlocked = blockedEntryTransition
+    ? hoursBetween(blockedEntryTransition.transitioned_at, exitTransition.transitioned_at)
+    : null;
+  const hoursSinceUnblocked = hoursSince(now, exitTransition.transitioned_at) ?? 0;
+  const overdue = isOverdue(context.task.due_at, now);
+  const severity = highestSeverity(
+    overdue ? "high" : "medium",
+    hoursSinceUnblocked >= 24 ? "high" : "low"
+  );
+
+  const evidence: IntelligenceContractEvidenceItem[] = [
+    {
+      code: "recent_unblock_transition",
+      kind: "task",
+      summary: `The task left Blocked/Waiting ${hoursSinceUnblocked} hour${hoursSinceUnblocked === 1 ? "" : "s"} ago.`,
+      relatedId: context.task.id,
+      recordedAt: exitTransition.transitioned_at,
+    },
+    {
+      code: "current_task_state",
+      kind: "task",
+      summary: `The task is now ${context.task.status} with no active dependency blocker.`,
+      relatedId: context.task.id,
+      recordedAt: context.task.updated_at,
+    },
+    buildRecentlyResolvedDependencyEvidence({
+      ...context,
+      recentlyResolvedDeps,
+    }),
+    dueEvidence(context.task.due_at, now),
+    latestCommentEvidence(context.comments[0]),
+  ].filter((item): item is IntelligenceContractEvidenceItem => item !== null);
+
+  return {
+    contractType: "recently_unblocked",
+    canonicalSubjectKey: `unblocked:${context.task.id}`,
+    promotionFamilyKey: `recently_unblocked|unblocked:${context.task.id}`,
+    detectedAt: now.toISOString(),
+    summary: `${context.task.title} was recently unblocked.`,
+    reason: hoursBlocked === null
+      ? `A dependency cleared and the task left Blocked/Waiting ${hoursSinceUnblocked} hours ago.`
+      : `A dependency cleared and the task left Blocked/Waiting ${hoursSinceUnblocked} hours ago after roughly ${hoursBlocked} blocked hours.`,
+    severity,
+    confidence: "high",
+    subject: {
+      taskId: context.task.id,
+      taskTitle: context.task.title,
+      currentStatus: context.task.status,
+    },
+    metrics: {
+      unblockedAt: exitTransition.transitioned_at,
+      hoursBlocked,
+      recommendedActionWindow: "within 24 hours",
     },
     evidence,
     provenance: makeProvenance(context),
@@ -493,12 +632,22 @@ export function detectIntelligenceContracts(
       buildBlockedWaitingStaleContract(context, now),
       buildStaleTaskContract(context, now),
       buildAmbiguousTaskContract(context, now),
+      buildRecentlyUnblockedContract(context, now),
     ].filter((contract): contract is IntelligenceV1Contract => contract !== null);
 
     contracts.push(...taskContracts);
   }
 
-  return contracts;
+  const recentlyUnblockedTaskIds = new Set(
+    contracts
+      .filter((contract) => contract.contractType === "recently_unblocked")
+      .map((contract) => contract.subject.taskId)
+  );
+
+  return contracts.filter((contract) => (
+    contract.contractType !== "blocked_waiting_stale"
+    || !recentlyUnblockedTaskIds.has(contract.subject.taskId)
+  ));
 }
 
 export async function runIntelligencePhaseOne(

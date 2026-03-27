@@ -1,18 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { IntelligenceV1ContractType } from "@/lib/intelligence-layer";
+import type { BriefingOpenReviewItem } from "@/lib/briefing/contracts";
 import {
   formatIntelligenceArtifactTypeLabel,
   formatIntelligenceSuggestedActionLabel,
   parseTaskIdFromSubjectKey,
 } from "@/lib/intelligence-layer/presentation";
-
-export interface BriefingOpenReviewItem {
-  artifact_id: string;
-  artifact_type: string;
-  task_id: string;
-  task_title: string;
-  suggested_action: string;
-}
 
 interface OpenReviewArtifactRow {
   id: string;
@@ -20,6 +13,7 @@ interface OpenReviewArtifactRow {
   subject_key: string;
   primary_contract_type: IntelligenceV1ContractType;
   severity: "low" | "medium" | "high";
+  review_payload: Record<string, unknown> | null;
   updated_at: string;
 }
 
@@ -33,6 +27,12 @@ const SEVERITY_ORDER: Record<OpenReviewArtifactRow["severity"], number> = {
   medium: 1,
   low: 2,
 };
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
 
 function isMissingRelationError(error: unknown): boolean {
   const candidate = error as { code?: string; message?: string; details?: string; hint?: string } | null;
@@ -89,23 +89,45 @@ export function buildBriefingOpenReviewItems(
       return [{
         artifact_id: artifact.id,
         artifact_type: formatOpenReviewArtifactType(artifact.artifact_kind, artifact.primary_contract_type),
+        family: artifact.primary_contract_type,
         task_id: task.id,
         task_title: task.title,
         suggested_action: formatOpenReviewSuggestedAction(artifact.artifact_kind, artifact.primary_contract_type),
+        current_status: (() => {
+          const subject = asRecord(asRecord(artifact.review_payload).subject);
+          return typeof subject.currentStatus === "string" ? subject.currentStatus : null;
+        })(),
+        unblocked_at: (() => {
+          const metrics = asRecord(asRecord(artifact.review_payload).metrics);
+          return typeof metrics.unblockedAt === "string" ? metrics.unblockedAt : null;
+        })(),
+        recommended_action_window: (() => {
+          const metrics = asRecord(asRecord(artifact.review_payload).metrics);
+          return typeof metrics.recommendedActionWindow === "string" ? metrics.recommendedActionWindow : null;
+        })(),
       }];
     });
 }
 
 export async function readBriefingOpenReviewItems(
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  options: {
+    families?: IntelligenceV1ContractType[];
+  } = {}
 ): Promise<BriefingOpenReviewItem[]> {
-  const { data: artifactData, error: artifactError } = await supabase
+  let query = supabase
     .from("intelligence_artifacts")
-    .select("id, artifact_kind, subject_key, primary_contract_type, severity, updated_at")
+    .select("id, artifact_kind, subject_key, primary_contract_type, severity, review_payload, updated_at")
     .eq("user_id", userId)
     .eq("status", "open")
     .order("updated_at", { ascending: true });
+
+  if (options.families && options.families.length > 0) {
+    query = query.in("primary_contract_type", options.families);
+  }
+
+  const { data: artifactData, error: artifactError } = await query;
 
   if (artifactError) {
     if (!isMissingRelationError(artifactError)) {

@@ -107,6 +107,7 @@ function evidencePriority(contractType: IntelligenceV1ContractType, code: string
     blocked_waiting_stale: ["blocked_stale_age", "blocked_state", "unresolved_dependency", "due_overdue", "due_recorded", "linked_note"],
     stale_task: ["active_task_status", "due_overdue", "due_recorded", "latest_comment", "linked_note"],
     ambiguous_task: ["needs_review_flag", "missing_clarifying_context", "due_overdue", "due_recorded", "linked_note_context"],
+    recently_unblocked: ["recent_unblock_transition", "recent_dependency_cleared", "current_task_state", "due_overdue", "due_recorded", "latest_comment"],
   };
 
   const index = byType[contractType].indexOf(code);

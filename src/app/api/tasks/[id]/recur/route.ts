@@ -4,6 +4,7 @@ import {
   normalizeTaskWithRelations,
   TASK_WITH_RELATIONS_SELECT,
 } from '@/lib/task-relations';
+import { queueTaskStatusTransition } from '@/lib/task-status-transitions';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 
 function isGeneratedRecurringInstance(taskId: string, recurrence: unknown): boolean {
@@ -80,6 +81,15 @@ export async function POST(
 
     if (updateError) {
       throw updateError;
+    }
+
+    if (typeof updates.status === 'string' && currentTask.status !== updates.status) {
+      queueTaskStatusTransition(supabase, {
+        userId,
+        taskId: id,
+        fromStatus: currentTask.status,
+        toStatus: updates.status as typeof currentTask.status,
+      });
     }
 
     return NextResponse.json(normalizeTaskWithRelations(data as Record<string, unknown>));

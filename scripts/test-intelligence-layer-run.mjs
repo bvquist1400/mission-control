@@ -44,6 +44,18 @@ class MemoryQueryBuilder {
     return this;
   }
 
+  gte(field, value) {
+    this.filters.push((row) => String(row[field] ?? "") >= String(value));
+    return this;
+  }
+
+  not(field, operator, value) {
+    if (operator === "is") {
+      this.filters.push((row) => row[field] !== value);
+    }
+    return this;
+  }
+
   order(field, options = {}) {
     this.orders.push({ field, ascending: options.ascending !== false, nullsFirst: options.nullsFirst });
     return this;
@@ -114,6 +126,7 @@ class MemorySupabase {
       note_tasks: [],
       note_decisions: [],
       task_dependencies: [],
+      task_status_transitions: [],
       ...seed,
     };
   }
@@ -490,6 +503,17 @@ const supabase = new MemorySupabase({
       needs_review: true,
       updated_at: isoDaysAgo(4),
     }),
+    makeTask("task-unblocked", {
+      title: "Resume import dry run",
+      status: "In Progress",
+      updated_at: isoDaysAgo(1),
+      due_at: "2026-03-27T14:00:00.000Z",
+    }),
+    makeTask("task-resolved-blocker", {
+      title: "Deliver blocker handoff",
+      status: "Done",
+      updated_at: isoDaysAgo(1),
+    }),
   ],
   task_comments: [
     {
@@ -515,7 +539,39 @@ const supabase = new MemorySupabase({
       task_id: "task-followup",
       depends_on_task_id: null,
       depends_on_commitment_id: "commitment-followup",
+      resolved_at: null,
+      is_resolved: false,
       created_at: isoDaysAgo(6),
+    },
+    {
+      id: "dep-unblocked",
+      user_id: USER_ID,
+      task_id: "task-unblocked",
+      depends_on_task_id: "task-resolved-blocker",
+      depends_on_commitment_id: null,
+      resolved_at: isoDaysAgo(1),
+      is_resolved: true,
+      created_at: isoDaysAgo(8),
+    },
+  ],
+  task_status_transitions: [
+    {
+      id: "transition-unblocked-entry",
+      user_id: USER_ID,
+      task_id: "task-unblocked",
+      from_status: "Planned",
+      to_status: "Blocked/Waiting",
+      transitioned_at: isoDaysAgo(8),
+      created_at: isoDaysAgo(8),
+    },
+    {
+      id: "transition-unblocked-exit",
+      user_id: USER_ID,
+      task_id: "task-unblocked",
+      from_status: "Blocked/Waiting",
+      to_status: "In Progress",
+      transitioned_at: isoDaysAgo(1),
+      created_at: isoDaysAgo(1),
     },
   ],
   notes: [
@@ -599,19 +655,20 @@ assert.equal(winterLateWindow.localTime, "11:00");
 assert.equal(winterLateWindow.slotLabel, "11:00");
 
 const firstRun = await executeIntelligencePipeline(supabase, store, USER_ID, { now: new Date(NOW_ISO) });
-assert.equal(firstRun.taskContextCount, 4);
-assert.equal(firstRun.contractCount, 5);
+assert.equal(firstRun.taskContextCount, 5);
+assert.equal(firstRun.contractCount, 6);
 assert.deepEqual(firstRun.contractCounts, {
   follow_up_risk: 1,
   blocked_waiting_stale: 1,
   stale_task: 2,
   ambiguous_task: 1,
+  recently_unblocked: 1,
 });
-assert.equal(firstRun.contractSnapshotCount, 5);
-assert.equal(firstRun.touchedArtifactCount, 5);
-assert.equal(firstRun.promotionEventCount, 5);
+assert.equal(firstRun.contractSnapshotCount, 6);
+assert.equal(firstRun.touchedArtifactCount, 6);
+assert.equal(firstRun.promotionEventCount, 6);
 assert.deepEqual(firstRun.promotionEventCounts, {
-  created: 5,
+  created: 6,
   updated: 0,
   noop: 0,
   grouped_created: 0,
@@ -620,19 +677,19 @@ assert.deepEqual(firstRun.promotionEventCounts, {
 });
 
 const secondRun = await executeIntelligencePipeline(supabase, store, USER_ID, { now: new Date(NOW_ISO) });
-assert.equal(secondRun.taskContextCount, 4);
-assert.equal(secondRun.contractCount, 5);
-assert.equal(secondRun.contractSnapshotCount, 5);
-assert.equal(secondRun.touchedArtifactCount, 5);
-assert.equal(secondRun.promotionEventCount, 5);
+assert.equal(secondRun.taskContextCount, 5);
+assert.equal(secondRun.contractCount, 6);
+assert.equal(secondRun.contractSnapshotCount, 6);
+assert.equal(secondRun.touchedArtifactCount, 6);
+assert.equal(secondRun.promotionEventCount, 6);
 assert.deepEqual(secondRun.promotionEventCounts, {
   created: 0,
   updated: 0,
-  noop: 5,
+  noop: 6,
   grouped_created: 0,
   grouped_updated: 0,
   grouped_noop: 0,
 });
-assert.equal(store.artifacts.length, 5);
+assert.equal(store.artifacts.length, 6);
 
 console.log("Intelligence layer scheduled runner tests passed.");

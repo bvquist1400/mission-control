@@ -9,6 +9,7 @@ import {
   normalizeTaskWithRelationsList,
   TASK_WITH_RELATIONS_SELECT,
 } from '@/lib/task-relations';
+import { queueTaskStatusTransition } from '@/lib/task-status-transitions';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import { fetchTaskDependencySummaries } from '@/lib/task-dependencies';
 import type { TaskStatus, TaskType, EstimateSource } from '@/types/database';
@@ -476,6 +477,15 @@ export async function POST(request: NextRequest) {
       if (checklistError) {
         console.error('Failed to create initial checklist items:', checklistError);
       }
+    }
+
+    if (data) {
+      queueTaskStatusTransition(supabase, {
+        userId,
+        taskId: data.id,
+        fromStatus: null,
+        toStatus: status,
+      });
     }
 
     return NextResponse.json(normalizeTaskWithRelations(data as Record<string, unknown>), { status: 201 });
