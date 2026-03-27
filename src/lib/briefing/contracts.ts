@@ -5,6 +5,24 @@ import type { FocusBlock } from "./focus-blocks";
 import type { PrepTask, TaskSummary } from "./prep-tasks";
 import type { LlmRunMeta } from "@/lib/llm/types";
 
+export interface BriefingSectionGroup<TItem> {
+  section_id: string | null;
+  section_name: string | null;
+  tasks: TItem[];
+}
+
+export interface BriefingProjectGroup<TItem> {
+  project_id: string;
+  project_name: string;
+  has_sections: boolean;
+  groups: BriefingSectionGroup<TItem>[];
+}
+
+export interface BriefingGroupedProjectTasks<TItem> {
+  projects: BriefingProjectGroup<TItem>[];
+  unassigned: TItem[];
+}
+
 export interface BriefingCalendarData {
   events: ApiCalendarEvent[];
   busyBlocks: BusyBlock[];
@@ -16,6 +34,9 @@ export interface BriefingTaskData {
   planned: TaskSummary[];
   completed: TaskSummary[];
   remaining: TaskSummary[];
+  planned_by_project?: BriefingGroupedProjectTasks<TaskSummary>;
+  completed_by_project?: BriefingGroupedProjectTasks<TaskSummary>;
+  remaining_by_project?: BriefingGroupedProjectTasks<TaskSummary>;
 }
 
 export interface BriefingProgress {
@@ -80,6 +101,8 @@ export interface TomorrowBriefingData {
   calendar: Omit<BriefingCalendarData, "focusBlocks">;
   prepTasks: PrepTask[];
   rolledOver: TaskSummary[];
+  prepTasks_by_project?: BriefingGroupedProjectTasks<PrepTask>;
+  rolledOver_by_project?: BriefingGroupedProjectTasks<TaskSummary>;
   tomorrow_context: BriefingTomorrowContextItem[];
   estimatedCapacity: CapacityResult;
 }

@@ -34,6 +34,7 @@ import {
 } from "@/lib/briefing";
 import type {
   BriefingMode,
+  PrepTask,
   TaskInput,
   TaskSummary,
   BriefingResponse,
@@ -41,8 +42,18 @@ import type {
 } from "@/lib/briefing";
 import { readBriefingOpenReviewItems } from "@/lib/briefing/open-review-items";
 import { calculateCapacity } from "@/lib/capacity";
+import {
+  groupTasksByProjectSections,
+  listOwnedProjectSections,
+  type SectionAwareTaskLike,
+} from "@/lib/project-sections";
 import { requireAuthenticatedRoute } from "@/lib/supabase/route-auth";
+import {
+  normalizeTaskWithRelationsList,
+  TASK_WITH_RELATIONS_SELECT,
+} from "@/lib/task-relations";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
+import type { ProjectSection } from "@/types/database";
 import type { Task, TaskWithImplementation } from "@/types/database";
 
 function taskToSummary(task: TaskWithImplementation): TaskSummary {
@@ -56,9 +67,65 @@ function taskToSummary(task: TaskWithImplementation): TaskSummary {
     status: task.status,
     blocker: task.blocker,
     waiting_on: task.waiting_on,
+    project_id: task.project_id,
+    project_name: task.project?.name ?? null,
+    section_id: task.section_id,
+    section_name: task.section_name ?? null,
     implementation_name: task.implementation?.name ?? null,
     implementation_phase: task.implementation?.phase ?? null,
     implementation_rag: task.implementation?.rag ?? null,
+  };
+}
+
+function groupTaskSummaries(tasks: TaskSummary[], projectSections: ProjectSection[]) {
+  const grouped = groupTasksByProjectSections(
+    tasks.map((task) => ({
+      ...task,
+      project_id: task.project_id ?? null,
+      project_name: task.project_name ?? null,
+      section_id: task.section_id ?? null,
+      section_name: task.section_name ?? null,
+    })),
+    projectSections
+  );
+
+  return {
+    projects: grouped.grouped_projects,
+    unassigned: grouped.unassigned_tasks,
+  };
+}
+
+type GroupablePrepTask = PrepTask & SectionAwareTaskLike;
+
+function toGroupablePrepTask(prepTask: PrepTask): GroupablePrepTask {
+  return {
+    ...prepTask,
+    id: prepTask.task.id,
+    title: prepTask.task.title,
+    project_id: prepTask.task.project_id ?? null,
+    project_name: prepTask.task.project_name ?? null,
+    section_id: prepTask.task.section_id ?? null,
+    section_name: prepTask.task.section_name ?? null,
+  };
+}
+
+function stripGroupablePrepTask(task: GroupablePrepTask): PrepTask {
+  const { id: _id, title: _title, project_id: _projectId, project_name: _projectName, section_id: _sectionId, section_name: _sectionName, ...rest } = task;
+  return rest as PrepTask;
+}
+
+function groupPrepTasksByProject(prepTasks: PrepTask[], projectSections: ProjectSection[]) {
+  const grouped = groupTasksByProjectSections(prepTasks.map(toGroupablePrepTask), projectSections);
+
+  return {
+    projects: grouped.grouped_projects.map((project) => ({
+      ...project,
+      groups: project.groups.map((group) => ({
+        ...group,
+        tasks: group.tasks.map(stripGroupablePrepTask),
+      })),
+    })),
+    unassigned: grouped.unassigned_tasks.map(stripGroupablePrepTask),
   };
 }
 
@@ -170,7 +237,7 @@ async function fetchCalendarData(
 async function fetchTasks(supabase: SupabaseClient, userId: string): Promise<TaskWithImplementation[]> {
   const { data, error } = await supabase
     .from("tasks")
-    .select("*, implementation:implementations(id, name, phase, rag)")
+    .select(TASK_WITH_RELATIONS_SELECT)
     .eq("user_id", userId)
     .order("priority_score", { ascending: false });
 
@@ -179,7 +246,7 @@ async function fetchTasks(supabase: SupabaseClient, userId: string): Promise<Tas
     return [];
   }
 
-  return (data || []) as TaskWithImplementation[];
+  return normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>);
 }
 
 async function fetchImplementations(
@@ -265,6 +332,13 @@ export async function GET(request: NextRequest) {
       fetchStakeholders(supabase, userId),
       mode === "morning" ? readBriefingOpenReviewItems(supabase, userId) : Promise.resolve([]),
     ]);
+    const projectSections = await listOwnedProjectSections(
+      supabase,
+      userId,
+      allTasks
+        .map((task) => task.project_id)
+        .filter((projectId): projectId is string => typeof projectId === "string" && projectId.length > 0)
+    );
 
     const todayRange = normalizeRequestedRange(todayET, todayET);
     const todayWindows = buildDayWindows(todayRange, DEFAULT_WORKDAY_CONFIG);
@@ -332,6 +406,9 @@ export async function GET(request: NextRequest) {
         planned: plannedTasks,
         completed: completedTasks,
         remaining: remainingTasks,
+        planned_by_project: groupTaskSummaries(plannedTasks, projectSections),
+        completed_by_project: groupTaskSummaries(completedTasks, projectSections),
+        remaining_by_project: groupTaskSummaries(remainingTasks, projectSections),
       },
       capacity,
       progress: {
@@ -404,6 +481,8 @@ export async function GET(request: NextRequest) {
         },
         prepTasks,
         rolledOver,
+        prepTasks_by_project: groupPrepTasksByProject(prepTasks, projectSections),
+        rolledOver_by_project: groupTaskSummaries(rolledOver, projectSections),
         tomorrow_context: tomorrowContext,
         estimatedCapacity: tomorrowCapacity,
       };

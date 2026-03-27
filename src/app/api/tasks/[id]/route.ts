@@ -1,14 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
+import {
+  ProjectSectionServiceError,
+  resolveTaskProjectSectionState,
+  validateTaskSectionAssignment,
+} from '@/lib/project-sections';
 import { normalizeTaskTags } from '@/lib/task-tags';
+import {
+  normalizeTaskWithRelations,
+  TASK_WITH_RELATIONS_SELECT,
+} from '@/lib/task-relations';
 import { recalculateTaskPriority } from '@/lib/priority';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
-import type { TaskStatus, TaskType } from '@/types/database';
+import type { Task, TaskStatus, TaskType } from '@/types/database';
 
 const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done'];
 const VALID_TASK_TYPES: TaskType[] = ['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build'];
-const TASK_SELECT =
-  '*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag), sprint:sprints(id, name, start_date, end_date)';
-
 function isValidStatus(value: string): value is TaskStatus {
   return VALID_STATUSES.includes(value as TaskStatus);
 }
@@ -42,7 +48,7 @@ export async function GET(
 
     const { data, error } = await supabase
       .from('tasks')
-      .select(TASK_SELECT)
+      .select(TASK_WITH_RELATIONS_SELECT)
       .eq('id', id)
       .eq('user_id', userId)
       .single();
@@ -54,7 +60,7 @@ export async function GET(
       throw error;
     }
 
-    return NextResponse.json(data);
+    return NextResponse.json(normalizeTaskWithRelations(data as Record<string, unknown>));
   } catch (error) {
     console.error('Error fetching task:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
@@ -81,6 +87,7 @@ export async function PATCH(
       'description',
       'implementation_id',
       'project_id',
+      'section_id',
       'sprint_id',
       'status',
       'task_type',
@@ -107,6 +114,8 @@ export async function PATCH(
       if (field === 'implementation_id') {
         updates[field] = asStringOrNull(value);
       } else if (field === 'project_id') {
+        updates[field] = asStringOrNull(value);
+      } else if (field === 'section_id') {
         updates[field] = asStringOrNull(value);
       } else if (field === 'sprint_id') {
         updates[field] = asStringOrNull(value);
@@ -173,6 +182,31 @@ export async function PATCH(
       return NextResponse.json({ error: 'pinned must be a boolean' }, { status: 400 });
     }
 
+    let currentTask: Task | null = null;
+    const needsCurrentTask =
+      'project_id' in updates
+      || 'section_id' in updates
+      || 'status' in updates
+      || 'due_at' in updates;
+
+    if (needsCurrentTask) {
+      const { data: fetchedTask, error: fetchError } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('id', id)
+        .eq('user_id', userId)
+        .single();
+
+      if (fetchError) {
+        if (fetchError.code === 'PGRST116') {
+          return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+        }
+        throw fetchError;
+      }
+
+      currentTask = fetchedTask as Task;
+    }
+
     const implementationId = updates.implementation_id;
     if (typeof implementationId === 'string') {
       const { data: implementation, error: implementationError } = await supabase
@@ -201,6 +235,36 @@ export async function PATCH(
       }
     }
 
+    if (currentTask) {
+      const hasProjectInput = 'project_id' in updates;
+      const hasSectionInput = 'section_id' in updates;
+      const nextTaskSectionState = resolveTaskProjectSectionState({
+        current_project_id: typeof currentTask.project_id === 'string' ? currentTask.project_id : null,
+        current_section_id: typeof currentTask.section_id === 'string' ? currentTask.section_id : null,
+        has_project_input: hasProjectInput,
+        project_id_input: (updates.project_id as string | null | undefined) ?? null,
+        has_section_input: hasSectionInput,
+        section_id_input: (updates.section_id as string | null | undefined) ?? null,
+      });
+
+      if (
+        hasProjectInput
+        && nextTaskSectionState.project_id !== (typeof currentTask.project_id === 'string' ? currentTask.project_id : null)
+        && !hasSectionInput
+      ) {
+        updates.section_id = null;
+      }
+
+      try {
+        await validateTaskSectionAssignment(supabase, userId, nextTaskSectionState);
+      } catch (error) {
+        if (error instanceof ProjectSectionServiceError) {
+          return NextResponse.json({ error: error.message }, { status: error.status });
+        }
+        throw error;
+      }
+    }
+
     const sprintId = updates.sprint_id;
     if (typeof sprintId === 'string') {
       const { data: sprint, error: sprintError } = await supabase
@@ -217,21 +281,7 @@ export async function PATCH(
 
     const needsPriorityRecalc = 'status' in updates || 'due_at' in updates;
 
-    if (needsPriorityRecalc) {
-      const { data: currentTask, error: fetchError } = await supabase
-        .from('tasks')
-        .select('*')
-        .eq('id', id)
-        .eq('user_id', userId)
-        .single();
-
-      if (fetchError) {
-        if (fetchError.code === 'PGRST116') {
-          return NextResponse.json({ error: 'Task not found' }, { status: 404 });
-        }
-        throw fetchError;
-      }
-
+    if (needsPriorityRecalc && currentTask) {
       const mergedTask = { ...currentTask, ...updates };
       updates.priority_score = recalculateTaskPriority(mergedTask);
     }
@@ -245,7 +295,7 @@ export async function PATCH(
       .update(updates)
       .eq('id', id)
       .eq('user_id', userId)
-      .select(TASK_SELECT)
+      .select(TASK_WITH_RELATIONS_SELECT)
       .single();
 
     if (error) {
@@ -255,7 +305,7 @@ export async function PATCH(
       throw error;
     }
 
-    return NextResponse.json(data);
+    return NextResponse.json(normalizeTaskWithRelations(data as Record<string, unknown>));
   } catch (error) {
     console.error('Error updating task:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

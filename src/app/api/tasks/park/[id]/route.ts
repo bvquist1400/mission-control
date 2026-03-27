@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { recalculateTaskPriority } from '@/lib/priority';
+import {
+  normalizeTaskWithRelations,
+  TASK_WITH_RELATIONS_SELECT,
+} from '@/lib/task-relations';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 
 // POST /api/tasks/park/[id] - Convenience endpoint to move a task into Parked
@@ -44,7 +48,7 @@ export async function POST(
       })
       .eq('id', id)
       .eq('user_id', userId)
-      .select('*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag), sprint:sprints(id, name, start_date, end_date)')
+      .select(TASK_WITH_RELATIONS_SELECT)
       .single();
 
     if (error) {
@@ -55,7 +59,7 @@ export async function POST(
       throw error;
     }
 
-    return NextResponse.json(data);
+    return NextResponse.json(normalizeTaskWithRelations(data as Record<string, unknown>));
   } catch (error) {
     console.error('Error parking task:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

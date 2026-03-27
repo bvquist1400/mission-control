@@ -351,6 +351,7 @@ function createMcpServer(): McpServer {
       tag: z.string().optional().describe('Filter to tasks containing this lowercase tag'),
       implementation_id: z.string().optional().describe('Filter by application UUID'),
       project_id: z.string().optional().describe('Filter by project UUID'),
+      section_id: z.string().optional().describe('Filter by project section UUID'),
       due_soon: z.boolean().optional().describe('Due within 48 hours, excluding Done and Parked'),
       include_done: z.boolean().optional().describe('Include completed tasks (default: excluded)'),
       include_parked: z.boolean().optional().describe('Include parked tasks (default: excluded)'),
@@ -364,6 +365,7 @@ function createMcpServer(): McpServer {
       if (args.tag) url.searchParams.set('tag', args.tag);
       if (args.implementation_id) url.searchParams.set('implementation_id', args.implementation_id);
       if (args.project_id) url.searchParams.set('project_id', args.project_id);
+      if (args.section_id) url.searchParams.set('section_id', args.section_id);
       if (args.due_soon) url.searchParams.set('due_soon', 'true');
       if (args.include_done) url.searchParams.set('include_done', 'true');
       if (args.include_parked) url.searchParams.set('include_parked', 'true');
@@ -438,6 +440,7 @@ function createMcpServer(): McpServer {
       waiting_on: z.string().optional().describe('Who/what is this waiting on'),
       implementation_id: z.string().optional().describe('Application UUID to link to'),
       project_id: z.string().optional().describe('Project UUID to link to'),
+      section_id: z.string().optional().describe('Project section UUID to link to'),
       tags: z.array(z.string()).optional().describe('Freeform lowercase tags'),
       stakeholder_mentions: z.array(z.string()).optional().describe('Stakeholder names'),
       source_type: z.string().optional().describe('Source label, e.g. Manual or Recurring'),
@@ -481,6 +484,7 @@ function createMcpServer(): McpServer {
       follow_up_at: z.string().nullable().optional(),
       implementation_id: z.string().nullable().optional(),
       project_id: z.string().nullable().optional().describe('Project UUID or null to unlink'),
+      section_id: z.string().nullable().optional().describe('Project section UUID or null to unlink'),
       sprint_id: z.string().nullable().optional().describe('Sprint UUID or null to unlink'),
       tags: z.array(z.string()).optional(),
       pinned_excerpt: z.string().nullable().optional(),
@@ -871,6 +875,48 @@ function createMcpServer(): McpServer {
     }
   );
 
+  // ── PROJECT SECTIONS ─────────────────────────────────────────────────
+  mcp.tool(
+    'list_project_sections',
+    'List sections for a project ordered by sort_order and creation time.',
+    {
+      project_id: z.string().describe('Project UUID'),
+    },
+    async ({ project_id }) => {
+      const res = await fetch(
+        `https://mission-control-orpin-chi.vercel.app/api/projects/${project_id}/sections`,
+        { headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! } }
+      );
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  mcp.tool(
+    'create_project_section',
+    'Create a section within a project.',
+    {
+      project_id: z.string().describe('Project UUID'),
+      name: z.string().describe('Section name'),
+      sort_order: z.number().int().optional().describe('Integer sort order'),
+    },
+    async ({ project_id, ...payload }) => {
+      const res = await fetch(
+        `https://mission-control-orpin-chi.vercel.app/api/projects/${project_id}/sections`,
+        {
+          method: 'POST',
+          headers: {
+            'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY!,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+        }
+      );
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
   // ── SPRINTS ───────────────────────────────────────────────────────────
   mcp.tool(
     'list_sprints',
@@ -1005,6 +1051,31 @@ function createMcpServer(): McpServer {
     }
   );
 
+  mcp.tool(
+    'update_project_section',
+    'Rename or reorder a project section.',
+    {
+      section_id: z.string().describe('Project section UUID'),
+      name: z.string().optional().describe('Section name'),
+      sort_order: z.number().int().optional().describe('Integer sort order'),
+    },
+    async ({ section_id, ...updates }) => {
+      const res = await fetch(
+        `https://mission-control-orpin-chi.vercel.app/api/sections/${section_id}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY!,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(updates),
+        }
+      );
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
   // ── DELETE PROJECT ────────────────────────────────────────────────────
   mcp.tool(
     'delete_project',
@@ -1015,6 +1086,25 @@ function createMcpServer(): McpServer {
     async ({ project_id }) => {
       const res = await fetch(
         `https://mission-control-orpin-chi.vercel.app/api/projects/${project_id}`,
+        {
+          method: 'DELETE',
+          headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
+        }
+      );
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  mcp.tool(
+    'delete_project_section',
+    'Delete a project section by ID.',
+    {
+      section_id: z.string().describe('Project section UUID'),
+    },
+    async ({ section_id }) => {
+      const res = await fetch(
+        `https://mission-control-orpin-chi.vercel.app/api/sections/${section_id}`,
         {
           method: 'DELETE',
           headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },

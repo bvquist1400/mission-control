@@ -554,6 +554,8 @@ export async function createTaskFromNote(
       description: asTrimmedString(input.description) ?? null,
       implementation_id: implementationId,
       project_id: projectId,
+      // V1 intentionally leaves note-created tasks unsectioned.
+      section_id: null,
       sprint_id: sprintId,
       status,
       task_type: taskType,

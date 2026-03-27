@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import { fetchTaskDependencySummaries } from '@/lib/task-dependencies';
+import {
+  normalizeTaskWithRelationsList,
+  TASK_WITH_RELATIONS_SELECT,
+} from '@/lib/task-relations';
 
 // GET /api/tasks/parked - List parked tasks
 export async function GET(request: NextRequest) {
@@ -22,7 +26,7 @@ export async function GET(request: NextRequest) {
 
     let query = supabase
       .from('tasks')
-      .select('*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag), sprint:sprints(id, name, start_date, end_date)')
+      .select(TASK_WITH_RELATIONS_SELECT)
       .eq('user_id', userId)
       .eq('status', 'Parked')
       .order('updated_at', { ascending: false })
@@ -43,7 +47,7 @@ export async function GET(request: NextRequest) {
       throw error;
     }
 
-    const tasks = data || [];
+    const tasks = normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>);
     const taskIds = tasks.map((task) => task.id);
     const dependencyMap = await fetchTaskDependencySummaries(supabase, userId, taskIds);
 

@@ -22,7 +22,10 @@
     "test:implementation-notes-ui": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-implementation-notes-panel.mjs",
     "test:meeting-notes-ui": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-meeting-notes-panel.mjs",
     "test:task-notes-ui": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-task-notes-panel.mjs",
-    "test:work-intelligence": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-work-intelligence.mjs"
+    "test:work-intelligence": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-work-intelligence.mjs",
+    "test:project-sections": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-project-sections.mjs",
+    "backfill:project-sections:dry-run": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/backfill-project-sections.mjs",
+    "backfill:project-sections:apply": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/backfill-project-sections.mjs --apply"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",

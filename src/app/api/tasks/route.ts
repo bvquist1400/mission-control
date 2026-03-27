@@ -1,5 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
+import {
+  ProjectSectionServiceError,
+  validateTaskSectionAssignment,
+} from '@/lib/project-sections';
 import { normalizeTaskTag, normalizeTaskTags } from '@/lib/task-tags';
+import {
+  normalizeTaskWithRelations,
+  normalizeTaskWithRelationsList,
+  TASK_WITH_RELATIONS_SELECT,
+} from '@/lib/task-relations';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import { fetchTaskDependencySummaries } from '@/lib/task-dependencies';
 import type { TaskStatus, TaskType, EstimateSource } from '@/types/database';
@@ -7,9 +16,6 @@ import type { TaskStatus, TaskType, EstimateSource } from '@/types/database';
 const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done'];
 const VALID_TASK_TYPES: TaskType[] = ['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build'];
 const VALID_ESTIMATE_SOURCES: EstimateSource[] = ['default', 'llm', 'manual'];
-const TASK_SELECT =
-  '*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag), sprint:sprints(id, name, start_date, end_date)';
-
 function isValidStatus(value: string): value is TaskStatus {
   return VALID_STATUSES.includes(value as TaskStatus);
 }
@@ -60,6 +66,7 @@ export async function GET(request: NextRequest) {
     const sprintId = searchParams.get('sprint_id');
     const tag = normalizeTaskTag(searchParams.get('tag') ?? '');
     const dueSoon = searchParams.get('due_soon');
+    const sectionId = searchParams.get('section_id');
     const includeDone = searchParams.get('include_done') === 'true';
     const includeParked = searchParams.get('include_parked') === 'true';
     const view = searchParams.get('view');
@@ -87,7 +94,7 @@ export async function GET(request: NextRequest) {
     if (view === 'top3') {
       const { data, error } = await supabase
         .from('tasks')
-        .select(TASK_SELECT)
+        .select(TASK_WITH_RELATIONS_SELECT)
         .eq('user_id', userId)
         .in('status', ['Planned', 'In Progress'])
         .order('priority_score', { ascending: false })
@@ -98,7 +105,7 @@ export async function GET(request: NextRequest) {
         throw error;
       }
 
-      return NextResponse.json(data || []);
+      return NextResponse.json(normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>));
     }
 
     if (view === 'due_soon') {
@@ -124,7 +131,7 @@ export async function GET(request: NextRequest) {
 
       const { data, error } = await supabase
         .from('tasks')
-        .select(TASK_SELECT)
+        .select(TASK_WITH_RELATIONS_SELECT)
         .eq('user_id', userId)
         .not('due_at', 'is', null)
         .lte('due_at', in48h.toISOString())
@@ -138,7 +145,9 @@ export async function GET(request: NextRequest) {
         throw error;
       }
 
-      const filtered = (data || []).filter((task) => !topThreeIds.has(task.id)).slice(0, dueSoonLimit);
+      const filtered = normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>)
+        .filter((task) => !topThreeIds.has(task.id))
+        .slice(0, dueSoonLimit);
       return NextResponse.json(filtered);
     }
 
@@ -167,7 +176,7 @@ export async function GET(request: NextRequest) {
 
     let query = supabase
       .from('tasks')
-      .select(TASK_SELECT)
+      .select(TASK_WITH_RELATIONS_SELECT)
       .eq('user_id', userId)
       .order('priority_score', { ascending: false })
       .order('id', { ascending: true })
@@ -198,6 +207,10 @@ export async function GET(request: NextRequest) {
       query = query.eq('project_id', projectId);
     }
 
+    if (sectionId) {
+      query = query.eq('section_id', sectionId);
+    }
+
     if (dueSoon === 'true') {
       const now = new Date();
       const in48h = new Date(now.getTime() + 48 * 60 * 60 * 1000);
@@ -222,7 +235,7 @@ export async function GET(request: NextRequest) {
       throw error;
     }
 
-    const tasks = data || [];
+    const tasks = normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>);
     const taskIds = tasks.map((task) => task.id);
     const dependencyMap = await fetchTaskDependencySummaries(supabase, userId, taskIds);
 
@@ -344,6 +357,19 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const sectionId = asStringOrNull(body.section_id);
+    try {
+      await validateTaskSectionAssignment(supabase, userId, {
+        project_id: projectId,
+        section_id: sectionId,
+      });
+    } catch (error) {
+      if (error instanceof ProjectSectionServiceError) {
+        return NextResponse.json({ error: error.message }, { status: error.status });
+      }
+      throw error;
+    }
+
     const sprintId = asStringOrNull(body.sprint_id);
     if (sprintId) {
       const { data: sprint, error: sprintError } = await supabase
@@ -381,6 +407,7 @@ export async function POST(request: NextRequest) {
         description: asStringOrNull(body.description),
         implementation_id: implementationId,
         project_id: projectId,
+        section_id: sectionId,
         sprint_id: sprintId,
         status,
         task_type: taskType,
@@ -397,7 +424,7 @@ export async function POST(request: NextRequest) {
         source_url: asStringOrNull(body.source_url),
         pinned_excerpt: asStringOrNull(body.pinned_excerpt),
       })
-      .select(TASK_SELECT)
+      .select(TASK_WITH_RELATIONS_SELECT)
       .single();
 
     if (error) {
@@ -451,7 +478,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json(data, { status: 201 });
+    return NextResponse.json(normalizeTaskWithRelations(data as Record<string, unknown>), { status: 201 });
   } catch (error) {
     console.error('Error creating task:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

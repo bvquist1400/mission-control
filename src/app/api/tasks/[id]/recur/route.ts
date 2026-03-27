@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { coerceTaskRecurrence, normalizeTaskRecurrenceInput } from '@/lib/recurrence';
+import {
+  normalizeTaskWithRelations,
+  TASK_WITH_RELATIONS_SELECT,
+} from '@/lib/task-relations';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 
 function isGeneratedRecurringInstance(taskId: string, recurrence: unknown): boolean {
@@ -71,14 +75,14 @@ export async function POST(
       .update(updates)
       .eq('id', id)
       .eq('user_id', userId)
-      .select('*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag), sprint:sprints(id, name, start_date, end_date)')
+      .select(TASK_WITH_RELATIONS_SELECT)
       .single();
 
     if (updateError) {
       throw updateError;
     }
 
-    return NextResponse.json(data);
+    return NextResponse.json(normalizeTaskWithRelations(data as Record<string, unknown>));
   } catch (error) {
     console.error('Error configuring recurring task:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
@@ -126,14 +130,14 @@ export async function DELETE(
       .update({ recurrence: null })
       .eq('id', id)
       .eq('user_id', userId)
-      .select('*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag), sprint:sprints(id, name, start_date, end_date)')
+      .select(TASK_WITH_RELATIONS_SELECT)
       .single();
 
     if (error) {
       throw error;
     }
 
-    return NextResponse.json(data);
+    return NextResponse.json(normalizeTaskWithRelations(data as Record<string, unknown>));
   } catch (error) {
     console.error('Error removing recurring task configuration:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

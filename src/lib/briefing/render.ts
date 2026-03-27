@@ -897,9 +897,7 @@ function renderDigestTaskListCard(
     return sectionFrame(title, `<div style="color:${EMAIL_COLORS.muted};">${escapeHtml(emptyMessage)}</div>`);
   }
 
-  const body = items.slice(0, 3).map((task, index) => {
-    return `<div style="padding-top:${index === 0 ? "0" : "12px"};"><strong>${escapeHtml(task.title)}</strong><div style="color:${EMAIL_COLORS.muted};padding-top:4px;">${escapeHtml(renderPriorityTaskContext(task))}</div></div>`;
-  }).join("");
+  const body = renderGroupedDigestTaskHtml(items.slice(0, 3));
 
   return sectionFrame(title, body);
 }
@@ -1112,12 +1110,101 @@ function renderBriefHtml(
 </html>`;
 }
 
+function groupDigestTaskItems(items: DailyBriefDigestTaskItem[]) {
+  const projects = new Map<string, {
+    project_name: string;
+    has_sections: boolean;
+    section_groups: Map<string, { section_name: string | null; tasks: DailyBriefDigestTaskItem[] }>;
+    unsectioned: DailyBriefDigestTaskItem[];
+  }>();
+  const unassigned: DailyBriefDigestTaskItem[] = [];
+
+  for (const item of items) {
+    if (!item.project_id) {
+      unassigned.push(item);
+      continue;
+    }
+
+    const key = item.project_id;
+    const existing = projects.get(key) ?? {
+      project_name: item.project_name ?? "Unknown project",
+      has_sections: item.project_has_sections === true,
+      section_groups: new Map<string, { section_name: string | null; tasks: DailyBriefDigestTaskItem[] }>(),
+      unsectioned: [],
+    };
+    existing.has_sections = existing.has_sections || item.project_has_sections === true;
+
+    if (existing.has_sections && item.section_name) {
+      const sectionKey = item.section_id ?? item.section_name;
+      const sectionGroup = existing.section_groups.get(sectionKey) ?? {
+        section_name: item.section_name,
+        tasks: [],
+      };
+      sectionGroup.tasks.push(item);
+      existing.section_groups.set(sectionKey, sectionGroup);
+    } else if (existing.has_sections) {
+      existing.unsectioned.push(item);
+    } else {
+      existing.unsectioned.push(item);
+    }
+
+    projects.set(key, existing);
+  }
+
+  return {
+    projects: [...projects.values()],
+    unassigned,
+  };
+}
+
+function renderGroupedDigestTaskHtml(items: DailyBriefDigestTaskItem[]): string {
+  const grouped = groupDigestTaskItems(items);
+  const blocks: string[] = [];
+
+  for (const project of grouped.projects) {
+    blocks.push(`<div style="padding-top:${blocks.length === 0 ? "0" : "12px"};"><strong>${escapeHtml(project.project_name)}</strong></div>`);
+
+    if (!project.has_sections) {
+      blocks.push(...project.unsectioned.map((task) => (
+        `<div style="padding-top:6px;padding-left:12px;"><strong>${escapeHtml(task.title)}</strong><div style="color:${EMAIL_COLORS.muted};padding-top:4px;">${escapeHtml(renderPriorityTaskContext(task))}</div></div>`
+      )));
+      continue;
+    }
+
+    for (const section of project.section_groups.values()) {
+      blocks.push(`<div style="padding-top:8px;padding-left:12px;color:${EMAIL_COLORS.muted};font-size:12px;font-weight:600;">${escapeHtml(section.section_name ?? "Unsectioned")}</div>`);
+      blocks.push(...section.tasks.map((task) => (
+        `<div style="padding-top:6px;padding-left:24px;"><strong>${escapeHtml(task.title)}</strong><div style="color:${EMAIL_COLORS.muted};padding-top:4px;">${escapeHtml(renderPriorityTaskContext(task))}</div></div>`
+      )));
+    }
+
+    if (project.unsectioned.length > 0) {
+      blocks.push(`<div style="padding-top:8px;padding-left:12px;color:${EMAIL_COLORS.muted};font-size:12px;font-weight:600;">Unsectioned</div>`);
+      blocks.push(...project.unsectioned.map((task) => (
+        `<div style="padding-top:6px;padding-left:24px;"><strong>${escapeHtml(task.title)}</strong><div style="color:${EMAIL_COLORS.muted};padding-top:4px;">${escapeHtml(renderPriorityTaskContext(task))}</div></div>`
+      )));
+    }
+  }
+
+  if (grouped.unassigned.length > 0) {
+    blocks.push(`<div style="padding-top:${blocks.length === 0 ? "0" : "12px"};"><strong>Unassigned</strong></div>`);
+    blocks.push(...grouped.unassigned.map((task) => (
+      `<div style="padding-top:6px;padding-left:12px;"><strong>${escapeHtml(task.title)}</strong><div style="color:${EMAIL_COLORS.muted};padding-top:4px;">${escapeHtml(renderPriorityTaskContext(task))}</div></div>`
+    )));
+  }
+
+  return blocks.join("");
+}
+
 function renderTextTaskItems(items: DailyBriefDigestTaskItem[], emptyMessage: string): string[] {
   if (items.length === 0) {
     return [`- ${emptyMessage}`];
   }
 
-  return items.map((item) => {
+  const grouped = groupDigestTaskItems(items);
+  const lines: string[] = [];
+
+  const renderLine = (item: DailyBriefDigestTaskItem) => {
     const parts = [
       `${item.title} [${item.id}]`,
       item.due_label,
@@ -1126,7 +1213,32 @@ function renderTextTaskItems(items: DailyBriefDigestTaskItem[], emptyMessage: st
       item.recent_update,
     ].filter((value): value is string => Boolean(value));
     return `- ${parts.join(". ")}`;
-  });
+  };
+
+  for (const project of grouped.projects) {
+    lines.push(`- ${project.project_name}`);
+    if (!project.has_sections) {
+      lines.push(...project.unsectioned.map((task) => `  ${renderLine(task)}`));
+      continue;
+    }
+
+    for (const section of project.section_groups.values()) {
+      lines.push(`  - ${section.section_name ?? "Unsectioned"}`);
+      lines.push(...section.tasks.map((task) => `    ${renderLine(task)}`));
+    }
+
+    if (project.unsectioned.length > 0) {
+      lines.push("  - Unsectioned");
+      lines.push(...project.unsectioned.map((task) => `    ${renderLine(task)}`));
+    }
+  }
+
+  if (grouped.unassigned.length > 0) {
+    lines.push("- Unassigned");
+    lines.push(...grouped.unassigned.map((task) => `  ${renderLine(task)}`));
+  }
+
+  return lines;
 }
 
 function renderTextMeetingItems(meetings: DailyBriefDigestMeetingItem[]): string[] {

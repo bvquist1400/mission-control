@@ -16,6 +16,14 @@ import { detectBriefingMode, formatETTime, getTodayET, getTomorrowET, type Brief
 import { identifyPrepTasks, type TaskInput } from "@/lib/briefing/prep-tasks";
 import { normalizeDateOnly } from "@/lib/date-only";
 import {
+  groupTasksByProjectSections,
+  listOwnedProjectSections,
+} from "@/lib/project-sections";
+import {
+  normalizeTaskWithRelationsList,
+  TASK_WITH_RELATIONS_SELECT,
+} from "@/lib/task-relations";
+import {
   buildWorkEodReview,
   type PersistedEodReviewPayload,
   type WorkEodReviewRead,
@@ -45,8 +53,6 @@ import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
 import type { CommitmentDirection, TaskStatus } from "@/types/database";
 
 const ET_TIMEZONE = DEFAULT_WORKDAY_CONFIG.timezone;
-const TASK_SELECT =
-  "*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag), sprint:sprints(id, name, start_date, end_date, theme)";
 
 export type DailyBriefMode = BriefingMode | "auto";
 
@@ -95,6 +101,11 @@ export interface DailyBriefDigestTaskItem {
   id: string;
   title: string;
   status: TaskStatus;
+  project_id: string | null;
+  project_name: string | null;
+  project_has_sections?: boolean;
+  section_id: string | null;
+  section_name: string | null;
   due_at: string | null;
   due_label: string | null;
   context: string | null;
@@ -393,6 +404,10 @@ function toTaskDigestItem(
     id: task.id,
     title: task.title,
     status: task.status,
+    project_id: task.project_id,
+    project_name: task.project?.name ?? null,
+    section_id: task.section_id,
+    section_name: task.section_name ?? null,
     due_at: task.due_at,
     due_label: formatEtDueLabel(task.due_at, now, requestedDate),
     context: buildTaskContextLabel(task),
@@ -824,6 +839,77 @@ function formatTaskLine(item: DailyBriefDigestTaskItem): string {
   return `- ${pieces.join(". ")}`;
 }
 
+function renderTaskLinesByProjectSection(
+  items: DailyBriefDigestTaskItem[],
+  emptyMessage: string,
+  projectSections: Array<{
+    id: string;
+    user_id: string;
+    project_id: string;
+    name: string;
+    sort_order: number;
+    created_at: string;
+    updated_at: string;
+  }>
+): string[] {
+  if (items.length === 0) {
+    return [emptyMessage];
+  }
+
+  const grouped = groupTasksByProjectSections(
+    items.map((item) => ({
+      ...item,
+      project_id: item.project_id,
+      project_name: item.project_name,
+      section_id: item.section_id,
+      section_name: item.section_name,
+    })),
+    projectSections
+  );
+
+  if (grouped.grouped_projects.length === 0) {
+    return items.map(formatTaskLine);
+  }
+
+  const lines: string[] = [];
+
+  for (const project of grouped.grouped_projects) {
+    lines.push(`### ${project.project_name}`);
+
+    if (!project.has_sections) {
+      lines.push(...project.groups[0].tasks.map(formatTaskLine));
+      continue;
+    }
+
+    for (const group of project.groups) {
+      if (group.section_name) {
+        lines.push(`#### ${group.section_name}`);
+      } else {
+        lines.push("#### Unsectioned");
+      }
+
+      lines.push(...group.tasks.map(formatTaskLine));
+    }
+  }
+
+  if (grouped.unassigned_tasks.length > 0) {
+    lines.push("### Unassigned");
+    lines.push(...grouped.unassigned_tasks.map(formatTaskLine));
+  }
+
+  return lines;
+}
+
+function annotateProjectSectionState(
+  items: DailyBriefDigestTaskItem[],
+  projectIdsWithSections: Set<string>
+): DailyBriefDigestTaskItem[] {
+  return items.map((item) => ({
+    ...item,
+    project_has_sections: item.project_id ? projectIdsWithSections.has(item.project_id) : false,
+  }));
+}
+
 function formatMeetingLine(item: DailyBriefDigestMeetingItem): string {
   const pieces = [
     `${item.time_range_et} - ${item.title}`,
@@ -900,6 +986,15 @@ function renderMarkdown(payload: {
   guidanceTitle: "Where to Start" | "Afternoon Focus" | "Tomorrow Prep";
   guidance: string[];
   syncRecommendations: DailyBriefSyncRecommendation[];
+  projectSections: Array<{
+    id: string;
+    user_id: string;
+    project_id: string;
+    name: string;
+    sort_order: number;
+    created_at: string;
+    updated_at: string;
+  }>;
 }): string {
   const modeLabel = payload.mode === "eod" ? "EOD" : `${payload.mode[0].toUpperCase()}${payload.mode.slice(1)}`;
   const sections: string[] = [
@@ -924,9 +1019,9 @@ function renderMarkdown(payload: {
     sections.push(
       [
         "## Tasks",
-        ...(payload.dueSoon.length > 0 ? payload.dueSoon.map(formatTaskLine) : ["- No overdue or due-soon tasks."]),
-        ...(payload.blocked.length > 0 ? payload.blocked.map(formatTaskLine) : []),
-        ...(payload.inProgress.length > 0 ? payload.inProgress.map(formatTaskLine) : []),
+        ...renderTaskLinesByProjectSection(payload.dueSoon, "- No overdue or due-soon tasks.", payload.projectSections),
+        ...(payload.blocked.length > 0 ? renderTaskLinesByProjectSection(payload.blocked, "- No blocked work.", payload.projectSections) : []),
+        ...(payload.inProgress.length > 0 ? renderTaskLinesByProjectSection(payload.inProgress, "- Nothing is marked In Progress.", payload.projectSections) : []),
       ].join("\n")
     );
 
@@ -944,21 +1039,31 @@ function renderMarkdown(payload: {
     sections.push(
       [
         "## Completed Today",
-        ...(payload.completedToday.length > 0
-          ? payload.completedToday.map(formatTaskLine)
-          : ["- Nothing is marked done today. Statuses may need updating."]),
+        ...renderTaskLinesByProjectSection(
+          payload.completedToday,
+          "- Nothing is marked done today. Statuses may need updating.",
+          payload.projectSections
+        ),
       ].join("\n")
     );
     sections.push(
       [
         "## Still In Progress",
-        ...(payload.inProgress.length > 0 ? payload.inProgress.map(formatTaskLine) : ["- No tasks are marked In Progress."]),
+        ...renderTaskLinesByProjectSection(
+          payload.inProgress,
+          "- No tasks are marked In Progress.",
+          payload.projectSections
+        ),
       ].join("\n")
     );
     sections.push(
       [
         "## Still Blocked",
-        ...(payload.blocked.length > 0 ? payload.blocked.map(formatTaskLine) : ["- No tasks are currently blocked."]),
+        ...renderTaskLinesByProjectSection(
+          payload.blocked,
+          "- No tasks are currently blocked.",
+          payload.projectSections
+        ),
       ].join("\n")
     );
   }
@@ -967,21 +1072,31 @@ function renderMarkdown(payload: {
     sections.push(
       [
         "## Done Today",
-        ...(payload.completedToday.length > 0
-          ? payload.completedToday.map(formatTaskLine)
-          : ["- Nothing is marked done today. Statuses may need updating."]),
+        ...renderTaskLinesByProjectSection(
+          payload.completedToday,
+          "- Nothing is marked done today. Statuses may need updating.",
+          payload.projectSections
+        ),
       ].join("\n")
     );
     sections.push(
       [
         "## Rolls to Tomorrow",
-        ...(payload.rolledOver.length > 0 ? payload.rolledOver.map(formatTaskLine) : ["- No obvious rollover items."]),
+        ...renderTaskLinesByProjectSection(
+          payload.rolledOver,
+          "- No obvious rollover items.",
+          payload.projectSections
+        ),
       ].join("\n")
     );
     sections.push(
       [
         "## Tomorrow Prep",
-        ...(payload.tomorrowPrep.length > 0 ? payload.tomorrowPrep.map(formatTaskLine) : ["- No special tomorrow-prep items surfaced."]),
+        ...renderTaskLinesByProjectSection(
+          payload.tomorrowPrep,
+          "- No special tomorrow-prep items surfaced.",
+          payload.projectSections
+        ),
       ].join("\n")
     );
     if (payload.statusUpdateRecommendations.length > 0) {
@@ -1101,7 +1216,7 @@ async function fetchCalendarEvents(
 async function fetchTasks(supabase: SupabaseClient, userId: string): Promise<TaskWithRelations[]> {
   const { data, error } = await supabase
     .from("tasks")
-    .select(TASK_SELECT)
+    .select(TASK_WITH_RELATIONS_SELECT)
     .eq("user_id", userId)
     .order("priority_score", { ascending: false })
     .order("updated_at", { ascending: false });
@@ -1110,7 +1225,7 @@ async function fetchTasks(supabase: SupabaseClient, userId: string): Promise<Tas
     throw error;
   }
 
-  return (data || []) as TaskWithRelations[];
+  return normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>) as TaskWithRelations[];
 }
 
 async function fetchOpenCommitments(supabase: SupabaseClient, userId: string): Promise<OpenCommitmentRow[]> {
@@ -1269,6 +1384,10 @@ function toDigestTaskItemFromReview(
     id: item.taskId,
     title: item.title,
     status: task?.status ?? "Planned",
+    project_id: task?.project_id ?? null,
+    project_name: task?.project?.name ?? null,
+    section_id: task?.section_id ?? null,
+    section_name: task?.section_name ?? null,
     due_at: item.dueAt,
     due_label: formatEtDueLabel(item.dueAt, now, requestedDate),
     context: item.context ?? (task ? buildTaskContextLabel(task) : null),
@@ -1357,6 +1476,14 @@ export async function buildDailyBriefDigest({
   const meetings = buildMeetingDigestItems(remainingEvents, stakeholders, openCommitments, openTasks);
   const commitmentsTheirs = buildCommitmentGroups(openCommitments, "theirs");
   const commitmentsOurs = buildCommitmentGroups(openCommitments, "ours");
+  const projectSections = await listOwnedProjectSections(
+    supabase,
+    userId,
+    allTasks
+      .map((task) => task.project_id)
+      .filter((projectId): projectId is string => typeof projectId === "string" && projectId.length > 0)
+  );
+  const projectIdsWithSections = new Set(projectSections.map((section) => section.project_id));
   const rawTomorrowPrep = resolvedMode === "eod" ? identifyPrepTasks(toTaskInputs(allTasks), tomorrowEvents, tomorrowDate) : [];
   const statusUpdateRecommendationResult =
     resolvedMode === "eod"
@@ -1400,36 +1527,57 @@ export async function buildDailyBriefDigest({
     });
   }
 
-  const dueSoonDigest = dueSoonTasks.map((task) => toTaskDigestItem(task, now, requestedDate, commentActivity, effectiveSince));
+  const dueSoonDigest = annotateProjectSectionState(
+    dueSoonTasks.map((task) => toTaskDigestItem(task, now, requestedDate, commentActivity, effectiveSince)),
+    projectIdsWithSections
+  );
   const blockedDigest =
-    resolvedMode === "eod" && eodReview
+    annotateProjectSectionState(
+      resolvedMode === "eod" && eodReview
       ? eodReview.openBlockers.map((item) =>
           toDigestTaskItemFromReview(item, taskById, now, requestedDate, commentActivity, effectiveSince)
         )
-      : snapshot.blockedTasks.map((task) => toTaskDigestItem(task, now, requestedDate, commentActivity, effectiveSince));
-  const inProgressDigest = inProgressTasks.map((task) => toTaskDigestItem(task, now, requestedDate, commentActivity, effectiveSince));
+      : snapshot.blockedTasks.map((task) => toTaskDigestItem(task, now, requestedDate, commentActivity, effectiveSince)),
+      projectIdsWithSections
+    );
+  const inProgressDigest = annotateProjectSectionState(
+    inProgressTasks.map((task) => toTaskDigestItem(task, now, requestedDate, commentActivity, effectiveSince)),
+    projectIdsWithSections
+  );
   const completedTodayDigest =
-    resolvedMode === "eod" && eodReview
+    annotateProjectSectionState(
+      resolvedMode === "eod" && eodReview
       ? eodReview.completedToday.map((item) =>
           toDigestTaskItemFromReview(item, taskById, now, requestedDate, commentActivity, effectiveSince)
         )
-      : snapshot.completedTodayTasks.map((task) => toTaskDigestItem(task, now, requestedDate, commentActivity, effectiveSince));
+      : snapshot.completedTodayTasks.map((task) => toTaskDigestItem(task, now, requestedDate, commentActivity, effectiveSince)),
+      projectIdsWithSections
+    );
   const rolledOverDigest =
-    resolvedMode === "eod" && eodReview
+    annotateProjectSectionState(
+      resolvedMode === "eod" && eodReview
       ? eodReview.rolledForward.map((item) =>
           toDigestTaskItemFromReview(item, taskById, now, requestedDate, commentActivity, effectiveSince)
         )
-      : snapshot.rolledOverTasks.map((task) => toTaskDigestItem(task, now, requestedDate, commentActivity, effectiveSince));
-  const staleFollowupDigest = followUpRiskTasks.map((task) => ({
-    ...toTaskDigestItem(task, now, requestedDate, commentActivity, effectiveSince),
-    reason: buildStaleFollowupReason(task),
-  }));
+      : snapshot.rolledOverTasks.map((task) => toTaskDigestItem(task, now, requestedDate, commentActivity, effectiveSince)),
+      projectIdsWithSections
+    );
+  const staleFollowupDigest = annotateProjectSectionState(
+    followUpRiskTasks.map((task) => ({
+      ...toTaskDigestItem(task, now, requestedDate, commentActivity, effectiveSince),
+      reason: buildStaleFollowupReason(task),
+    })),
+    projectIdsWithSections
+  );
   const tomorrowPrepDigest =
-    resolvedMode === "eod" && eodReview
+    annotateProjectSectionState(
+      resolvedMode === "eod" && eodReview
       ? eodReview.tomorrowFirstThings.map((item) =>
           toDigestTaskItemFromReview(item, taskById, now, requestedDate, commentActivity, effectiveSince)
         )
-      : [];
+      : [],
+      projectIdsWithSections
+    );
   const statusUpdateRecommendations =
     resolvedMode === "eod" && eodReview
       ? eodReview.statusUpdateRecommendations.map(toDigestStatusUpdateRecommendation)
@@ -1517,6 +1665,7 @@ export async function buildDailyBriefDigest({
     guidanceTitle,
     guidance,
     syncRecommendations: suggestedSyncToday,
+    projectSections,
   });
 
   return {

@@ -156,6 +156,8 @@ async function runGeneration(request: NextRequest): Promise<NextResponse> {
               description: template.description,
               implementation_id: template.implementation_id,
               project_id: template.project_id,
+              // V1 intentionally leaves automated recurring task instances unsectioned.
+              section_id: null,
               sprint_id: null,
               status: 'Backlog',
               task_type: template.task_type,

@@ -69,6 +69,7 @@ export interface Task {
   description: string | null;
   implementation_id: string | null;
   project_id: string | null;
+  section_id: string | null;
   sprint_id: string | null;
   status: TaskStatus;
   task_type: TaskType;
@@ -264,7 +265,8 @@ export interface LlmExtraction {
 export interface TaskWithImplementation extends Task {
   implementation: { id: string; name: string; phase?: ImplPhase; rag?: RagStatus } | null;
   project: { id: string; name: string; stage?: ProjectStage; rag?: RagStatus } | null;
-  sprint: { id: string; name: string; start_date: string; end_date: string } | null;
+  sprint: { id: string; name: string; start_date: string; end_date: string; theme?: string | null } | null;
+  section_name?: string | null;
   dependencies?: TaskDependencySummary[];
   dependency_blocked?: boolean;
 }
@@ -275,6 +277,7 @@ export interface TaskUpdatePayload {
   description?: string | null;
   implementation_id?: string | null;
   project_id?: string | null;
+  section_id?: string | null;
   sprint_id?: string | null;
   status?: TaskStatus;
   task_type?: TaskType;
@@ -310,6 +313,10 @@ export interface TaskSummary {
   blocker: boolean;
   priority_score?: number;
   updated_at?: string;
+  project_id?: string | null;
+  project_name?: string | null;
+  section_id?: string | null;
+  section_name?: string | null;
 }
 
 // Implementation detail with related data
@@ -331,6 +338,16 @@ export interface Project {
   servicenow_spm_id: string | null;
   status_summary: string;
   portfolio_rank: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectSection {
+  id: string;
+  user_id: string;
+  project_id: string;
+  name: string;
+  sort_order: number;
   created_at: string;
   updated_at: string;
 }

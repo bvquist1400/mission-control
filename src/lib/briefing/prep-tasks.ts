@@ -23,6 +23,10 @@ export interface TaskSummary {
   status: string;
   blocker: boolean;
   waiting_on: string | null;
+  project_id?: string | null;
+  project_name?: string | null;
+  section_id?: string | null;
+  section_name?: string | null;
   implementation_name?: string | null;
   implementation_phase?: ImplPhase | null;
   implementation_rag?: RagStatus | null;
@@ -31,6 +35,8 @@ export interface TaskSummary {
 /** Input type for prep task functions - compatible with TaskWithImplementation */
 export type TaskInput = Task & {
   implementation?: { name: string; phase?: ImplPhase | null; rag?: RagStatus | null } | null;
+  project?: { id: string; name: string } | null;
+  section_name?: string | null;
 };
 
 /**
@@ -91,6 +97,8 @@ function formatEventTime(isoTime: string, timezone = "America/New_York"): string
  */
 export function taskToSummary(
   task: Task,
+  projectName?: string | null,
+  sectionName?: string | null,
   implementationName?: string | null,
   implementationPhase?: ImplPhase | null,
   implementationRag?: RagStatus | null
@@ -105,6 +113,10 @@ export function taskToSummary(
     status: task.status,
     blocker: task.blocker,
     waiting_on: task.waiting_on,
+    project_id: task.project_id ?? null,
+    project_name: projectName ?? null,
+    section_id: task.section_id ?? null,
+    section_name: sectionName ?? null,
     implementation_name: implementationName,
     implementation_phase: implementationPhase ?? null,
     implementation_rag: implementationRag ?? null,
@@ -145,7 +157,14 @@ export function identifyPrepTasks(
       );
 
       prepTasks.push({
-        task: taskToSummary(task, task.implementation?.name, task.implementation?.phase, task.implementation?.rag),
+        task: taskToSummary(
+          task,
+          task.project?.name,
+          task.section_name ?? null,
+          task.implementation?.name,
+          task.implementation?.phase,
+          task.implementation?.rag
+        ),
         reason: matchingEvent
           ? `Prep for: ${matchingEvent.title} at ${formatEventTime(matchingEvent.start_at)}`
           : "Meeting preparation task",
@@ -162,7 +181,14 @@ export function identifyPrepTasks(
 
     if (matchingEvent) {
       prepTasks.push({
-        task: taskToSummary(task, task.implementation?.name, task.implementation?.phase, task.implementation?.rag),
+        task: taskToSummary(
+          task,
+          task.project?.name,
+          task.section_name ?? null,
+          task.implementation?.name,
+          task.implementation?.phase,
+          task.implementation?.rag
+        ),
         reason: `Related to: ${matchingEvent.title} at ${formatEventTime(matchingEvent.start_at)}`,
         targetMeetingTitle: matchingEvent.title,
         targetMeetingTime: matchingEvent.start_at,
@@ -174,7 +200,14 @@ export function identifyPrepTasks(
     if (task.due_at && task.due_at >= tomorrowStart && task.due_at <= tomorrowEnd) {
       if (task.estimated_minutes >= 60) {
         prepTasks.push({
-          task: taskToSummary(task, task.implementation?.name, task.implementation?.phase, task.implementation?.rag),
+          task: taskToSummary(
+            task,
+            task.project?.name,
+            task.section_name ?? null,
+            task.implementation?.name,
+            task.implementation?.phase,
+            task.implementation?.rag
+          ),
           reason: `Due tomorrow (${task.estimated_minutes} min) - consider starting today`,
         });
       }
@@ -211,7 +244,14 @@ export function findRolledOverTasks(
       if (task.priority_score >= 70 && (task.status === "Planned" || task.status === "In Progress")) return true;
       return false;
     })
-    .map((task) => taskToSummary(task, task.implementation?.name, task.implementation?.phase, task.implementation?.rag))
+    .map((task) => taskToSummary(
+      task,
+      task.project?.name,
+      task.section_name ?? null,
+      task.implementation?.name,
+      task.implementation?.phase,
+      task.implementation?.rag
+    ))
     .sort((a, b) => (b.priority_score ?? 0) - (a.priority_score ?? 0));
 }
 
@@ -231,5 +271,12 @@ export function findCompletedTodayTasks(
       // Check if updated_at is today (assumes completion updates the timestamp)
       return task.updated_at >= todayStart && task.updated_at <= todayEnd;
     })
-    .map((task) => taskToSummary(task, task.implementation?.name, task.implementation?.phase, task.implementation?.rag));
+    .map((task) => taskToSummary(
+      task,
+      task.project?.name,
+      task.section_name ?? null,
+      task.implementation?.name,
+      task.implementation?.phase,
+      task.implementation?.rag
+    ));
 }
