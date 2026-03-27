@@ -13,6 +13,10 @@
   },
   "crons": [
     {
+      "path": "/api/calendar/sync",
+      "schedule": "*/15 * * * *"
+    },
+    {
       "path": "/api/tasks/generate-recurring",
       "schedule": "0 11 * * *"
     },
