@@ -23,7 +23,9 @@
       ],
       "relatedTaskIds": [
         "done-deck"
-      ]
+      ],
+      "primaryReason": null,
+      "supportingReasons": []
     },
     {
       "key": "task:roll-cutover",
@@ -36,7 +38,9 @@
       ],
       "relatedTaskIds": [
         "roll-cutover"
-      ]
+      ],
+      "primaryReason": null,
+      "supportingReasons": []
     },
     {
       "key": "task:done-note",
@@ -49,7 +53,9 @@
       ],
       "relatedTaskIds": [
         "done-note"
-      ]
+      ],
+      "primaryReason": null,
+      "supportingReasons": []
     },
     {
       "key": "task:done-launch",
@@ -62,7 +68,9 @@
       ],
       "relatedTaskIds": [
         "done-launch"
-      ]
+      ],
+      "primaryReason": null,
+      "supportingReasons": []
     }
   ],
   "whatKeptSlipping": [
@@ -70,7 +78,7 @@
       "key": "task:slip-qa",
       "title": "Close QA regression set",
       "context": "Alpha Platform / Quarterly Launch / Sprint 12",
-      "summary": "Close QA regression set rolled across 2 closes, so it kept surviving the daily cut instead of actually getting cleared.",
+      "summary": "Close QA regression set rolled across 2 closes, so it kept surviving the daily cut instead of actually getting cleared. Repeated reason: Still waiting on Vendor signoff before QA can close.",
       "occurrences": 2,
       "daysSeen": [
         "2026-03-25",
@@ -78,6 +86,10 @@
       ],
       "relatedTaskIds": [
         "slip-qa"
+      ],
+      "primaryReason": "Still waiting on Vendor signoff before QA can close.",
+      "supportingReasons": [
+        "Still waiting on Vendor signoff before QA can close."
       ]
     },
     {
@@ -91,7 +103,9 @@
       ],
       "relatedTaskIds": [
         "roll-cutover"
-      ]
+      ],
+      "primaryReason": null,
+      "supportingReasons": []
     },
     {
       "key": "task:decision-pilot",
@@ -211,14 +225,14 @@
     }
   ],
   "nextWeekCalls": [
-    "Stop reloading Close QA regression set every day. Narrow it, escalate it, or explicitly park it on Monday.",
+    "Stop reloading Close QA regression set every day. Narrow it, escalate it, or explicitly park it on Monday. Repeated reason: Still waiting on Vendor signoff before QA can close.",
     "Clear cold follow-up risk early next week before it burns another close-of-day cycle.",
     "Customer Pilot needs a decision before more work piles onto it: Decide whether to expand the pilot scope."
   ],
   "narrativeHints": [
     "There was real forward motion, but the same loose edges kept sneaking back into the close-of-day picture.",
     "Finalize customer demo deck was one of the clearest movement threads across the week, so it is worth protecting instead of restarting from scratch.",
-    "Close QA regression set kept surviving the daily cut, which is usually a sign that the shape of the work is wrong, not just the timing.",
+    "Close QA regression set kept surviving the daily cut, which is usually a sign that the shape of the work is wrong, not just the timing. Repeated reason: Still waiting on Vendor signoff before QA can close.",
     "Cold follow-up risk was not a one-day wobble. It kept showing back up in the stored closes."
   ],
   "confidence": "medium",

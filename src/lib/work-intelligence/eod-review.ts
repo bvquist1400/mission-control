@@ -382,6 +382,18 @@ function toReviewTaskItem(
   };
 }
 
+function buildRolledForwardReason(task: WorkIntelligenceTask): string {
+  if (task.status === "Blocked/Waiting") {
+    if (task.waiting_on?.trim()) {
+      return `Still waiting on ${task.waiting_on.trim()}.`;
+    }
+
+    return "Blocked without a clean exit move.";
+  }
+
+  return "Still open at close of day and likely to reopen tomorrow.";
+}
+
 function buildPrepCandidates(
   tasks: WorkIntelligenceTask[],
   tomorrowEvents: ApiCalendarEvent[],
@@ -585,7 +597,7 @@ export function buildWorkEodReview(input: BuildWorkEodReviewInput): WorkEodRevie
     toReviewTaskItem(task, "Closed today.", input.snapshot.commentActivity)
   );
   const rolledForward = input.snapshot.rolledOverTasks.map((task) =>
-    toReviewTaskItem(task, "Still open at close of day and likely to reopen tomorrow.", input.snapshot.commentActivity)
+    toReviewTaskItem(task, buildRolledForwardReason(task), input.snapshot.commentActivity)
   );
   const openBlockers = input.snapshot.openTasks
     .filter((task) => task.status === "Blocked/Waiting")

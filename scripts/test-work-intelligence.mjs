@@ -770,7 +770,7 @@ const secondEodReview = cloneReview(eodReview, {
       taskId: "slip-qa",
       title: "Close QA regression set",
       context: "Alpha Platform / Quarterly Launch / Sprint 12",
-      reason: "Still open at close of day and likely to reopen tomorrow.",
+      reason: "Still waiting on Vendor signoff before QA can close.",
       updatedAt: "2026-03-25T18:10:00.000Z",
       dueAt: "2026-03-25T20:00:00.000Z",
     },
@@ -839,7 +839,7 @@ const thirdEodReview = cloneReview(eodReview, {
       taskId: "slip-qa",
       title: "Close QA regression set",
       context: "Alpha Platform / Quarterly Launch / Sprint 12",
-      reason: "Still open at close of day and likely to reopen tomorrow.",
+      reason: "Still waiting on Vendor signoff before QA can close.",
       updatedAt: "2026-03-26T18:45:00.000Z",
       dueAt: "2026-03-26T20:00:00.000Z",
     },
@@ -1008,10 +1008,13 @@ const weeklyReview = buildWorkWeeklyReview({
 assert.equal(weeklyReview.reviewType, "weekly");
 assert.equal(weeklyReview.dailyReviewCount, 3);
 assert.equal(weeklyReview.whatKeptSlipping[0]?.title, "Close QA regression set");
+assert.equal(weeklyReview.whatKeptSlipping[0]?.primaryReason, "Still waiting on Vendor signoff before QA can close.");
+assert.equal(weeklyReview.whatKeptSlipping[0]?.summary.includes("Vendor signoff"), true);
 assert.equal(weeklyReview.recurringRisks.some((risk) => risk.label === "Cold follow-up risk" || risk.label === "Vendor signoff follow-up"), true);
 assert.equal(weeklyReview.confidence, "medium");
 assert.equal(weeklyReview.rawSignals.missingDailyReviewDates.length, 2);
 assert.equal(weeklyReview.nextWeekCalls.some((call) => /^Stop reloading /.test(call)), true);
+assert.equal(weeklyReview.nextWeekCalls.some((call) => /Vendor signoff/.test(call)), true);
 assert.equal(weeklyReview.narrativeHints.some((hint) => /executive|retrospective|alignment/i.test(hint)), false);
 writeOrAssertFixture("weekly-review.chain.sample.json", weeklyReview);
 

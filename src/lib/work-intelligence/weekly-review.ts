@@ -88,6 +88,8 @@ export interface WorkWeeklyReviewAggregateItem {
   occurrences: number;
   daysSeen: string[];
   relatedTaskIds: string[];
+  primaryReason?: string | null;
+  supportingReasons?: string[];
 }
 
 export interface WorkWeeklyReviewRisk {
@@ -388,12 +390,79 @@ function normalizeStoredEodReview(snapshot: StoredReviewSnapshotRow<Record<strin
   };
 }
 
+const GENERIC_WEEKLY_REASONS = new Set([
+  "closed today",
+  "still open at close of day and likely to reopen tomorrow",
+  "blocked without a clean exit move",
+]);
+
+interface WeeklyAggregateReason {
+  text: string;
+  occurrences: number;
+  daysSeen: string[];
+  latestDate: string;
+}
+
+function normalizeWeeklyAggregateReason(reason: string | null | undefined): string | null {
+  if (typeof reason !== "string") {
+    return null;
+  }
+
+  const trimmed = reason.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const normalized = trimmed.replace(/[.]+$/g, "").trim();
+  if (!normalized) {
+    return null;
+  }
+
+  return GENERIC_WEEKLY_REASONS.has(normalized.toLowerCase()) ? null : trimmed;
+}
+
+function summarizeWeeklyAggregateReasons(
+  reasons: Iterable<WeeklyAggregateReason>
+): { primaryReason: string | null; supportingReasons: string[] } {
+  const ordered = [...reasons].sort(
+    (left, right) =>
+      right.occurrences - left.occurrences
+      || right.latestDate.localeCompare(left.latestDate)
+      || left.text.localeCompare(right.text)
+  );
+
+  if (ordered.length === 0) {
+    return {
+      primaryReason: null,
+      supportingReasons: [],
+    };
+  }
+
+  return {
+    primaryReason: ordered[0]?.text ?? null,
+    supportingReasons: ordered.map((item) => item.text).slice(0, 3),
+  };
+}
+
+function appendPrimaryReason(value: string, primaryReason: string | null | undefined): string {
+  if (!primaryReason) {
+    return value;
+  }
+
+  const normalizedBase = value.trim().replace(/\s+$/g, "");
+  const normalizedReason = primaryReason.trim();
+  return `${normalizedBase} Repeated reason: ${normalizedReason}`;
+}
+
 function aggregateWeeklyItems(
   reviews: NormalizedStoredEodReview[],
-  pickItems: (review: WorkEodReviewRead) => Array<{ taskId?: string; title?: string; context?: string | null }>,
-  summaryBuilder: (title: string, occurrences: number, daysSeen: string[]) => string
+  pickItems: (review: WorkEodReviewRead) => Array<{ taskId?: string; title?: string; context?: string | null; reason?: string | null }>,
+  summaryBuilder: (item: WorkWeeklyReviewAggregateItem) => string
 ): WorkWeeklyReviewAggregateItem[] {
-  const aggregate = new Map<string, WorkWeeklyReviewAggregateItem>();
+  const aggregate = new Map<
+    string,
+    WorkWeeklyReviewAggregateItem & { reasonAggregate: Map<string, WeeklyAggregateReason> }
+  >();
 
   for (const review of reviews) {
     for (const item of pickItems(review.review)) {
@@ -405,6 +474,17 @@ function aggregateWeeklyItems(
       const key = item.taskId ? `task:${item.taskId}` : `title:${title.toLowerCase()}`;
       const existing = aggregate.get(key);
       if (!existing) {
+        const reasonAggregate = new Map<string, WeeklyAggregateReason>();
+        const normalizedReason = normalizeWeeklyAggregateReason(item.reason);
+        if (normalizedReason) {
+          reasonAggregate.set(normalizedReason.toLowerCase(), {
+            text: normalizedReason,
+            occurrences: 1,
+            daysSeen: [review.requestedDate],
+            latestDate: review.requestedDate,
+          });
+        }
+
         aggregate.set(key, {
           key,
           title,
@@ -413,6 +493,9 @@ function aggregateWeeklyItems(
           occurrences: 1,
           daysSeen: [review.requestedDate],
           relatedTaskIds: item.taskId ? [item.taskId] : [],
+          primaryReason: normalizedReason,
+          supportingReasons: normalizedReason ? [normalizedReason] : [],
+          reasonAggregate,
         });
         continue;
       }
@@ -427,15 +510,44 @@ function aggregateWeeklyItems(
       if (!existing.context && item.context) {
         existing.context = item.context;
       }
+
+      const normalizedReason = normalizeWeeklyAggregateReason(item.reason);
+      if (normalizedReason) {
+        const reasonKey = normalizedReason.toLowerCase();
+        const existingReason = existing.reasonAggregate.get(reasonKey);
+        if (!existingReason) {
+          existing.reasonAggregate.set(reasonKey, {
+            text: normalizedReason,
+            occurrences: 1,
+            daysSeen: [review.requestedDate],
+            latestDate: review.requestedDate,
+          });
+        } else {
+          existingReason.occurrences += 1;
+          if (!existingReason.daysSeen.includes(review.requestedDate)) {
+            existingReason.daysSeen.push(review.requestedDate);
+          }
+          existingReason.latestDate = review.requestedDate;
+        }
+      }
     }
   }
 
   return [...aggregate.values()]
-    .map((item) => ({
-      ...item,
-      daysSeen: [...item.daysSeen].sort(),
-      summary: summaryBuilder(item.title, item.occurrences, [...item.daysSeen].sort()),
-    }))
+    .map((item) => {
+      const { reasonAggregate, ...rest } = item;
+      const reasonSummary = summarizeWeeklyAggregateReasons(reasonAggregate.values());
+      const aggregateItem: WorkWeeklyReviewAggregateItem = {
+        ...rest,
+        ...reasonSummary,
+        daysSeen: [...rest.daysSeen].sort(),
+      };
+
+      return {
+        ...aggregateItem,
+        summary: summaryBuilder(aggregateItem),
+      };
+    })
     .sort((left, right) => right.occurrences - left.occurrences || right.daysSeen[right.daysSeen.length - 1].localeCompare(left.daysSeen[left.daysSeen.length - 1]) || left.title.localeCompare(right.title))
     .slice(0, 5);
 }
@@ -558,7 +670,12 @@ function buildNextWeekCalls(
   };
 
   if (whatKeptSlipping[0]) {
-    push(`Stop reloading ${whatKeptSlipping[0].title} every day. Narrow it, escalate it, or explicitly park it on Monday.`);
+    push(
+      appendPrimaryReason(
+        `Stop reloading ${whatKeptSlipping[0].title} every day. Narrow it, escalate it, or explicitly park it on Monday.`,
+        whatKeptSlipping[0].primaryReason
+      )
+    );
   }
 
   if (recurringRisks[0]) {
@@ -605,7 +722,10 @@ function buildNarrativeHints(
       ? `${whatMoved[0].title} was one of the clearest movement threads across the week, so it is worth protecting instead of restarting from scratch.`
       : null,
     whatKeptSlipping[0]
-      ? `${whatKeptSlipping[0].title} kept surviving the daily cut, which is usually a sign that the shape of the work is wrong, not just the timing.`
+      ? appendPrimaryReason(
+          `${whatKeptSlipping[0].title} kept surviving the daily cut, which is usually a sign that the shape of the work is wrong, not just the timing.`,
+          whatKeptSlipping[0].primaryReason
+        )
       : null,
     recurringRisks[0]
       ? `${recurringRisks[0].label} was not a one-day wobble. It kept showing back up in the stored closes.`
@@ -747,18 +867,24 @@ export function buildWorkWeeklyReview(input: BuildWorkWeeklyReviewInput): WorkWe
   const movedFromDaily = aggregateWeeklyItems(
     input.storedDailyReviews,
     (review) => review.completedToday ?? [],
-    (title, occurrences) =>
-      occurrences > 1
-        ? `${title} showed up as real movement on ${occurrences} stored closes, which means it carried through more than one day cleanly.`
-        : `${title} landed cleanly in one stored day-end close.`
+    (item) =>
+      item.occurrences > 1
+        ? `${item.title} showed up as real movement on ${item.occurrences} stored closes, which means it carried through more than one day cleanly.`
+        : `${item.title} landed cleanly in one stored day-end close.`
   );
   const slippingFromDaily = aggregateWeeklyItems(
     input.storedDailyReviews,
     (review) => review.rolledForward ?? [],
-    (title, occurrences) =>
-      occurrences > 1
-        ? `${title} rolled across ${occurrences} closes, so it kept surviving the daily cut instead of actually getting cleared.`
-        : `${title} still rolled at close, which puts it on next week's watch list.`
+    (item) =>
+      item.occurrences > 1
+        ? appendPrimaryReason(
+            `${item.title} rolled across ${item.occurrences} closes, so it kept surviving the daily cut instead of actually getting cleared.`,
+            item.primaryReason
+          )
+        : appendPrimaryReason(
+            `${item.title} still rolled at close, which puts it on next week's watch list.`,
+            item.primaryReason
+          )
   );
   const recurringRisksFromDaily = aggregateWeeklyRisks(input.storedDailyReviews);
 
