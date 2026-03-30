@@ -431,6 +431,12 @@ function eventTypeForCandidate(kind: IntelligenceArtifactCandidate["artifactKind
   return phase;
 }
 
+function transitionCoveredFamilies(reviewPayload: Record<string, unknown>): string[] {
+  return Array.isArray(reviewPayload.coveredFamilies)
+    ? reviewPayload.coveredFamilies.filter((value): value is string => typeof value === "string" && value.length > 0)
+    : [];
+}
+
 export async function promoteIntelligenceContracts(
   store: IntelligencePromotionStore,
   userId: string,
@@ -726,6 +732,15 @@ export async function transitionIntelligenceArtifactStatus(
     lastEvaluatedAt: artifact.lastEvaluatedAt,
   });
 
+  const transitionPayload = {
+    ...(options.payload ?? {}),
+    artifactKind: artifact.artifactKind,
+    detectorType: artifact.primaryContractType,
+    primaryContractType: artifact.primaryContractType,
+    subjectKey: artifact.subjectKey,
+    coveredFamilies: transitionCoveredFamilies(artifact.reviewPayload),
+  };
+
   await store.insertStatusTransition({
     userId,
     artifactId,
@@ -733,7 +748,7 @@ export async function transitionIntelligenceArtifactStatus(
     toStatus,
     triggeredBy: options.triggeredBy ?? "user",
     note: options.note ?? null,
-    payload: options.payload ?? {},
+    payload: transitionPayload,
   });
 
   return updated;

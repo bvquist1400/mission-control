@@ -1478,7 +1478,7 @@ function createMcpServer(): McpServer {
 
   mcp.tool(
     'list_open_artifacts',
-    'List open intelligence artifacts that currently need a review decision.',
+    'List active intelligence artifacts that are still open or accepted.',
     {},
     async () => {
       const runtime = getRuntimeConfig();
@@ -1488,6 +1488,7 @@ function createMcpServer(): McpServer {
         open?: Array<{
           artifact_id?: string;
           artifact_type?: string;
+          status?: string;
           summary?: string;
           task_id?: string | null;
           task_title?: string;
@@ -1496,13 +1497,30 @@ function createMcpServer(): McpServer {
           suggested_action?: string;
           available_actions?: string[];
         }>;
-        counts?: { open?: number };
+        accepted?: Array<{
+          artifact_id?: string;
+          artifact_type?: string;
+          status?: string;
+          summary?: string;
+          task_id?: string | null;
+          task_title?: string;
+          task_status?: string | null;
+          task_href?: string | null;
+          suggested_action?: string;
+          available_actions?: string[];
+        }>;
+        counts?: { open?: number; accepted?: number };
       };
 
-      const artifacts = Array.isArray(payload.open)
-        ? payload.open.map((item) => ({
+      const activeArtifacts = [
+        ...(Array.isArray(payload.open) ? payload.open : []),
+        ...(Array.isArray(payload.accepted) ? payload.accepted : []),
+      ];
+
+      const artifacts = activeArtifacts.map((item) => ({
             artifact_id: item.artifact_id ?? null,
             artifact_type: item.artifact_type ?? null,
+            status: item.status ?? null,
             title: item.task_title ?? item.summary ?? 'Artifact',
             summary: item.summary ?? null,
             subject_task: {
@@ -1513,11 +1531,12 @@ function createMcpServer(): McpServer {
             },
             suggested_action: item.suggested_action ?? null,
             available_actions: Array.isArray(item.available_actions) ? item.available_actions : [],
-          }))
-        : [];
+          }));
 
       return toMcpResponse({
-        count: typeof payload.counts?.open === 'number' ? payload.counts.open : artifacts.length,
+        count: artifacts.length,
+        open_count: typeof payload.counts?.open === 'number' ? payload.counts.open : 0,
+        accepted_count: typeof payload.counts?.accepted === 'number' ? payload.counts.accepted : 0,
         artifacts,
       });
     }
@@ -1555,6 +1574,21 @@ function createMcpServer(): McpServer {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ action: 'dismiss' }),
+      });
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  mcp.tool(
+    'apply_artifact',
+    'Mark an accepted intelligence artifact as handled/applied after acting on it.',
+    {
+      artifact_id: z.string().uuid().describe('Accepted artifact UUID'),
+    },
+    async ({ artifact_id }) => {
+      const res = await fetch(`${LEGACY_APP_ORIGIN}/api/intelligence/artifacts/${artifact_id}/apply`, {
+        method: 'POST',
       });
       const data = await res.json();
       return toMcpResponse(data);

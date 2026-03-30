@@ -133,6 +133,7 @@ const toolNames = (toolsList.body?.result?.tools || []).map((tool) => tool.name)
 
 for (const requiredTool of [
   "accept_artifact",
+  "apply_artifact",
   "dismiss_artifact",
   "list_open_artifacts",
   "trigger_intelligence_run",
@@ -144,7 +145,7 @@ const temporaryTasks = [];
 
 try {
   const overdueFollowUpAt = new Date(Date.now() - (96 * 60 * 60 * 1000)).toISOString();
-  for (const action of ["accept", "dismiss"]) {
+  for (const action of ["apply", "dismiss"]) {
     const validationTitle = `[Codex MCP Validation] ${action} artifact ${new Date().toISOString()}`;
     const createTaskResult = await requestJson(actionsApiKey, "/api/tasks", {
       method: "POST",
@@ -212,16 +213,16 @@ try {
 
   assert.equal(listBefore.status, 200, "list_open_artifacts should succeed");
   const listBeforeData = parseToolData(listBefore.body);
-  const openArtifactsBefore = Array.isArray(listBeforeData?.data?.artifacts) ? listBeforeData.data.artifacts : [];
+  const activeArtifactsBefore = Array.isArray(listBeforeData?.data?.artifacts) ? listBeforeData.data.artifacts : [];
 
-  const acceptedTarget = temporaryTasks.find((task) => task.action === "accept");
+  const appliedTarget = temporaryTasks.find((task) => task.action === "apply");
   const dismissedTarget = temporaryTasks.find((task) => task.action === "dismiss");
-  const acceptedArtifact = openArtifactsBefore.find((artifact) => artifact.subject_task?.task_id === acceptedTarget?.taskId);
-  const dismissedArtifact = openArtifactsBefore.find((artifact) => artifact.subject_task?.task_id === dismissedTarget?.taskId);
+  const applicableArtifact = activeArtifactsBefore.find((artifact) => artifact.subject_task?.task_id === appliedTarget?.taskId);
+  const dismissedArtifact = activeArtifactsBefore.find((artifact) => artifact.subject_task?.task_id === dismissedTarget?.taskId);
 
-  assert.ok(acceptedArtifact, "Temporary accept validation task should produce an open artifact through MCP");
+  assert.ok(applicableArtifact, "Temporary apply validation task should produce an active artifact through MCP");
   assert.ok(dismissedArtifact, "Temporary dismiss validation task should produce an open artifact through MCP");
-  assert.equal(typeof acceptedArtifact.artifact_id, "string", "Accepted artifact must include artifact_id");
+  assert.equal(typeof applicableArtifact.artifact_id, "string", "Applicable artifact must include artifact_id");
   assert.equal(typeof dismissedArtifact.artifact_id, "string", "Dismissed artifact must include artifact_id");
 
   const acceptResult = await postMcpMessage(
@@ -233,7 +234,7 @@ try {
       params: {
         name: "accept_artifact",
         arguments: {
-          artifact_id: acceptedArtifact.artifact_id,
+          artifact_id: applicableArtifact.artifact_id,
         },
       },
     },
@@ -243,6 +244,50 @@ try {
   assert.equal(acceptResult.status, 200, "accept_artifact should succeed");
   const acceptData = parseToolData(acceptResult.body);
   assert.equal(acceptData?.data?.status, "accepted", "Artifact should transition to accepted through MCP");
+
+  const listAccepted = await postMcpMessage(
+    apiKey,
+    {
+      jsonrpc: "2.0",
+      id: "call-list-accepted-1",
+      method: "tools/call",
+      params: {
+        name: "list_open_artifacts",
+        arguments: {},
+      },
+    },
+    init.sessionId
+  );
+
+  assert.equal(listAccepted.status, 200, "Accepted-state list_open_artifacts should succeed");
+  const listAcceptedData = parseToolData(listAccepted.body);
+  const activeArtifactsAccepted = Array.isArray(listAcceptedData?.data?.artifacts) ? listAcceptedData.data.artifacts : [];
+  assert.ok(
+    activeArtifactsAccepted.some(
+      (artifact) => artifact.artifact_id === applicableArtifact.artifact_id && artifact.status === "accepted"
+    ),
+    "Accepted artifact should remain visible in list_open_artifacts until applied"
+  );
+
+  const applyResult = await postMcpMessage(
+    apiKey,
+    {
+      jsonrpc: "2.0",
+      id: "call-apply-1",
+      method: "tools/call",
+      params: {
+        name: "apply_artifact",
+        arguments: {
+          artifact_id: applicableArtifact.artifact_id,
+        },
+      },
+    },
+    init.sessionId
+  );
+
+  assert.equal(applyResult.status, 200, "apply_artifact should succeed");
+  const applyData = parseToolData(applyResult.body);
+  assert.equal(applyData?.data?.status, "applied", "Artifact should transition to applied through MCP");
 
   const dismissResult = await postMcpMessage(
     apiKey,
@@ -280,14 +325,14 @@ try {
 
   assert.equal(listAfter.status, 200, "Second list_open_artifacts should succeed");
   const listAfterData = parseToolData(listAfter.body);
-  const openArtifactsAfter = Array.isArray(listAfterData?.data?.artifacts) ? listAfterData.data.artifacts : [];
+  const activeArtifactsAfter = Array.isArray(listAfterData?.data?.artifacts) ? listAfterData.data.artifacts : [];
   assert.ok(
-    !openArtifactsAfter.some((artifact) => artifact.artifact_id === acceptedArtifact.artifact_id),
-    "Accepted artifact should no longer appear in open artifacts"
+    !activeArtifactsAfter.some((artifact) => artifact.artifact_id === applicableArtifact.artifact_id),
+    "Applied artifact should no longer appear in active artifacts"
   );
   assert.ok(
-    !openArtifactsAfter.some((artifact) => artifact.artifact_id === dismissedArtifact.artifact_id),
-    "Dismissed artifact should no longer appear in open artifacts"
+    !activeArtifactsAfter.some((artifact) => artifact.artifact_id === dismissedArtifact.artifact_id),
+    "Dismissed artifact should no longer appear in active artifacts"
   );
 
   const runResult = await postMcpMessage(
@@ -325,13 +370,13 @@ try {
 
   assert.equal(listAfterRun.status, 200, "Post-run list_open_artifacts should succeed");
   const listAfterRunData = parseToolData(listAfterRun.body);
-  const openArtifactsAfterRun = Array.isArray(listAfterRunData?.data?.artifacts) ? listAfterRunData.data.artifacts : [];
+  const activeArtifactsAfterRun = Array.isArray(listAfterRunData?.data?.artifacts) ? listAfterRunData.data.artifacts : [];
   assert.ok(
-    !openArtifactsAfterRun.some((artifact) => artifact.artifact_id === acceptedArtifact.artifact_id),
-    "Accepted artifact should remain out of open artifacts after the immediate MCP-triggered intelligence run"
+    !activeArtifactsAfterRun.some((artifact) => artifact.artifact_id === applicableArtifact.artifact_id),
+    "Applied artifact should remain out of active artifacts after the immediate MCP-triggered intelligence run"
   );
   assert.ok(
-    !openArtifactsAfterRun.some((artifact) => artifact.artifact_id === dismissedArtifact.artifact_id),
+    !activeArtifactsAfterRun.some((artifact) => artifact.artifact_id === dismissedArtifact.artifact_id),
     "Dismissed artifact should remain suppressed after an immediate MCP-triggered intelligence run"
   );
 
@@ -339,17 +384,18 @@ try {
     toolsVerified: [
       "list_open_artifacts",
       "accept_artifact",
+      "apply_artifact",
       "dismiss_artifact",
       "trigger_intelligence_run",
     ],
     temporaryTasks,
-    acceptedArtifactId: acceptedArtifact.artifact_id,
-    acceptedArtifactSummary: acceptedArtifact.summary ?? null,
+    appliedArtifactId: applicableArtifact.artifact_id,
+    appliedArtifactSummary: applicableArtifact.summary ?? null,
     dismissedArtifactId: dismissedArtifact.artifact_id,
     dismissedArtifactSummary: dismissedArtifact.summary ?? null,
-    openCountBefore: openArtifactsBefore.length,
-    openCountAfterActions: openArtifactsAfter.length,
-    openCountAfterRun: openArtifactsAfterRun.length,
+    activeCountBefore: activeArtifactsBefore.length,
+    activeCountAfterActions: activeArtifactsAfter.length,
+    activeCountAfterRun: activeArtifactsAfterRun.length,
     initialRunSummary: initialRunData.data,
     runSummary: runData.data,
   }, null, 2));

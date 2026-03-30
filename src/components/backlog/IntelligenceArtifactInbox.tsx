@@ -34,12 +34,17 @@ async function fetchInbox(): Promise<IntelligenceArtifactInboxPayload> {
   return response.json();
 }
 
-async function postArtifactAction(artifactId: string, action: "accept" | "dismiss"): Promise<void> {
-  const response = await fetch(`/api/intelligence/artifacts/${artifactId}/status`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action }),
-  });
+async function postArtifactAction(artifactId: string, action: "accept" | "dismiss" | "apply"): Promise<void> {
+  const response = await fetch(
+    action === "apply"
+      ? `/api/intelligence/artifacts/${artifactId}/apply`
+      : `/api/intelligence/artifacts/${artifactId}/status`,
+    {
+      method: "POST",
+      headers: action === "apply" ? undefined : { "Content-Type": "application/json" },
+      body: action === "apply" ? undefined : JSON.stringify({ action }),
+    }
+  );
 
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -111,11 +116,12 @@ function ArtifactCard({
 }: {
   item: IntelligenceArtifactInboxItem;
   acting: boolean;
-  onAction?: (artifactId: string, action: "accept" | "dismiss") => void;
+  onAction?: (artifactId: string, action: "accept" | "dismiss" | "apply") => void;
 }) {
   const transitionLabel = formatTransitionLabel(item);
   const canAccept = item.available_actions.includes("accept");
   const canDismiss = item.available_actions.includes("dismiss");
+  const canApply = item.available_actions.includes("apply");
 
   return (
     <article className="rounded-card border border-stroke bg-panel p-4 shadow-sm">
@@ -173,6 +179,16 @@ function ArtifactCard({
                 {acting ? "Saving..." : "Dismiss"}
               </button>
             ) : null}
+            {canApply ? (
+              <button
+                type="button"
+                onClick={() => onAction(item.artifact_id, "apply")}
+                disabled={acting}
+                className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {acting ? "Saving..." : "Mark handled"}
+              </button>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -214,7 +230,7 @@ function QueueSection({
   emptyLabel: string;
   items: IntelligenceArtifactInboxItem[];
   actingById: Record<string, boolean>;
-  onAction?: (artifactId: string, action: "accept" | "dismiss") => void;
+  onAction?: (artifactId: string, action: "accept" | "dismiss" | "apply") => void;
 }) {
   return (
     <section className="space-y-3">
@@ -244,6 +260,7 @@ export function IntelligenceArtifactInbox() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actingById, setActingById] = useState<Record<string, boolean>>({});
+  const [showApplied, setShowApplied] = useState(false);
   const [showDismissed, setShowDismissed] = useState(false);
 
   useEffect(() => {
@@ -287,7 +304,7 @@ export function IntelligenceArtifactInbox() {
     };
   }, []);
 
-  async function handleAction(artifactId: string, action: "accept" | "dismiss") {
+  async function handleAction(artifactId: string, action: "accept" | "dismiss" | "apply") {
     setActingById((current) => ({ ...current, [artifactId]: true }));
     setError(null);
 
@@ -358,15 +375,37 @@ export function IntelligenceArtifactInbox() {
             emptyLabel="No accepted artifacts are waiting on action."
             items={payload.accepted}
             actingById={actingById}
+            onAction={handleAction}
           />
 
-          <QueueSection
-            title="Recently Applied"
-            description="Recent completions for context."
-            emptyLabel="No recently applied artifacts yet."
-            items={payload.applied}
-            actingById={actingById}
-          />
+          <section className="space-y-3">
+            <div className="flex flex-col gap-3 rounded-card border border-stroke bg-panel p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-foreground">Recently Applied</h2>
+                <p className="text-sm text-muted-foreground">
+                  Hidden by default to keep the inbox focused. Expand when you need recent handled-item context.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowApplied((current) => !current)}
+                className="inline-flex items-center justify-center rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm font-semibold text-foreground transition hover:bg-panel"
+                aria-expanded={showApplied}
+              >
+                {showApplied ? "Hide applied" : `Show applied (${payload.applied.length})`}
+              </button>
+            </div>
+
+            {showApplied ? (
+              <QueueSection
+                title="Applied History"
+                description="Recent completions for context."
+                emptyLabel="No recently applied artifacts yet."
+                items={payload.applied}
+                actingById={actingById}
+              />
+            ) : null}
+          </section>
 
           <section className="space-y-3">
             <div className="flex flex-col gap-3 rounded-card border border-stroke bg-panel p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">

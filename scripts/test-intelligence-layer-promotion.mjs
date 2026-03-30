@@ -450,6 +450,11 @@ function makeFollowUpRiskContract(taskId, waitingOn, overrides = {}) {
   });
   const artifactId = result.artifacts[0].id;
 
+  await assert.rejects(
+    () => transitionIntelligenceArtifactStatus(store, USER_ID, artifactId, "applied"),
+    /Invalid intelligence artifact status transition/
+  );
+
   const accepted = await transitionIntelligenceArtifactStatus(store, USER_ID, artifactId, "accepted");
   assert.equal(accepted.status, "accepted");
   assert.deepEqual(accepted.availableActions, ["apply", "expire"]);
@@ -462,6 +467,13 @@ function makeFollowUpRiskContract(taskId, waitingOn, overrides = {}) {
   const applied = await transitionIntelligenceArtifactStatus(store, USER_ID, artifactId, "applied");
   assert.equal(applied.status, "applied");
   assert.deepEqual(applied.availableActions, []);
+  assert.deepEqual(store.statusTransitions.at(-1).payload, {
+    artifactKind: "single_contract",
+    detectorType: "stale_task",
+    primaryContractType: "stale_task",
+    subjectKey: "task:task-status",
+    coveredFamilies: ["stale_task|task:task-status"],
+  });
 
   await assert.rejects(
     () => transitionIntelligenceArtifactStatus(store, USER_ID, artifactId, "open"),

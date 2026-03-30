@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { SupabaseIntelligencePromotionStore } from "@/lib/intelligence-layer/promotion-store";
-import { transitionIntelligenceArtifactStatus } from "@/lib/intelligence-layer/promotion";
 import { requireAuthenticatedRoute } from "@/lib/supabase/route-auth";
+import {
+  performArtifactRouteAction,
+  type IntelligenceArtifactRouteAction,
+} from "../transition";
 
 interface StatusActionBody {
   action?: string;
@@ -10,9 +12,11 @@ interface StatusActionBody {
 function toStatus(action: string) {
   switch (action) {
     case "accept":
-      return "accepted" as const;
+      return "accept" as const;
     case "dismiss":
-      return "dismissed" as const;
+      return "dismiss" as const;
+    case "apply":
+      return "apply" as const;
     default:
       return null;
   }
@@ -31,27 +35,17 @@ export async function POST(
     const { supabase, userId } = auth.context;
     const { id } = await params;
     const body = (await request.json().catch(() => ({}))) as StatusActionBody;
-    const nextStatus = typeof body.action === "string" ? toStatus(body.action) : null;
+    const action = typeof body.action === "string" ? toStatus(body.action) : null;
 
-    if (!nextStatus) {
-      return NextResponse.json({ error: "action must be one of: accept, dismiss" }, { status: 400 });
+    if (!action) {
+      return NextResponse.json({ error: "action must be one of: accept, dismiss, apply" }, { status: 400 });
     }
 
-    const updated = await transitionIntelligenceArtifactStatus(
-      new SupabaseIntelligencePromotionStore(supabase),
+    const updated = await performArtifactRouteAction(
+      supabase,
       userId,
       id,
-      nextStatus,
-      {
-        triggeredBy: "user",
-        note: nextStatus === "accepted"
-          ? "Accepted from the artifact inbox."
-          : "Dismissed from the artifact inbox.",
-        payload: {
-          source: "artifact_inbox",
-          requestedAction: body.action,
-        },
-      }
+      action as IntelligenceArtifactRouteAction
     );
 
     return NextResponse.json(updated);
