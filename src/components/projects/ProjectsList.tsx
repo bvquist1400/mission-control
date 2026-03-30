@@ -225,7 +225,7 @@ export function ProjectsList({ implementationId, embedded = false }: ProjectsLis
 
         {isCreateOpen && (
           <form onSubmit={handleCreate} className="mt-4 space-y-4">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
               <div className="xl:col-span-2">
                 <label className="mb-1 block text-xs font-medium text-muted-foreground">Name *</label>
                 <input
@@ -387,7 +387,7 @@ export function ProjectsList({ implementationId, embedded = false }: ProjectsLis
 
       {/* ── Project grid ── */}
       {!loading && !error && visibleProjects.length > 0 && (
-        <div className="grid gap-4 xl:grid-cols-2">
+        <div className="grid gap-4 xl:grid-cols-2 2xl:grid-cols-3">
           {visibleProjects.map((project) => (
             <ProjectCard key={project.id} project={project} />
           ))}

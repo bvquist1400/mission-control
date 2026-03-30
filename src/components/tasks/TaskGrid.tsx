@@ -152,6 +152,14 @@ export function TaskGrid({
   const showImplementationColumn = scopeMode === "global";
   const showSprintColumn = true;
   const columnCount = showImplementationColumn ? 11 : 10;
+  const tableMinWidthClass = showImplementationColumn ? "min-w-[1180px]" : "min-w-[1040px]";
+  const taskColumnWidthClass = showImplementationColumn ? "w-[280px]" : "w-[320px]";
+  const taskCellWidthClass = showImplementationColumn ? "w-[280px] max-w-[280px]" : "w-[320px] max-w-[320px]";
+  const implementationColumnWidthClass = "w-[145px]";
+  const sprintColumnWidthClass = "w-[150px]";
+  const statusColumnWidthClass = "w-[150px]";
+  const dueColumnWidthClass = "w-[110px]";
+  const actionsColumnWidthClass = "w-[108px]";
 
   useEffect(() => {
     setExpandedTaskId(initialExpandedTaskId ?? null);
@@ -887,11 +895,11 @@ export function TaskGrid({
           Scroll for more &rarr;
         </p>
         <div className="max-w-full overflow-x-auto">
-          <table className="w-full min-w-[1280px]">
+          <table className={`w-full ${tableMinWidthClass}`}>
             <thead className="border-b-2 border-stroke bg-panel-muted">
               <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground [&>th]:border-r [&>th]:border-solid [&>th]:border-stroke [&>th:last-child]:border-r-0">
                 <th className="w-10 px-2 py-3" />
-                <th className="w-[320px] px-3 py-3">
+                <th className={`${taskColumnWidthClass} px-3 py-3`}>
                   <button
                     type="button"
                     onClick={() => toggleSort("task")}
@@ -912,12 +920,12 @@ export function TaskGrid({
                   </button>
                 </th>
                 {showImplementationColumn ? (
-                  <th className="w-[160px] px-3 py-3">Application</th>
+                  <th className={`${implementationColumnWidthClass} px-3 py-3`}>Application</th>
                 ) : null}
                 {showSprintColumn ? (
-                  <th className="w-[170px] px-3 py-3">Sprint</th>
+                  <th className={`${sprintColumnWidthClass} px-3 py-3`}>Sprint</th>
                 ) : null}
-                <th className="w-[170px] px-3 py-3">Status</th>
+                <th className={`${statusColumnWidthClass} px-3 py-3`}>Status</th>
                 <th className="w-[80px] px-3 py-3 text-center">
                   <button
                     type="button"
@@ -938,7 +946,7 @@ export function TaskGrid({
                     </span>
                   </button>
                 </th>
-                <th className="w-[120px] px-3 py-3">
+                <th className={`${dueColumnWidthClass} px-3 py-3`}>
                   <button
                     type="button"
                     onClick={() => toggleSort("due")}
@@ -980,7 +988,7 @@ export function TaskGrid({
                   </button>
                 </th>
                 <th className="w-[60px] px-3 py-3 text-center">Flags</th>
-                <th className="w-[120px] px-3 py-3">Actions</th>
+                <th className={`${actionsColumnWidthClass} px-3 py-3`}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -1019,7 +1027,7 @@ export function TaskGrid({
                         </button>
                       </td>
 
-                      <td className="w-[320px] max-w-[320px] px-3 py-2.5 align-middle">
+                      <td className={`${taskCellWidthClass} px-3 py-2.5 align-middle`}>
                         <p className="break-words text-sm font-medium leading-tight text-foreground">{task.title}</p>
                         {task.implementation?.phase === "Sundown" ? (
                           <p className="mt-1 inline-flex rounded bg-orange-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-orange-300">
@@ -1059,7 +1067,7 @@ export function TaskGrid({
                       </td>
 
                       {showImplementationColumn ? (
-                        <td className="w-[160px] px-3 py-2.5 align-middle">
+                        <td className={`${implementationColumnWidthClass} px-3 py-2.5 align-middle`}>
                           <select
                             value={task.implementation_id ?? ""}
                             onChange={(event) =>
@@ -1079,7 +1087,7 @@ export function TaskGrid({
                       ) : null}
 
                       {showSprintColumn ? (
-                        <td className="w-[170px] px-3 py-2.5 align-middle">
+                        <td className={`${sprintColumnWidthClass} px-3 py-2.5 align-middle`}>
                           <select
                             value={task.sprint_id ?? ""}
                             onChange={(event) =>
@@ -1098,7 +1106,7 @@ export function TaskGrid({
                         </td>
                       ) : null}
 
-                      <td className="w-[170px] px-3 py-2.5 align-middle">
+                      <td className={`${statusColumnWidthClass} px-3 py-2.5 align-middle`}>
                         <StatusSelector
                           value={task.status}
                           onChange={(status) => {
@@ -1143,7 +1151,7 @@ export function TaskGrid({
                         />
                       </td>
 
-                      <td className="w-[120px] px-2 py-2.5 align-middle">
+                      <td className={`${dueColumnWidthClass} px-2 py-2.5 align-middle`}>
                         <input
                           type="date"
                           value={timestampToLocalDateInputValue(task.due_at)}
@@ -1178,7 +1186,7 @@ export function TaskGrid({
                         </div>
                       </td>
 
-                      <td className="w-[120px] px-2 py-2.5 align-middle">
+                      <td className={`${actionsColumnWidthClass} px-2 py-2.5 align-middle`}>
                         <div className="flex items-center gap-1.5">
                           <button
                             type="button"

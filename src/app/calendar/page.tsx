@@ -60,6 +60,22 @@ interface CalendarResponse {
   };
 }
 
+interface CalendarHistoryEvent extends CalendarEvent {
+  has_meeting_context: boolean;
+  history_reason: 'notes' | 'context' | 'notes_and_context';
+  date_et?: string;
+  start_time_et?: string;
+  end_time_et?: string;
+  time_range_et?: string;
+}
+
+interface CalendarHistoryResponse {
+  daysBack: number;
+  limit: number;
+  generatedAt: string;
+  events: CalendarHistoryEvent[];
+}
+
 function formatDateTime(value: string): string {
   const timestamp = Date.parse(value);
   if (Number.isNaN(timestamp)) {
@@ -91,6 +107,14 @@ function formatMinutes(value: number): string {
 
 function addDays(dateString: string, days: number): string {
   return addDateOnlyDays(dateString, days) ?? dateString;
+}
+
+function truncateText(value: string, maxChars: number): string {
+  if (value.length <= maxChars) {
+    return value;
+  }
+
+  return `${value.slice(0, maxChars - 1).trimEnd()}…`;
 }
 
 function LoadingSkeleton() {
@@ -131,6 +155,11 @@ export default function CalendarPage() {
   const [savedContextAt, setSavedContextAt] = useState<Record<string, string>>({});
   const [savingContextKey, setSavingContextKey] = useState<string | null>(null);
   const [expandedNotesKey, setExpandedNotesKey] = useState<string | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyData, setHistoryData] = useState<CalendarHistoryResponse | null>(null);
+  const [expandedHistoryNotesKey, setExpandedHistoryNotesKey] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -198,6 +227,58 @@ export default function CalendarPage() {
       isMounted = false;
     };
   }, [daysAhead]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadHistory() {
+      setHistoryLoading(true);
+      setHistoryError(null);
+
+      try {
+        const response = await fetch('/api/calendar/history?daysBack=90&limit=24', { cache: 'no-store' });
+
+        if (response.status === 401) {
+          if (isMounted) {
+            setAuthRequired(true);
+            setHistoryData(null);
+          }
+          return;
+        }
+
+        if (!response.ok) {
+          const failure = (await response.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(failure?.error ?? 'Failed to load meeting history');
+        }
+
+        const payload = (await response.json()) as CalendarHistoryResponse;
+        if (isMounted) {
+          setHistoryData(payload);
+          setExpandedHistoryNotesKey((current) => {
+            if (!current) {
+              return current;
+            }
+
+            return payload.events.some((event) => getEventKey(event) === current) ? current : null;
+          });
+        }
+      } catch (loadError) {
+        if (isMounted) {
+          setHistoryError(loadError instanceof Error ? loadError.message : 'Failed to load meeting history');
+        }
+      } finally {
+        if (isMounted) {
+          setHistoryLoading(false);
+        }
+      }
+    }
+
+    loadHistory();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const subtitle = useMemo(() => {
     if (authRequired) {
@@ -359,15 +440,128 @@ export default function CalendarPage() {
             </article>
           </section>
 
-          <section className="rounded-card border border-stroke bg-panel p-4 text-sm text-muted-foreground">
-            <p className="font-semibold text-foreground">Delta since previous snapshot</p>
-            <p className="mt-1 text-xs">Source: {data.source.toUpperCase()}</p>
-            <p className="mt-1">
-              Added: <span className="font-semibold text-foreground">{data.changesSince.added.length}</span> | Removed:{' '}
-              <span className="font-semibold text-foreground">{data.changesSince.removed.length}</span> | Changed:{' '}
-              <span className="font-semibold text-foreground">{data.changesSince.changed.length}</span>
-            </p>
-            <p className="mt-1 text-xs">Last refreshed {formatDateTime(data.generatedAt)}.</p>
+          <section className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">History</p>
+                <h2 className="mt-2 text-lg font-semibold text-foreground">Recent Meetings With Notes</h2>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Past meetings with retained notes or saved meeting context. Hidden by default to keep the calendar focused on what is next.
+                </p>
+              </div>
+              {historyData ? (
+                <div className="flex items-center gap-2">
+                  <span className="rounded-full border border-stroke bg-panel-muted px-3 py-1 text-xs font-medium text-muted-foreground">
+                    {historyData.events.length} saved
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowHistory((current) => !current)}
+                    disabled={historyData.events.length === 0}
+                    className="rounded-lg border border-stroke bg-panel px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-panel-muted disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {showHistory ? 'Hide history' : `Show history (${historyData.events.length})`}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+
+            {historyError ? (
+              <p className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+                {historyError}
+              </p>
+            ) : null}
+
+            {historyLoading ? (
+              <p className="mt-4 text-sm text-muted-foreground">Loading retained meeting history…</p>
+            ) : null}
+
+            {!historyLoading && historyData ? (
+              historyData.events.length === 0 ? (
+                <div className="mt-4 rounded-xl border border-dashed border-stroke bg-panel-muted/45 px-4 py-5 text-sm text-muted-foreground">
+                  No past meetings with saved notes or context were found in the current history window.
+                </div>
+              ) : showHistory ? (
+                <div className="mt-4 space-y-3">
+                  {historyData.events.map((event) => {
+                    const eventKey = getEventKey(event);
+                    const notesOpen = expandedHistoryNotesKey === eventKey;
+                    const notesButtonLabel = notesOpen ? `Hide Notes (${event.note_count})` : `Show Notes (${event.note_count})`;
+                    const contextPreview = event.meeting_context ? truncateText(event.meeting_context, 220) : null;
+
+                    return (
+                      <article key={eventKey} className="rounded-xl border border-stroke bg-panel-muted/55 p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <Link
+                              href={getMeetingDetailHref(event)}
+                              className="text-base font-semibold text-foreground transition hover:text-accent hover:underline"
+                            >
+                              {event.title || 'Untitled meeting'}
+                            </Link>
+                            <p className="mt-1 text-sm text-muted-foreground">
+                              {event.date_et ?? formatDateTime(event.start_at)}
+                              {event.time_range_et ? ` • ${event.time_range_et}` : ''}
+                            </p>
+                            <p className="mt-1 text-sm text-muted-foreground">
+                              {event.with_display.length > 0 ? event.with_display.join(', ') : 'No attendee names were stored.'}
+                            </p>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="rounded-full border border-stroke bg-panel px-3 py-1 text-xs font-medium text-foreground">
+                              {event.note_count} {event.note_count === 1 ? 'note' : 'notes'}
+                            </span>
+                            {event.has_meeting_context ? (
+                              <span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-300">
+                                Saved context
+                              </span>
+                            ) : null}
+                            {event.note_count > 0 ? (
+                              <button
+                                type="button"
+                                onClick={() => setExpandedHistoryNotesKey((current) => (current === eventKey ? null : eventKey))}
+                                className="rounded-lg border border-stroke px-2.5 py-1 text-xs font-semibold text-foreground transition hover:bg-panel"
+                              >
+                                {notesButtonLabel}
+                              </button>
+                            ) : null}
+                            <Link
+                              href={getMeetingDetailHref(event)}
+                              className="rounded-lg border border-stroke bg-panel px-2.5 py-1 text-xs font-semibold text-foreground transition hover:bg-panel"
+                            >
+                              Open Meeting
+                            </Link>
+                          </div>
+                        </div>
+
+                        {contextPreview ? (
+                          <p className="mt-3 rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-muted-foreground">
+                            {contextPreview}
+                          </p>
+                        ) : null}
+
+                        {notesOpen ? (
+                          <div className="mt-3">
+                            <MeetingNotesPanel
+                              event={{
+                                source: event.source,
+                                externalEventId: event.external_event_id,
+                                startAt: event.start_at,
+                              }}
+                            />
+                          </div>
+                        ) : null}
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="mt-4 text-sm text-muted-foreground">
+                  Expand this section when you want to review older meetings and the notes captured on them.
+                </p>
+              )
+            ) : null}
           </section>
 
           {data.events.length === 0 ? (
