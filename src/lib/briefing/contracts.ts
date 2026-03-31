@@ -94,6 +94,20 @@ export interface BriefingOpenReviewItem {
   recommended_action_window: string | null;
 }
 
+export interface DailyBriefStatusUpdateRecommendation {
+  entity_type: "project" | "implementation";
+  entity_id: string;
+  entity_name: string;
+  summary: string;
+  reason: string;
+  latest_movement_at: string;
+  last_status_artifact_at: string | null;
+  related_tasks: Array<{
+    id: string;
+    title: string;
+  }>;
+}
+
 export interface TodayBriefingData {
   calendar: BriefingCalendarData;
   tasks: BriefingTaskData;

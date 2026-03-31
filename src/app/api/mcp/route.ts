@@ -808,6 +808,88 @@ function createMcpServer(): McpServer {
     }
   );
 
+  // ── APPLICATION STATUS UPDATES ────────────────────────────────────────
+  mcp.tool(
+    'list_application_status_updates',
+    'List recent status update log entries for an application.',
+    {
+      application_id: z.string().describe('Application UUID'),
+      limit: z.number().int().min(1).max(50).optional().describe('Maximum number of log entries to return; defaults to 10'),
+    },
+    async ({ application_id, limit }) => {
+      const url = new URL(
+        `/api/applications/${application_id}/copy-update`,
+        'https://mission-control-orpin-chi.vercel.app'
+      );
+      if (typeof limit === 'number') {
+        url.searchParams.set('limit', String(limit));
+      }
+
+      const res = await fetch(url.toString(), {
+        headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
+      });
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  mcp.tool(
+    'create_application_status_update',
+    'Append a status update log entry for an application. By default, also sync the application status_summary to the same note.',
+    {
+      application_id: z.string().describe('Application UUID'),
+      note: z.string().min(1).describe('Status update text to store in the application log'),
+      created_by: z.enum(['Brent', 'Assistant']).optional().describe('Who authored the status update; defaults to Assistant for MCP-created notes'),
+      sync_status_summary: z.boolean().optional().describe('When true or omitted, also update application.status_summary to the same note'),
+    },
+    async ({ application_id, note, created_by, sync_status_summary }) => {
+      const res = await fetch(
+        `https://mission-control-orpin-chi.vercel.app/api/applications/${application_id}/copy-update`,
+        {
+          method: 'POST',
+          headers: {
+            'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY!,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            saveToLog: true,
+            note,
+            createdBy: created_by ?? 'Assistant',
+            syncStatusSummary: sync_status_summary !== false,
+          }),
+        }
+      );
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  mcp.tool(
+    'generate_application_copy_update',
+    'Generate a Teams-ready status update snippet for an application and optionally save it to the application status update log.',
+    {
+      application_id: z.string().describe('Application UUID'),
+      save_to_log: z.boolean().optional().describe('When true or omitted, save the generated snippet to the application status update log'),
+    },
+    async ({ application_id, save_to_log }) => {
+      const res = await fetch(
+        `https://mission-control-orpin-chi.vercel.app/api/applications/${application_id}/copy-update`,
+        {
+          method: 'POST',
+          headers: {
+            'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY!,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            saveToLog: save_to_log !== false,
+          }),
+        }
+      );
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
   // ── LIST PROJECTS ─────────────────────────────────────────────────────
   mcp.tool(
     'list_projects',

@@ -11,9 +11,9 @@ import type {
   DailyBriefDigestMeetingItem,
   DailyBriefOpenReviewItem,
   DailyBriefDigestResponse,
-  DailyBriefStatusUpdateRecommendation,
   DailyBriefDigestTaskItem,
 } from "@/lib/briefing/digest";
+import type { DailyBriefStatusUpdateRecommendation } from "@/lib/briefing/contracts";
 
 const RENDER_CACHE_TTL_MS = 30 * 60 * 1000;
 const RENDER_LLM_TIMEOUT_MS = 15000;

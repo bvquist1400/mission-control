@@ -4,7 +4,10 @@ import {
   type IntelligenceCommitment,
 } from "@/lib/briefing/intelligence";
 import { readBriefingOpenReviewItems } from "@/lib/briefing/open-review-items";
-import type { BriefingOpenReviewItem } from "@/lib/briefing/contracts";
+import type {
+  BriefingOpenReviewItem,
+  DailyBriefStatusUpdateRecommendation,
+} from "@/lib/briefing/contracts";
 import {
   buildDayWindows,
   decorateCalendarEvent,
@@ -153,20 +156,6 @@ export interface DailyBriefSyncRecommendation {
   task_id: string;
   title: string;
   reason: string;
-}
-
-export interface DailyBriefStatusUpdateRecommendation {
-  entity_type: "project" | "implementation";
-  entity_id: string;
-  entity_name: string;
-  summary: string;
-  reason: string;
-  latest_movement_at: string;
-  last_status_artifact_at: string | null;
-  related_tasks: Array<{
-    id: string;
-    title: string;
-  }>;
 }
 
 export interface DailyBriefOpenReviewItem extends BriefingOpenReviewItem {}

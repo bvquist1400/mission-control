@@ -5,7 +5,12 @@ import { MorningBriefing } from "./MorningBriefing";
 import { MiddayBriefing } from "./MiddayBriefing";
 import { EODBriefing } from "./EODBriefing";
 import { BriefingNarrative } from "./BriefingNarrative";
-import type { BriefingMode, BriefingNarrativeResponse, BriefingResponse } from "@/lib/briefing";
+import type {
+  BriefingMode,
+  BriefingNarrativeResponse,
+  BriefingResponse,
+  DailyBriefStatusUpdateRecommendation,
+} from "@/lib/briefing";
 import type { LlmModelCatalogRow, LlmRunMeta } from "@/lib/llm";
 
 interface DailyBriefingProps {
@@ -49,6 +54,10 @@ interface StoredNarrativePayload {
   cycleKey: string;
   narrative: string;
   llm: LlmRunMeta | null;
+}
+
+interface BriefingDigestSubset {
+  status_update_recommendations?: DailyBriefStatusUpdateRecommendation[];
 }
 
 function readStoredNarrative(cycleKey: string): StoredNarrativePayload | null {
@@ -97,6 +106,7 @@ function writeStoredNarrative(payload: StoredNarrativePayload): void {
 
 export function DailyBriefing({ replanSignal }: DailyBriefingProps) {
   const [data, setData] = useState<BriefingResponse | null>(null);
+  const [statusUpdateRecommendations, setStatusUpdateRecommendations] = useState<DailyBriefStatusUpdateRecommendation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [modeOverride, setModeOverride] = useState<BriefingMode | null>(null);
@@ -243,6 +253,22 @@ export function DailyBriefing({ replanSignal }: DailyBriefingProps) {
         }
 
         const briefingData = (await response.json()) as BriefingResponse;
+        let nextStatusUpdateRecommendations: DailyBriefStatusUpdateRecommendation[] = [];
+
+        if (briefingData.mode === "eod") {
+          const digestResponse = await fetch(
+            `/api/briefing/digest?mode=eod&date=${encodeURIComponent(briefingData.requestedDate)}`,
+            { cache: "no-store" }
+          );
+
+          if (digestResponse.ok) {
+            const digestData = (await digestResponse.json()) as BriefingDigestSubset;
+            nextStatusUpdateRecommendations = Array.isArray(digestData.status_update_recommendations)
+              ? digestData.status_update_recommendations
+              : [];
+          }
+        }
+
         if (requestId !== latestBriefingRequestRef.current) {
           return;
         }
@@ -250,6 +276,7 @@ export function DailyBriefing({ replanSignal }: DailyBriefingProps) {
         const cycleKey = `${briefingData.requestedDate}:${briefingData.mode}`;
         const stored = readStoredNarrative(cycleKey);
         setData(briefingData);
+        setStatusUpdateRecommendations(nextStatusUpdateRecommendations);
         if (stored) {
           setNarrative(stored.narrative);
           setNarrativeMeta(stored.llm);
@@ -455,11 +482,14 @@ export function DailyBriefing({ replanSignal }: DailyBriefingProps) {
 
         {activeMode === "eod" && data.tomorrow && (
           <EODBriefing
+            requestedDate={data.requestedDate}
             today={{
               tasks: data.today.tasks,
               progress: data.today.progress,
             }}
             tomorrow={data.tomorrow}
+            statusUpdateRecommendations={statusUpdateRecommendations}
+            onStatusUpdateSaved={handleRefresh}
           />
         )}
 

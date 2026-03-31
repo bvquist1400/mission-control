@@ -40,6 +40,7 @@ export type {
   BriefingColdCommitment,
   BriefingCommitmentData,
   BriefingOpenReviewItem,
+  DailyBriefStatusUpdateRecommendation,
   BriefingRiskRadarItem,
   BriefingTomorrowCommitmentItem,
   BriefingTomorrowContextItem,
