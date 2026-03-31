@@ -46,3 +46,6 @@ data/calendar/*
 data/calendar/*.ics
 data/calendar/*.xml
 !data/calendar/README.md
+
+# local Supabase CLI state
+supabase/.temp/
