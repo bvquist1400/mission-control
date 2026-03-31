@@ -17,6 +17,8 @@ import * as plannerPlanRoute from '@/app/api/planner/plan/route';
 import * as plannerSyncTodayRoute from '@/app/api/planner/sync-today/route';
 import * as projectsRoute from '@/app/api/projects/route';
 import * as projectRoute from '@/app/api/projects/[id]/route';
+import * as projectSectionsRoute from '@/app/api/projects/[id]/sections/route';
+import * as sectionRoute from '@/app/api/sections/[id]/route';
 import * as sprintsRoute from '@/app/api/sprints/route';
 import * as sprintRoute from '@/app/api/sprints/[id]/route';
 import * as stakeholdersRoute from '@/app/api/stakeholders/route';
@@ -237,10 +239,22 @@ async function handleRequest(
     return methodNotAllowed();
   }
 
+  if (segments[0] === 'projects' && segments[1] && segments[2] === 'sections' && segments.length === 3) {
+    if (request.method === 'GET') return invokeDynamic(projectSectionsRoute.GET, requestWithContext, { id: segments[1] });
+    if (request.method === 'POST') return invokeDynamic(projectSectionsRoute.POST, requestWithContext, { id: segments[1] });
+    return methodNotAllowed();
+  }
+
   if (segments[0] === 'projects' && segments[1] && segments.length === 2) {
     if (request.method === 'GET') return invokeDynamic(projectRoute.GET, requestWithContext, { id: segments[1] });
     if (request.method === 'PATCH') return invokeDynamic(projectRoute.PATCH, requestWithContext, { id: segments[1] });
     if (request.method === 'DELETE') return invokeDynamic(projectRoute.DELETE, requestWithContext, { id: segments[1] });
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'sections' && segments[1] && segments.length === 2) {
+    if (request.method === 'PATCH') return invokeDynamic(sectionRoute.PATCH, requestWithContext, { id: segments[1] });
+    if (request.method === 'DELETE') return invokeDynamic(sectionRoute.DELETE, requestWithContext, { id: segments[1] });
     return methodNotAllowed();
   }
 
