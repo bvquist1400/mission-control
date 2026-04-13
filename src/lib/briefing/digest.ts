@@ -16,9 +16,13 @@ import {
   type ApiCalendarEvent,
   type CalendarTemporalStatus,
 } from "@/lib/calendar";
+import { buildCalendarEntityId } from "@/lib/calendar-event-identity";
 import { detectBriefingMode, formatETTime, getTodayET, getTomorrowET, type BriefingMode } from "@/lib/briefing";
 import { identifyPrepTasks, type TaskInput } from "@/lib/briefing/prep-tasks";
 import { normalizeDateOnly } from "@/lib/date-only";
+import { readIntelligenceTaskContexts } from "@/lib/intelligence-layer";
+import { hydrateNotes } from "@/lib/notes-relations";
+import { normalizeNoteRow } from "@/lib/notes-shared";
 import {
   groupTasksByProjectSections,
   listOwnedProjectSections,
@@ -54,7 +58,7 @@ import type {
   WorkSprintSummary,
 } from "@/lib/work-intelligence/types";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
-import type { CommitmentDirection, TaskStatus } from "@/types/database";
+import type { CommitmentDirection, NoteWithDetails, TaskStatus } from "@/types/database";
 
 const ET_TIMEZONE = DEFAULT_WORKDAY_CONFIG.timezone;
 const RECENTLY_UNBLOCKED_FAMILY = "recently_unblocked";
@@ -78,6 +82,11 @@ interface CalendarEventContextRow {
   source: CalendarEventSource;
   external_event_id: string;
   meeting_context: string | null;
+}
+
+interface NoteLinkCountRow {
+  entity_id: string;
+  note_id: string;
 }
 
 type TaskWithRelations = WorkIntelligenceTask;
@@ -116,6 +125,19 @@ export interface DailyBriefDigestTaskItem {
   context: string | null;
   reason: string;
   recent_update: string | null;
+  supporting_notes: Array<{
+    id: string;
+    title: string;
+    excerpt: string | null;
+    relation_reasons: string[];
+    updated_at: string;
+  }>;
+  active_decisions: Array<{
+    id: string;
+    title: string;
+    summary: string;
+    updated_at: string;
+  }>;
 }
 
 export interface DailyBriefDigestMeetingItem {
@@ -136,6 +158,18 @@ export interface DailyBriefDigestMeetingItem {
     id: string;
     title: string;
     status: TaskStatus;
+  }>;
+  linked_notes: Array<{
+    id: string;
+    title: string;
+    excerpt: string | null;
+    updated_at: string;
+  }>;
+  linked_decisions: Array<{
+    id: string;
+    title: string;
+    summary: string;
+    updated_at: string;
   }>;
 }
 
@@ -384,6 +418,14 @@ function buildTaskReason(task: TaskWithRelations, now: Date, requestedDate: stri
   return "High-leverage work to keep moving";
 }
 
+function formatNoteHeadline(title: string, excerpt: string | null): string {
+  return excerpt ? `${title}: ${excerpt}` : title;
+}
+
+function formatDecisionHeadline(title: string, summary: string): string {
+  return summary ? `${title}: ${truncate(summary, 140)}` : title;
+}
+
 function toTaskDigestItem(
   task: TaskWithRelations,
   now: Date,
@@ -404,6 +446,8 @@ function toTaskDigestItem(
     context: buildTaskContextLabel(task),
     reason: buildTaskReason(task, now, requestedDate),
     recent_update: buildRecentUpdate(task, commentActivity, sinceIso),
+    supporting_notes: [],
+    active_decisions: [],
   };
 }
 
@@ -494,11 +538,20 @@ function buildMeetingDigestItems(
   meetings: ApiCalendarEvent[],
   stakeholders: StakeholderNameRow[],
   openCommitments: OpenCommitmentRow[],
-  tasks: TaskWithRelations[]
+  tasks: TaskWithRelations[],
+  meetingNotesByEntity: Map<string, NoteWithDetails[]>
 ): DailyBriefDigestMeetingItem[] {
   return meetings.map((event) => {
     const matchedStakeholders = findStakeholdersForEvent(event, stakeholders);
     const stakeholderIds = new Set(matchedStakeholders.map((stakeholder) => stakeholder.id));
+    const meetingEntityId = event.source
+      ? buildCalendarEntityId({
+          source: event.source,
+          externalEventId: event.external_event_id,
+          startAt: event.start_at,
+        })
+      : null;
+    const meetingNotes = meetingEntityId ? meetingNotesByEntity.get(meetingEntityId) ?? [] : [];
     const relatedCommitments = openCommitments
       .filter((commitment) => commitment.stakeholder && stakeholderIds.has(commitment.stakeholder.id))
       .sort((left, right) => {
@@ -519,6 +572,42 @@ function buildMeetingDigestItems(
       .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
       .map((value) => truncate(value, 180))[0] ?? null;
 
+    const linkedNotes = meetingNotes
+      .map((note) => ({
+        id: note.id,
+        title: note.title,
+        excerpt: truncate(note.body_markdown, 180),
+        updated_at: note.updated_at,
+      }))
+      .slice(0, 2);
+    const linkedDecisions = meetingNotes
+      .flatMap((note) => note.decisions)
+      .filter((decision) => decision.decision_status === "active")
+      .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+      .map((decision) => ({
+        id: decision.id,
+        title: decision.title,
+        summary: truncate(decision.summary, 160) ?? decision.summary,
+        updated_at: decision.updated_at,
+      }))
+      .slice(0, 3);
+    const taskByRelatedId = new Map(
+      findRelatedTasksForStakeholders(matchedStakeholders, tasks).map((task) => [task.id, task])
+    );
+
+    for (const note of meetingNotes) {
+      for (const taskLink of note.task_links) {
+        if (!taskLink.task) {
+          continue;
+        }
+        taskByRelatedId.set(taskLink.task.id, {
+          id: taskLink.task.id,
+          title: taskLink.task.title,
+          status: taskLink.task.status,
+        });
+      }
+    }
+
     return {
       title: event.title,
       time_range_et: event.time_range_et ?? "All day",
@@ -527,9 +616,57 @@ function buildMeetingDigestItems(
       notes,
       stakeholder_names: matchedStakeholders.map((stakeholder) => stakeholder.name),
       open_commitments: relatedCommitments,
-      related_tasks: findRelatedTasksForStakeholders(matchedStakeholders, tasks),
+      related_tasks: [...taskByRelatedId.values()].slice(0, 4),
+      linked_notes: linkedNotes,
+      linked_decisions: linkedDecisions,
     };
   });
+}
+
+function buildTaskNoteContextMap(
+  contexts: Awaited<ReturnType<typeof readIntelligenceTaskContexts>>
+): Map<string, Pick<DailyBriefDigestTaskItem, "supporting_notes" | "active_decisions">> {
+  return new Map(
+    contexts.map((context) => {
+      const activeDecisions = context.notes
+        .flatMap((note) => note.decisions)
+        .filter((decision) => decision.decisionStatus === "active")
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+      const dedupedDecisions = [...new Map(activeDecisions.map((decision) => [decision.id, decision])).values()]
+        .slice(0, 2)
+        .map((decision) => ({
+          id: decision.id,
+          title: decision.title,
+          summary: truncate(decision.summary, 160) ?? decision.summary,
+          updated_at: decision.updatedAt,
+        }));
+
+      return [
+        context.task.id,
+        {
+          supporting_notes: context.notes.slice(0, 2).map((note) => ({
+            id: note.id,
+            title: note.title,
+            excerpt: note.excerpt ? truncate(note.excerpt, 180) : null,
+            relation_reasons: note.relationReasons,
+            updated_at: note.updatedAt,
+          })),
+          active_decisions: dedupedDecisions,
+        },
+      ];
+    })
+  );
+}
+
+function applyTaskNoteContext(
+  items: DailyBriefDigestTaskItem[],
+  noteContextByTaskId: Map<string, Pick<DailyBriefDigestTaskItem, "supporting_notes" | "active_decisions">>
+): DailyBriefDigestTaskItem[] {
+  return items.map((item) => ({
+    ...item,
+    supporting_notes: noteContextByTaskId.get(item.id)?.supporting_notes ?? [],
+    active_decisions: noteContextByTaskId.get(item.id)?.active_decisions ?? [],
+  }));
 }
 
 function buildGuidanceLine(task: DailyBriefDigestTaskItem, prefix: string): string {
@@ -825,6 +962,12 @@ function formatTaskLine(item: DailyBriefDigestTaskItem): string {
     item.reason,
     item.context ? `Context: ${item.context}` : null,
     item.recent_update,
+    item.supporting_notes[0]
+      ? `Notes: ${formatNoteHeadline(item.supporting_notes[0].title, item.supporting_notes[0].excerpt)}`
+      : null,
+    item.active_decisions[0]
+      ? `Decision: ${formatDecisionHeadline(item.active_decisions[0].title, item.active_decisions[0].summary)}`
+      : null,
   ].filter((value): value is string => Boolean(value));
 
   return `- ${pieces.join(". ")}`;
@@ -906,6 +1049,12 @@ function formatMeetingLine(item: DailyBriefDigestMeetingItem): string {
     `${item.time_range_et} - ${item.title}`,
     item.with_display.length > 0 ? `With ${item.with_display.join(", ")}` : null,
     item.notes ? `Notes: ${item.notes}` : null,
+    item.linked_notes.length > 0
+      ? `Linked notes: ${item.linked_notes.map((note) => formatNoteHeadline(note.title, note.excerpt)).join("; ")}`
+      : null,
+    item.linked_decisions.length > 0
+      ? `Decisions: ${item.linked_decisions.map((decision) => formatDecisionHeadline(decision.title, decision.summary)).join("; ")}`
+      : null,
     item.open_commitments.length > 0
       ? `Open commitments: ${item.open_commitments
           .map((commitment) => `${commitment.stakeholder_name} (${commitment.direction}): ${commitment.title}`)
@@ -1253,6 +1402,7 @@ async function fetchCalendarEvents(
   }
 
   return calendarRows.map((row) => decorateCalendarEvent({
+    source: row.source,
     start_at: row.start_at,
     end_at: row.end_at,
     title: row.title,
@@ -1277,6 +1427,96 @@ async function fetchTasks(supabase: SupabaseClient, userId: string): Promise<Tas
   }
 
   return normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>) as TaskWithRelations[];
+}
+
+async function fetchMeetingNotesByEntity(
+  supabase: SupabaseClient,
+  userId: string,
+  meetings: ApiCalendarEvent[]
+): Promise<Map<string, NoteWithDetails[]>> {
+  const entityIds = meetings
+    .filter(
+      (
+        meeting
+      ): meeting is ApiCalendarEvent & { source: CalendarEventSource; external_event_id: string; start_at: string } =>
+        Boolean(meeting.source && meeting.external_event_id && meeting.start_at)
+    )
+    .map((meeting) =>
+      buildCalendarEntityId({
+        source: meeting.source,
+        externalEventId: meeting.external_event_id,
+        startAt: meeting.start_at,
+      })
+    );
+
+  if (entityIds.length === 0) {
+    return new Map();
+  }
+
+  const { data: noteLinkRows, error: noteLinkError } = await supabase
+    .from("note_links")
+    .select("entity_id, note_id")
+    .eq("user_id", userId)
+    .eq("entity_type", "calendar_event")
+    .in("entity_id", [...new Set(entityIds)]);
+
+  if (noteLinkError) {
+    throw noteLinkError;
+  }
+
+  const noteIds = [...new Set(((noteLinkRows || []) as NoteLinkCountRow[]).map((row) => row.note_id).filter(Boolean))];
+  if (noteIds.length === 0) {
+    return new Map();
+  }
+
+  const { data: noteRows, error: noteRowsError } = await supabase
+    .from("notes")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("status", "active")
+    .in("id", noteIds)
+    .order("pinned", { ascending: false })
+    .order("updated_at", { ascending: false });
+
+  if (noteRowsError) {
+    throw noteRowsError;
+  }
+
+  const hydratedNotes = await hydrateNotes(
+    supabase,
+    userId,
+    ((noteRows || []) as Array<Record<string, unknown>>).map((row) => normalizeNoteRow(row))
+  );
+  const noteById = new Map(hydratedNotes.map((note) => [note.id, note]));
+
+  const notesByEntityId = new Map<string, NoteWithDetails[]>();
+  for (const row of (noteLinkRows || []) as NoteLinkCountRow[]) {
+    const note = noteById.get(row.note_id);
+    if (!note) {
+      continue;
+    }
+
+    const existing = notesByEntityId.get(row.entity_id) ?? [];
+    if (!existing.some((item) => item.id === note.id)) {
+      existing.push(note);
+      notesByEntityId.set(row.entity_id, existing);
+    }
+  }
+
+  for (const [entityId, notes] of notesByEntityId.entries()) {
+    notesByEntityId.set(
+      entityId,
+      [...notes].sort((left, right) => {
+        if (left.pinned !== right.pinned) {
+          return Number(right.pinned) - Number(left.pinned);
+        }
+
+        return right.updated_at.localeCompare(left.updated_at);
+      })
+    );
+  }
+
+  return notesByEntityId;
 }
 
 async function fetchOpenCommitments(supabase: SupabaseClient, userId: string): Promise<OpenCommitmentRow[]> {
@@ -1448,6 +1688,8 @@ function toDigestTaskItemFromReview(
       : item.updatedAt
         ? `Updated at ${formatEtDateTime(item.updatedAt)}`
         : null,
+    supporting_notes: [],
+    active_decisions: [],
   };
 }
 
@@ -1528,7 +1770,7 @@ export async function buildDailyBriefDigest({
   const inProgressTasks = snapshot.inProgressTasks;
   const followUpRiskTasks = snapshot.followUpRiskTasks;
   const sprint = snapshot.sprintSummary;
-  const meetings = buildMeetingDigestItems(remainingEvents, stakeholders, openCommitments, openTasks);
+  const meetingNotesByEntity = await fetchMeetingNotesByEntity(supabase, userId, remainingEvents);
   const commitmentsTheirs = buildCommitmentGroups(openCommitments, "theirs");
   const commitmentsOurs = buildCommitmentGroups(openCommitments, "ours");
   const projectSections = await listOwnedProjectSections(
@@ -1582,11 +1824,11 @@ export async function buildDailyBriefDigest({
     });
   }
 
-  const dueSoonDigest = annotateProjectSectionState(
+  const baseDueSoonDigest = annotateProjectSectionState(
     dueSoonTasks.map((task) => toTaskDigestItem(task, now, requestedDate, commentActivity, effectiveSince)),
     projectIdsWithSections
   );
-  const blockedDigest =
+  const baseBlockedDigest =
     annotateProjectSectionState(
       resolvedMode === "eod" && eodReview
       ? eodReview.openBlockers.map((item) =>
@@ -1595,11 +1837,11 @@ export async function buildDailyBriefDigest({
       : snapshot.blockedTasks.map((task) => toTaskDigestItem(task, now, requestedDate, commentActivity, effectiveSince)),
       projectIdsWithSections
     );
-  const inProgressDigest = annotateProjectSectionState(
+  const baseInProgressDigest = annotateProjectSectionState(
     inProgressTasks.map((task) => toTaskDigestItem(task, now, requestedDate, commentActivity, effectiveSince)),
     projectIdsWithSections
   );
-  const completedTodayDigest =
+  const baseCompletedTodayDigest =
     annotateProjectSectionState(
       resolvedMode === "eod" && eodReview
       ? eodReview.completedToday.map((item) =>
@@ -1608,7 +1850,7 @@ export async function buildDailyBriefDigest({
       : snapshot.completedTodayTasks.map((task) => toTaskDigestItem(task, now, requestedDate, commentActivity, effectiveSince)),
       projectIdsWithSections
     );
-  const rolledOverDigest =
+  const baseRolledOverDigest =
     annotateProjectSectionState(
       resolvedMode === "eod" && eodReview
       ? eodReview.rolledForward.map((item) =>
@@ -1617,14 +1859,14 @@ export async function buildDailyBriefDigest({
       : snapshot.rolledOverTasks.map((task) => toTaskDigestItem(task, now, requestedDate, commentActivity, effectiveSince)),
       projectIdsWithSections
     );
-  const staleFollowupDigest = annotateProjectSectionState(
+  const baseStaleFollowupDigest = annotateProjectSectionState(
     followUpRiskTasks.map((task) => ({
       ...toTaskDigestItem(task, now, requestedDate, commentActivity, effectiveSince),
       reason: buildStaleFollowupReason(task),
     })),
     projectIdsWithSections
   );
-  const tomorrowPrepDigest =
+  const baseTomorrowPrepDigest =
     annotateProjectSectionState(
       resolvedMode === "eod" && eodReview
       ? eodReview.tomorrowFirstThings.map((item) =>
@@ -1633,6 +1875,38 @@ export async function buildDailyBriefDigest({
       : [],
       projectIdsWithSections
     );
+  const noteContextTaskIds = [
+    ...baseDueSoonDigest,
+    ...baseBlockedDigest,
+    ...baseInProgressDigest,
+    ...baseCompletedTodayDigest,
+    ...baseRolledOverDigest,
+    ...baseStaleFollowupDigest,
+    ...baseTomorrowPrepDigest,
+  ].map((item) => item.id);
+  const uniqueNoteContextTaskIds = [...new Set(noteContextTaskIds)];
+  const noteContextByTaskId = uniqueNoteContextTaskIds.length > 0
+    ? buildTaskNoteContextMap(
+        await readIntelligenceTaskContexts(supabase, userId, {
+          now,
+          taskIds: uniqueNoteContextTaskIds,
+        })
+      )
+    : new Map<string, Pick<DailyBriefDigestTaskItem, "supporting_notes" | "active_decisions">>();
+  const dueSoonDigest = applyTaskNoteContext(baseDueSoonDigest, noteContextByTaskId);
+  const blockedDigest = applyTaskNoteContext(baseBlockedDigest, noteContextByTaskId);
+  const inProgressDigest = applyTaskNoteContext(baseInProgressDigest, noteContextByTaskId);
+  const completedTodayDigest = applyTaskNoteContext(baseCompletedTodayDigest, noteContextByTaskId);
+  const rolledOverDigest = applyTaskNoteContext(baseRolledOverDigest, noteContextByTaskId);
+  const staleFollowupDigest = applyTaskNoteContext(baseStaleFollowupDigest, noteContextByTaskId);
+  const tomorrowPrepDigest = applyTaskNoteContext(baseTomorrowPrepDigest, noteContextByTaskId);
+  const meetings = buildMeetingDigestItems(
+    remainingEvents,
+    stakeholders,
+    openCommitments,
+    openTasks,
+    meetingNotesByEntity
+  );
   const statusUpdateRecommendations =
     resolvedMode === "eod" && eodReview
       ? eodReview.statusUpdateRecommendations.map(toDigestStatusUpdateRecommendation)

@@ -156,7 +156,29 @@ function extractJsonObject(raw: string): Record<string, unknown> | null {
   }
 }
 
-function formatPromptTask(task: DailyBriefDigestTaskItem): Record<string, string | null> {
+function renderTaskNoteSummary(task: DailyBriefDigestTaskItem): string | null {
+  const parts = [
+    task.supporting_notes[0]
+      ? `${task.supporting_notes[0].title}${task.supporting_notes[0].excerpt ? `: ${task.supporting_notes[0].excerpt}` : ""}`
+      : null,
+    task.active_decisions[0]
+      ? `${task.active_decisions[0].title}: ${task.active_decisions[0].summary}`
+      : null,
+  ].filter((value): value is string => Boolean(value));
+
+  return parts.length > 0 ? parts.join(" | ") : null;
+}
+
+function renderMeetingNoteSummary(meeting: DailyBriefDigestMeetingItem): string | null {
+  const parts = [
+    ...meeting.linked_notes.slice(0, 2).map((note) => `${note.title}${note.excerpt ? `: ${note.excerpt}` : ""}`),
+    ...meeting.linked_decisions.slice(0, 2).map((decision) => `${decision.title}: ${decision.summary}`),
+  ].filter((value): value is string => Boolean(value));
+
+  return parts.length > 0 ? parts.join(" | ") : null;
+}
+
+function formatPromptTask(task: DailyBriefDigestTaskItem): Record<string, unknown> {
   return {
     id: task.id,
     title: task.title,
@@ -164,6 +186,7 @@ function formatPromptTask(task: DailyBriefDigestTaskItem): Record<string, string
     reason: truncatePromptValue(task.reason, 160),
     recent_update: truncatePromptValue(task.recent_update, 120),
     context: truncatePromptValue(task.context, 120),
+    notes: truncatePromptValue(renderTaskNoteSummary(task), 180),
   };
 }
 
@@ -172,6 +195,8 @@ function formatPromptMeeting(meeting: DailyBriefDigestMeetingItem): Record<strin
     title: meeting.title,
     time: meeting.time_range_et,
     notes: truncatePromptValue(meeting.notes, 160),
+    linked_notes: meeting.linked_notes.map((note) => truncatePromptValue(`${note.title}${note.excerpt ? `: ${note.excerpt}` : ""}`, 140)),
+    linked_decisions: meeting.linked_decisions.map((decision) => truncatePromptValue(`${decision.title}: ${decision.summary}`, 140)),
     commitments: meeting.open_commitments.map((item) => `${item.stakeholder_name}: ${item.title}`),
     related_tasks: meeting.related_tasks.map((task) => `${task.title} [${task.id}]`),
   };
@@ -652,6 +677,7 @@ function renderPriorityTaskContext(task: DailyBriefDigestTaskItem): string {
     task.reason,
     task.context ? `Context: ${task.context}` : null,
     task.recent_update,
+    renderTaskNoteSummary(task) ? `Notes: ${renderTaskNoteSummary(task)}` : null,
   ].filter((value): value is string => Boolean(value)).join(". ");
 }
 
@@ -731,6 +757,7 @@ function renderMeetingsCard(meetings: DailyBriefDigestMeetingItem[]): string {
     const divider = index < meetings.slice(0, 4).length - 1 ? `border-bottom:1px solid ${EMAIL_COLORS.stroke};` : "";
     const context = [
       meeting.notes,
+      renderMeetingNoteSummary(meeting) ? `Linked notes: ${renderMeetingNoteSummary(meeting)}` : null,
       meeting.open_commitments.length > 0 ? `Commitments: ${meeting.open_commitments.map((item) => `${item.stakeholder_name}: ${item.title}`).join("; ")}` : null,
       meeting.related_tasks.length > 0 ? `Related tasks: ${meeting.related_tasks.map((item) => `${item.title} [${item.id}]`).join("; ")}` : null,
     ].filter((value): value is string => Boolean(value)).join(". ");
@@ -1272,6 +1299,7 @@ function renderTextTaskItems(items: DailyBriefDigestTaskItem[], emptyMessage: st
       item.reason,
       item.context ? `Context: ${item.context}` : null,
       item.recent_update,
+      renderTaskNoteSummary(item) ? `Notes: ${renderTaskNoteSummary(item)}` : null,
     ].filter((value): value is string => Boolean(value));
     return `- ${parts.join(". ")}`;
   };
@@ -1312,6 +1340,7 @@ function renderTextMeetingItems(meetings: DailyBriefDigestMeetingItem[]): string
       `${meeting.time_range_et} - ${meeting.title}`,
       meeting.with_display.length > 0 ? `With ${meeting.with_display.join(", ")}` : null,
       meeting.notes ? `Notes: ${meeting.notes}` : null,
+      renderMeetingNoteSummary(meeting) ? `Linked notes: ${renderMeetingNoteSummary(meeting)}` : null,
     ].filter((value): value is string => Boolean(value));
     return `- ${parts.join(". ")}`;
   });

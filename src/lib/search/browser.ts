@@ -2,6 +2,7 @@ import type { MissionControlSearchResult } from '@/lib/mcp/search';
 
 export type BrowserSearchEntity =
   | 'task'
+  | 'note'
   | 'application'
   | 'project'
   | 'sprint'
@@ -23,6 +24,7 @@ export interface BrowserSearchResult {
 
 const ENTITY_LABELS: Record<BrowserSearchEntity, string> = {
   task: 'Task',
+  note: 'Note',
   application: 'Application',
   project: 'Project',
   sprint: 'Sprint',
@@ -60,6 +62,7 @@ function parseRecordId(typedId: string): { entity: BrowserSearchEntity; rawId: s
 
   switch (entity) {
     case 'task':
+    case 'note':
     case 'application':
     case 'project':
     case 'sprint':
@@ -84,6 +87,7 @@ function inferEntity(result: MissionControlSearchResult): BrowserSearchEntity {
   const metadataEntity = readString(result.metadata?.entity);
   if (
     metadataEntity === 'task' ||
+    metadataEntity === 'note' ||
     metadataEntity === 'application' ||
     metadataEntity === 'project' ||
     metadataEntity === 'sprint' ||
@@ -149,6 +153,8 @@ function buildBrowserHref(result: MissionControlSearchResult, entity: BrowserSea
   switch (entity) {
     case 'task':
       return buildTaskHref(result, recordId?.rawId ?? null);
+    case 'note':
+      return recordId ? `/r/note/${encodeURIComponent(recordId.rawId)}` : toRelativeHref(result.url);
     case 'application':
       return recordId ? `/applications/${encodeURIComponent(recordId.rawId)}` : toRelativeHref(result.url);
     case 'project':
@@ -173,11 +179,14 @@ function buildContext(result: MissionControlSearchResult, entity: BrowserSearchE
   const dueAt = formatShortDate(readString(result.metadata?.due_at));
   const stakeholderName = readString(result.metadata?.stakeholder_name);
   const receivedAt = formatShortDateTime(readString(result.metadata?.received_at));
+  const updatedAt = formatShortDateTime(readString(result.metadata?.updated_at));
   const startAt = formatShortDateTime(readString(result.metadata?.start_at));
   const endAt = formatShortDateTime(readString(result.metadata?.end_at));
   const source = readString(result.metadata?.source);
   const sprintStart = formatShortDate(readString(result.metadata?.start_date));
   const sprintEnd = formatShortDate(readString(result.metadata?.end_date));
+  const noteType = readString(result.metadata?.note_type);
+  const pinned = result.metadata?.pinned === true;
 
   const parts: string[] = [];
 
@@ -185,6 +194,12 @@ function buildContext(result: MissionControlSearchResult, entity: BrowserSearchE
     case 'task':
       if (status) parts.push(status);
       if (dueAt) parts.push(`Due ${dueAt}`);
+      break;
+    case 'note':
+      if (noteType) parts.push(noteType.replace(/_/g, ' '));
+      if (status) parts.push(status);
+      if (pinned) parts.push('Pinned');
+      if (updatedAt) parts.push(`Updated ${updatedAt}`);
       break;
     case 'sprint':
       if (sprintStart && sprintEnd) {

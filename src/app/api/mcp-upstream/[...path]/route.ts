@@ -7,6 +7,16 @@ import * as briefingDigestRoute from '@/app/api/briefing/digest/route';
 import * as briefingRenderRoute from '@/app/api/briefing/render/route';
 import * as briefingNarrativeRoute from '@/app/api/briefing/narrative/route';
 import * as briefingWeeklyReviewRoute from '@/app/api/briefing/weekly-review/route';
+import * as notesRoute from '@/app/api/notes/route';
+import * as noteMeetingRoute from '@/app/api/notes/meeting/route';
+import * as noteRoute from '@/app/api/notes/[id]/route';
+import * as noteArchiveRoute from '@/app/api/notes/[id]/archive/route';
+import * as noteLinksRoute from '@/app/api/notes/[id]/links/route';
+import * as noteLinksUnlinkRoute from '@/app/api/notes/[id]/links/unlink/route';
+import * as noteTasksRoute from '@/app/api/notes/[id]/tasks/route';
+import * as noteCreateTaskRoute from '@/app/api/notes/[id]/tasks/create/route';
+import * as noteDecisionsRoute from '@/app/api/notes/[id]/decisions/route';
+import * as noteDecisionRoute from '@/app/api/notes/[id]/decisions/[decisionId]/route';
 import * as commitmentsRoute from '@/app/api/commitments/route';
 import * as commitmentRoute from '@/app/api/commitments/[id]/route';
 import * as focusRoute from '@/app/api/focus/route';
@@ -36,7 +46,8 @@ import { requireMcpOauthRoute } from '@/lib/mcp/oauth';
 import { writeInternalAuthContext } from '@/lib/supabase/internal-auth';
 
 type StaticHandler = ((request: NextRequest) => Promise<Response>) | undefined;
-type DynamicHandler = ((request: NextRequest, context: { params: Promise<{ id: string }> }) => Promise<Response>) | undefined;
+type DynamicHandler<TParams extends Record<string, string> = { id: string }> =
+  ((request: NextRequest, context: { params: Promise<TParams> }) => Promise<Response>) | undefined;
 
 function methodNotAllowed(): NextResponse {
   return NextResponse.json({ error: 'Method not allowed' }, { status: 405 });
@@ -50,10 +61,10 @@ async function invokeStatic(handler: StaticHandler, request: NextRequest): Promi
   return handler(request);
 }
 
-async function invokeDynamic(
-  handler: DynamicHandler,
+async function invokeDynamic<TParams extends Record<string, string>>(
+  handler: DynamicHandler<TParams>,
   request: NextRequest,
-  params: { id: string }
+  params: TParams
 ): Promise<Response> {
   if (!handler) {
     return methodNotAllowed();
@@ -166,6 +177,63 @@ async function handleRequest(
 
   if (segments[0] === 'briefing' && segments[1] === 'narrative' && segments.length === 2) {
     return invokeStatic(briefingNarrativeRoute.POST, requestWithContext);
+  }
+
+  if (segments[0] === 'notes' && segments.length === 1) {
+    if (request.method === 'GET') return invokeStatic(notesRoute.GET, requestWithContext);
+    if (request.method === 'POST') return invokeStatic(notesRoute.POST, requestWithContext);
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'notes' && segments[1] === 'meeting' && segments.length === 2) {
+    if (request.method === 'POST') return invokeStatic(noteMeetingRoute.POST, requestWithContext);
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'notes' && segments[1] && segments.length === 2) {
+    if (request.method === 'GET') return invokeDynamic(noteRoute.GET, requestWithContext, { id: segments[1] });
+    if (request.method === 'PATCH') return invokeDynamic(noteRoute.PATCH, requestWithContext, { id: segments[1] });
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'notes' && segments[1] && segments[2] === 'archive' && segments.length === 3) {
+    if (request.method === 'POST') return invokeDynamic(noteArchiveRoute.POST, requestWithContext, { id: segments[1] });
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'notes' && segments[1] && segments[2] === 'links' && segments.length === 3) {
+    if (request.method === 'POST') return invokeDynamic(noteLinksRoute.POST, requestWithContext, { id: segments[1] });
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'notes' && segments[1] && segments[2] === 'links' && segments[3] === 'unlink' && segments.length === 4) {
+    if (request.method === 'POST') return invokeDynamic(noteLinksUnlinkRoute.POST, requestWithContext, { id: segments[1] });
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'notes' && segments[1] && segments[2] === 'tasks' && segments.length === 3) {
+    if (request.method === 'POST') return invokeDynamic(noteTasksRoute.POST, requestWithContext, { id: segments[1] });
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'notes' && segments[1] && segments[2] === 'tasks' && segments[3] === 'create' && segments.length === 4) {
+    if (request.method === 'POST') return invokeDynamic(noteCreateTaskRoute.POST, requestWithContext, { id: segments[1] });
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'notes' && segments[1] && segments[2] === 'decisions' && segments.length === 3) {
+    if (request.method === 'POST') return invokeDynamic(noteDecisionsRoute.POST, requestWithContext, { id: segments[1] });
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'notes' && segments[1] && segments[2] === 'decisions' && segments[3] && segments.length === 4) {
+    if (request.method === 'PATCH') {
+      return invokeDynamic(noteDecisionRoute.PATCH, requestWithContext, {
+        id: segments[1],
+        decisionId: segments[3],
+      });
+    }
+    return methodNotAllowed();
   }
 
   if (segments[0] === 'tasks' && segments.length === 1) {

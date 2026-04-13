@@ -11,6 +11,34 @@ import { z } from 'zod';
 const ET_TIMEZONE = 'America/New_York';
 const LEGACY_APP_ORIGIN = 'https://mission-control-orpin-chi.vercel.app';
 const TASK_RECURRENCE_FREQUENCIES = ['daily', 'weekly', 'biweekly', 'monthly'] as const;
+const NOTE_TYPE_VALUES = [
+  'working_note',
+  'meeting_note',
+  'application_note',
+  'decision_note',
+  'prep_note',
+  'retrospective_note',
+] as const;
+const NOTE_STATUS_VALUES = ['active', 'archived'] as const;
+const NOTE_LINK_ENTITY_TYPE_VALUES = [
+  'task',
+  'calendar_event',
+  'implementation',
+  'project',
+  'stakeholder',
+  'commitment',
+  'sprint',
+] as const;
+const NOTE_LINK_ROLE_VALUES = [
+  'primary_context',
+  'meeting_for',
+  'related_task',
+  'decision_about',
+  'prep_for',
+  'reference',
+] as const;
+const NOTE_TASK_RELATIONSHIP_VALUES = ['linked', 'created_from', 'discussed_in'] as const;
+const NOTE_DECISION_STATUS_VALUES = ['active', 'superseded', 'reversed'] as const;
 const STAKEHOLDER_CONTEXT_SCHEMA = z.object({
   last_contacted_at: z.string().nullable().optional().describe('Last contact timestamp (ISO)'),
   preferred_contact: z.string().nullable().optional().describe('Preferred contact method'),
@@ -1361,6 +1389,304 @@ function createMcpServer(): McpServer {
           body: JSON.stringify(updates),
         }
       );
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  // ── LIST NOTES ────────────────────────────────────────────────────────
+  mcp.tool(
+    'list_notes',
+    'List notes, optionally filtered by type, status, pinned state, or linked entity.',
+    {
+      note_type: z.enum(NOTE_TYPE_VALUES).optional(),
+      status: z.enum(NOTE_STATUS_VALUES).optional(),
+      pinned: z.boolean().optional(),
+      entity_type: z.enum(NOTE_LINK_ENTITY_TYPE_VALUES).optional(),
+      entity_id: z.string().optional().describe('Entity id for task, implementation, project, stakeholder, commitment, sprint, or encoded calendar entity id'),
+      link_role: z.enum(NOTE_LINK_ROLE_VALUES).optional(),
+      limit: z.number().int().min(1).max(200).optional(),
+      offset: z.number().int().min(0).optional(),
+    },
+    async ({ note_type, status, pinned, entity_type, entity_id, link_role, limit, offset }) => {
+      if ((entity_type && !entity_id) || (!entity_type && entity_id)) {
+        return toMcpResponse({ error: 'entity_type and entity_id must be provided together' });
+      }
+
+      const url = new URL('/api/notes', LEGACY_APP_ORIGIN);
+      if (note_type) url.searchParams.set('note_type', note_type);
+      if (status) url.searchParams.set('status', status);
+      if (typeof pinned === 'boolean') url.searchParams.set('pinned', String(pinned));
+      if (entity_type && entity_id) {
+        url.searchParams.set('entity_type', entity_type);
+        url.searchParams.set('entity_id', entity_id);
+      }
+      if (link_role) url.searchParams.set('link_role', link_role);
+      if (typeof limit === 'number') url.searchParams.set('limit', String(limit));
+      if (typeof offset === 'number') url.searchParams.set('offset', String(offset));
+
+      const res = await fetch(url.toString());
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  // ── GET NOTE ──────────────────────────────────────────────────────────
+  mcp.tool(
+    'get_note',
+    'Get a note by id, including links, linked tasks, and note decisions.',
+    {
+      note_id: z.string().uuid().describe('Note UUID'),
+    },
+    async ({ note_id }) => {
+      const res = await fetch(`${LEGACY_APP_ORIGIN}/api/notes/${note_id}`);
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  // ── CREATE NOTE ───────────────────────────────────────────────────────
+  mcp.tool(
+    'create_note',
+    'Create a standalone note. Use link_note_to_entity, link_task_to_note, or create_meeting_note to attach it to work context.',
+    {
+      title: z.string().min(1).describe('Note title'),
+      body_markdown: z.string().optional(),
+      note_type: z.enum(NOTE_TYPE_VALUES).optional(),
+      status: z.enum(NOTE_STATUS_VALUES).optional(),
+      pinned: z.boolean().optional(),
+      last_reviewed_at: z.string().nullable().optional(),
+    },
+    async (args) => {
+      const res = await fetch(`${LEGACY_APP_ORIGIN}/api/notes`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(args),
+      });
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  // ── UPDATE NOTE ───────────────────────────────────────────────────────
+  mcp.tool(
+    'update_note',
+    'Update an existing note.',
+    {
+      note_id: z.string().uuid().describe('Note UUID'),
+      title: z.string().optional(),
+      body_markdown: z.string().optional(),
+      note_type: z.enum(NOTE_TYPE_VALUES).optional(),
+      status: z.enum(NOTE_STATUS_VALUES).optional(),
+      pinned: z.boolean().optional(),
+      last_reviewed_at: z.string().nullable().optional(),
+    },
+    async ({ note_id, ...updates }) => {
+      const res = await fetch(`${LEGACY_APP_ORIGIN}/api/notes/${note_id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(updates),
+      });
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  // ── ARCHIVE NOTE ──────────────────────────────────────────────────────
+  mcp.tool(
+    'archive_note',
+    'Archive a note without deleting it.',
+    {
+      note_id: z.string().uuid().describe('Note UUID'),
+    },
+    async ({ note_id }) => {
+      const res = await fetch(`${LEGACY_APP_ORIGIN}/api/notes/${note_id}/archive`, {
+        method: 'POST',
+      });
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  // ── CREATE MEETING NOTE ───────────────────────────────────────────────
+  mcp.tool(
+    'create_meeting_note',
+    'Create a meeting note linked to a calendar event, and optionally to an implementation or project.',
+    {
+      calendar_event: z.object({
+        source: z.enum(['local', 'ical', 'graph']).describe('Calendar provider source'),
+        external_event_id: z.string().min(1).describe('Stored calendar external_event_id'),
+        start_at: z.string().describe('Calendar event start timestamp (ISO)'),
+      }),
+      implementation_id: z.string().nullable().optional(),
+      project_id: z.string().nullable().optional(),
+      body_markdown: z.string().optional(),
+      pinned: z.boolean().optional(),
+    },
+    async (args) => {
+      const res = await fetch(`${LEGACY_APP_ORIGIN}/api/notes/meeting`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(args),
+      });
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  // ── LINK NOTE TO ENTITY ───────────────────────────────────────────────
+  mcp.tool(
+    'link_note_to_entity',
+    'Attach an existing note to a task, calendar event, implementation, project, stakeholder, commitment, or sprint.',
+    {
+      note_id: z.string().uuid().describe('Note UUID'),
+      entity_type: z.enum(NOTE_LINK_ENTITY_TYPE_VALUES),
+      entity_id: z.string().min(1).describe('Entity id or canonical encoded calendar entity id'),
+      link_role: z.enum(NOTE_LINK_ROLE_VALUES).optional(),
+    },
+    async ({ note_id, ...link }) => {
+      const res = await fetch(`${LEGACY_APP_ORIGIN}/api/notes/${note_id}/links`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(link),
+      });
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  // ── UNLINK NOTE FROM ENTITY ───────────────────────────────────────────
+  mcp.tool(
+    'unlink_note_from_entity',
+    'Remove an existing note-to-entity link.',
+    {
+      note_id: z.string().uuid().describe('Note UUID'),
+      entity_type: z.enum(NOTE_LINK_ENTITY_TYPE_VALUES),
+      entity_id: z.string().min(1).describe('Entity id or canonical encoded calendar entity id'),
+      link_role: z.enum(NOTE_LINK_ROLE_VALUES).optional(),
+    },
+    async ({ note_id, ...link }) => {
+      const res = await fetch(`${LEGACY_APP_ORIGIN}/api/notes/${note_id}/links/unlink`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(link),
+      });
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  // ── LINK TASK TO NOTE ─────────────────────────────────────────────────
+  mcp.tool(
+    'link_task_to_note',
+    'Link an existing task to an existing note.',
+    {
+      note_id: z.string().uuid().describe('Note UUID'),
+      task_id: z.string().uuid().describe('Task UUID'),
+      relationship_type: z.enum(NOTE_TASK_RELATIONSHIP_VALUES).optional(),
+    },
+    async ({ note_id, ...body }) => {
+      const res = await fetch(`${LEGACY_APP_ORIGIN}/api/notes/${note_id}/tasks`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  // ── CREATE TASK FROM NOTE ─────────────────────────────────────────────
+  mcp.tool(
+    'create_task_from_note',
+    'Create a new task from a note and link it back to the note.',
+    {
+      note_id: z.string().uuid().describe('Note UUID'),
+      title: z.string().min(1).describe('Task title'),
+      description: z.string().nullable().optional(),
+      implementation_id: z.string().nullable().optional(),
+      project_id: z.string().nullable().optional(),
+      sprint_id: z.string().nullable().optional(),
+      status: z.enum(['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done']).optional(),
+      task_type: z.enum(['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build']).optional(),
+      estimated_minutes: z.number().int().min(1).max(480).optional(),
+      estimate_source: z.enum(['default', 'llm', 'manual']).optional(),
+      due_at: z.string().nullable().optional(),
+      priority_score: z.number().int().min(0).max(100).optional(),
+      blocker: z.boolean().optional(),
+      needs_review: z.boolean().optional(),
+      waiting_on: z.string().nullable().optional(),
+      relationship_type: z.enum(NOTE_TASK_RELATIONSHIP_VALUES).optional(),
+    },
+    async ({ note_id, ...body }) => {
+      const res = await fetch(`${LEGACY_APP_ORIGIN}/api/notes/${note_id}/tasks/create`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  // ── CREATE NOTE DECISION ──────────────────────────────────────────────
+  mcp.tool(
+    'create_note_decision',
+    'Record a decision on a note.',
+    {
+      note_id: z.string().uuid().describe('Note UUID'),
+      title: z.string().min(1).describe('Decision title'),
+      summary: z.string().min(1).describe('Decision summary'),
+      decision_status: z.enum(NOTE_DECISION_STATUS_VALUES).optional(),
+      decided_at: z.string().nullable().optional(),
+      decided_by_stakeholder_id: z.string().nullable().optional(),
+    },
+    async ({ note_id, ...body }) => {
+      const res = await fetch(`${LEGACY_APP_ORIGIN}/api/notes/${note_id}/decisions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
+  // ── UPDATE NOTE DECISION STATUS ───────────────────────────────────────
+  mcp.tool(
+    'update_note_decision_status',
+    'Update a note decision status, decided timestamp, or deciding stakeholder.',
+    {
+      note_id: z.string().uuid().describe('Note UUID'),
+      decision_id: z.string().uuid().describe('Decision UUID'),
+      decision_status: z.enum(NOTE_DECISION_STATUS_VALUES).describe('Updated decision status'),
+      decided_at: z.string().nullable().optional(),
+      decided_by_stakeholder_id: z.string().nullable().optional(),
+    },
+    async ({ note_id, decision_id, ...body }) => {
+      const res = await fetch(`${LEGACY_APP_ORIGIN}/api/notes/${note_id}/decisions/${decision_id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
       const data = await res.json();
       return toMcpResponse(data);
     }

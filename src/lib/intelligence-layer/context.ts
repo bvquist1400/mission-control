@@ -199,7 +199,12 @@ async function fetchTasks(
     throw error;
   }
 
-  return ((data || []) as Task[]).filter((task) => ACTIVE_TASK_STATUSES.has(task.status));
+  const rows = (data || []) as Task[];
+  if (taskIds && taskIds.length > 0) {
+    return rows;
+  }
+
+  return rows.filter((task) => ACTIVE_TASK_STATUSES.has(task.status));
 }
 
 async function fetchImplementations(

@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 
 const cwd = process.cwd();
 const notesModule = await import(pathToFileURL(path.join(cwd, "src/lib/notes.ts")).href);
+const searchModule = await import(pathToFileURL(path.join(cwd, "src/lib/mcp/search.ts")).href);
 
 const {
   NotesServiceError,
@@ -23,6 +24,11 @@ const {
   updateDecisionStatus,
   updateNote,
 } = notesModule;
+const {
+  fetchMissionControlItemById,
+  mapRouteKindToTypedId,
+  searchMissionControlData,
+} = searchModule;
 
 const TABLES_WITH_UPDATED_AT = new Set([
   "notes",
@@ -87,6 +93,31 @@ class MemoryQueryBuilder {
   in(field, values) {
     const valueSet = new Set(values);
     this.filters.push((row) => valueSet.has(row[field]));
+    return this;
+  }
+
+  or(expression) {
+    const clauses = String(expression)
+      .split(",")
+      .map((clause) => clause.trim())
+      .filter(Boolean)
+      .map((clause) => {
+        const ilikeIndex = clause.indexOf(".ilike.");
+        if (ilikeIndex === -1) {
+          throw new Error(`Unsupported or() clause: ${clause}`);
+        }
+
+        const field = clause.slice(0, ilikeIndex);
+        const rawPattern = clause.slice(ilikeIndex + ".ilike.".length);
+        const normalizedPattern = rawPattern.replace(/^%/, "").replace(/%$/, "").toLowerCase();
+        return { field, normalizedPattern };
+      });
+
+    this.filters.push((row) =>
+      clauses.some(({ field, normalizedPattern }) =>
+        String(row[field] ?? "").toLowerCase().includes(normalizedPattern)
+      )
+    );
     return this;
   }
 
@@ -247,6 +278,8 @@ class MemorySupabase {
       commitments: [],
       sprints: [],
       calendar_events: [],
+      calendar_event_context: [],
+      inbox_items: [],
       ...seed,
     };
     this.idCounters = new Map();
@@ -595,6 +628,30 @@ assert.equal(allProjectNotes.some((note) => note.id === linkedNote.id), true);
 assert.equal(allProjectNotes.some((note) => note.id === meetingNote.id), true);
 assert.equal(meetingProjectNotes.some((note) => note.id === meetingNote.id), true);
 assert.equal(meetingProjectNotes.some((note) => note.id === linkedNote.id), false);
+
+const noteSearchResults = await searchMissionControlData(
+  supabase,
+  "user-1",
+  "updated body",
+  "https://example.test"
+);
+const noteSearchResult = noteSearchResults.find((result) => result.id === `record:note:${created.id}`);
+assert.ok(noteSearchResult);
+assert.equal(noteSearchResult?.title, "Launch note");
+assert.equal(noteSearchResult?.url, `https://example.test/r/note/${created.id}`);
+
+const fetchedNoteResult = await fetchMissionControlItemById(
+  supabase,
+  "user-1",
+  `record:note:${linkedNote.id}`,
+  "https://example.test"
+);
+assert.ok(fetchedNoteResult);
+assert.equal(fetchedNoteResult?.title, "Context note");
+assert.equal(String(fetchedNoteResult?.metadata?.entity), "note");
+assert.equal(Array.isArray(fetchedNoteResult?.metadata?.links), true);
+
+assert.equal(mapRouteKindToTypedId("note", linkedNote.id), `record:note:${linkedNote.id}`);
 
 const migrationSql = fs.readFileSync(path.join(cwd, "supabase/migrations/032_add_notes.sql"), "utf8");
 assert.equal(/DROP TRIGGER IF EXISTS trg_notes_updated ON notes;/i.test(migrationSql), true);

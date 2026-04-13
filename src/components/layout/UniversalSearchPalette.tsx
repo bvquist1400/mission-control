@@ -201,7 +201,7 @@ export function UniversalSearchPalette({ onClose, onOpenTask }: UniversalSearchP
                       setError(null);
                     }
                   }}
-                  placeholder="Search tasks, projects, stakeholders, meetings, email..."
+                  placeholder="Search tasks, notes, projects, stakeholders, meetings, email..."
                   autoComplete="off"
                   spellCheck={false}
                   className="w-full bg-transparent text-lg font-medium text-foreground outline-none placeholder:text-muted-foreground"
@@ -222,7 +222,7 @@ export function UniversalSearchPalette({ onClose, onOpenTask }: UniversalSearchP
               <div className="flex h-full min-h-[18rem] flex-col items-center justify-center rounded-2xl border border-dashed border-stroke bg-panel-muted/35 px-6 text-center">
                 <p className="text-base font-semibold text-foreground">Start typing to search everything.</p>
                 <p className="mt-2 max-w-xl text-sm text-muted-foreground">
-                  Results include tasks, applications, projects, sprints, stakeholders, commitments, email, and meetings.
+                  Results include tasks, notes, applications, projects, sprints, stakeholders, commitments, email, and meetings.
                 </p>
                 <p className="mt-4 text-xs uppercase tracking-[0.14em] text-muted-foreground">
                   Arrow keys to move. Enter to open. Esc to close.

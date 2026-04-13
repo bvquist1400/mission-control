@@ -3,6 +3,7 @@ import {
   decodeCalendarEventIdentity,
   encodeCalendarEventIdentity,
 } from '../calendar-event-identity';
+import { getNoteById } from '@/lib/notes';
 
 export interface MissionControlSearchResult {
   id: string;
@@ -14,6 +15,7 @@ export interface MissionControlSearchResult {
 
 type SearchEntityKind =
   | 'task'
+  | 'note'
   | 'application'
   | 'project'
   | 'sprint'
@@ -282,6 +284,40 @@ async function searchTasks(
     },
     score: scoreText(query, [task.title, task.description, task.waiting_on, task.pinned_excerpt], task.updated_at),
     updatedAt: task.updated_at,
+  }));
+}
+
+async function searchNotes(
+  supabase: SupabaseClient,
+  userId: string,
+  query: string,
+  canonicalBaseUrl: string
+): Promise<SearchCandidate[]> {
+  const { data, error } = await supabase
+    .from('notes')
+    .select('id, title, body_markdown, note_type, status, pinned, updated_at')
+    .eq('user_id', userId)
+    .or(buildIlikeOrFilter(['title', 'body_markdown'], query))
+    .order('pinned', { ascending: false })
+    .order('updated_at', { ascending: false })
+    .limit(10);
+
+  if (error) throw error;
+
+  return (data || []).map((item) => ({
+    id: buildRecordId('note', item.id),
+    title: item.title,
+    text: truncateText(item.body_markdown),
+    url: buildCanonicalUrl(canonicalBaseUrl, 'note', item.id),
+    metadata: {
+      entity: 'note',
+      note_type: item.note_type,
+      status: item.status,
+      pinned: item.pinned,
+      updated_at: item.updated_at,
+    },
+    score: scoreText(query, [item.title, item.body_markdown], item.updated_at) + (item.pinned ? 6 : 0),
+    updatedAt: item.updated_at,
   }));
 }
 
@@ -608,6 +644,7 @@ export async function searchMissionControlData(
 
   const results = await Promise.all([
     searchTasks(supabase, userId, normalizedQuery, canonicalBaseUrl),
+    searchNotes(supabase, userId, normalizedQuery, canonicalBaseUrl),
     searchApplications(supabase, userId, normalizedQuery, canonicalBaseUrl),
     searchProjects(supabase, userId, normalizedQuery, canonicalBaseUrl),
     searchSprints(supabase, userId, normalizedQuery, canonicalBaseUrl),
@@ -667,6 +704,51 @@ async function fetchTask(
       entity: 'task',
       status: data.status,
       due_at: data.due_at,
+    },
+  };
+}
+
+async function fetchNote(
+  supabase: SupabaseClient,
+  userId: string,
+  id: string,
+  canonicalBaseUrl: string
+): Promise<MissionControlSearchResult | null> {
+  const data = await getNoteById(supabase, userId, id).catch(() => null);
+  if (!data) return null;
+
+  return {
+    id: buildRecordId('note', data.id),
+    title: data.title,
+    text: joinText([
+      data.body_markdown,
+      data.decisions.length > 0
+        ? `Decisions:\n${data.decisions.map((decision) => `${decision.title}: ${decision.summary}`).join('\n')}`
+        : null,
+      data.task_links.length > 0
+        ? `Linked tasks:\n${data.task_links
+            .filter((taskLink) => taskLink.task)
+            .map((taskLink) => `${taskLink.task?.title ?? taskLink.task_id} (${taskLink.relationship_type})`)
+            .join('\n')}`
+        : null,
+      data.links.length > 0
+        ? `Linked entities:\n${data.links.map((link) => `${link.entity_type}:${link.entity_id} (${link.link_role})`).join('\n')}`
+        : null,
+    ]),
+    url: buildCanonicalUrl(canonicalBaseUrl, 'note', data.id),
+    metadata: {
+      entity: 'note',
+      note_type: data.note_type,
+      status: data.status,
+      pinned: data.pinned,
+      last_reviewed_at: data.last_reviewed_at,
+      updated_at: data.updated_at,
+      link_count: data.links.length,
+      task_link_count: data.task_links.length,
+      decision_count: data.decisions.length,
+      links: data.links,
+      task_links: data.task_links,
+      decisions: data.decisions,
     },
   };
 }
@@ -926,6 +1008,8 @@ export async function fetchMissionControlItemById(
     switch (entity) {
       case 'task':
         return fetchTask(supabase, userId, id, canonicalBaseUrl);
+      case 'note':
+        return fetchNote(supabase, userId, id, canonicalBaseUrl);
       case 'application':
         return fetchApplication(supabase, userId, id, canonicalBaseUrl);
       case 'project':
@@ -955,6 +1039,7 @@ export async function fetchMissionControlItemById(
 export function mapRouteKindToTypedId(kind: string, id: string): string | null {
   switch (kind) {
     case 'task':
+    case 'note':
     case 'application':
     case 'project':
     case 'sprint':
