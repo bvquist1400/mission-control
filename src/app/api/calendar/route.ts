@@ -42,6 +42,7 @@ interface NoteLinkCountRow {
 }
 
 const MAX_MEETING_CONTEXT_CHARS = 8000;
+const IN_FILTER_BATCH_SIZE = 40;
 
 function buildContextKey(source: CalendarEventSource, externalEventId: string): string {
   return `${source}::${externalEventId}`;
@@ -116,57 +117,73 @@ export async function GET(request: NextRequest) {
     );
 
     if (externalEventIds.length > 0) {
-      const { data: contextRows, error: contextError } = await supabase
-        .from('calendar_event_context')
-        .select('source, external_event_id, meeting_context')
-        .eq('user_id', userId)
-        .in('external_event_id', externalEventIds);
+      const contextRows: CalendarEventContextRow[] = [];
 
-      if (contextError) {
-        if (!isMissingRelationError(contextError)) {
-          throw contextError;
-        }
-      } else {
-        for (const row of (contextRows || []) as CalendarEventContextRow[]) {
-          const trimmed = row.meeting_context?.trim();
-          if (!trimmed) {
-            continue;
+      for (let index = 0; index < externalEventIds.length; index += IN_FILTER_BATCH_SIZE) {
+        const batch = externalEventIds.slice(index, index + IN_FILTER_BATCH_SIZE);
+        const { data, error: contextError } = await supabase
+          .from('calendar_event_context')
+          .select('source, external_event_id, meeting_context')
+          .eq('user_id', userId)
+          .in('external_event_id', batch);
+
+        if (contextError) {
+          if (!isMissingRelationError(contextError)) {
+            throw contextError;
           }
-          contextByEvent.set(buildContextKey(row.source, row.external_event_id), trimmed);
+          break;
         }
+
+        contextRows.push(...((data || []) as CalendarEventContextRow[]));
+      }
+
+      for (const row of contextRows) {
+        const trimmed = row.meeting_context?.trim();
+        if (!trimmed) {
+          continue;
+        }
+        contextByEvent.set(buildContextKey(row.source, row.external_event_id), trimmed);
       }
     }
 
     if (calendarEntityIds.length > 0) {
-      const { data: noteLinkRows, error: noteLinkError } = await supabase
-        .from('note_links')
-        .select('entity_id, note_id')
-        .eq('user_id', userId)
-        .eq('entity_type', 'calendar_event')
-        .in('entity_id', calendarEntityIds);
+      const noteLinkRows: NoteLinkCountRow[] = [];
 
-      if (noteLinkError) {
-        if (!isMissingRelationError(noteLinkError)) {
-          throw noteLinkError;
-        }
-      } else {
-        const noteIdsByEntity = new Map<string, Set<string>>();
+      for (let index = 0; index < calendarEntityIds.length; index += IN_FILTER_BATCH_SIZE) {
+        const batch = calendarEntityIds.slice(index, index + IN_FILTER_BATCH_SIZE);
+        const { data, error: noteLinkError } = await supabase
+          .from('note_links')
+          .select('entity_id, note_id')
+          .eq('user_id', userId)
+          .eq('entity_type', 'calendar_event')
+          .in('entity_id', batch);
 
-        for (const row of (noteLinkRows || []) as NoteLinkCountRow[]) {
-          const entityId = row.entity_id;
-          const noteId = row.note_id;
-          if (!entityId || !noteId) {
-            continue;
+        if (noteLinkError) {
+          if (!isMissingRelationError(noteLinkError)) {
+            throw noteLinkError;
           }
-
-          const noteIds = noteIdsByEntity.get(entityId) ?? new Set<string>();
-          noteIds.add(noteId);
-          noteIdsByEntity.set(entityId, noteIds);
+          break;
         }
 
-        for (const [entityId, noteIds] of noteIdsByEntity.entries()) {
-          noteCountByEntityId.set(entityId, noteIds.size);
+        noteLinkRows.push(...((data || []) as NoteLinkCountRow[]));
+      }
+
+      const noteIdsByEntity = new Map<string, Set<string>>();
+
+      for (const row of noteLinkRows) {
+        const entityId = row.entity_id;
+        const noteId = row.note_id;
+        if (!entityId || !noteId) {
+          continue;
         }
+
+        const noteIds = noteIdsByEntity.get(entityId) ?? new Set<string>();
+        noteIds.add(noteId);
+        noteIdsByEntity.set(entityId, noteIds);
+      }
+
+      for (const [entityId, noteIds] of noteIdsByEntity.entries()) {
+        noteCountByEntityId.set(entityId, noteIds.size);
       }
     }
 
