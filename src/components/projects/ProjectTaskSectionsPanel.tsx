@@ -53,6 +53,7 @@ async function fetchProjectTasks(projectId: string, includeCompleted: boolean): 
   const params = new URLSearchParams({
     limit: "500",
     project_id: projectId,
+    include_parked: "true",
   });
 
   if (includeCompleted) {
@@ -756,7 +757,13 @@ export function ProjectTaskSectionsPanel({
                       <div className="flex items-center gap-2">
                         <h3 className="text-sm font-semibold text-foreground">{section.name}</h3>
                         <span className="rounded-full bg-panel-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                          {sectionTasks.length} task{sectionTasks.length === 1 ? "" : "s"}
+                          {(() => {
+                            const parkedCount = sectionTasks.filter((t) => t.status === "Parked").length;
+                            const total = sectionTasks.length;
+                            if (parkedCount === 0) return `${total} task${total === 1 ? "" : "s"}`;
+                            const active = total - parkedCount;
+                            return `${total} task${total === 1 ? "" : "s"} (${active} active, ${parkedCount} parked)`;
+                          })()}
                         </span>
                       </div>
                       <p className="mt-1 text-xs text-muted-foreground">

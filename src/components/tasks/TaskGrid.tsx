@@ -1005,7 +1005,7 @@ export function TaskGrid({
                   <Fragment key={task.id}>
                     <tr
                       id={`task-${task.id}`}
-                      className={`border-b border-solid border-stroke [&>td]:border-r [&>td]:border-solid [&>td]:border-stroke [&>td:last-child]:border-r-0 ${isBusy ? "opacity-70" : ""} ${isExpanded ? "bg-accent/10" : "hover:bg-panel-muted/40"}`}
+                      className={`border-b border-solid border-stroke [&>td]:border-r [&>td]:border-solid [&>td]:border-stroke [&>td:last-child]:border-r-0 ${isBusy ? "opacity-70" : task.status === "Parked" ? "opacity-60" : ""} ${isExpanded ? "bg-accent/10" : "hover:bg-panel-muted/40"}`}
                     >
                       <td className="w-10 px-2 py-2.5 align-middle text-center">
                         <button
@@ -1029,6 +1029,11 @@ export function TaskGrid({
 
                       <td className={`${taskCellWidthClass} px-3 py-2.5 align-middle`}>
                         <p className="break-words text-sm font-medium leading-tight text-foreground">{task.title}</p>
+                        {task.status === "Parked" ? (
+                          <span className="mt-1 inline-flex rounded bg-panel-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                            Parked
+                          </span>
+                        ) : null}
                         {task.implementation?.phase === "Sundown" ? (
                           <p className="mt-1 inline-flex rounded bg-orange-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-orange-300">
                             Sundown implementation
