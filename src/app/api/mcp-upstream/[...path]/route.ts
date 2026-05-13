@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import * as applicationsRoute from '@/app/api/applications/route';
 import * as applicationRoute from '@/app/api/applications/[id]/route';
+import * as applicationCopyUpdateRoute from '@/app/api/applications/[id]/copy-update/route';
 import * as applicationHealthRoute from '@/app/api/applications/health-scores/route';
 import * as briefingRoute from '@/app/api/briefing/route';
 import * as briefingDigestRoute from '@/app/api/briefing/digest/route';
@@ -298,6 +299,12 @@ async function handleRequest(
   if (segments[0] === 'applications' && segments[1] && segments.length === 2) {
     if (request.method === 'GET') return invokeDynamic(applicationRoute.GET, requestWithContext, { id: segments[1] });
     if (request.method === 'PATCH') return invokeDynamic(applicationRoute.PATCH, requestWithContext, { id: segments[1] });
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'applications' && segments[1] && segments[2] === 'copy-update' && segments.length === 3) {
+    if (request.method === 'GET') return invokeDynamic(applicationCopyUpdateRoute.GET, requestWithContext, { id: segments[1] });
+    if (request.method === 'POST') return invokeDynamic(applicationCopyUpdateRoute.POST, requestWithContext, { id: segments[1] });
     return methodNotAllowed();
   }
 
