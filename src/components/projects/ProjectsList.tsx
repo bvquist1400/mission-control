@@ -228,9 +228,10 @@ export function ProjectsList({
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
+  const nonCancelledProjects = projects.filter((project) => project.stage !== "Cancelled");
   const visibleProjects = includeDoneProjects
-    ? projects
-    : projects.filter((project) => project.stage !== "Done");
+    ? nonCancelledProjects
+    : nonCancelledProjects.filter((project) => project.stage !== "Done");
 
   const content = (
     <div className="space-y-6">
