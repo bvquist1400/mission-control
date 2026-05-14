@@ -108,6 +108,9 @@ interface ProjectTemplateCatalogModalProps {
   onClose: () => void;
   implementations: ImplementationOption[];
   defaultImplementationId?: string;
+  layout?: "modal" | "page";
+  initialTemplateId?: string;
+  initialMode?: "browse" | "create" | "edit";
 }
 
 interface EditableTemplateSection {
@@ -274,8 +277,13 @@ export function ProjectTemplateCatalogModal({
   onClose,
   implementations,
   defaultImplementationId,
+  layout = "modal",
+  initialTemplateId,
+  initialMode = "browse",
 }: ProjectTemplateCatalogModalProps) {
   const router = useRouter();
+  const isPageLayout = layout === "page";
+  const effectiveOpen = isPageLayout ? true : open;
 
   const [templates, setTemplates] = useState<TemplateSummary[] | null>(null);
   const [templatesError, setTemplatesError] = useState<string | null>(null);
@@ -298,8 +306,10 @@ export function ProjectTemplateCatalogModal({
 
   const [editorMode, setEditorMode] = useState<"create" | "edit" | null>(null);
   const [editorDraft, setEditorDraft] = useState<TemplateEditorDraft | null>(null);
+  const [expandedTaskIndex, setExpandedTaskIndex] = useState<number | null>(null);
   const [templateSaveError, setTemplateSaveError] = useState<string | null>(null);
   const [templateSaving, setTemplateSaving] = useState(false);
+  const [hasAppliedInitialMode, setHasAppliedInitialMode] = useState(false);
 
   const resetPreviewState = useCallback(() => {
     setPreviewData(null);
@@ -344,14 +354,14 @@ export function ProjectTemplateCatalogModal({
   }, []);
 
   useEffect(() => {
-    if (!open) {
+    if (!effectiveOpen) {
       return;
     }
-    void loadTemplates();
-  }, [loadTemplates, open]);
+    void loadTemplates(initialTemplateId ?? null);
+  }, [effectiveOpen, initialTemplateId, loadTemplates]);
 
   useEffect(() => {
-    if (!open || !selectedTemplateId || detailsById[selectedTemplateId] || detailErrorsById[selectedTemplateId]) {
+    if (!effectiveOpen || !selectedTemplateId || detailsById[selectedTemplateId] || detailErrorsById[selectedTemplateId]) {
       return;
     }
 
@@ -384,9 +394,9 @@ export function ProjectTemplateCatalogModal({
     return () => {
       active = false;
     };
-  }, [detailErrorsById, detailsById, open, selectedTemplateId]);
+  }, [detailErrorsById, detailsById, effectiveOpen, selectedTemplateId]);
 
-  const templatesLoading = open && templates === null && !templatesError;
+  const templatesLoading = effectiveOpen && templates === null && !templatesError;
   const detail = selectedTemplateId ? detailsById[selectedTemplateId] ?? null : null;
   const detailError = selectedTemplateId ? detailErrorsById[selectedTemplateId] ?? null : null;
   const detailLoading = Boolean(selectedTemplateId) && !detail && !detailError;
@@ -418,6 +428,7 @@ export function ProjectTemplateCatalogModal({
 
   function startCreateTemplate() {
     setEditorMode("create");
+    setExpandedTaskIndex(null);
     setTemplateSaveError(null);
     setEditorDraft({
       templateId: null,
@@ -439,6 +450,7 @@ export function ProjectTemplateCatalogModal({
     }
 
     setEditorMode("edit");
+    setExpandedTaskIndex(0);
     setTemplateSaveError(null);
     setEditorDraft(draftFromDetail(detail));
   }
@@ -446,7 +458,27 @@ export function ProjectTemplateCatalogModal({
   function cancelEditor() {
     setEditorMode(null);
     setEditorDraft(null);
+    setExpandedTaskIndex(null);
     setTemplateSaveError(null);
+  }
+
+  function navigateToAuthoringPage(mode: "create" | "edit") {
+    if (isPageLayout) {
+      if (mode === "create") {
+        startCreateTemplate();
+      } else {
+        startEditTemplate();
+      }
+      return;
+    }
+
+    const params = new URLSearchParams();
+    params.set("mode", mode);
+    if (mode === "edit" && selectedTemplateId) {
+      params.set("template_id", selectedTemplateId);
+    }
+    onClose();
+    router.push(`/projects/templates?${params.toString()}`);
   }
 
   async function handleSaveTemplate() {
@@ -585,8 +617,10 @@ export function ProjectTemplateCatalogModal({
   }
 
   function addTask() {
+    let nextExpandedIndex: number | null = null;
     setEditorDraft((current) => {
       if (!current) return current;
+      nextExpandedIndex = current.tasks.length;
       return {
         ...current,
         tasks: [
@@ -607,9 +641,16 @@ export function ProjectTemplateCatalogModal({
         ],
       };
     });
+    setExpandedTaskIndex(nextExpandedIndex);
   }
 
   function removeTask(index: number) {
+    setExpandedTaskIndex((current) => {
+      if (current === null) return null;
+      if (current === index) return null;
+      if (current > index) return current - 1;
+      return current;
+    });
     setEditorDraft((current) => {
       if (!current) return current;
       return {
@@ -620,6 +661,13 @@ export function ProjectTemplateCatalogModal({
   }
 
   function moveTask(index: number, direction: -1 | 1) {
+    const nextIndex = index + direction;
+    setExpandedTaskIndex((current) => {
+      if (current === null) return null;
+      if (current === index) return nextIndex;
+      if (current === nextIndex) return index;
+      return current;
+    });
     setEditorDraft((current) => {
       if (!current) return current;
       return {
@@ -728,13 +776,46 @@ export function ProjectTemplateCatalogModal({
     resetPreviewState();
   }
 
-  return (
-    <Modal open={open} onClose={onClose} title="Project templates" size="wide">
-      <div className="space-y-4">
-        <p className="text-sm text-muted-foreground">
-          Start recurring work with a template, preview the generated project, then create it.
-        </p>
+  useEffect(() => {
+    if (!effectiveOpen || hasAppliedInitialMode || !isPageLayout) {
+      return;
+    }
 
+    if (initialMode === "create") {
+      startCreateTemplate();
+      setHasAppliedInitialMode(true);
+      return;
+    }
+
+    if (initialMode === "edit") {
+      if (!selectedTemplateId || detailLoading || !detail) {
+        return;
+      }
+      startEditTemplate();
+      setHasAppliedInitialMode(true);
+      return;
+    }
+
+    setHasAppliedInitialMode(true);
+  }, [
+    detail,
+    detailLoading,
+    effectiveOpen,
+    hasAppliedInitialMode,
+    initialMode,
+    isPageLayout,
+    selectedTemplateId,
+  ]);
+
+  const contentHeightClass = isPageLayout
+    ? "space-y-4 p-4"
+    : "max-h-[62vh] space-y-4 overflow-y-auto p-4";
+
+  const content = (
+    <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">
+        Start recurring work with a template, preview the generated project, then create it.
+      </p>
         <div className="grid gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
           <div className="rounded-lg border border-stroke bg-panel-muted/30">
             <div className="border-b border-stroke px-3 py-2">
@@ -743,14 +824,14 @@ export function ProjectTemplateCatalogModal({
                 <div className="flex items-center gap-1">
                   <button
                     type="button"
-                    onClick={startCreateTemplate}
+                    onClick={() => navigateToAuthoringPage("create")}
                     className="rounded border border-stroke bg-panel px-2 py-1 text-[11px] font-semibold text-foreground hover:bg-panel-muted"
                   >
                     New Template
                   </button>
                   <button
                     type="button"
-                    onClick={startEditTemplate}
+                    onClick={() => navigateToAuthoringPage("edit")}
                     disabled={!selectedTemplateId || detailLoading || Boolean(detailError)}
                     className="rounded border border-stroke bg-panel px-2 py-1 text-[11px] font-semibold text-foreground hover:bg-panel-muted disabled:cursor-not-allowed disabled:opacity-50"
                   >
@@ -806,7 +887,7 @@ export function ProjectTemplateCatalogModal({
 
           <div className="rounded-lg border border-stroke bg-panel">
             {editorMode && editorDraft ? (
-              <div className="max-h-[62vh] space-y-4 overflow-y-auto p-4">
+              <div className={contentHeightClass}>
                 <div className="flex items-center justify-between gap-2">
                   <h3 className="text-base font-semibold text-foreground">
                     {editorMode === "create" ? "New template" : "Edit template"}
@@ -953,136 +1034,170 @@ export function ProjectTemplateCatalogModal({
                     <div className="space-y-3">
                       {editorDraft.tasks.map((task, index) => (
                         <div key={`${task.id ?? "new"}-${index}`} className="rounded-md border border-stroke bg-panel p-3">
-                          <div className="grid gap-3 md:grid-cols-2">
-                            <label className="space-y-1 md:col-span-2">
-                              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Title</span>
-                              <input
-                                type="text"
-                                value={task.title}
-                                onChange={(event) => updateTask(index, { title: event.target.value })}
-                                className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
-                              />
-                            </label>
-
-                            <label className="space-y-1 md:col-span-2">
-                              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Description</span>
-                              <textarea
-                                value={task.description}
-                                onChange={(event) => updateTask(index, { description: event.target.value })}
-                                rows={2}
-                                className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
-                              />
-                            </label>
-
-                            <label className="space-y-1">
-                              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Section</span>
-                              <select
-                                value={task.section_key}
-                                onChange={(event) => updateTask(index, { section_key: event.target.value })}
-                                className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
-                              >
-                                <option value="">Unsectioned</option>
-                                {editorDraft.sections.map((section) => (
-                                  <option key={section.client_key} value={section.client_key}>
-                                    {section.name || "(Untitled section)"}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-
-                            <label className="space-y-1">
-                              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Task type</span>
-                              <select
-                                value={task.task_type}
-                                onChange={(event) => updateTask(index, { task_type: event.target.value as TaskType })}
-                                className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
-                              >
-                                {TASK_TYPE_VALUES.map((value) => (
-                                  <option key={value} value={value}>{value}</option>
-                                ))}
-                              </select>
-                            </label>
-
-                            <label className="space-y-1">
-                              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</span>
-                              <select
-                                value={task.status}
-                                onChange={(event) => updateTask(index, { status: event.target.value as TaskStatus })}
-                                className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
-                              >
-                                {TASK_STATUS_VALUES.map((value) => (
-                                  <option key={value} value={value}>{value}</option>
-                                ))}
-                              </select>
-                            </label>
-
-                            <label className="space-y-1">
-                              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Priority score</span>
-                              <input
-                                type="number"
-                                min={0}
-                                max={100}
-                                value={task.priority_score}
-                                onChange={(event) => {
-                                  const parsed = Number(event.target.value);
-                                  const safe = Number.isFinite(parsed) ? Math.max(0, Math.min(100, Math.round(parsed))) : 50;
-                                  updateTask(index, { priority_score: safe });
-                                }}
-                                className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
-                              />
-                            </label>
-
-                            <label className="space-y-1">
-                              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Relative due days</span>
-                              <input
-                                type="number"
-                                value={task.relative_due_days}
-                                onChange={(event) => updateTask(index, { relative_due_days: event.target.value })}
-                                placeholder="e.g. 7"
-                                className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
-                              />
-                            </label>
-
-                            <label className="space-y-1 md:col-span-2">
-                              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Waiting on</span>
-                              <input
-                                type="text"
-                                value={task.waiting_on}
-                                onChange={(event) => updateTask(index, { waiting_on: event.target.value })}
-                                className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
-                              />
-                            </label>
-
-                            <label className="space-y-1 md:col-span-2">
-                              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Checklist items (one per line)</span>
-                              <textarea
-                                value={task.checklist_items_text}
-                                onChange={(event) => updateTask(index, { checklist_items_text: event.target.value })}
-                                rows={3}
-                                className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
-                              />
-                            </label>
-
-                            <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-                              <input
-                                type="checkbox"
-                                checked={task.needs_review}
-                                onChange={(event) => updateTask(index, { needs_review: event.target.checked })}
-                                className="h-4 w-4 accent-accent"
-                              />
-                              Needs review
-                            </label>
-
-                            <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-                              <input
-                                type="checkbox"
-                                checked={task.blocker}
-                                onChange={(event) => updateTask(index, { blocker: event.target.checked })}
-                                className="h-4 w-4 accent-accent"
-                              />
-                              Blocker
-                            </label>
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-semibold text-foreground">
+                                {task.title.trim() || `Untitled task ${index + 1}`}
+                              </p>
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                {task.section_key
+                                  ? `Section: ${editorDraft.sections.find((section) => section.client_key === task.section_key)?.name || "Untitled section"}`
+                                  : "Unsectioned"}
+                                {" • "}
+                                {task.status}
+                                {" • "}
+                                {(() => {
+                                  const parsed = Number(task.relative_due_days);
+                                  return formatDaysOffset(
+                                    task.relative_due_days.trim().length > 0 && Number.isFinite(parsed) ? parsed : null
+                                  );
+                                })()}
+                                {task.checklist_items_text.trim().length > 0
+                                  ? ` • ${task.checklist_items_text.split("\n").filter((item) => item.trim().length > 0).length} checklist`
+                                  : ""}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setExpandedTaskIndex((current) => (current === index ? null : index))}
+                              className="shrink-0 rounded border border-stroke px-2 py-1 text-xs text-foreground hover:bg-panel-muted"
+                            >
+                              {expandedTaskIndex === index ? "Collapse" : "Edit"}
+                            </button>
                           </div>
+
+                          {expandedTaskIndex === index ? (
+                            <div className="mt-3 grid gap-3 md:grid-cols-2">
+                              <label className="space-y-1 md:col-span-2">
+                                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Title</span>
+                                <input
+                                  type="text"
+                                  value={task.title}
+                                  onChange={(event) => updateTask(index, { title: event.target.value })}
+                                  className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+                                />
+                              </label>
+
+                              <label className="space-y-1 md:col-span-2">
+                                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Description</span>
+                                <textarea
+                                  value={task.description}
+                                  onChange={(event) => updateTask(index, { description: event.target.value })}
+                                  rows={2}
+                                  className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+                                />
+                              </label>
+
+                              <label className="space-y-1">
+                                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Section</span>
+                                <select
+                                  value={task.section_key}
+                                  onChange={(event) => updateTask(index, { section_key: event.target.value })}
+                                  className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+                                >
+                                  <option value="">Unsectioned</option>
+                                  {editorDraft.sections.map((section) => (
+                                    <option key={section.client_key} value={section.client_key}>
+                                      {section.name || "(Untitled section)"}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+
+                              <label className="space-y-1">
+                                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Task type</span>
+                                <select
+                                  value={task.task_type}
+                                  onChange={(event) => updateTask(index, { task_type: event.target.value as TaskType })}
+                                  className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+                                >
+                                  {TASK_TYPE_VALUES.map((value) => (
+                                    <option key={value} value={value}>{value}</option>
+                                  ))}
+                                </select>
+                              </label>
+
+                              <label className="space-y-1">
+                                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</span>
+                                <select
+                                  value={task.status}
+                                  onChange={(event) => updateTask(index, { status: event.target.value as TaskStatus })}
+                                  className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+                                >
+                                  {TASK_STATUS_VALUES.map((value) => (
+                                    <option key={value} value={value}>{value}</option>
+                                  ))}
+                                </select>
+                              </label>
+
+                              <label className="space-y-1">
+                                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Priority score</span>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={100}
+                                  value={task.priority_score}
+                                  onChange={(event) => {
+                                    const parsed = Number(event.target.value);
+                                    const safe = Number.isFinite(parsed) ? Math.max(0, Math.min(100, Math.round(parsed))) : 50;
+                                    updateTask(index, { priority_score: safe });
+                                  }}
+                                  className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+                                />
+                              </label>
+
+                              <label className="space-y-1">
+                                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Relative due days</span>
+                                <input
+                                  type="number"
+                                  value={task.relative_due_days}
+                                  onChange={(event) => updateTask(index, { relative_due_days: event.target.value })}
+                                  placeholder="e.g. 7"
+                                  className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+                                />
+                              </label>
+
+                              <label className="space-y-1 md:col-span-2">
+                                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Waiting on</span>
+                                <input
+                                  type="text"
+                                  value={task.waiting_on}
+                                  onChange={(event) => updateTask(index, { waiting_on: event.target.value })}
+                                  className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+                                />
+                              </label>
+
+                              <label className="space-y-1 md:col-span-2">
+                                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Checklist items (one per line)</span>
+                                <textarea
+                                  value={task.checklist_items_text}
+                                  onChange={(event) => updateTask(index, { checklist_items_text: event.target.value })}
+                                  rows={3}
+                                  className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+                                />
+                              </label>
+
+                              <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+                                <input
+                                  type="checkbox"
+                                  checked={task.needs_review}
+                                  onChange={(event) => updateTask(index, { needs_review: event.target.checked })}
+                                  className="h-4 w-4 accent-accent"
+                                />
+                                Needs review
+                              </label>
+
+                              <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+                                <input
+                                  type="checkbox"
+                                  checked={task.blocker}
+                                  onChange={(event) => updateTask(index, { blocker: event.target.checked })}
+                                  className="h-4 w-4 accent-accent"
+                                />
+                                Blocker
+                              </label>
+                            </div>
+                          ) : null}
 
                           <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
                             <button
@@ -1113,6 +1228,18 @@ export function ProjectTemplateCatalogModal({
                       ))}
                     </div>
                   )}
+
+                  {editorDraft.tasks.length > 0 ? (
+                    <div className="pt-1">
+                      <button
+                        type="button"
+                        onClick={addTask}
+                        className="w-full rounded border border-dashed border-stroke bg-panel px-3 py-2 text-xs font-semibold text-foreground hover:bg-panel-muted"
+                      >
+                        Add another task
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
 
                 {templateSaveError ? <p className="text-sm text-red-400">{templateSaveError}</p> : null}
@@ -1146,7 +1273,7 @@ export function ProjectTemplateCatalogModal({
                 {!detailLoading && detailError ? <div className="p-4 text-sm text-red-400">{detailError}</div> : null}
 
                 {!detailLoading && !detailError && detail ? (
-                  <div className="max-h-[62vh] space-y-4 overflow-y-auto p-4">
+                  <div className={contentHeightClass}>
                     <div className="space-y-3 rounded-md border border-stroke bg-panel-muted/30 p-3">
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="text-base font-semibold text-foreground">{detail.name}</h3>
@@ -1282,7 +1409,16 @@ export function ProjectTemplateCatalogModal({
             )}
           </div>
         </div>
-      </div>
+    </div>
+  );
+
+  if (isPageLayout) {
+    return content;
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="Project templates" size="wide">
+      {content}
     </Modal>
   );
 }
