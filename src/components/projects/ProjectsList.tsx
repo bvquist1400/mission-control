@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { ProjectCard, type ProjectCardData } from "@/components/projects/ProjectCard";
+import { ProjectTable } from "@/components/projects/ProjectTable";
+import { ProjectTemplateCatalogModal } from "@/components/projects/ProjectTemplateCatalogModal";
 import { DEFAULT_PROJECT_STAGE, normalizeProjectStage } from "@/lib/project-stage";
 import { ProjectStageSelector } from "@/components/ui/ProjectStageSelector";
 import { RagSelector } from "@/components/ui/RagSelector";
@@ -17,6 +19,7 @@ interface ApiProject {
   stage: ProjectStage;
   rag: RagStatus;
   target_date: string | null;
+  updated_at: string;
   servicenow_spm_id: string | null;
   status_summary: string;
   portfolio_rank: number;
@@ -39,6 +42,8 @@ interface ApiImplementation {
   phase: ImplPhase;
   rag: RagStatus;
 }
+
+type ProjectsViewMode = "table" | "cards";
 
 // ─── Draft state for create form ─────────────────────────────────────────────
 
@@ -73,7 +78,9 @@ function apiToCardData(project: ApiProject): ProjectCardData {
     name: project.name,
     stage,
     rag: project.rag,
+    portfolioRank: project.portfolio_rank,
     targetDate: project.target_date,
+    updatedAt: project.updated_at,
     statusSummary: project.status_summary || "",
     description: project.description,
     servicenowSpmId: project.servicenow_spm_id,
@@ -94,9 +101,23 @@ interface ProjectsListProps {
   implementationId?: string;
   /** If in embedded mode (inside an application page), suppress the PageHeader */
   embedded?: boolean;
+  /** Initial projects view mode */
+  defaultView?: ProjectsViewMode;
 }
 
-export function ProjectsList({ implementationId, embedded = false }: ProjectsListProps) {
+function buildProjectsRequestPath(implementationId: string): string {
+  const params = new URLSearchParams({ with_stats: "true" });
+  if (implementationId) {
+    params.set("implementation_id", implementationId);
+  }
+  return `/api/projects?${params.toString()}`;
+}
+
+export function ProjectsList({
+  implementationId,
+  embedded = false,
+  defaultView,
+}: ProjectsListProps) {
   const [projects, setProjects] = useState<ProjectCardData[]>([]);
   const [implementations, setImplementations] = useState<ApiImplementation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -105,6 +126,10 @@ export function ProjectsList({ implementationId, embedded = false }: ProjectsLis
   const [draft, setDraft] = useState<ProjectDraft>(INITIAL_DRAFT);
   const [saving, setSaving] = useState(false);
   const [filterImplId, setFilterImplId] = useState(implementationId ?? "");
+  const [viewMode, setViewMode] = useState<ProjectsViewMode>(
+    defaultView ?? (embedded ? "cards" : "table")
+  );
+  const [isTemplateCatalogOpen, setIsTemplateCatalogOpen] = useState(false);
   const [includeDoneProjects, setIncludeDoneProjects] = useState(false);
   const isMounted = useRef(true);
 
@@ -112,6 +137,10 @@ export function ProjectsList({ implementationId, embedded = false }: ProjectsLis
     isMounted.current = true;
     return () => { isMounted.current = false; };
   }, []);
+
+  useEffect(() => {
+    setFilterImplId(implementationId ?? "");
+  }, [implementationId]);
 
   // Fetch implementations for the dropdown (only when not embedded)
   useEffect(() => {
@@ -128,12 +157,7 @@ export function ProjectsList({ implementationId, embedded = false }: ProjectsLis
   useEffect(() => {
     setLoading(true);
     setError(null);
-
-    const url = new URL("/api/projects", window.location.origin);
-    url.searchParams.set("with_stats", "true");
-    if (filterImplId) url.searchParams.set("implementation_id", filterImplId);
-
-    fetch(url.toString())
+    fetch(buildProjectsRequestPath(filterImplId))
       .then(async (res) => {
         if (res.status === 401) throw new Error("Authentication required.");
         if (!res.ok) throw new Error("Failed to fetch projects.");
@@ -170,7 +194,7 @@ export function ProjectsList({ implementationId, embedded = false }: ProjectsLis
       if (draft.targetDate) body.target_date = draft.targetDate;
       if (draft.spmId.trim()) body.servicenow_spm_id = draft.spmId.trim();
       if (draft.implementationId) body.implementation_id = draft.implementationId;
-      else if (implementationId) body.implementation_id = implementationId;
+      else if (filterImplId) body.implementation_id = filterImplId;
 
       const res = await fetch("/api/projects", {
         method: "POST",
@@ -185,7 +209,7 @@ export function ProjectsList({ implementationId, embedded = false }: ProjectsLis
 
       const created = await res.json() as ApiProject;
       // Optimistically prepend — re-fetch to get full stats
-      const fullRes = await fetch(`/api/projects?with_stats=true`);
+      const fullRes = await fetch(buildProjectsRequestPath(filterImplId));
       const all = await fullRes.json() as ApiProject[];
       if (isMounted.current) {
         setProjects(all.map(apiToCardData));
@@ -347,6 +371,31 @@ export function ProjectsList({ implementationId, embedded = false }: ProjectsLis
             </>
           ) : null}
 
+          <div className="inline-flex rounded-lg border border-stroke bg-panel p-1">
+            <button
+              type="button"
+              onClick={() => setViewMode("table")}
+              className={`rounded-md px-2.5 py-1 text-xs font-semibold transition ${
+                viewMode === "table"
+                  ? "bg-accent text-white"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Table
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("cards")}
+              className={`rounded-md px-2.5 py-1 text-xs font-semibold transition ${
+                viewMode === "cards"
+                  ? "bg-accent text-white"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Cards
+            </button>
+          </div>
+
           <label className="inline-flex items-center gap-2 rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground">
             <input
               type="checkbox"
@@ -385,13 +434,17 @@ export function ProjectsList({ implementationId, embedded = false }: ProjectsLis
         </div>
       )}
 
-      {/* ── Project grid ── */}
+      {/* ── Project views ── */}
       {!loading && !error && visibleProjects.length > 0 && (
-        <div className="grid gap-4 xl:grid-cols-2 2xl:grid-cols-3">
-          {visibleProjects.map((project) => (
-            <ProjectCard key={project.id} project={project} />
-          ))}
-        </div>
+        viewMode === "table" ? (
+          <ProjectTable projects={visibleProjects} />
+        ) : (
+          <div className="grid gap-4 xl:grid-cols-2 2xl:grid-cols-3">
+            {visibleProjects.map((project) => (
+              <ProjectCard key={project.id} project={project} />
+            ))}
+          </div>
+        )
       )}
     </div>
   );
@@ -406,16 +459,36 @@ export function ProjectsList({ implementationId, embedded = false }: ProjectsLis
         title="Projects"
         description="Track work items within applications. Each project has its own delivery stage, RAG status, and task list."
         actions={
-          <button
-            type="button"
-            onClick={() => setIsCreateOpen(true)}
-            className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90"
-          >
-            + New Project
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsTemplateCatalogOpen(true)}
+              className="rounded-lg border border-stroke bg-panel px-3 py-2 text-sm font-semibold text-foreground hover:bg-panel-muted"
+            >
+              From Template
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsCreateOpen(true)}
+              className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90"
+            >
+              + New Project
+            </button>
+          </div>
         }
       />
       {content}
+      {isTemplateCatalogOpen ? (
+        <ProjectTemplateCatalogModal
+          open={isTemplateCatalogOpen}
+          onClose={() => setIsTemplateCatalogOpen(false)}
+          implementations={implementations.map((implementation) => ({
+            id: implementation.id,
+            name: implementation.name,
+          }))}
+          defaultImplementationId={filterImplId}
+        />
+      ) : null}
     </div>
   );
 }

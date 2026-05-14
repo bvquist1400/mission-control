@@ -377,6 +377,54 @@ export interface ProjectSection {
   updated_at: string;
 }
 
+export interface ProjectTemplate {
+  id: string;
+  user_id: string;
+  name: string;
+  description: string | null;
+  default_stage: ProjectStage;
+  default_rag: RagStatus;
+  default_status_summary: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectTemplateSection {
+  id: string;
+  user_id: string;
+  template_id: string;
+  name: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectTemplateTask {
+  id: string;
+  user_id: string;
+  template_id: string;
+  template_section_id: string | null;
+  title: string;
+  description: string | null;
+  task_type: TaskType;
+  priority_score: number;
+  status: TaskStatus;
+  relative_due_days: number | null;
+  needs_review: boolean;
+  blocker: boolean;
+  waiting_on: string | null;
+  sort_order: number;
+  checklist_items: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectTemplateDetail extends ProjectTemplate {
+  sections: Array<ProjectTemplateSection & { tasks: ProjectTemplateTask[] }>;
+  unsectioned_tasks: ProjectTemplateTask[];
+}
+
 export interface ProjectWithStats extends Project {
   open_task_count: number;
   completed_task_count: number;

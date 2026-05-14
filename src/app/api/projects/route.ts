@@ -175,7 +175,7 @@ export async function GET(request: NextRequest) {
       const isParked = task.status === 'Parked';
       const checklistCounts = checklistCountsByTask.get(task.id) ?? { total: 0, done: 0 };
 
-      if (!isDone) {
+      if (!isDone && !isParked) {
         stats.openTaskCount += 1;
       }
 

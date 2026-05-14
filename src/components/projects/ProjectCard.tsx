@@ -11,7 +11,9 @@ export interface ProjectCardData {
   name: string;
   stage: ProjectStage;
   rag: RagStatus;
+  portfolioRank: number;
   targetDate: string | null;
+  updatedAt: string;
   statusSummary: string;
   description: string | null;
   servicenowSpmId: string | null;
