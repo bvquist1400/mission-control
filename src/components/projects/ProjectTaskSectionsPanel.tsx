@@ -133,6 +133,27 @@ function nextSectionSortOrder(sections: ProjectSection[]): number {
   return Math.max(...sections.map((section) => section.sort_order)) + 1;
 }
 
+function sortTasksBySectionOrder(tasks: TaskWithImplementation[]): TaskWithImplementation[] {
+  return [...tasks].sort((a, b) => {
+    const aTime = Date.parse(a.created_at);
+    const bTime = Date.parse(b.created_at);
+    const aHasTime = Number.isFinite(aTime);
+    const bHasTime = Number.isFinite(bTime);
+
+    if (aHasTime && bHasTime && aTime !== bTime) {
+      return aTime - bTime;
+    }
+    if (aHasTime && !bHasTime) {
+      return -1;
+    }
+    if (!aHasTime && bHasTime) {
+      return 1;
+    }
+
+    return a.id.localeCompare(b.id);
+  });
+}
+
 export function ProjectTaskSectionsPanel({
   projectId,
   projectName,
@@ -183,13 +204,13 @@ export function ProjectTaskSectionsPanel({
     () =>
       sortedSections.map((section) => ({
         section,
-        tasks: tasksForProject.filter((task) => task.section_id === section.id),
+        tasks: sortTasksBySectionOrder(tasksForProject.filter((task) => task.section_id === section.id)),
       })),
     [sortedSections, tasksForProject]
   );
 
   const unsectionedTasks = useMemo(
-    () => tasksForProject.filter((task) => !task.section_id),
+    () => sortTasksBySectionOrder(tasksForProject.filter((task) => !task.section_id)),
     [tasksForProject]
   );
 
