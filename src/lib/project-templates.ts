@@ -84,7 +84,8 @@ export function resolveDueFromKickoff(kickoffDate: string, relativeDueDays: numb
 
   return {
     due_date: dueDate,
-    due_at: `${dueDate}T00:00:00.000Z`,
+    // Store due dates near end-of-day UTC so local date rendering does not slip to the prior day.
+    due_at: `${dueDate}T23:59:59.999Z`,
   };
 }
 
