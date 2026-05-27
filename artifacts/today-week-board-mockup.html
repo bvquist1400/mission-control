@@ -1,0 +1,667 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mission Control Today: This Week Board Mockup</title>
+  <style>
+    :root {
+      --background: #0d1117;
+      --foreground: #e6edf3;
+      --muted-foreground: #7d8590;
+      --panel: #161b22;
+      --panel-muted: #21262d;
+      --stroke: #30363d;
+      --accent: #c41e3a;
+      --accent-soft: rgba(196, 30, 58, 0.15);
+      --green: #34d399;
+      --amber: #fbbf24;
+      --red: #f87171;
+      --blue: #60a5fa;
+      --radius-card: 1rem;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 12% 2%, rgba(196, 30, 58, 0.08) 0%, transparent 30%),
+        radial-gradient(circle at 92% 14%, rgba(139, 92, 246, 0.05) 0%, transparent 26%),
+        var(--background);
+      color: var(--foreground);
+      font-family: "Avenir Next", "Trebuchet MS", "Segoe UI", sans-serif;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      border-right: 1px solid var(--stroke);
+      background: rgba(13, 17, 23, 0.72);
+      padding: 24px 18px;
+    }
+
+    .brand {
+      margin-bottom: 26px;
+      font-size: 18px;
+      font-weight: 750;
+      letter-spacing: -0.02em;
+    }
+
+    .search {
+      border: 1px solid var(--stroke);
+      border-radius: 14px;
+      background: var(--panel);
+      padding: 12px;
+      color: var(--muted-foreground);
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .nav {
+      display: grid;
+      gap: 8px;
+      margin-top: 24px;
+    }
+
+    .nav a {
+      border: 1px solid transparent;
+      border-radius: 14px;
+      color: var(--muted-foreground);
+      padding: 10px 12px;
+      text-decoration: none;
+      transition: 160ms ease;
+    }
+
+    .nav a.active,
+    .nav a:hover {
+      border-color: var(--stroke);
+      background: var(--panel);
+      color: var(--foreground);
+    }
+
+    main {
+      padding: 36px;
+    }
+
+    .page-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 20px;
+      border-bottom: 1px solid var(--stroke);
+      padding-bottom: 20px;
+      margin-bottom: 24px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 34px;
+      line-height: 1.05;
+      letter-spacing: -0.04em;
+    }
+
+    .subhead {
+      max-width: 760px;
+      margin: 10px 0 0;
+      color: var(--muted-foreground);
+      font-size: 14px;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--stroke);
+      border-radius: 999px;
+      background: var(--panel);
+      color: var(--muted-foreground);
+      padding: 8px 12px;
+      font-size: 13px;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+
+    .pill.hot {
+      border-color: rgba(248, 113, 113, 0.35);
+      background: rgba(248, 113, 113, 0.1);
+      color: #fca5a5;
+    }
+
+    .capacity {
+      min-width: 150px;
+      display: grid;
+      gap: 5px;
+    }
+
+    .capacity-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 12px;
+    }
+
+    .bar {
+      height: 6px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: var(--panel-muted);
+    }
+
+    .bar > span {
+      display: block;
+      width: 79%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--green), var(--amber));
+    }
+
+    .focus {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      border: 1px solid rgba(196, 30, 58, 0.35);
+      border-radius: var(--radius-card);
+      background: linear-gradient(135deg, rgba(196, 30, 58, 0.17), rgba(22, 27, 34, 0.92));
+      padding: 16px 18px;
+      margin-bottom: 22px;
+    }
+
+    .focus strong { color: #fecdd3; }
+    .focus span { color: var(--muted-foreground); font-size: 13px; }
+
+    .summary-strip {
+      display: grid;
+      grid-template-columns: minmax(0, 1.5fr) repeat(4, minmax(100px, 0.55fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .summary-card {
+      border: 1px solid var(--stroke);
+      border-radius: var(--radius-card);
+      background: rgba(22, 27, 34, 0.88);
+      padding: 16px;
+    }
+
+    .summary-card.hero {
+      background:
+        linear-gradient(135deg, rgba(196, 30, 58, 0.15), transparent 45%),
+        rgba(22, 27, 34, 0.9);
+    }
+
+    .eyebrow {
+      margin: 0 0 6px;
+      color: var(--muted-foreground);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .summary-card h2,
+    .summary-card h3 {
+      margin: 0;
+      font-size: 18px;
+      letter-spacing: -0.02em;
+    }
+
+    .summary-card h3 {
+      font-size: 24px;
+    }
+
+    .summary-card p {
+      margin: 8px 0 0;
+      color: var(--muted-foreground);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .board-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin: 24px 0 14px;
+    }
+
+    .board-toolbar h2 {
+      margin: 0;
+      font-size: 20px;
+      letter-spacing: -0.02em;
+    }
+
+    .filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .filter {
+      border: 1px solid var(--stroke);
+      border-radius: 999px;
+      background: var(--panel);
+      color: var(--muted-foreground);
+      padding: 7px 11px;
+      font-size: 12px;
+      font-weight: 750;
+    }
+
+    .filter.active {
+      border-color: rgba(196, 30, 58, 0.55);
+      background: var(--accent-soft);
+      color: #fecdd3;
+    }
+
+    .board {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(215px, 1fr));
+      gap: 14px;
+      overflow-x: auto;
+      padding-bottom: 8px;
+    }
+
+    .column {
+      min-width: 215px;
+      border: 1px solid var(--stroke);
+      border-radius: 18px;
+      background: rgba(13, 17, 23, 0.52);
+      padding: 12px;
+    }
+
+    .column-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .column-title {
+      display: grid;
+      gap: 2px;
+    }
+
+    .column-title strong {
+      font-size: 14px;
+    }
+
+    .column-title span {
+      color: var(--muted-foreground);
+      font-size: 12px;
+    }
+
+    .count {
+      border: 1px solid var(--stroke);
+      border-radius: 999px;
+      background: var(--panel);
+      color: var(--foreground);
+      padding: 3px 8px;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .task {
+      position: relative;
+      display: grid;
+      gap: 11px;
+      border: 1px solid var(--stroke);
+      border-radius: 16px;
+      background: var(--panel);
+      padding: 13px;
+      margin-bottom: 10px;
+      box-shadow: 0 8px 22px rgba(0, 0, 0, 0.14);
+    }
+
+    .task.overdue { border-left: 4px solid var(--red); }
+    .task.today { border-left: 4px solid var(--accent); }
+    .task.waiting { border-left: 4px solid var(--amber); }
+    .task.pinned { border-left: 4px solid var(--amber); }
+
+    .task h4 {
+      margin: 0;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .task-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .chip {
+      border: 1px solid var(--stroke);
+      border-radius: 999px;
+      background: var(--panel-muted);
+      color: var(--muted-foreground);
+      padding: 3px 7px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .chip.red { border-color: rgba(248, 113, 113, 0.35); background: rgba(248, 113, 113, 0.1); color: #fca5a5; }
+    .chip.green { border-color: rgba(52, 211, 153, 0.35); background: rgba(52, 211, 153, 0.1); color: #86efac; }
+    .chip.amber { border-color: rgba(251, 191, 36, 0.35); background: rgba(251, 191, 36, 0.1); color: #fde68a; }
+    .chip.blue { border-color: rgba(96, 165, 250, 0.35); background: rgba(96, 165, 250, 0.1); color: #bfdbfe; }
+
+    .task dl {
+      display: grid;
+      gap: 6px;
+      margin: 0;
+      color: var(--muted-foreground);
+      font-size: 11px;
+    }
+
+    .task-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .task-row dd {
+      margin: 0;
+      color: var(--foreground);
+      font-weight: 750;
+      text-align: right;
+    }
+
+    .task-actions {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+    }
+
+    .done,
+    .pin {
+      border: 1px solid rgba(52, 211, 153, 0.32);
+      border-radius: 10px;
+      background: rgba(52, 211, 153, 0.1);
+      color: #86efac;
+      cursor: default;
+      font-size: 12px;
+      font-weight: 800;
+      padding: 7px 10px;
+    }
+
+    .pin {
+      border-color: var(--stroke);
+      background: var(--panel-muted);
+      color: var(--muted-foreground);
+      width: 36px;
+    }
+
+    .sidecar-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(300px, 0.75fr);
+      gap: 16px;
+      margin-top: 24px;
+    }
+
+    .panel {
+      border: 1px solid var(--stroke);
+      border-radius: var(--radius-card);
+      background: var(--panel);
+      padding: 18px;
+    }
+
+    .panel h3 {
+      margin: 0 0 14px;
+      font-size: 18px;
+    }
+
+    .meeting {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      border-radius: 12px;
+      background: var(--panel-muted);
+      padding: 12px;
+      margin-bottom: 10px;
+      font-size: 13px;
+    }
+
+    .meeting p { margin: 0; }
+    .meeting .time { color: var(--muted-foreground); margin-top: 4px; }
+
+    .progress-bar {
+      height: 8px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: var(--panel-muted);
+      margin: 14px 0 8px;
+    }
+
+    .progress-bar span {
+      display: block;
+      width: 62%;
+      height: 100%;
+      background: var(--green);
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .metric {
+      border-radius: 10px;
+      background: var(--panel-muted);
+      padding: 10px;
+      color: var(--muted-foreground);
+      font-size: 12px;
+    }
+
+    .metric strong {
+      display: block;
+      margin-top: 4px;
+      color: var(--foreground);
+      font-size: 16px;
+    }
+
+    @media (max-width: 980px) {
+      .shell { grid-template-columns: 1fr; }
+      .sidebar { display: none; }
+      main { padding: 24px; }
+      .page-header { display: grid; }
+      .actions { justify-content: flex-start; }
+      .summary-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .summary-card.hero { grid-column: 1 / -1; }
+      .sidecar-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar" aria-label="Mock navigation">
+      <div class="brand">Cooper Mission Control</div>
+      <div class="search">Search everything<br><small>Tasks, projects, stakeholders, meetings</small></div>
+      <nav class="nav">
+        <a class="active" href="#">Today</a>
+        <a href="#">AI Playbooks</a>
+        <a href="#">Backlog</a>
+        <a href="#">Sprints</a>
+        <a href="#">Applications</a>
+        <a href="#">Projects</a>
+        <a href="#">Stakeholders</a>
+        <a href="#">Focus</a>
+        <a href="#">Calendar</a>
+      </nav>
+    </aside>
+
+    <main>
+      <header class="page-header">
+        <div>
+          <h1>Today</h1>
+          <p class="subhead">Weekly execution board for deadlines, planned work, blockers, and near-term capacity. This replaces the old Top 3 emphasis with a clearer “what needs doing this week” view.</p>
+        </div>
+        <div class="actions">
+          <span class="pill hot">Artifact Inbox (2)</span>
+          <span class="pill capacity">
+            <span class="capacity-row"><strong>Capacity</strong><span>260 / 330 min</span></span>
+            <span class="bar"><span></span></span>
+          </span>
+          <span class="pill">Wednesday, May 27, 2026</span>
+        </div>
+      </header>
+
+      <section class="focus">
+        <div>
+          <strong>Focus directive: close the open rollout loop before starting net-new work.</strong><br>
+          <span>Planner signal stays visible, but the board becomes the main execution surface.</span>
+        </div>
+        <span class="pill">Active</span>
+      </section>
+
+      <section class="summary-strip" aria-label="Week summary">
+        <article class="summary-card hero">
+          <p class="eyebrow">This Week</p>
+          <h2>May 25 - May 31</h2>
+          <p>14 open tasks across due dates, blocked follow-ups, and review items. The board keeps real deadlines separate from “important but not due yet.”</p>
+        </article>
+        <article class="summary-card"><p class="eyebrow">Overdue</p><h3>3</h3><p>Needs explicit decision.</p></article>
+        <article class="summary-card"><p class="eyebrow">Due Today</p><h3>5</h3><p>260 min estimated.</p></article>
+        <article class="summary-card"><p class="eyebrow">Waiting</p><h3>2</h3><p>Follow-up risk.</p></article>
+        <article class="summary-card"><p class="eyebrow">Review</p><h3>4</h3><p>Backlog cleanup.</p></article>
+      </section>
+
+      <section class="board-toolbar">
+        <div>
+          <h2>What’s Due This Week</h2>
+          <p class="subhead" style="margin-top: 5px;">Asana-style columns, Mission Control cards. Click a card would open the same task detail modal.</p>
+        </div>
+        <div class="filters">
+          <span class="filter active">All</span>
+          <span class="filter">Synced Today</span>
+          <span class="filter">Pinned</span>
+          <span class="filter">Blocked</span>
+          <span class="filter">Needs Review</span>
+        </div>
+      </section>
+
+      <section class="board" aria-label="Weekly task board">
+        <div class="column">
+          <div class="column-header"><div class="column-title"><strong>Overdue</strong><span>Before Wed</span></div><span class="count">3</span></div>
+          <article class="task overdue">
+            <div><h4>Send project status update for HR portal automation</h4></div>
+            <div class="task-meta"><span class="chip red">Overdue</span><span class="chip">45 min</span><span class="chip blue">Application</span></div>
+            <dl><div class="task-row"><dt>Due</dt><dd>May 26</dd></div><div class="task-row"><dt>Status</dt><dd>In Progress</dd></div></dl>
+            <div class="task-actions"><button class="done">✓ Done</button><button class="pin">Pin</button></div>
+          </article>
+          <article class="task overdue">
+            <h4>Review unresolved intake artifacts from Monday</h4>
+            <div class="task-meta"><span class="chip red">Overdue</span><span class="chip amber">Needs Review</span></div>
+            <dl><div class="task-row"><dt>Due</dt><dd>May 25</dd></div><div class="task-row"><dt>Status</dt><dd>Planned</dd></div></dl>
+            <div class="task-actions"><button class="done">✓ Done</button><button class="pin">Pin</button></div>
+          </article>
+        </div>
+
+        <div class="column">
+          <div class="column-header"><div class="column-title"><strong>Today</strong><span>Wed, May 27</span></div><span class="count">5</span></div>
+          <article class="task today pinned">
+            <h4>Patch template instantiation due-date drift smoke test</h4>
+            <div class="task-meta"><span class="chip amber">Pinned</span><span class="chip green">Synced Today</span><span class="chip">60 min</span></div>
+            <dl><div class="task-row"><dt>Due</dt><dd>Today</dd></div><div class="task-row"><dt>Status</dt><dd>In Progress</dd></div></dl>
+            <div class="task-actions"><button class="done">✓ Done</button><button class="pin">Pin</button></div>
+          </article>
+          <article class="task today">
+            <h4>Prepare stakeholder note for Friday rollout review</h4>
+            <div class="task-meta"><span class="chip green">Synced Today</span><span class="chip">30 min</span></div>
+            <dl><div class="task-row"><dt>Due</dt><dd>Today</dd></div><div class="task-row"><dt>Project</dt><dd>Rollout</dd></div></dl>
+            <div class="task-actions"><button class="done">✓ Done</button><button class="pin">Pin</button></div>
+          </article>
+          <article class="task today">
+            <h4>Confirm application dashboard health score copy</h4>
+            <div class="task-meta"><span class="chip">25 min</span><span class="chip blue">Application</span></div>
+            <dl><div class="task-row"><dt>Due</dt><dd>Today</dd></div><div class="task-row"><dt>Status</dt><dd>Planned</dd></div></dl>
+            <div class="task-actions"><button class="done">✓ Done</button><button class="pin">Pin</button></div>
+          </article>
+        </div>
+
+        <div class="column">
+          <div class="column-header"><div class="column-title"><strong>Tomorrow</strong><span>Thu, May 28</span></div><span class="count">2</span></div>
+          <article class="task">
+            <h4>Draft training checklist for project owners</h4>
+            <div class="task-meta"><span class="chip">40 min</span><span class="chip blue">Project</span></div>
+            <dl><div class="task-row"><dt>Due</dt><dd>May 28</dd></div><div class="task-row"><dt>Status</dt><dd>Planned</dd></div></dl>
+            <div class="task-actions"><button class="done">✓ Done</button><button class="pin">Pin</button></div>
+          </article>
+          <article class="task">
+            <h4>Validate sprint progress forecast after completed tasks sync</h4>
+            <div class="task-meta"><span class="chip">35 min</span><span class="chip green">Synced Today</span></div>
+            <dl><div class="task-row"><dt>Due</dt><dd>May 28</dd></div><div class="task-row"><dt>Status</dt><dd>Planned</dd></div></dl>
+            <div class="task-actions"><button class="done">✓ Done</button><button class="pin">Pin</button></div>
+          </article>
+        </div>
+
+        <div class="column">
+          <div class="column-header"><div class="column-title"><strong>Later Week</strong><span>Fri - Sun</span></div><span class="count">4</span></div>
+          <article class="task">
+            <h4>Write launch notes for reusable project template workflow</h4>
+            <div class="task-meta"><span class="chip">50 min</span><span class="chip blue">Project</span></div>
+            <dl><div class="task-row"><dt>Due</dt><dd>May 29</dd></div><div class="task-row"><dt>Status</dt><dd>Planned</dd></div></dl>
+            <div class="task-actions"><button class="done">✓ Done</button><button class="pin">Pin</button></div>
+          </article>
+          <article class="task">
+            <h4>Clean up parked tasks that no longer map to active projects</h4>
+            <div class="task-meta"><span class="chip">45 min</span><span class="chip amber">Review</span></div>
+            <dl><div class="task-row"><dt>Due</dt><dd>May 30</dd></div><div class="task-row"><dt>Status</dt><dd>Planned</dd></div></dl>
+            <div class="task-actions"><button class="done">✓ Done</button><button class="pin">Pin</button></div>
+          </article>
+        </div>
+
+        <div class="column">
+          <div class="column-header"><div class="column-title"><strong>Waiting / Review</strong><span>Blocked and queues</span></div><span class="count">6</span></div>
+          <article class="task waiting">
+            <h4>Waiting on credential confirmation for calendar import test</h4>
+            <div class="task-meta"><span class="chip amber">Waiting</span><span class="chip">Follow up May 28</span></div>
+            <dl><div class="task-row"><dt>Owner</dt><dd>IT</dd></div><div class="task-row"><dt>Status</dt><dd>Blocked</dd></div></dl>
+            <div class="task-actions"><button class="done">Open Task</button><button class="pin">Pin</button></div>
+          </article>
+          <article class="task waiting">
+            <h4>4 backlog tasks need review</h4>
+            <div class="task-meta"><span class="chip amber">Needs Review</span><span class="chip blue">Queue</span></div>
+            <dl><div class="task-row"><dt>Action</dt><dd>Open Review Queue</dd></div><div class="task-row"><dt>Status</dt><dd>Open</dd></div></dl>
+            <div class="task-actions"><button class="done">Open Queue</button><button class="pin">Pin</button></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="sidecar-grid">
+        <article class="panel">
+          <h3>Today’s Meetings</h3>
+          <div class="meeting"><div><p><strong>Project owner sync</strong></p><p class="time">10:00 AM - 10:30 AM</p></div><span class="chip">Upcoming</span></div>
+          <div class="meeting"><div><p><strong>Rollout checkpoint</strong></p><p class="time">1:00 PM - 1:45 PM</p></div><span class="chip amber">Prep needed</span></div>
+        </article>
+        <article class="panel">
+          <h3>Sprint Progress</h3>
+          <p class="subhead" style="margin: 0;">Current sprint stays visible, but secondary to the weekly board.</p>
+          <div class="progress-bar"><span></span></div>
+          <p class="subhead" style="margin-top: 0;">13/21 tasks complete (62%)</p>
+          <div class="metrics">
+            <div class="metric">In Progress<strong>4</strong></div>
+            <div class="metric">Planned<strong>7</strong></div>
+            <div class="metric">Blocked<strong>2</strong></div>
+            <div class="metric">Workdays Left<strong>3</strong></div>
+          </div>
+        </article>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

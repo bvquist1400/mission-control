@@ -152,6 +152,34 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(filtered);
     }
 
+    if (view === 'weekly_board') {
+      const weekEndParam = searchParams.get('week_end');
+      const parsedWeekEnd = weekEndParam ? new Date(weekEndParam) : null;
+      const weekEnd = parsedWeekEnd && Number.isFinite(parsedWeekEnd.getTime())
+        ? parsedWeekEnd
+        : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      const weeklyLimit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 300) : 200;
+
+      const { data, error } = await supabase
+        .from('tasks')
+        .select(TASK_WITH_RELATIONS_SELECT)
+        .eq('user_id', userId)
+        .not('due_at', 'is', null)
+        .lte('due_at', weekEnd.toISOString())
+        .neq('status', 'Done')
+        .neq('status', 'Parked')
+        .order('due_at', { ascending: true })
+        .order('priority_score', { ascending: false })
+        .order('id', { ascending: true })
+        .limit(weeklyLimit);
+
+      if (error) {
+        throw error;
+      }
+
+      return NextResponse.json(normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>));
+    }
+
     if (view === 'waiting_summary') {
       const waitingLimit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 30;
       const { data, error } = await supabase

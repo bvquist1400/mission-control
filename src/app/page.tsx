@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { TaskCard, type TaskCardData } from "@/components/tasks/TaskCard";
+import type { TaskCardData } from "@/components/tasks/TaskCard";
 import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
 import { CapacityMeter } from "@/components/today/CapacityMeter";
 import { FocusStatusBar } from "@/components/today/FocusStatusBar";
@@ -39,13 +40,30 @@ interface MeetingEvent {
   location: string | null;
 }
 
-type TodaySectionKey = "meetings" | "topThree" | "dueSoon" | "waitingOn" | "needsReview" | "sync" | "sprint";
+type TodaySectionKey = "meetings" | "weekBoard" | "waitingOn" | "needsReview" | "sync" | "sprint";
 type TodaySectionErrors = Partial<Record<TodaySectionKey, string>>;
 type TodaySectionUpdatedAt = Partial<Record<TodaySectionKey, string>>;
+type WeekColumnKey = "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "weekend";
+
+interface WeekBoardTaskData extends TaskCardData {
+  priorityScore: number;
+  projectName: string | null;
+  waitingOn: string | null;
+  followUpAt: string | null;
+  needsReview: boolean;
+  dependencyBlocked: boolean;
+}
+
+interface WeekBoardColumn {
+  key: WeekColumnKey;
+  title: string;
+  subtitle: string;
+  tasks: WeekBoardTaskData[];
+  isCurrentDay: boolean;
+}
 
 interface TodayData {
-  topThree: TaskCardData[];
-  dueSoon: TaskCardData[];
+  weekBoard: WeekBoardTaskData[];
   waitingOn: WaitingTask[];
   needsReviewCount: number;
   openArtifactCount: number;
@@ -56,8 +74,7 @@ interface TodayData {
   sectionErrors: TodaySectionErrors;
   sectionUpdatedAt: TodaySectionUpdatedAt;
   // Raw tasks kept for modal lookup
-  topThreeRaw: TaskWithImplementation[];
-  dueSoonRaw: TaskWithImplementation[];
+  weekBoardRaw: TaskWithImplementation[];
 }
 
 interface NeedsReviewCountResponse {
@@ -145,6 +162,22 @@ function taskToCardData(
   };
 }
 
+function taskToWeekBoardData(
+  task: TaskWithImplementation,
+  dueState?: TaskCardData["dueState"],
+  syncedToday: boolean = false
+): WeekBoardTaskData {
+  return {
+    ...taskToCardData(task, dueState, syncedToday),
+    priorityScore: task.priority_score,
+    projectName: task.project?.name ?? null,
+    waitingOn: task.waiting_on,
+    followUpAt: task.follow_up_at,
+    needsReview: task.needs_review,
+    dependencyBlocked: Boolean(task.dependency_blocked),
+  };
+}
+
 async function fetchJson<T>(url: string, fallbackError: string): Promise<T> {
   const response = await fetch(url, { cache: "no-store" });
 
@@ -225,18 +258,131 @@ function getDueState(dueAt: string | null, now: Date, timeZone: string): TaskCar
   return "Due Soon";
 }
 
-function dedupeTasksForCapacity(...groups: TaskWithImplementation[][]): TaskWithImplementation[] {
-  const byId = new Map<string, TaskWithImplementation>();
+function getEndOfWeekIso(now: Date): string {
+  const endOfWeek = new Date(now);
+  endOfWeek.setDate(endOfWeek.getDate() + (6 - endOfWeek.getDay()));
+  endOfWeek.setHours(23, 59, 59, 999);
+  return endOfWeek.toISOString();
+}
 
-  for (const group of groups) {
-    for (const task of group) {
-      if (!byId.has(task.id)) {
-        byId.set(task.id, task);
-      }
+function addLocalDays(date: Date, days: number): Date {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function getStartOfWorkWeek(now: Date): Date {
+  const start = new Date(now);
+  const day = start.getDay();
+  const daysFromMonday = day === 0 ? -6 : 1 - day;
+  start.setDate(start.getDate() + daysFromMonday);
+  start.setHours(0, 0, 0, 0);
+  return start;
+}
+
+function formatColumnDate(date: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone }).format(date);
+}
+
+function compareTasksByDueThenPriority(a: WeekBoardTaskData, b: WeekBoardTaskData): number {
+  const aDue = a.dueAt ? new Date(a.dueAt).getTime() : Number.POSITIVE_INFINITY;
+  const bDue = b.dueAt ? new Date(b.dueAt).getTime() : Number.POSITIVE_INFINITY;
+
+  if (aDue !== bDue) {
+    return aDue - bDue;
+  }
+
+  if (a.priorityScore !== b.priorityScore) {
+    return b.priorityScore - a.priorityScore;
+  }
+
+  return a.title.localeCompare(b.title);
+}
+
+function buildWeekBoardColumns(tasks: WeekBoardTaskData[], now: Date, timeZone: string): WeekBoardColumn[] {
+  const todayDate = getDateInTimeZone(now, timeZone);
+  const weekStart = getStartOfWorkWeek(now);
+  const monday = getDateInTimeZone(weekStart, timeZone);
+  const tuesday = getDateInTimeZone(addLocalDays(weekStart, 1), timeZone);
+  const wednesday = getDateInTimeZone(addLocalDays(weekStart, 2), timeZone);
+  const thursday = getDateInTimeZone(addLocalDays(weekStart, 3), timeZone);
+  const friday = getDateInTimeZone(addLocalDays(weekStart, 4), timeZone);
+  const saturday = getDateInTimeZone(addLocalDays(weekStart, 5), timeZone);
+  const sunday = getDateInTimeZone(addLocalDays(weekStart, 6), timeZone);
+  const grouped: Record<WeekColumnKey, WeekBoardTaskData[]> = {
+    monday: [],
+    tuesday: [],
+    wednesday: [],
+    thursday: [],
+    friday: [],
+    weekend: [],
+  };
+
+  for (const task of tasks) {
+    if (!task.dueAt) {
+      continue;
+    }
+
+    const dueDate = getDateInTimeZone(new Date(task.dueAt), timeZone);
+    if (dueDate <= monday) {
+      grouped.monday.push(task);
+    } else if (dueDate === tuesday) {
+      grouped.tuesday.push(task);
+    } else if (dueDate === wednesday) {
+      grouped.wednesday.push(task);
+    } else if (dueDate === thursday) {
+      grouped.thursday.push(task);
+    } else if (dueDate === friday) {
+      grouped.friday.push(task);
+    } else if (dueDate === saturday || dueDate === sunday) {
+      grouped.weekend.push(task);
     }
   }
 
-  return Array.from(byId.values());
+  return [
+    {
+      key: "monday",
+      title: "Monday",
+      subtitle: formatColumnDate(weekStart, timeZone),
+      tasks: grouped.monday.sort(compareTasksByDueThenPriority),
+      isCurrentDay: monday === todayDate,
+    },
+    {
+      key: "tuesday",
+      title: "Tuesday",
+      subtitle: formatColumnDate(addLocalDays(weekStart, 1), timeZone),
+      tasks: grouped.tuesday.sort(compareTasksByDueThenPriority),
+      isCurrentDay: tuesday === todayDate,
+    },
+    {
+      key: "wednesday",
+      title: "Wednesday",
+      subtitle: formatColumnDate(addLocalDays(weekStart, 2), timeZone),
+      tasks: grouped.wednesday.sort(compareTasksByDueThenPriority),
+      isCurrentDay: wednesday === todayDate,
+    },
+    {
+      key: "thursday",
+      title: "Thursday",
+      subtitle: formatColumnDate(addLocalDays(weekStart, 3), timeZone),
+      tasks: grouped.thursday.sort(compareTasksByDueThenPriority),
+      isCurrentDay: thursday === todayDate,
+    },
+    {
+      key: "friday",
+      title: "Friday",
+      subtitle: formatColumnDate(addLocalDays(weekStart, 4), timeZone),
+      tasks: grouped.friday.sort(compareTasksByDueThenPriority),
+      isCurrentDay: friday === todayDate,
+    },
+    {
+      key: "weekend",
+      title: "Weekend",
+      subtitle: `${formatColumnDate(addLocalDays(weekStart, 5), timeZone)} - ${formatColumnDate(addLocalDays(weekStart, 6), timeZone)}`,
+      tasks: grouped.weekend.sort(compareTasksByDueThenPriority),
+      isCurrentDay: saturday === todayDate || sunday === todayDate,
+    },
+  ];
 }
 
 function getTaskCountByStatus(detail: SprintDetail, status: "In Progress" | "Planned" | "Blocked/Waiting"): number {
@@ -291,18 +437,15 @@ async function fetchCurrentSprintProgress(timeZone: string): Promise<SprintProgr
 }
 
 interface ExecutionSlices {
-  topThree: TaskCardData[];
-  dueSoon: TaskCardData[];
+  weekBoard: WeekBoardTaskData[];
   waitingOn: WaitingTask[];
   needsReviewCount: number;
   capacity: CapacityResult;
-  topThreeRaw: TaskWithImplementation[];
-  dueSoonRaw: TaskWithImplementation[];
+  weekBoardRaw: TaskWithImplementation[];
 }
 
 function buildExecutionSlices(
-  topThreeTasks: TaskWithImplementation[],
-  dueSoonTasks: TaskWithImplementation[],
+  weekBoardTasks: TaskWithImplementation[],
   waitingTasks: WaitingTaskSource[],
   needsReviewCount: number,
   timeZone: string,
@@ -310,10 +453,9 @@ function buildExecutionSlices(
   syncedTaskIds: Set<string>
 ): ExecutionSlices {
   const now = new Date();
-  const topThree = topThreeTasks.map((task) => taskToCardData(task, undefined, syncedTaskIds.has(task.id)));
-  const dueSoon = dueSoonTasks
-    .slice(0, 6)
-    .map((task) => taskToCardData(task, getDueState(task.due_at, now, timeZone), syncedTaskIds.has(task.id)));
+  const weekBoard = weekBoardTasks.map((task) => (
+    taskToWeekBoardData(task, getDueState(task.due_at, now, timeZone), syncedTaskIds.has(task.id))
+  ));
   const waitingOn: WaitingTask[] = waitingTasks.map((task) => ({
     id: task.id,
     title: task.title,
@@ -321,18 +463,14 @@ function buildExecutionSlices(
     followUpAt: task.follow_up_at,
   }));
 
-  const tasksForCapacity = dedupeTasksForCapacity(topThreeTasks, dueSoonTasks);
-  const topThreeIds = new Set(topThreeTasks.map((task) => task.id));
-  const capacity = calculateCapacity(tasksForCapacity, topThreeIds, normalizeBusyMinutes(meetingMinutes));
+  const capacity = calculateCapacity(weekBoardTasks, new Set<string>(), normalizeBusyMinutes(meetingMinutes));
 
   return {
-    topThree,
-    dueSoon,
+    weekBoard,
     waitingOn,
     needsReviewCount,
     capacity,
-    topThreeRaw: topThreeTasks,
-    dueSoonRaw: dueSoonTasks.slice(0, 6),
+    weekBoardRaw: weekBoardTasks,
   };
 }
 
@@ -340,12 +478,17 @@ async function fetchExecutionSlices(
   timeZone: string,
   meetingMinutes: number,
   syncedTaskIds: Set<string>,
+  weekEndIso: string,
   previous: ExecutionSlices | null = null,
   previousSectionUpdatedAt: TodaySectionUpdatedAt = {}
 ): Promise<{ slices: ExecutionSlices; sectionErrors: TodaySectionErrors; sectionUpdatedAt: TodaySectionUpdatedAt }> {
-  const [topThreeRes, dueSoonRes, waitingRes, needsReviewRes] = await Promise.allSettled([
-    fetchJson<TaskWithImplementation[]>("/api/tasks?view=top3", "Failed to fetch top priorities"),
-    fetchJson<TaskWithImplementation[]>("/api/tasks?view=due_soon&limit=30", "Failed to fetch due soon tasks"),
+  const weekBoardUrl = `/api/tasks?${new URLSearchParams({
+    view: "weekly_board",
+    week_end: weekEndIso,
+    limit: "200",
+  }).toString()}`;
+  const [weekBoardRes, waitingRes, needsReviewRes] = await Promise.allSettled([
+    fetchJson<TaskWithImplementation[]>(weekBoardUrl, "Failed to fetch this week's tasks"),
     fetchJson<WaitingTaskSource[]>("/api/tasks?view=waiting_summary&limit=30", "Failed to fetch blocked tasks"),
     fetchJson<NeedsReviewCountResponse>("/api/tasks?view=needs_review_count", "Failed to fetch review count"),
   ]);
@@ -377,8 +520,7 @@ async function fetchExecutionSlices(
     return fallback;
   }
 
-  const topThreeTasks = resolveSettled(topThreeRes, previous?.topThreeRaw ?? [], "topThree", "Failed to fetch top priorities");
-  const dueSoonTasks = resolveSettled(dueSoonRes, previous?.dueSoonRaw ?? [], "dueSoon", "Failed to fetch due soon tasks");
+  const weekBoardTasks = resolveSettled(weekBoardRes, previous?.weekBoardRaw ?? [], "weekBoard", "Failed to fetch this week's tasks");
   const waitingTasksFallback: WaitingTaskSource[] = (previous?.waitingOn || []).map((item) => ({
     id: item.id,
     title: item.title,
@@ -396,8 +538,7 @@ async function fetchExecutionSlices(
 
   return {
     slices: buildExecutionSlices(
-      topThreeTasks,
-      dueSoonTasks,
+      weekBoardTasks,
       waitingTasks,
       needsReviewCount,
       timeZone,
@@ -466,7 +607,14 @@ async function fetchTodayData(timeZone: string): Promise<TodayData> {
 
   const syncedTaskIds = new Set(latestSync?.task_ids || []);
   const meetingMinutes = normalizeBusyMinutes(calendarPayload.busyMinutes);
-  const execution = await fetchExecutionSlices(timeZone, meetingMinutes, syncedTaskIds, null, sectionUpdatedAt);
+  const execution = await fetchExecutionSlices(
+    timeZone,
+    meetingMinutes,
+    syncedTaskIds,
+    getEndOfWeekIso(new Date()),
+    null,
+    sectionUpdatedAt
+  );
 
   const meetings = (calendarPayload.events ?? [])
     .filter((event) => typeof event.start === "string" && typeof event.end === "string")
@@ -591,6 +739,275 @@ function MeetingStatusBadge({ status }: { status: MeetingTemporalStatus }) {
   );
 }
 
+function getBoardEdgeClass(task: WeekBoardTaskData): string {
+  if (task.dueState === "Overdue") {
+    return "border-l-red-400";
+  }
+
+  if (task.dueState === "Due Today") {
+    return "border-l-accent";
+  }
+
+  if (task.status === "Blocked/Waiting" || task.blocker || task.dependencyBlocked || task.needsReview) {
+    return "border-l-amber-400";
+  }
+
+  return "border-l-stroke";
+}
+
+function TaskMetaChip({
+  children,
+  tone = "neutral",
+}: {
+  children: ReactNode;
+  tone?: "neutral" | "red" | "amber" | "green" | "blue";
+}) {
+  const toneClass = {
+    neutral: "border-stroke bg-panel-muted text-muted-foreground",
+    red: "border-red-500/30 bg-red-500/10 text-red-300",
+    amber: "border-amber-500/30 bg-amber-500/10 text-amber-200",
+    green: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
+    blue: "border-blue-500/30 bg-blue-500/10 text-blue-200",
+  }[tone];
+
+  return (
+    <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${toneClass}`}>
+      {children}
+    </span>
+  );
+}
+
+function WeeklyTaskCard({
+  task,
+  completing,
+  pinning,
+  onOpen,
+  onDone,
+  onTogglePinned,
+}: {
+  task: WeekBoardTaskData;
+  completing: boolean;
+  pinning: boolean;
+  onOpen: () => void;
+  onDone: () => void;
+  onTogglePinned: (taskId: string, nextPinned: boolean) => void | Promise<void>;
+}) {
+  const contextName = task.projectName ?? task.implementationName ?? null;
+  const dueTone = task.dueState === "Overdue" ? "red" : task.dueState === "Due Today" ? "amber" : "neutral";
+
+  return (
+    <article
+      className={`rounded-card border border-l-4 border-stroke bg-panel p-3 shadow-sm transition-colors hover:border-foreground/20 hover:bg-panel-muted/50 ${getBoardEdgeClass(task)}`}
+    >
+      <button
+        type="button"
+        onClick={onOpen}
+        className="block w-full text-left focus:outline-none focus-visible:rounded-lg focus-visible:ring-2 focus-visible:ring-accent/50"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <h3 className="min-w-0 text-sm font-semibold leading-relaxed text-foreground">{task.title}</h3>
+          {task.pinned ? <TaskMetaChip tone="amber">Pinned</TaskMetaChip> : null}
+        </div>
+
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {task.dueState ? <TaskMetaChip tone={dueTone}>{task.dueState}</TaskMetaChip> : null}
+          {task.syncedToday ? <TaskMetaChip tone="green">Synced Today</TaskMetaChip> : null}
+          {task.blocker || task.dependencyBlocked ? <TaskMetaChip tone="red">Blocker</TaskMetaChip> : null}
+          {task.status === "Blocked/Waiting" ? <TaskMetaChip tone="amber">Waiting</TaskMetaChip> : null}
+          {task.needsReview ? <TaskMetaChip tone="amber">Review</TaskMetaChip> : null}
+          {task.tags.slice(0, 2).map((tag) => (
+            <TaskMetaChip key={tag}>{tag}</TaskMetaChip>
+          ))}
+        </div>
+
+        <dl className="mt-3 space-y-1.5 text-xs text-muted-foreground">
+          <div className="flex items-center justify-between gap-3">
+            <dt>Estimate</dt>
+            <dd className="font-semibold text-foreground">{task.estimatedMinutes} min</dd>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <dt>Due</dt>
+            <dd className="font-semibold text-foreground">{task.dueAt ? formatDate(task.dueAt) : "No due date"}</dd>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <dt>Status</dt>
+            <dd className="font-semibold text-foreground">{task.status}</dd>
+          </div>
+        </dl>
+
+        {contextName ? (
+          <p className="mt-3 rounded-md bg-panel-muted px-2.5 py-2 text-xs text-muted-foreground">
+            {task.projectName ? "Project" : "Application"}: {contextName}
+          </p>
+        ) : null}
+      </button>
+
+      <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">
+        <button
+          type="button"
+          onClick={onDone}
+          disabled={completing}
+          aria-label="Mark task complete"
+          className="rounded-md border border-green-500/30 bg-green-500/10 px-3 py-1.5 text-xs font-semibold text-green-400 transition hover:border-green-500/50 hover:bg-green-500/20 disabled:opacity-50"
+        >
+          {completing ? "Marking..." : "✓ Done"}
+        </button>
+        <button
+          type="button"
+          onClick={() => onTogglePinned(task.id, !task.pinned)}
+          disabled={pinning}
+          aria-label={task.pinned ? "Unpin task from Today" : "Pin task to Today"}
+          className={`rounded-md border px-2.5 py-1.5 text-xs font-semibold transition disabled:opacity-50 ${
+            task.pinned
+              ? "border-amber-500/40 bg-amber-500/15 text-amber-300 hover:bg-amber-500/20"
+              : "border-stroke bg-panel-muted text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          {pinning ? "..." : "Pin"}
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function WeeklyBoardColumn({
+  column,
+  completingIds,
+  pinningIds,
+  onOpenTask,
+  onDoneTask,
+  onTogglePinned,
+}: {
+  column: WeekBoardColumn;
+  completingIds: Set<string>;
+  pinningIds: Set<string>;
+  onOpenTask: (taskId: string) => void;
+  onDoneTask: (taskId: string) => void;
+  onTogglePinned: (taskId: string, nextPinned: boolean) => void | Promise<void>;
+}) {
+  return (
+    <section
+      className={`min-w-0 rounded-card border p-3 ${
+        column.isCurrentDay
+          ? "border-accent/50 bg-accent-soft/30"
+          : "border-stroke bg-background/50"
+      }`}
+    >
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">
+            {column.title}
+            {column.isCurrentDay ? <span className="ml-2 text-[11px] font-bold text-red-200">Today</span> : null}
+          </h3>
+          <p className="text-xs text-muted-foreground">{column.subtitle}</p>
+        </div>
+        <span className="rounded-full border border-stroke bg-panel px-2 py-0.5 text-xs font-bold text-foreground">
+          {column.tasks.length}
+        </span>
+      </div>
+
+      {column.tasks.length === 0 ? (
+        <p className="rounded-lg border border-dashed border-stroke bg-panel/50 px-3 py-5 text-center text-xs text-muted-foreground">
+          No tasks here.
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {column.tasks.map((task) => (
+            <WeeklyTaskCard
+              key={task.id}
+              task={task}
+              completing={completingIds.has(task.id)}
+              pinning={pinningIds.has(task.id)}
+              onOpen={() => onOpenTask(task.id)}
+              onDone={() => onDoneTask(task.id)}
+              onTogglePinned={onTogglePinned}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function WaitingReviewColumn({
+  waitingOn,
+  needsReviewCount,
+  sectionUpdatedAt,
+  sectionErrors,
+  timeZone,
+}: {
+  waitingOn: WaitingTask[];
+  needsReviewCount: number;
+  sectionUpdatedAt: TodaySectionUpdatedAt;
+  sectionErrors: TodaySectionErrors;
+  timeZone: string;
+}) {
+  const total = waitingOn.length + needsReviewCount;
+
+  return (
+    <section className="min-w-0 rounded-card border border-stroke bg-background/50 p-3">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">Waiting / Review</h3>
+          <p className="text-xs text-muted-foreground">
+            {sectionUpdatedAt.waitingOn ? `Updated ${formatUpdatedTime(sectionUpdatedAt.waitingOn, timeZone)}` : "Blocked and queue items"}
+          </p>
+        </div>
+        <span className="rounded-full border border-stroke bg-panel px-2 py-0.5 text-xs font-bold text-foreground">{total}</span>
+      </div>
+
+      {sectionErrors.waitingOn ? (
+        <p className="mb-3 rounded-md border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+          Waiting list refresh failed. Showing available data.
+        </p>
+      ) : null}
+
+      <div className="space-y-3">
+        {waitingOn.slice(0, 5).map((item) => (
+          <article key={item.id} className="rounded-card border border-l-4 border-stroke border-l-amber-400 bg-panel p-3 shadow-sm">
+            <h3 className="text-sm font-semibold leading-relaxed text-foreground">{item.title}</h3>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Waiting on {item.waitingOn}
+              {item.followUpAt ? ` · follow up ${formatDate(item.followUpAt)}` : ""}
+            </p>
+            <Link
+              href={`/backlog?expand=${item.id}`}
+              className="mt-3 inline-flex rounded-md border border-stroke bg-panel-muted px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-panel"
+            >
+              Open Task
+            </Link>
+          </article>
+        ))}
+
+        {needsReviewCount > 0 ? (
+          <article className="rounded-card border border-l-4 border-stroke border-l-amber-400 bg-panel p-3 shadow-sm">
+            <h3 className="text-sm font-semibold leading-relaxed text-foreground">
+              {needsReviewCount} {needsReviewCount === 1 ? "task needs" : "tasks need"} review
+            </h3>
+            {sectionErrors.needsReview ? (
+              <p className="mt-2 text-xs text-amber-300">Review count refresh failed. Showing available data.</p>
+            ) : (
+              <p className="mt-2 text-xs text-muted-foreground">Review queue remains one click away from the board.</p>
+            )}
+            <Link
+              href="/backlog?review=needs_review"
+              className="mt-3 inline-flex rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-white transition hover:opacity-90"
+            >
+              Open Review Queue
+            </Link>
+          </article>
+        ) : null}
+
+        {waitingOn.length === 0 && needsReviewCount === 0 ? (
+          <p className="rounded-lg border border-dashed border-stroke bg-panel/50 px-3 py-5 text-center text-xs text-muted-foreground">
+            Nothing blocked or waiting for review.
+          </p>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 function LoadingSkeleton() {
   return (
     <div className="space-y-6">
@@ -635,8 +1052,7 @@ async function setTaskPinned(taskId: string, pinned: boolean): Promise<void> {
 function applyPinnedState(data: TodayData, taskId: string, pinned: boolean): TodayData {
   return {
     ...data,
-    topThree: data.topThree.map((task) => (task.id === taskId ? { ...task, pinned } : task)),
-    dueSoon: data.dueSoon.map((task) => (task.id === taskId ? { ...task, pinned } : task)),
+    weekBoard: data.weekBoard.map((task) => (task.id === taskId ? { ...task, pinned } : task)),
   };
 }
 
@@ -676,6 +1092,13 @@ export default function TodayPage() {
     day: "numeric",
     year: "numeric",
   }).format(new Date());
+  const weekColumns = data ? buildWeekBoardColumns(data.weekBoard, new Date(nowMs), timeZone) : [];
+  const weekdayColumns = weekColumns.filter((column) => column.key !== "weekend");
+  const weekendColumn = weekColumns.find((column) => column.key === "weekend") ?? null;
+  const boardTaskCount = data?.weekBoard.length ?? 0;
+  const overdueCount = data?.weekBoard.filter((task) => task.dueState === "Overdue").length ?? 0;
+  const todayDueCount = data?.weekBoard.filter((task) => task.dueState === "Due Today").length ?? 0;
+  const boardMinutes = data?.weekBoard.reduce((sum, task) => sum + task.estimatedMinutes, 0) ?? 0;
 
   useEffect(() => {
     if (!timeZoneReady) {
@@ -760,14 +1183,13 @@ export default function TodayPage() {
         timeZone,
         meetingMinutes,
         syncedTaskIds,
+        getEndOfWeekIso(new Date()),
         {
-          topThree: previousData.topThree,
-          dueSoon: previousData.dueSoon,
+          weekBoard: previousData.weekBoard,
           waitingOn: previousData.waitingOn,
           needsReviewCount: previousData.needsReviewCount,
           capacity: previousData.capacity,
-          topThreeRaw: previousData.topThreeRaw,
-          dueSoonRaw: previousData.dueSoonRaw,
+          weekBoardRaw: previousData.weekBoardRaw,
         },
         previousData.sectionUpdatedAt
       );
@@ -778,8 +1200,7 @@ export default function TodayPage() {
         }
 
         const nextSectionErrors: TodaySectionErrors = { ...current.sectionErrors };
-        delete nextSectionErrors.topThree;
-        delete nextSectionErrors.dueSoon;
+        delete nextSectionErrors.weekBoard;
         delete nextSectionErrors.waitingOn;
         delete nextSectionErrors.needsReview;
 
@@ -815,7 +1236,7 @@ export default function TodayPage() {
         : undefined;
       const nextDueState = nextDueAt !== undefined ? getDueState(nextDueAt, new Date(), timeZone) : undefined;
 
-      function mergeCard(task: TaskCardData): TaskCardData {
+      function mergeCard(task: WeekBoardTaskData): WeekBoardTaskData {
         if (task.id !== taskId) {
           return task;
         }
@@ -828,6 +1249,9 @@ export default function TodayPage() {
           ...(typeof updates.status === "string" ? { status: updates.status } : {}),
           ...(typeof updates.blocker === "boolean" ? { blocker: updates.blocker } : {}),
           ...(typeof updates.pinned === "boolean" ? { pinned: updates.pinned } : {}),
+          ...(typeof updates.needs_review === "boolean" ? { needsReview: updates.needs_review } : {}),
+          ...(typeof updates.waiting_on === "string" || updates.waiting_on === null ? { waitingOn: updates.waiting_on } : {}),
+          ...(typeof updates.follow_up_at === "string" || updates.follow_up_at === null ? { followUpAt: updates.follow_up_at } : {}),
           ...(nextDueAt !== undefined ? { dueAt: nextDueAt, dueState: nextDueState } : {}),
         };
       }
@@ -838,10 +1262,8 @@ export default function TodayPage() {
 
       return {
         ...prev,
-        topThree: prev.topThree.map(mergeCard),
-        dueSoon: prev.dueSoon.map(mergeCard),
-        topThreeRaw: prev.topThreeRaw.map(mergeTask),
-        dueSoonRaw: prev.dueSoonRaw.map(mergeTask),
+        weekBoard: prev.weekBoard.map(mergeCard),
+        weekBoardRaw: prev.weekBoardRaw.map(mergeTask),
       };
     });
   }, [timeZone]);
@@ -855,10 +1277,8 @@ export default function TodayPage() {
 
       return {
         ...prev,
-        topThree: prev.topThree.filter((task) => task.id !== taskId),
-        dueSoon: prev.dueSoon.filter((task) => task.id !== taskId),
-        topThreeRaw: prev.topThreeRaw.filter((task) => task.id !== taskId),
-        dueSoonRaw: prev.dueSoonRaw.filter((task) => task.id !== taskId),
+        weekBoard: prev.weekBoard.filter((task) => task.id !== taskId),
+        weekBoardRaw: prev.weekBoardRaw.filter((task) => task.id !== taskId),
       };
     });
   }, []);
@@ -1088,174 +1508,85 @@ export default function TodayPage() {
             </div>
           </section>
 
-          <section className="space-y-3">
-            <div>
-              <h2 className="text-lg font-semibold text-foreground">Top 3 Today</h2>
-              {data.sectionUpdatedAt.topThree ? (
-                <p className="text-xs text-muted-foreground">Updated {formatUpdatedTime(data.sectionUpdatedAt.topThree, timeZone)}</p>
-              ) : null}
+          <section className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+              <article className="rounded-card border border-stroke bg-panel p-4 shadow-sm md:col-span-2 xl:col-span-2">
+                <p className="text-xs font-bold uppercase tracking-[0.12em] text-muted-foreground">This Week</p>
+                <h2 className="mt-1 text-xl font-semibold text-foreground">What&apos;s due this week</h2>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Deadline-driven board for Monday through Friday, with weekend work separated below so the normal workweek stays clean.
+                </p>
+              </article>
+              <article className="rounded-card border border-stroke bg-panel p-4 shadow-sm">
+                <p className="text-xs font-bold uppercase tracking-[0.12em] text-muted-foreground">Open</p>
+                <p className="mt-1 text-2xl font-semibold text-foreground">{boardTaskCount}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{boardMinutes} min estimated</p>
+              </article>
+              <article className="rounded-card border border-red-500/30 bg-red-500/10 p-4 shadow-sm">
+                <p className="text-xs font-bold uppercase tracking-[0.12em] text-red-300">Overdue</p>
+                <p className="mt-1 text-2xl font-semibold text-red-200">{overdueCount}</p>
+                <p className="mt-1 text-xs text-red-200/80">Red card edge</p>
+              </article>
+              <article className="rounded-card border border-accent/40 bg-accent-soft p-4 shadow-sm">
+                <p className="text-xs font-bold uppercase tracking-[0.12em] text-red-200">Due Today</p>
+                <p className="mt-1 text-2xl font-semibold text-foreground">{todayDueCount}</p>
+                <p className="mt-1 text-xs text-red-100/70">Accent card edge</p>
+              </article>
             </div>
-            <p className="text-sm text-muted-foreground">
-              Rank-ordered active work. Tasks tagged{" "}
-              <span className="font-semibold text-emerald-400">Synced Today</span> came from your latest sync run.
-            </p>
-            {data.sectionErrors.topThree ? (
-              <p className="rounded-md border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-                Top 3 refresh failed. Showing available data.
-              </p>
-            ) : null}
-            {data.topThree.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No tasks scheduled.</p>
-            ) : (
-              <div className="grid gap-4 xl:grid-cols-3">
-                {data.topThree.map((task) => (
-                  <div key={task.id} className="flex flex-col gap-2">
-                    <div
-                      role="button"
-                      tabIndex={0}
-                      className="block cursor-pointer text-left focus:outline-none focus-visible:rounded-card focus-visible:ring-2 focus-visible:ring-accent/50"
-                      aria-label={`Open task details for ${task.title}`}
-                      onClick={() => setModalTaskId(task.id)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          setModalTaskId(task.id);
-                        }
-                      }}
-                    >
-                      <TaskCard
-                        task={task}
-                        pinning={pinningIds.has(task.id)}
-                        onTogglePinned={handleTogglePinned}
-                      />
-                    </div>
-                    <button
-                      onClick={() => handleQuickComplete(task.id)}
-                      disabled={completingIds.has(task.id)}
-                      aria-label="Mark task complete"
-                      className="w-full rounded-md border border-green-500/30 bg-green-500/10 px-3 py-1.5 text-xs font-semibold text-green-400 transition hover:border-green-500/50 hover:bg-green-500/20 disabled:opacity-50"
-                      title="Mark as done"
-                    >
-                      {completingIds.has(task.id) ? "Marking done..." : "✓ Done"}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
 
-          <section className="space-y-3">
-            <div>
-              <h2 className="text-lg font-semibold text-foreground">Due Soon (48h)</h2>
-              {data.sectionUpdatedAt.dueSoon ? (
-                <p className="text-xs text-muted-foreground">Updated {formatUpdatedTime(data.sectionUpdatedAt.dueSoon, timeZone)}</p>
-              ) : null}
-            </div>
-            {data.sectionErrors.dueSoon ? (
-              <p className="rounded-md border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-                Due-soon refresh failed. Showing available data.
-              </p>
-            ) : null}
-            {data.dueSoon.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Nothing due in the next 48 hours.</p>
-            ) : (
-              <div className="grid gap-4 md:grid-cols-2">
-                {data.dueSoon.map((task) => (
-                  <div key={task.id} className="flex flex-col gap-2">
-                    <div
-                      role="button"
-                      tabIndex={0}
-                      className="block cursor-pointer text-left focus:outline-none focus-visible:rounded-card focus-visible:ring-2 focus-visible:ring-accent/50"
-                      aria-label={`Open task details for ${task.title}`}
-                      onClick={() => setModalTaskId(task.id)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          setModalTaskId(task.id);
-                        }
-                      }}
-                    >
-                      <TaskCard
-                        task={task}
-                        pinning={pinningIds.has(task.id)}
-                        onTogglePinned={handleTogglePinned}
-                      />
-                    </div>
-                    <button
-                      onClick={() => handleQuickComplete(task.id)}
-                      disabled={completingIds.has(task.id)}
-                      aria-label="Mark task complete"
-                      className="w-full rounded-md border border-green-500/30 bg-green-500/10 px-3 py-1.5 text-xs font-semibold text-green-400 transition hover:border-green-500/50 hover:bg-green-500/20 disabled:opacity-50"
-                      title="Mark as done"
-                    >
-                      {completingIds.has(task.id) ? "Marking done..." : "✓ Done"}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
-
-          <section className="grid gap-4 lg:grid-cols-2">
-            <article className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+            <div className="flex flex-wrap items-end justify-between gap-4">
               <div>
-                <h2 className="text-lg font-semibold text-foreground">Blocked / Waiting</h2>
-                {data.sectionUpdatedAt.waitingOn ? (
-                  <p className="text-xs text-muted-foreground">Updated {formatUpdatedTime(data.sectionUpdatedAt.waitingOn, timeZone)}</p>
+                <h2 className="text-lg font-semibold text-foreground">Weekly Board</h2>
+                {data.sectionUpdatedAt.weekBoard ? (
+                  <p className="text-xs text-muted-foreground">Updated {formatUpdatedTime(data.sectionUpdatedAt.weekBoard, timeZone)}</p>
                 ) : null}
               </div>
-              {data.sectionErrors.waitingOn ? (
-                <p className="mt-3 rounded-md border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-                  Waiting list refresh failed. Showing available data.
-                </p>
-              ) : null}
-              {data.waitingOn.length === 0 ? (
-                <p className="mt-4 text-sm text-muted-foreground">No tasks waiting on others.</p>
-              ) : (
-                <ul className="mt-4 space-y-3">
-                  {data.waitingOn.map((item) => (
-                    <li key={item.id} className="rounded-lg bg-panel-muted p-3 text-sm">
-                      <p className="font-medium text-foreground">{item.title}</p>
-                      <p className="mt-1 text-muted-foreground">
-                        {item.waitingOn}
-                        {item.followUpAt ? ` · follow up ${formatDate(item.followUpAt)}` : ""}
-                      </p>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </article>
-
-            <article className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
-              <div>
-                <h2 className="text-lg font-semibold text-foreground">Needs Review</h2>
-                {data.sectionUpdatedAt.needsReview ? (
-                  <p className="text-xs text-muted-foreground">Updated {formatUpdatedTime(data.sectionUpdatedAt.needsReview, timeZone)}</p>
-                ) : null}
+              <div className="flex flex-wrap gap-2 text-[11px] font-semibold">
+                <span className="rounded-full border border-red-500/30 bg-red-500/10 px-2 py-1 text-red-300">Red = overdue</span>
+                <span className="rounded-full border border-accent/40 bg-accent-soft px-2 py-1 text-red-100">Accent = due today</span>
+                <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-200">Amber = blocked / waiting / review</span>
               </div>
-              {data.sectionErrors.needsReview ? (
-                <p className="mt-3 rounded-md border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-                  Review count refresh failed. Showing available data.
-                </p>
+            </div>
+
+            {data.sectionErrors.weekBoard ? (
+              <p className="rounded-md border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+                Weekly board refresh failed. Showing available data.
+              </p>
+            ) : null}
+
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+              {weekdayColumns.map((column) => (
+                <WeeklyBoardColumn
+                  key={column.key}
+                  column={column}
+                  completingIds={completingIds}
+                  pinningIds={pinningIds}
+                  onOpenTask={setModalTaskId}
+                  onDoneTask={handleQuickComplete}
+                  onTogglePinned={handleTogglePinned}
+                />
+              ))}
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
+              {weekendColumn ? (
+                <WeeklyBoardColumn
+                  column={weekendColumn}
+                  completingIds={completingIds}
+                  pinningIds={pinningIds}
+                  onOpenTask={setModalTaskId}
+                  onDoneTask={handleQuickComplete}
+                  onTogglePinned={handleTogglePinned}
+                />
               ) : null}
-              {data.needsReviewCount === 0 ? (
-                <div className="mt-4">
-                  <p className="text-sm text-muted-foreground">All caught up! No tasks need review.</p>
-                </div>
-              ) : (
-                <div className="mt-4">
-                  <p className="text-sm text-muted-foreground">
-                    {data.needsReviewCount} {data.needsReviewCount === 1 ? "task needs" : "tasks need"} review in backlog.
-                  </p>
-                  <Link
-                    href="/backlog?review=needs_review"
-                    className="mt-4 inline-flex rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:opacity-90"
-                  >
-                    Open Review Queue ({data.needsReviewCount})
-                  </Link>
-                </div>
-              )}
-            </article>
+              <WaitingReviewColumn
+                waitingOn={data.waitingOn}
+                needsReviewCount={data.needsReviewCount}
+                sectionUpdatedAt={data.sectionUpdatedAt}
+                sectionErrors={data.sectionErrors}
+                timeZone={timeZone}
+              />
+            </div>
           </section>
         </>
       ) : null}
@@ -1263,12 +1594,10 @@ export default function TodayPage() {
       <TaskDetailModal
         task={
           modalTaskId
-            ? (data?.topThreeRaw.find((t) => t.id === modalTaskId) ??
-               data?.dueSoonRaw.find((t) => t.id === modalTaskId) ??
-               null)
+            ? (data?.weekBoardRaw.find((t) => t.id === modalTaskId) ?? null)
             : null
         }
-        allTasks={[...(data?.topThreeRaw ?? []), ...(data?.dueSoonRaw ?? [])]}
+        allTasks={[...(data?.weekBoardRaw ?? [])]}
         commitments={commitments}
         onClose={() => setModalTaskId(null)}
         onTaskUpdated={handleTaskUpdated}
