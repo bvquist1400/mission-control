@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import type { ReactNode } from "react";
 import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
 import type { TaskCardData } from "@/components/tasks/TaskCard";
@@ -59,6 +58,7 @@ interface WeekBoardColumn {
   title: string;
   subtitle: string;
   tasks: WeekBoardTaskData[];
+  dueDate: string;
   isCurrentDay: boolean;
 }
 
@@ -284,6 +284,10 @@ function formatColumnDate(date: Date, timeZone: string): string {
   return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone }).format(date);
 }
 
+function buildDateOnlyDueAt(dateOnly: string): string {
+  return `${dateOnly}T23:59:59.999Z`;
+}
+
 function compareTasksByDueThenPriority(a: WeekBoardTaskData, b: WeekBoardTaskData): number {
   const aDue = a.dueAt ? new Date(a.dueAt).getTime() : Number.POSITIVE_INFINITY;
   const bDue = b.dueAt ? new Date(b.dueAt).getTime() : Number.POSITIVE_INFINITY;
@@ -345,6 +349,7 @@ function buildWeekBoardColumns(tasks: WeekBoardTaskData[], now: Date, timeZone: 
       title: "Monday",
       subtitle: formatColumnDate(weekStart, timeZone),
       tasks: grouped.monday.sort(compareTasksByDueThenPriority),
+      dueDate: monday,
       isCurrentDay: monday === todayDate,
     },
     {
@@ -352,6 +357,7 @@ function buildWeekBoardColumns(tasks: WeekBoardTaskData[], now: Date, timeZone: 
       title: "Tuesday",
       subtitle: formatColumnDate(addLocalDays(weekStart, 1), timeZone),
       tasks: grouped.tuesday.sort(compareTasksByDueThenPriority),
+      dueDate: tuesday,
       isCurrentDay: tuesday === todayDate,
     },
     {
@@ -359,6 +365,7 @@ function buildWeekBoardColumns(tasks: WeekBoardTaskData[], now: Date, timeZone: 
       title: "Wednesday",
       subtitle: formatColumnDate(addLocalDays(weekStart, 2), timeZone),
       tasks: grouped.wednesday.sort(compareTasksByDueThenPriority),
+      dueDate: wednesday,
       isCurrentDay: wednesday === todayDate,
     },
     {
@@ -366,6 +373,7 @@ function buildWeekBoardColumns(tasks: WeekBoardTaskData[], now: Date, timeZone: 
       title: "Thursday",
       subtitle: formatColumnDate(addLocalDays(weekStart, 3), timeZone),
       tasks: grouped.thursday.sort(compareTasksByDueThenPriority),
+      dueDate: thursday,
       isCurrentDay: thursday === todayDate,
     },
     {
@@ -373,6 +381,7 @@ function buildWeekBoardColumns(tasks: WeekBoardTaskData[], now: Date, timeZone: 
       title: "Friday",
       subtitle: formatColumnDate(addLocalDays(weekStart, 4), timeZone),
       tasks: grouped.friday.sort(compareTasksByDueThenPriority),
+      dueDate: friday,
       isCurrentDay: friday === todayDate,
     },
     {
@@ -380,6 +389,7 @@ function buildWeekBoardColumns(tasks: WeekBoardTaskData[], now: Date, timeZone: 
       title: "Weekend",
       subtitle: `${formatColumnDate(addLocalDays(weekStart, 5), timeZone)} - ${formatColumnDate(addLocalDays(weekStart, 6), timeZone)}`,
       tasks: grouped.weekend.sort(compareTasksByDueThenPriority),
+      dueDate: saturday,
       isCurrentDay: saturday === todayDate || sunday === todayDate,
     },
   ];
@@ -755,94 +765,51 @@ function getBoardEdgeClass(task: WeekBoardTaskData): string {
   return "border-l-stroke";
 }
 
-function TaskMetaChip({
-  children,
-  tone = "neutral",
-}: {
-  children: ReactNode;
-  tone?: "neutral" | "red" | "amber" | "green" | "blue";
-}) {
-  const toneClass = {
-    neutral: "border-stroke bg-panel-muted text-muted-foreground",
-    red: "border-red-500/30 bg-red-500/10 text-red-300",
-    amber: "border-amber-500/30 bg-amber-500/10 text-amber-200",
-    green: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
-    blue: "border-blue-500/30 bg-blue-500/10 text-blue-200",
-  }[tone];
-
-  return (
-    <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${toneClass}`}>
-      {children}
-    </span>
-  );
-}
-
 function WeeklyTaskCard({
   task,
   completing,
   pinning,
+  moving,
+  dragging,
   onOpen,
   onDone,
   onTogglePinned,
+  onDragStart,
+  onDragEnd,
 }: {
   task: WeekBoardTaskData;
   completing: boolean;
   pinning: boolean;
+  moving: boolean;
+  dragging: boolean;
   onOpen: () => void;
   onDone: () => void;
   onTogglePinned: (taskId: string, nextPinned: boolean) => void | Promise<void>;
+  onDragStart: (taskId: string) => void;
+  onDragEnd: () => void;
 }) {
-  const contextName = task.projectName ?? task.implementationName ?? null;
-  const dueTone = task.dueState === "Overdue" ? "red" : task.dueState === "Due Today" ? "amber" : "neutral";
-
   return (
     <article
-      className={`rounded-card border border-l-4 border-stroke bg-panel p-3 shadow-sm transition-colors hover:border-foreground/20 hover:bg-panel-muted/50 ${getBoardEdgeClass(task)}`}
+      draggable={!completing && !pinning && !moving}
+      onDragStart={(event) => {
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", task.id);
+        onDragStart(task.id);
+      }}
+      onDragEnd={onDragEnd}
+      className={`cursor-grab rounded-xl border border-l-4 border-stroke bg-panel p-2.5 shadow-sm transition-colors hover:border-foreground/20 hover:bg-panel-muted/50 active:cursor-grabbing ${
+        dragging ? "opacity-50" : ""
+      } ${moving ? "opacity-60" : ""} ${getBoardEdgeClass(task)}`}
     >
       <button
         type="button"
         onClick={onOpen}
         className="block w-full text-left focus:outline-none focus-visible:rounded-lg focus-visible:ring-2 focus-visible:ring-accent/50"
       >
-        <div className="flex items-start justify-between gap-3">
-          <h3 className="min-w-0 text-sm font-semibold leading-relaxed text-foreground">{task.title}</h3>
-          {task.pinned ? <TaskMetaChip tone="amber">Pinned</TaskMetaChip> : null}
-        </div>
-
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          {task.dueState ? <TaskMetaChip tone={dueTone}>{task.dueState}</TaskMetaChip> : null}
-          {task.syncedToday ? <TaskMetaChip tone="green">Synced Today</TaskMetaChip> : null}
-          {task.blocker || task.dependencyBlocked ? <TaskMetaChip tone="red">Blocker</TaskMetaChip> : null}
-          {task.status === "Blocked/Waiting" ? <TaskMetaChip tone="amber">Waiting</TaskMetaChip> : null}
-          {task.needsReview ? <TaskMetaChip tone="amber">Review</TaskMetaChip> : null}
-          {task.tags.slice(0, 2).map((tag) => (
-            <TaskMetaChip key={tag}>{tag}</TaskMetaChip>
-          ))}
-        </div>
-
-        <dl className="mt-3 space-y-1.5 text-xs text-muted-foreground">
-          <div className="flex items-center justify-between gap-3">
-            <dt>Estimate</dt>
-            <dd className="font-semibold text-foreground">{task.estimatedMinutes} min</dd>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <dt>Due</dt>
-            <dd className="font-semibold text-foreground">{task.dueAt ? formatDate(task.dueAt) : "No due date"}</dd>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <dt>Status</dt>
-            <dd className="font-semibold text-foreground">{task.status}</dd>
-          </div>
-        </dl>
-
-        {contextName ? (
-          <p className="mt-3 rounded-md bg-panel-muted px-2.5 py-2 text-xs text-muted-foreground">
-            {task.projectName ? "Project" : "Application"}: {contextName}
-          </p>
-        ) : null}
+        <h3 className="text-sm font-semibold leading-snug text-foreground">{task.title}</h3>
       </button>
 
-      <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">
+      <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
         <button
           type="button"
           onClick={onDone}
@@ -850,7 +817,7 @@ function WeeklyTaskCard({
           aria-label="Mark task complete"
           className="rounded-md border border-green-500/30 bg-green-500/10 px-3 py-1.5 text-xs font-semibold text-green-400 transition hover:border-green-500/50 hover:bg-green-500/20 disabled:opacity-50"
         >
-          {completing ? "Marking..." : "✓ Done"}
+          {moving ? "Moving..." : completing ? "Marking..." : "✓ Done"}
         </button>
         <button
           type="button"
@@ -874,23 +841,61 @@ function WeeklyBoardColumn({
   column,
   completingIds,
   pinningIds,
+  movingIds,
+  draggingTaskId,
+  dropTargetKey,
   onOpenTask,
   onDoneTask,
   onTogglePinned,
+  onDragStartTask,
+  onDragEndTask,
+  onDropTask,
+  onDropTargetChange,
 }: {
   column: WeekBoardColumn;
   completingIds: Set<string>;
   pinningIds: Set<string>;
+  movingIds: Set<string>;
+  draggingTaskId: string | null;
+  dropTargetKey: WeekColumnKey | null;
   onOpenTask: (taskId: string) => void;
   onDoneTask: (taskId: string) => void;
   onTogglePinned: (taskId: string, nextPinned: boolean) => void | Promise<void>;
+  onDragStartTask: (taskId: string) => void;
+  onDragEndTask: () => void;
+  onDropTask: (taskId: string, dueDate: string) => void;
+  onDropTargetChange: (key: WeekColumnKey | null) => void;
 }) {
+  const isDropTarget = dropTargetKey === column.key;
+
   return (
     <section
-      className={`min-w-0 rounded-card border p-3 ${
-        column.isCurrentDay
-          ? "border-accent/50 bg-accent-soft/30"
-          : "border-stroke bg-background/50"
+      onDragOver={(event) => {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        if (dropTargetKey !== column.key) {
+          onDropTargetChange(column.key);
+        }
+      }}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          onDropTargetChange(null);
+        }
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        const taskId = event.dataTransfer.getData("text/plain");
+        onDropTargetChange(null);
+        if (taskId) {
+          onDropTask(taskId, column.dueDate);
+        }
+      }}
+      className={`min-w-0 rounded-card border p-3 transition-colors ${
+        isDropTarget
+          ? "border-accent bg-accent-soft/40"
+          : column.isCurrentDay
+            ? "border-accent/50 bg-accent-soft/30"
+            : "border-stroke bg-background/50"
       }`}
     >
       <div className="mb-3 flex items-center justify-between gap-3">
@@ -918,9 +923,13 @@ function WeeklyBoardColumn({
               task={task}
               completing={completingIds.has(task.id)}
               pinning={pinningIds.has(task.id)}
+              moving={movingIds.has(task.id)}
+              dragging={draggingTaskId === task.id}
               onOpen={() => onOpenTask(task.id)}
               onDone={() => onDoneTask(task.id)}
               onTogglePinned={onTogglePinned}
+              onDragStart={onDragStartTask}
+              onDragEnd={onDragEndTask}
             />
           ))}
         </div>
@@ -1049,10 +1058,38 @@ async function setTaskPinned(taskId: string, pinned: boolean): Promise<void> {
   }
 }
 
+async function setTaskDueAt(taskId: string, dueAt: string): Promise<void> {
+  const response = await fetch(`/api/tasks/${taskId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ due_at: dueAt }),
+  });
+
+  if (!response.ok) {
+    throw new Error("Failed to move task");
+  }
+}
+
 function applyPinnedState(data: TodayData, taskId: string, pinned: boolean): TodayData {
   return {
     ...data,
     weekBoard: data.weekBoard.map((task) => (task.id === taskId ? { ...task, pinned } : task)),
+  };
+}
+
+function applyDueAtState(data: TodayData, taskId: string, dueAt: string, timeZone: string): TodayData {
+  const dueState = getDueState(dueAt, new Date(), timeZone);
+  const weekBoardRaw = data.weekBoardRaw.map((task) => (
+    task.id === taskId ? { ...task, due_at: dueAt } : task
+  ));
+
+  return {
+    ...data,
+    weekBoard: data.weekBoard.map((task) => (
+      task.id === taskId ? { ...task, dueAt, dueState } : task
+    )),
+    weekBoardRaw,
+    capacity: calculateCapacity(weekBoardRaw, new Set<string>(), data.capacity.breakdown.meeting_minutes),
   };
 }
 
@@ -1062,6 +1099,9 @@ export default function TodayPage() {
   const [error, setError] = useState<string | null>(null);
   const [completingIds, setCompletingIds] = useState<Set<string>>(new Set());
   const [pinningIds, setPinningIds] = useState<Set<string>>(new Set());
+  const [movingIds, setMovingIds] = useState<Set<string>>(new Set());
+  const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
+  const [dropTargetKey, setDropTargetKey] = useState<WeekColumnKey | null>(null);
   const [modalTaskId, setModalTaskId] = useState<string | null>(null);
   const [commitments, setCommitments] = useState<CommitmentSummary[]>([]);
   const [commitmentsLoaded, setCommitmentsLoaded] = useState(false);
@@ -1305,6 +1345,36 @@ export default function TodayPage() {
     }
   }
 
+  async function handleMoveTask(taskId: string, dateOnly: string) {
+    if (!data || movingIds.has(taskId)) return;
+
+    const task = data.weekBoard.find((item) => item.id === taskId);
+    if (!task) return;
+
+    const nextDueAt = buildDateOnlyDueAt(dateOnly);
+    if (task.dueAt === nextDueAt) return;
+
+    const previousData = data;
+    setMovingIds((prev) => new Set(prev).add(taskId));
+    setError(null);
+    setData((prev) => (prev ? applyDueAtState(prev, taskId, nextDueAt, timeZone) : prev));
+
+    try {
+      await setTaskDueAt(taskId, nextDueAt);
+    } catch (err) {
+      setData(previousData);
+      setError(err instanceof Error ? err.message : "Failed to move task");
+    } finally {
+      setMovingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(taskId);
+        return next;
+      });
+      setDraggingTaskId(null);
+      setDropTargetKey(null);
+    }
+  }
+
   return (
     <div className="space-y-8">
       <PageHeader
@@ -1509,28 +1579,24 @@ export default function TodayPage() {
           </section>
 
           <section className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-              <article className="rounded-card border border-stroke bg-panel p-4 shadow-sm md:col-span-2 xl:col-span-2">
-                <p className="text-xs font-bold uppercase tracking-[0.12em] text-muted-foreground">This Week</p>
-                <h2 className="mt-1 text-xl font-semibold text-foreground">What&apos;s due this week</h2>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Deadline-driven board for Monday through Friday, with weekend work separated below so the normal workweek stays clean.
+            <div className="flex flex-wrap gap-2">
+              <article className="rounded-xl border border-stroke bg-panel px-3 py-2 shadow-sm">
+                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-muted-foreground">Open Work</p>
+                <p className="mt-0.5 text-sm font-semibold text-foreground">
+                  {boardTaskCount} <span className="font-medium text-muted-foreground">tasks · {boardMinutes} min</span>
                 </p>
               </article>
-              <article className="rounded-card border border-stroke bg-panel p-4 shadow-sm">
-                <p className="text-xs font-bold uppercase tracking-[0.12em] text-muted-foreground">Open</p>
-                <p className="mt-1 text-2xl font-semibold text-foreground">{boardTaskCount}</p>
-                <p className="mt-1 text-xs text-muted-foreground">{boardMinutes} min estimated</p>
+              <article className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 shadow-sm">
+                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-red-300">Overdue</p>
+                <p className="mt-0.5 text-sm font-semibold text-red-200">
+                  {overdueCount} {overdueCount === 1 ? "task needs" : "tasks need"} attention
+                </p>
               </article>
-              <article className="rounded-card border border-red-500/30 bg-red-500/10 p-4 shadow-sm">
-                <p className="text-xs font-bold uppercase tracking-[0.12em] text-red-300">Overdue</p>
-                <p className="mt-1 text-2xl font-semibold text-red-200">{overdueCount}</p>
-                <p className="mt-1 text-xs text-red-200/80">Red card edge</p>
-              </article>
-              <article className="rounded-card border border-accent/40 bg-accent-soft p-4 shadow-sm">
-                <p className="text-xs font-bold uppercase tracking-[0.12em] text-red-200">Due Today</p>
-                <p className="mt-1 text-2xl font-semibold text-foreground">{todayDueCount}</p>
-                <p className="mt-1 text-xs text-red-100/70">Accent card edge</p>
+              <article className="rounded-xl border border-accent/40 bg-accent-soft px-3 py-2 shadow-sm">
+                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-red-200">Due Today</p>
+                <p className="mt-0.5 text-sm font-semibold text-foreground">
+                  {todayDueCount} {todayDueCount === 1 ? "task" : "tasks"} due today
+                </p>
               </article>
             </div>
 
@@ -1561,9 +1627,19 @@ export default function TodayPage() {
                   column={column}
                   completingIds={completingIds}
                   pinningIds={pinningIds}
+                  movingIds={movingIds}
+                  draggingTaskId={draggingTaskId}
+                  dropTargetKey={dropTargetKey}
                   onOpenTask={setModalTaskId}
                   onDoneTask={handleQuickComplete}
                   onTogglePinned={handleTogglePinned}
+                  onDragStartTask={setDraggingTaskId}
+                  onDragEndTask={() => {
+                    setDraggingTaskId(null);
+                    setDropTargetKey(null);
+                  }}
+                  onDropTask={handleMoveTask}
+                  onDropTargetChange={setDropTargetKey}
                 />
               ))}
             </div>
@@ -1574,9 +1650,19 @@ export default function TodayPage() {
                   column={weekendColumn}
                   completingIds={completingIds}
                   pinningIds={pinningIds}
+                  movingIds={movingIds}
+                  draggingTaskId={draggingTaskId}
+                  dropTargetKey={dropTargetKey}
                   onOpenTask={setModalTaskId}
                   onDoneTask={handleQuickComplete}
                   onTogglePinned={handleTogglePinned}
+                  onDragStartTask={setDraggingTaskId}
+                  onDragEndTask={() => {
+                    setDraggingTaskId(null);
+                    setDropTargetKey(null);
+                  }}
+                  onDropTask={handleMoveTask}
+                  onDropTargetChange={setDropTargetKey}
                 />
               ) : null}
               <WaitingReviewColumn
