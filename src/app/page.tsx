@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
 import type { TaskCardData } from "@/components/tasks/TaskCard";
@@ -30,7 +30,7 @@ interface WaitingTask {
   followUpAt: string | null;
 }
 
-type WaitingTaskSource = Pick<TaskWithImplementation, "id" | "title" | "waiting_on" | "follow_up_at">;
+type WaitingTaskSource = TaskWithImplementation;
 
 interface MeetingEvent {
   title: string;
@@ -65,6 +65,7 @@ interface WeekBoardColumn {
 interface TodayData {
   weekBoard: WeekBoardTaskData[];
   waitingOn: WaitingTask[];
+  waitingOnRaw: TaskWithImplementation[];
   needsReviewCount: number;
   openArtifactCount: number;
   capacity: CapacityResult;
@@ -449,9 +450,19 @@ async function fetchCurrentSprintProgress(timeZone: string): Promise<SprintProgr
 interface ExecutionSlices {
   weekBoard: WeekBoardTaskData[];
   waitingOn: WaitingTask[];
+  waitingOnRaw: TaskWithImplementation[];
   needsReviewCount: number;
   capacity: CapacityResult;
   weekBoardRaw: TaskWithImplementation[];
+}
+
+function taskToWaitingTask(task: Pick<TaskWithImplementation, "id" | "title" | "waiting_on" | "follow_up_at">): WaitingTask {
+  return {
+    id: task.id,
+    title: task.title,
+    waitingOn: task.waiting_on || "Unknown",
+    followUpAt: task.follow_up_at,
+  };
 }
 
 function buildExecutionSlices(
@@ -466,18 +477,14 @@ function buildExecutionSlices(
   const weekBoard = weekBoardTasks.map((task) => (
     taskToWeekBoardData(task, getDueState(task.due_at, now, timeZone), syncedTaskIds.has(task.id))
   ));
-  const waitingOn: WaitingTask[] = waitingTasks.map((task) => ({
-    id: task.id,
-    title: task.title,
-    waitingOn: task.waiting_on || "Unknown",
-    followUpAt: task.follow_up_at,
-  }));
+  const waitingOn = waitingTasks.map(taskToWaitingTask);
 
   const capacity = calculateCapacity(weekBoardTasks, new Set<string>(), normalizeBusyMinutes(meetingMinutes));
 
   return {
     weekBoard,
     waitingOn,
+    waitingOnRaw: waitingTasks,
     needsReviewCount,
     capacity,
     weekBoardRaw: weekBoardTasks,
@@ -499,7 +506,7 @@ async function fetchExecutionSlices(
   }).toString()}`;
   const [weekBoardRes, waitingRes, needsReviewRes] = await Promise.allSettled([
     fetchJson<TaskWithImplementation[]>(weekBoardUrl, "Failed to fetch this week's tasks"),
-    fetchJson<WaitingTaskSource[]>("/api/tasks?view=waiting_summary&limit=30", "Failed to fetch blocked tasks"),
+    fetchJson<TaskWithImplementation[]>("/api/tasks?view=waiting_summary&limit=30", "Failed to fetch blocked tasks"),
     fetchJson<NeedsReviewCountResponse>("/api/tasks?view=needs_review_count", "Failed to fetch review count"),
   ]);
 
@@ -531,12 +538,7 @@ async function fetchExecutionSlices(
   }
 
   const weekBoardTasks = resolveSettled(weekBoardRes, previous?.weekBoardRaw ?? [], "weekBoard", "Failed to fetch this week's tasks");
-  const waitingTasksFallback: WaitingTaskSource[] = (previous?.waitingOn || []).map((item) => ({
-    id: item.id,
-    title: item.title,
-    waiting_on: item.waitingOn,
-    follow_up_at: item.followUpAt,
-  }));
+  const waitingTasksFallback = previous?.waitingOnRaw ?? [];
   const waitingTasks = resolveSettled(waitingRes, waitingTasksFallback, "waitingOn", "Failed to fetch blocked tasks");
   const reviewPayload = resolveSettled(
     needsReviewRes,
@@ -938,18 +940,112 @@ function WeeklyBoardColumn({
   );
 }
 
+function OverdueQueueSection({
+  tasks,
+  sectionUpdatedAt,
+  sectionErrors,
+  timeZone,
+  completingIds,
+  pinningIds,
+  movingIds,
+  draggingTaskId,
+  onOpenTask,
+  onDoneTask,
+  onTogglePinned,
+  onDragStartTask,
+  onDragEndTask,
+  onHide,
+  sectionRef,
+}: {
+  tasks: WeekBoardTaskData[];
+  sectionUpdatedAt: TodaySectionUpdatedAt;
+  sectionErrors: TodaySectionErrors;
+  timeZone: string;
+  completingIds: Set<string>;
+  pinningIds: Set<string>;
+  movingIds: Set<string>;
+  draggingTaskId: string | null;
+  onOpenTask: (taskId: string) => void;
+  onDoneTask: (taskId: string) => void;
+  onTogglePinned: (taskId: string, nextPinned: boolean) => void | Promise<void>;
+  onDragStartTask: (taskId: string) => void;
+  onDragEndTask: () => void;
+  onHide: () => void;
+  sectionRef: { current: HTMLElement | null };
+}) {
+  return (
+    <section
+      id="overdue-queue"
+      ref={sectionRef}
+      className="rounded-card border border-red-500/30 bg-red-500/10 p-4 shadow-sm"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-base font-semibold text-red-100">Overdue Queue</h3>
+          <p className="text-sm text-red-100/80">
+            Older overdue work lives here so the weekday board stays focused on the current week.
+          </p>
+          <p className="mt-1 text-xs text-red-100/70">
+            {sectionUpdatedAt.weekBoard
+              ? `Updated ${formatUpdatedTime(sectionUpdatedAt.weekBoard, timeZone)}`
+              : "Drag work back onto the board only when it is truly in play again."}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="rounded-full border border-red-400/30 bg-red-500/10 px-2 py-0.5 text-xs font-bold text-red-100">
+            {tasks.length}
+          </span>
+          <button
+            type="button"
+            onClick={onHide}
+            className="rounded-md border border-red-400/30 bg-red-500/10 px-3 py-1.5 text-xs font-semibold text-red-100 transition hover:bg-red-500/20"
+          >
+            Hide
+          </button>
+        </div>
+      </div>
+
+      {sectionErrors.weekBoard ? (
+        <p className="mt-3 rounded-md border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+          Overdue queue refresh failed. Showing available data.
+        </p>
+      ) : null}
+
+      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {tasks.map((task) => (
+          <WeeklyTaskCard
+            key={task.id}
+            task={task}
+            completing={completingIds.has(task.id)}
+            pinning={pinningIds.has(task.id)}
+            moving={movingIds.has(task.id)}
+            dragging={draggingTaskId === task.id}
+            onOpen={() => onOpenTask(task.id)}
+            onDone={() => onDoneTask(task.id)}
+            onTogglePinned={onTogglePinned}
+            onDragStart={onDragStartTask}
+            onDragEnd={onDragEndTask}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function WaitingReviewColumn({
   waitingOn,
   needsReviewCount,
   sectionUpdatedAt,
   sectionErrors,
   timeZone,
+  onOpenTask,
 }: {
   waitingOn: WaitingTask[];
   needsReviewCount: number;
   sectionUpdatedAt: TodaySectionUpdatedAt;
   sectionErrors: TodaySectionErrors;
   timeZone: string;
+  onOpenTask: (taskId: string) => void;
 }) {
   const total = waitingOn.length + needsReviewCount;
 
@@ -974,17 +1070,20 @@ function WaitingReviewColumn({
       <div className="space-y-3">
         {waitingOn.slice(0, 5).map((item) => (
           <article key={item.id} className="rounded-card border border-l-4 border-stroke border-l-amber-400 bg-panel p-3 shadow-sm">
-            <h3 className="text-sm font-semibold leading-relaxed text-foreground">{item.title}</h3>
-            <p className="mt-2 text-xs text-muted-foreground">
-              Waiting on {item.waitingOn}
-              {item.followUpAt ? ` · follow up ${formatDate(item.followUpAt)}` : ""}
-            </p>
-            <Link
-              href={`/backlog?expand=${item.id}`}
-              className="mt-3 inline-flex rounded-md border border-stroke bg-panel-muted px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-panel"
+            <button
+              type="button"
+              onClick={() => onOpenTask(item.id)}
+              className="block w-full text-left focus:outline-none focus-visible:rounded-lg focus-visible:ring-2 focus-visible:ring-accent/50"
             >
-              Open Task
-            </Link>
+              <h3 className="text-sm font-semibold leading-relaxed text-foreground">{item.title}</h3>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Waiting on {item.waitingOn}
+                {item.followUpAt ? ` · follow up ${formatDate(item.followUpAt)}` : ""}
+              </p>
+              <span className="mt-3 inline-flex rounded-md border border-stroke bg-panel-muted px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-panel">
+                Open Task
+              </span>
+            </button>
           </article>
         ))}
 
@@ -1109,6 +1208,9 @@ export default function TodayPage() {
   const [timeZone, setTimeZone] = useState(DEFAULT_WORKDAY_CONFIG.timezone);
   const [timeZoneReady, setTimeZoneReady] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [showOverdueQueue, setShowOverdueQueue] = useState(false);
+  const [scrollToOverdueQueue, setScrollToOverdueQueue] = useState(false);
+  const overdueQueueRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     setTimeZone(resolveClientTimeZone());
@@ -1132,13 +1234,15 @@ export default function TodayPage() {
     day: "numeric",
     year: "numeric",
   }).format(new Date());
-  const weekColumns = data ? buildWeekBoardColumns(data.weekBoard, new Date(nowMs), timeZone) : [];
+  const overdueTasks = data?.weekBoard.filter((task) => task.dueState === "Overdue") ?? [];
+  const scheduledWeekTasks = data?.weekBoard.filter((task) => task.dueState !== "Overdue") ?? [];
+  const weekColumns = data ? buildWeekBoardColumns(scheduledWeekTasks, new Date(nowMs), timeZone) : [];
   const weekdayColumns = weekColumns.filter((column) => column.key !== "weekend");
   const weekendColumn = weekColumns.find((column) => column.key === "weekend") ?? null;
-  const boardTaskCount = data?.weekBoard.length ?? 0;
-  const overdueCount = data?.weekBoard.filter((task) => task.dueState === "Overdue").length ?? 0;
-  const todayDueCount = data?.weekBoard.filter((task) => task.dueState === "Due Today").length ?? 0;
-  const boardMinutes = data?.weekBoard.reduce((sum, task) => sum + task.estimatedMinutes, 0) ?? 0;
+  const boardTaskCount = scheduledWeekTasks.length;
+  const overdueCount = overdueTasks.length;
+  const todayDueCount = scheduledWeekTasks.filter((task) => task.dueState === "Due Today").length;
+  const boardMinutes = scheduledWeekTasks.reduce((sum, task) => sum + task.estimatedMinutes, 0);
 
   useEffect(() => {
     if (!timeZoneReady) {
@@ -1207,6 +1311,21 @@ export default function TodayPage() {
     };
   }, [modalTaskId, commitmentsLoaded, commitmentsLoading]);
 
+  useEffect(() => {
+    if (overdueCount === 0 && showOverdueQueue) {
+      setShowOverdueQueue(false);
+    }
+  }, [overdueCount, showOverdueQueue]);
+
+  useEffect(() => {
+    if (!showOverdueQueue || !scrollToOverdueQueue) {
+      return;
+    }
+
+    overdueQueueRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setScrollToOverdueQueue(false);
+  }, [showOverdueQueue, scrollToOverdueQueue]);
+
   async function handleQuickComplete(taskId: string) {
     if (!data) return;
     if (!confirm("Mark as done?")) return;
@@ -1227,6 +1346,7 @@ export default function TodayPage() {
         {
           weekBoard: previousData.weekBoard,
           waitingOn: previousData.waitingOn,
+          waitingOnRaw: previousData.waitingOnRaw,
           needsReviewCount: previousData.needsReviewCount,
           capacity: previousData.capacity,
           weekBoardRaw: previousData.weekBoardRaw,
@@ -1300,9 +1420,15 @@ export default function TodayPage() {
         return task.id === taskId ? { ...task, ...updates } : task;
       }
 
+      const waitingOnRaw = prev.waitingOnRaw
+        .map(mergeTask)
+        .filter((task) => task.status === "Blocked/Waiting");
+
       return {
         ...prev,
         weekBoard: prev.weekBoard.map(mergeCard),
+        waitingOn: waitingOnRaw.map(taskToWaitingTask),
+        waitingOnRaw,
         weekBoardRaw: prev.weekBoardRaw.map(mergeTask),
       };
     });
@@ -1317,6 +1443,8 @@ export default function TodayPage() {
 
       return {
         ...prev,
+        waitingOn: prev.waitingOn.filter((task) => task.id !== taskId),
+        waitingOnRaw: prev.waitingOnRaw.filter((task) => task.id !== taskId),
         weekBoard: prev.weekBoard.filter((task) => task.id !== taskId),
         weekBoardRaw: prev.weekBoardRaw.filter((task) => task.id !== taskId),
       };
@@ -1374,6 +1502,21 @@ export default function TodayPage() {
       setDropTargetKey(null);
     }
   }
+
+  function handleOpenOverdueQueue() {
+    if (overdueCount === 0) {
+      return;
+    }
+
+    setShowOverdueQueue(true);
+    setScrollToOverdueQueue(true);
+  }
+
+  const modalTasks = data
+    ? Array.from(new Map(
+      [...data.weekBoardRaw, ...data.waitingOnRaw].map((task) => [task.id, task])
+    ).values())
+    : [];
 
   return (
     <div className="space-y-8">
@@ -1581,17 +1724,31 @@ export default function TodayPage() {
           <section className="space-y-4">
             <div className="flex flex-wrap gap-2">
               <article className="rounded-xl border border-stroke bg-panel px-3 py-2 shadow-sm">
-                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-muted-foreground">Open Work</p>
+                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-muted-foreground">This Week</p>
                 <p className="mt-0.5 text-sm font-semibold text-foreground">
                   {boardTaskCount} <span className="font-medium text-muted-foreground">tasks · {boardMinutes} min</span>
                 </p>
               </article>
-              <article className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 shadow-sm">
+              <button
+                type="button"
+                onClick={handleOpenOverdueQueue}
+                disabled={overdueCount === 0}
+                aria-controls="overdue-queue"
+                aria-expanded={showOverdueQueue}
+                className={`rounded-xl border px-3 py-2 text-left shadow-sm transition ${
+                  overdueCount > 0
+                    ? "border-red-500/30 bg-red-500/10 hover:bg-red-500/15"
+                    : "cursor-default border-red-500/20 bg-red-500/5 opacity-70"
+                }`}
+              >
                 <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-red-300">Overdue</p>
                 <p className="mt-0.5 text-sm font-semibold text-red-200">
                   {overdueCount} {overdueCount === 1 ? "task needs" : "tasks need"} attention
                 </p>
-              </article>
+                <p className="mt-1 text-[11px] font-medium text-red-100/80">
+                  {overdueCount > 0 ? "Open overdue queue" : "Nothing overdue"}
+                </p>
+              </button>
               <article className="rounded-xl border border-accent/40 bg-accent-soft px-3 py-2 shadow-sm">
                 <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-red-200">Due Today</p>
                 <p className="mt-0.5 text-sm font-semibold text-foreground">
@@ -1608,7 +1765,7 @@ export default function TodayPage() {
                 ) : null}
               </div>
               <div className="flex flex-wrap gap-2 text-[11px] font-semibold">
-                <span className="rounded-full border border-red-500/30 bg-red-500/10 px-2 py-1 text-red-300">Red = overdue</span>
+                <span className="rounded-full border border-red-500/30 bg-red-500/10 px-2 py-1 text-red-300">Red queue = overdue</span>
                 <span className="rounded-full border border-accent/40 bg-accent-soft px-2 py-1 text-red-100">Accent = due today</span>
                 <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-200">Amber = blocked / waiting / review</span>
               </div>
@@ -1644,6 +1801,29 @@ export default function TodayPage() {
               ))}
             </div>
 
+            {showOverdueQueue && overdueTasks.length > 0 ? (
+              <OverdueQueueSection
+                tasks={overdueTasks}
+                sectionUpdatedAt={data.sectionUpdatedAt}
+                sectionErrors={data.sectionErrors}
+                timeZone={timeZone}
+                completingIds={completingIds}
+                pinningIds={pinningIds}
+                movingIds={movingIds}
+                draggingTaskId={draggingTaskId}
+                onOpenTask={setModalTaskId}
+                onDoneTask={handleQuickComplete}
+                onTogglePinned={handleTogglePinned}
+                onDragStartTask={setDraggingTaskId}
+                onDragEndTask={() => {
+                  setDraggingTaskId(null);
+                  setDropTargetKey(null);
+                }}
+                onHide={() => setShowOverdueQueue(false)}
+                sectionRef={overdueQueueRef}
+              />
+            ) : null}
+
             <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
               {weekendColumn ? (
                 <WeeklyBoardColumn
@@ -1671,6 +1851,7 @@ export default function TodayPage() {
                 sectionUpdatedAt={data.sectionUpdatedAt}
                 sectionErrors={data.sectionErrors}
                 timeZone={timeZone}
+                onOpenTask={setModalTaskId}
               />
             </div>
           </section>
@@ -1680,10 +1861,10 @@ export default function TodayPage() {
       <TaskDetailModal
         task={
           modalTaskId
-            ? (data?.weekBoardRaw.find((t) => t.id === modalTaskId) ?? null)
+            ? (modalTasks.find((task) => task.id === modalTaskId) ?? null)
             : null
         }
-        allTasks={[...(data?.weekBoardRaw ?? [])]}
+        allTasks={modalTasks}
         commitments={commitments}
         onClose={() => setModalTaskId(null)}
         onTaskUpdated={handleTaskUpdated}

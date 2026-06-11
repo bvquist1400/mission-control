@@ -184,7 +184,7 @@ export async function GET(request: NextRequest) {
       const waitingLimit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 30;
       const { data, error } = await supabase
         .from('tasks')
-        .select('id, title, waiting_on, follow_up_at, priority_score')
+        .select(TASK_WITH_RELATIONS_SELECT)
         .eq('user_id', userId)
         .eq('status', 'Blocked/Waiting')
         .order('priority_score', { ascending: false })
@@ -195,12 +195,20 @@ export async function GET(request: NextRequest) {
         throw error;
       }
 
-      return NextResponse.json((data || []).map((task) => ({
-        id: task.id,
-        title: task.title,
-        waiting_on: task.waiting_on,
-        follow_up_at: task.follow_up_at,
-      })));
+      const tasks = normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>);
+      const taskIds = tasks.map((task) => task.id);
+      const dependencyMap = await fetchTaskDependencySummaries(supabase, userId, taskIds);
+
+      const enrichedTasks = tasks.map((task) => {
+        const dependencies = dependencyMap.get(task.id) || [];
+        return {
+          ...task,
+          dependencies,
+          dependency_blocked: dependencies.some((dependency) => dependency.unresolved),
+        };
+      });
+
+      return NextResponse.json(enrichedTasks);
     }
 
     let query = supabase

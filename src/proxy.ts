@@ -33,7 +33,7 @@ function isCorsEnabledPath(pathname: string): boolean {
   return CORS_ENABLED_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(prefix));
 }
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   if (getDeploymentRole() === 'mcp' && !isAllowedMcpPath(request.nextUrl.pathname)) {
     return new NextResponse('Not Found', { status: 404 });
   }
