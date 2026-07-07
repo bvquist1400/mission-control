@@ -196,6 +196,80 @@ function sortQueueItems(status: InboxQueueStatus, items: IntelligenceArtifactInb
   });
 }
 
+export async function autoApplyCompletedTaskArtifacts(
+  supabase: SupabaseClient,
+  userId: string,
+  artifactsByStatus: Record<InboxQueueStatus, InboxArtifactRow[]>,
+  taskById: Map<string, InboxTaskRow>
+): Promise<void> {
+  const now = new Date().toISOString();
+  const candidates = [...artifactsByStatus.open, ...artifactsByStatus.accepted]
+    .map((artifact) => {
+      const taskId = parseTaskIdFromSubjectKey(artifact.subject_key);
+      const task = taskId ? taskById.get(taskId) : null;
+      return task?.status === "Done" ? { artifact, fromStatus: artifact.status } : null;
+    })
+    .filter((item): item is { artifact: InboxArtifactRow; fromStatus: Extract<InboxQueueStatus, "open" | "accepted"> } => Boolean(item));
+
+  if (candidates.length === 0) {
+    return;
+  }
+
+  const artifactIds = candidates.map(({ artifact }) => artifact.id);
+  const { error: updateError } = await supabase
+    .from("intelligence_artifacts")
+    .update({
+      status: "applied",
+      available_actions: [],
+      last_evaluated_at: now,
+    })
+    .eq("user_id", userId)
+    .in("id", artifactIds);
+
+  if (updateError) {
+    console.error("[intelligence-inbox] completed-task artifact cleanup failed:", updateError);
+    return;
+  }
+
+  const { error: transitionError } = await supabase
+    .from("intelligence_artifact_status_transitions")
+    .insert(
+      candidates.map(({ artifact, fromStatus }) => ({
+        user_id: userId,
+        artifact_id: artifact.id,
+        from_status: fromStatus,
+        to_status: "applied",
+        triggered_by: "system",
+        note: "Auto-applied because the linked task is complete.",
+        payload: {
+          source: "artifact_inbox",
+          reason: "linked_task_completed",
+          subjectKey: artifact.subject_key,
+          artifactKind: artifact.artifact_kind,
+          primaryContractType: artifact.primary_contract_type,
+        },
+      }))
+    );
+
+  if (transitionError) {
+    console.error("[intelligence-inbox] completed-task artifact transition insert failed:", transitionError);
+  }
+
+  const appliedIds = new Set(artifactIds);
+  artifactsByStatus.open = artifactsByStatus.open.filter((artifact) => !appliedIds.has(artifact.id));
+  artifactsByStatus.accepted = artifactsByStatus.accepted.filter((artifact) => !appliedIds.has(artifact.id));
+  artifactsByStatus.applied = [
+    ...candidates.map(({ artifact }) => ({
+      ...artifact,
+      status: "applied" as const,
+      available_actions: [],
+      updated_at: now,
+      last_evaluated_at: now,
+    })),
+    ...artifactsByStatus.applied.filter((artifact) => !appliedIds.has(artifact.id)),
+  ];
+}
+
 export function buildIntelligenceArtifactInboxPayload(
   artifactsByStatus: Record<InboxQueueStatus, InboxArtifactRow[]>,
   taskById: Map<string, InboxTaskRow>,
@@ -300,35 +374,47 @@ export async function readIntelligenceArtifactInbox(
     ),
   ];
 
-  const artifactIds = [...new Set(allArtifacts.map((artifact) => artifact.id))];
-
-  const [taskResult, transitionResult] = await Promise.all([
-    taskIds.length === 0
-      ? Promise.resolve({ data: [] as InboxTaskRow[], error: null })
-      : supabase
-          .from("tasks")
-          .select("id, title, status")
-          .eq("user_id", userId)
-          .in("id", taskIds),
-    supabase
-      .from("intelligence_artifact_status_transitions")
-      .select("id, artifact_id, from_status, to_status, triggered_by, note, created_at")
-      .eq("user_id", userId)
-      .in("artifact_id", artifactIds)
-      .order("created_at", { ascending: false }),
-  ]);
+  const taskResult = taskIds.length === 0
+    ? { data: [] as InboxTaskRow[], error: null }
+    : await supabase
+        .from("tasks")
+        .select("id, title, status")
+        .eq("user_id", userId)
+        .in("id", taskIds);
 
   if (taskResult.error) {
     console.error("[intelligence-inbox] task fetch failed:", taskResult.error);
   }
 
-  if (transitionResult.error) {
-    console.error("[intelligence-inbox] status transition fetch failed:", transitionResult.error);
-  }
-
   const taskById = new Map<string, InboxTaskRow>(
     (((taskResult.error ? [] : taskResult.data) || []) as InboxTaskRow[]).map((task) => [task.id, task])
   );
+
+  await autoApplyCompletedTaskArtifacts(supabase, userId, artifactsByStatus, taskById);
+
+  const updatedArtifactIds = [
+    ...new Set(
+      [
+        ...artifactsByStatus.open,
+        ...artifactsByStatus.accepted,
+        ...artifactsByStatus.applied,
+        ...artifactsByStatus.dismissed,
+      ].map((artifact) => artifact.id)
+    ),
+  ];
+
+  const transitionResult = updatedArtifactIds.length === 0
+    ? { data: [] as InboxTransitionRow[], error: null }
+    : await supabase
+        .from("intelligence_artifact_status_transitions")
+        .select("id, artifact_id, from_status, to_status, triggered_by, note, created_at")
+        .eq("user_id", userId)
+        .in("artifact_id", updatedArtifactIds)
+        .order("created_at", { ascending: false });
+
+  if (transitionResult.error) {
+    console.error("[intelligence-inbox] status transition fetch failed:", transitionResult.error);
+  }
 
   const latestTransitionByArtifactId = new Map<string, IntelligenceArtifactInboxTransition>();
   for (const row of (((transitionResult.error ? [] : transitionResult.data) || []) as InboxTransitionRow[])) {

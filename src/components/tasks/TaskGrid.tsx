@@ -139,6 +139,11 @@ export function TaskGrid({
   const [deletingIds, setDeletingIds] = useState<Record<string, boolean>>({});
   const [estimateDrafts, setEstimateDrafts] = useState<Record<string, string>>({});
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null);
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(() => new Set());
+  const [bulkStatus, setBulkStatus] = useState<TaskStatus | "">("");
+  const [bulkSprintId, setBulkSprintId] = useState<string>("");
+  const [bulkDueDate, setBulkDueDate] = useState<string>("");
+  const [bulkActionBusy, setBulkActionBusy] = useState(false);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(initialExpandedTaskId);
   const [taskDetailsById, setTaskDetailsById] = useState<Record<string, TaskDetailData>>({});
   const [loadingDetailIds, setLoadingDetailIds] = useState<Record<string, boolean>>({});
@@ -151,8 +156,8 @@ export function TaskGrid({
   const scopedTasks = visibleTasks ?? tasks;
   const showImplementationColumn = scopeMode === "global";
   const showSprintColumn = true;
-  const columnCount = showImplementationColumn ? 11 : 10;
-  const tableMinWidthClass = showImplementationColumn ? "min-w-[1180px]" : "min-w-[1040px]";
+  const columnCount = showImplementationColumn ? 12 : 11;
+  const tableMinWidthClass = showImplementationColumn ? "min-w-[1220px]" : "min-w-[1080px]";
   const taskColumnWidthClass = showImplementationColumn ? "w-[280px]" : "w-[320px]";
   const taskCellWidthClass = showImplementationColumn ? "w-[280px] max-w-[280px]" : "w-[320px] max-w-[320px]";
   const implementationColumnWidthClass = "w-[145px]";
@@ -175,6 +180,14 @@ export function TaskGrid({
   useEffect(() => {
     taskDetailsByIdRef.current = taskDetailsById;
   }, [taskDetailsById]);
+
+  useEffect(() => {
+    const availableIds = new Set(tasks.map((task) => task.id));
+    setSelectedTaskIds((current) => {
+      const next = new Set([...current].filter((taskId) => availableIds.has(taskId)));
+      return next.size === current.size ? current : next;
+    });
+  }, [tasks]);
 
   useEffect(() => {
     if (!expandedTaskId) {
@@ -594,6 +607,16 @@ export function TaskGrid({
   }
 
   function clearTaskLocalState(taskId: string) {
+    setSelectedTaskIds((current) => {
+      if (!current.has(taskId)) {
+        return current;
+      }
+
+      const next = new Set(current);
+      next.delete(taskId);
+      return next;
+    });
+
     setExpandedTaskId((current) => (current === taskId ? null : current));
     setTaskDetailsById((current) => {
       if (!(taskId in current)) {
@@ -753,6 +776,90 @@ export function TaskGrid({
     }
   }
 
+  function toggleTaskSelected(taskId: string) {
+    setSelectedTaskIds((current) => {
+      const next = new Set(current);
+      if (next.has(taskId)) {
+        next.delete(taskId);
+      } else {
+        next.add(taskId);
+      }
+      return next;
+    });
+  }
+
+  async function applyBulkUpdate(updates: TaskUpdatePayload, options: { clearDueDate?: boolean; clearSprint?: boolean } = {}) {
+    const selectedIds = [...selectedTaskIds];
+    if (selectedIds.length === 0 || Object.keys(updates).length === 0 || bulkActionBusy) {
+      return;
+    }
+
+    setBulkActionBusy(true);
+    await Promise.all(selectedIds.map((taskId) => updateTask(taskId, updates)));
+    setBulkActionBusy(false);
+
+    if (options.clearDueDate || "due_at" in updates) {
+      setBulkDueDate("");
+    }
+    if (options.clearSprint || "sprint_id" in updates) {
+      setBulkSprintId("");
+    }
+    if ("status" in updates) {
+      setBulkStatus("");
+    }
+  }
+
+  async function deleteSelectedTasks() {
+    const selectedIds = [...selectedTaskIds];
+    if (selectedIds.length === 0 || bulkActionBusy) {
+      return;
+    }
+
+    if (!window.confirm(`Delete ${selectedIds.length} selected task${selectedIds.length === 1 ? "" : "s"}? This cannot be undone.`)) {
+      return;
+    }
+
+    setBulkActionBusy(true);
+    setError(null);
+    setDeletingIds((current) => ({
+      ...current,
+      ...Object.fromEntries(selectedIds.map((taskId) => [taskId, true])),
+    }));
+
+    const failedTitles: string[] = [];
+
+    await Promise.all(
+      selectedIds.map(async (taskId) => {
+        const task = tasks.find((item) => item.id === taskId);
+        try {
+          const response = await fetch(`/api/tasks/${taskId}`, { method: "DELETE" });
+          if (!response.ok) {
+            const data = await response.json().catch(() => ({ error: "Delete failed" }));
+            throw new Error(typeof data.error === "string" ? data.error : "Delete failed");
+          }
+
+          clearTaskLocalState(taskId);
+          setTasks((current) => current.filter((item) => item.id !== taskId));
+        } catch {
+          failedTitles.push(task?.title ?? taskId);
+        }
+      })
+    );
+
+    setDeletingIds((current) => {
+      const next = { ...current };
+      for (const taskId of selectedIds) {
+        delete next[taskId];
+      }
+      return next;
+    });
+    setBulkActionBusy(false);
+
+    if (failedTitles.length > 0) {
+      setError(`Failed to delete ${failedTitles.length} selected task${failedTitles.length === 1 ? "" : "s"}.`);
+    }
+  }
+
   async function commitEstimatedMinutes(task: TaskWithImplementation): Promise<void> {
     const draftValue = estimateDrafts[task.id];
     if (typeof draftValue !== "string") {
@@ -845,6 +952,27 @@ export function TaskGrid({
     });
   }, [scopedTasks, sortConfig]);
 
+  const visibleTaskIds = sortedTasks.map((task) => task.id);
+  const selectedVisibleCount = visibleTaskIds.filter((taskId) => selectedTaskIds.has(taskId)).length;
+  const allVisibleSelected = visibleTaskIds.length > 0 && selectedVisibleCount === visibleTaskIds.length;
+  const selectedCount = selectedTaskIds.size;
+
+  function toggleAllVisibleTasks() {
+    setSelectedTaskIds((current) => {
+      const next = new Set(current);
+      if (allVisibleSelected) {
+        for (const taskId of visibleTaskIds) {
+          next.delete(taskId);
+        }
+      } else {
+        for (const taskId of visibleTaskIds) {
+          next.add(taskId);
+        }
+      }
+      return next;
+    });
+  }
+
   function toggleSort(field: SortField) {
     setSortConfig((current) => {
       if (current?.field === field) {
@@ -890,6 +1018,118 @@ export function TaskGrid({
         </p>
       ) : null}
 
+      {selectedCount > 0 ? (
+        <section className="flex flex-wrap items-end gap-3 rounded-card border border-stroke bg-panel px-4 py-3 shadow-sm">
+          <div className="mr-auto min-w-[150px]">
+            <p className="text-sm font-semibold text-foreground">
+              {selectedCount} selected
+            </p>
+            <button
+              type="button"
+              onClick={() => setSelectedTaskIds(new Set())}
+              className="mt-1 text-xs font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            >
+              Clear selection
+            </button>
+          </div>
+
+          <label className="flex min-w-[150px] flex-col gap-1 text-xs font-medium text-muted-foreground">
+            Status
+            <select
+              value={bulkStatus}
+              onChange={(event) => setBulkStatus(event.target.value as TaskStatus | "")}
+              disabled={bulkActionBusy}
+              className="rounded border border-stroke bg-panel px-2 py-1.5 text-xs text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <option value="">Choose status</option>
+              <option value="Backlog">Backlog</option>
+              <option value="Planned">Planned</option>
+              <option value="In Progress">In Progress</option>
+              <option value="Blocked/Waiting">Blocked/Waiting</option>
+              <option value="Parked">Parked</option>
+              <option value="Done">Done</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={() => void applyBulkUpdate({ status: bulkStatus as TaskStatus })}
+            disabled={bulkActionBusy || !bulkStatus}
+            className="rounded border border-stroke bg-panel-muted px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-accent hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Apply Status
+          </button>
+
+          <label className="flex min-w-[170px] flex-col gap-1 text-xs font-medium text-muted-foreground">
+            Sprint
+            <select
+              value={bulkSprintId}
+              onChange={(event) => setBulkSprintId(event.target.value)}
+              disabled={bulkActionBusy}
+              className="rounded border border-stroke bg-panel px-2 py-1.5 text-xs text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <option value="">Choose sprint</option>
+              {sprints.map((sprint) => (
+                <option key={sprint.id} value={sprint.id}>
+                  {sprint.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={() => void applyBulkUpdate({ sprint_id: bulkSprintId })}
+            disabled={bulkActionBusy || !bulkSprintId}
+            className="rounded border border-stroke bg-panel-muted px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-accent hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Apply Sprint
+          </button>
+          <button
+            type="button"
+            onClick={() => void applyBulkUpdate({ sprint_id: null }, { clearSprint: true })}
+            disabled={bulkActionBusy}
+            className="rounded border border-stroke bg-panel px-3 py-1.5 text-xs font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Clear Sprint
+          </button>
+
+          <label className="flex min-w-[145px] flex-col gap-1 text-xs font-medium text-muted-foreground">
+            Due date
+            <input
+              type="date"
+              value={bulkDueDate}
+              onChange={(event) => setBulkDueDate(event.target.value)}
+              disabled={bulkActionBusy}
+              className="rounded border border-stroke bg-panel px-2 py-1.5 text-xs text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={() => void applyBulkUpdate({ due_at: localDateInputToEndOfDayIso(bulkDueDate) })}
+            disabled={bulkActionBusy || !bulkDueDate}
+            className="rounded border border-stroke bg-panel-muted px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-accent hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Apply Due
+          </button>
+          <button
+            type="button"
+            onClick={() => void applyBulkUpdate({ due_at: null }, { clearDueDate: true })}
+            disabled={bulkActionBusy}
+            className="rounded border border-stroke bg-panel px-3 py-1.5 text-xs font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Clear Due
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void deleteSelectedTasks()}
+            disabled={bulkActionBusy}
+            className="rounded border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Delete Selected
+          </button>
+        </section>
+      ) : null}
+
       <section className="max-w-full overflow-hidden rounded-card border border-stroke bg-panel shadow-sm">
         <p className="border-b border-stroke px-4 py-2 text-[11px] font-medium text-muted-foreground sm:hidden">
           Scroll for more &rarr;
@@ -898,6 +1138,15 @@ export function TaskGrid({
           <table className={`w-full ${tableMinWidthClass}`}>
             <thead className="border-b-2 border-stroke bg-panel-muted">
               <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground [&>th]:border-r [&>th]:border-solid [&>th]:border-stroke [&>th:last-child]:border-r-0">
+                <th className="w-10 px-2 py-3 text-center">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleSelected}
+                    onChange={toggleAllVisibleTasks}
+                    aria-label={allVisibleSelected ? "Clear all visible task selections" : "Select all visible tasks"}
+                    className="h-4 w-4 rounded border-stroke bg-panel text-accent focus:ring-accent"
+                  />
+                </th>
                 <th className="w-10 px-2 py-3" />
                 <th className={`${taskColumnWidthClass} px-3 py-3`}>
                   <button
@@ -997,6 +1246,7 @@ export function TaskGrid({
                 const isDeleting = Boolean(deletingIds[task.id]);
                 const isBusy = isSaving || isDeleting;
                 const isExpanded = expandedTaskId === task.id;
+                const isSelected = selectedTaskIds.has(task.id);
                 const details = taskDetailsById[task.id];
                 const isLoadingDetails = Boolean(loadingDetailIds[task.id]);
                 const dependencyWaitingLabel = getDependencyWaitingLabel(task);
@@ -1007,6 +1257,16 @@ export function TaskGrid({
                       id={`task-${task.id}`}
                       className={`border-b border-solid border-stroke [&>td]:border-r [&>td]:border-solid [&>td]:border-stroke [&>td:last-child]:border-r-0 ${isBusy ? "opacity-70" : task.status === "Parked" ? "opacity-60" : ""} ${isExpanded ? "bg-accent/10" : "hover:bg-panel-muted/40"}`}
                     >
+                      <td className="w-10 px-2 py-2.5 align-middle text-center">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleTaskSelected(task.id)}
+                          disabled={isBusy}
+                          aria-label={`Select task ${task.title}`}
+                          className="h-4 w-4 rounded border-stroke bg-panel text-accent focus:ring-accent disabled:cursor-not-allowed disabled:opacity-60"
+                        />
+                      </td>
                       <td className="w-10 px-2 py-2.5 align-middle text-center">
                         <button
                           type="button"

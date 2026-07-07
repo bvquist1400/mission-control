@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 const cwd = process.cwd();
 const inboxModule = await import(pathToFileURL(path.join(cwd, "src/lib/intelligence-layer/inbox.ts")).href);
 
-const { buildIntelligenceArtifactInboxPayload } = inboxModule;
+const { autoApplyCompletedTaskArtifacts, buildIntelligenceArtifactInboxPayload } = inboxModule;
 
 const taskById = new Map([
   ["task-1", { id: "task-1", title: "Vendor follow-up", status: "Blocked/Waiting" }],
@@ -127,5 +127,109 @@ assert.equal(payload.accepted[0].latest_transition?.note, "Accepted from the art
 
 assert.equal(payload.applied[0].artifact_type, "Stale + ambiguous task");
 assert.equal(payload.applied[0].task_href, "/backlog?expand=task-2");
+
+const cleanupArtifactsByStatus = {
+  open: [
+    {
+      id: "artifact-open-done",
+      artifact_kind: "single_contract",
+      subject_key: "task:task-done",
+      primary_contract_type: "follow_up_risk",
+      status: "open",
+      summary: "Done task should leave the open queue.",
+      reason: "The task was completed after artifact creation.",
+      severity: "medium",
+      confidence: "high",
+      available_actions: ["accept", "dismiss"],
+      artifact_evidence: [],
+      created_at: "2026-03-26T09:00:00.000Z",
+      updated_at: "2026-03-26T10:00:00.000Z",
+      last_evaluated_at: "2026-03-26T10:00:00.000Z",
+    },
+  ],
+  accepted: [
+    {
+      id: "artifact-accepted-active",
+      artifact_kind: "single_contract",
+      subject_key: "task:task-active",
+      primary_contract_type: "ambiguous_task",
+      status: "accepted",
+      summary: "Active task should remain accepted.",
+      reason: "The task is not done.",
+      severity: "low",
+      confidence: "medium",
+      available_actions: ["apply", "expire"],
+      artifact_evidence: [],
+      created_at: "2026-03-26T09:00:00.000Z",
+      updated_at: "2026-03-26T10:00:00.000Z",
+      last_evaluated_at: "2026-03-26T10:00:00.000Z",
+    },
+    {
+      id: "artifact-accepted-done",
+      artifact_kind: "single_contract",
+      subject_key: "task:task-done",
+      primary_contract_type: "stale_task",
+      status: "accepted",
+      summary: "Done task should leave the accepted queue.",
+      reason: "The task was completed after artifact creation.",
+      severity: "high",
+      confidence: "high",
+      available_actions: ["apply", "expire"],
+      artifact_evidence: [],
+      created_at: "2026-03-26T09:00:00.000Z",
+      updated_at: "2026-03-26T10:00:00.000Z",
+      last_evaluated_at: "2026-03-26T10:00:00.000Z",
+    },
+  ],
+  applied: [],
+  dismissed: [],
+};
+
+const cleanupWrites = {
+  updates: [],
+  insertedTransitions: [],
+};
+
+const cleanupSupabase = {
+  from(table) {
+    return {
+      update(payload) {
+        return {
+          eq() {
+            return {
+              in(_columnName, ids) {
+                cleanupWrites.updates.push({ table, payload, ids });
+                return Promise.resolve({ error: null });
+              },
+            };
+          },
+        };
+      },
+      insert(payload) {
+        cleanupWrites.insertedTransitions.push({ table, payload });
+        return Promise.resolve({ error: null });
+      },
+    };
+  },
+};
+
+await autoApplyCompletedTaskArtifacts(
+  cleanupSupabase,
+  "user-1",
+  cleanupArtifactsByStatus,
+  new Map([
+    ["task-done", { id: "task-done", title: "Completed task", status: "Done" }],
+    ["task-active", { id: "task-active", title: "Active task", status: "In Progress" }],
+  ])
+);
+
+assert.deepEqual(cleanupWrites.updates[0].ids.sort(), ["artifact-accepted-done", "artifact-open-done"]);
+assert.equal(cleanupWrites.updates[0].payload.status, "applied");
+assert.equal(cleanupWrites.insertedTransitions[0].payload.length, 2);
+assert.equal(cleanupWrites.insertedTransitions[0].payload[0].triggered_by, "system");
+assert.equal(cleanupWrites.insertedTransitions[0].payload[0].to_status, "applied");
+assert.deepEqual(cleanupArtifactsByStatus.open, []);
+assert.deepEqual(cleanupArtifactsByStatus.accepted.map((artifact) => artifact.id), ["artifact-accepted-active"]);
+assert.deepEqual(cleanupArtifactsByStatus.applied.map((artifact) => artifact.id).sort(), ["artifact-accepted-done", "artifact-open-done"]);
 
 console.log("intelligence artifact inbox tests passed");
