@@ -78,7 +78,7 @@ function getDueLabel(dueAt: string | null, nowMs: number): string | null {
 
 export function NowPanel({ topTasks, nextMeeting, syncNote }: NowPanelProps) {
   const router = useRouter();
-  const { openTask } = useTodayModal();
+  const { openTask, registerTasks } = useTodayModal();
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [completingIds, setCompletingIds] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
@@ -87,6 +87,10 @@ export function NowPanel({ topTasks, nextMeeting, syncNote }: NowPanelProps) {
     const intervalId = window.setInterval(() => setNowMs(Date.now()), 30_000);
     return () => window.clearInterval(intervalId);
   }, []);
+
+  useEffect(() => {
+    registerTasks(topTasks);
+  }, [topTasks, registerTasks]);
 
   async function handleDone(task: TaskWithImplementation) {
     if (completingIds.has(task.id)) {

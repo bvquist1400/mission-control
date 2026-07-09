@@ -19,6 +19,7 @@ import type {
 
 interface TodayModalContextValue {
   openTask: (task: TaskWithImplementation) => void;
+  registerTasks: (tasks: TaskWithImplementation[]) => void;
 }
 
 const TodayModalContext = createContext<TodayModalContextValue | null>(null);
@@ -53,6 +54,19 @@ export function TodayModalProvider({ children }: { children: ReactNode }) {
       return next;
     });
     setSelectedId(task.id);
+  }, []);
+
+  const registerTasks = useCallback((tasks: TaskWithImplementation[]) => {
+    if (tasks.length === 0) {
+      return;
+    }
+    setTasksById((prev) => {
+      const next = new Map(prev);
+      for (const task of tasks) {
+        next.set(task.id, task);
+      }
+      return next;
+    });
   }, []);
 
   useEffect(() => {
@@ -104,7 +118,10 @@ export function TodayModalProvider({ children }: { children: ReactNode }) {
 
   const selectedTask = selectedId ? tasksById.get(selectedId) ?? null : null;
   const allTasks = useMemo(() => Array.from(tasksById.values()), [tasksById]);
-  const contextValue = useMemo<TodayModalContextValue>(() => ({ openTask }), [openTask]);
+  const contextValue = useMemo<TodayModalContextValue>(
+    () => ({ openTask, registerTasks }),
+    [openTask, registerTasks]
+  );
 
   return (
     <TodayModalContext.Provider value={contextValue}>

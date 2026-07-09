@@ -2,10 +2,10 @@ import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { FocusStatusBar } from "@/components/today/FocusStatusBar";
-import { LegacyTodayBoard } from "@/components/today/LegacyTodayBoard";
 import { TodayModalProvider } from "@/components/today/TodayModalProvider";
 import { MeetingsSection } from "@/components/today/sections/MeetingsSection";
 import { NowPanelSection } from "@/components/today/sections/NowPanelSection";
+import { WeekBoardSection } from "@/components/today/sections/WeekBoardSection";
 import { TodayHeaderChips } from "@/components/today/sections/TodayHeaderChips";
 import { SectionSkeleton } from "@/components/today/sections/SectionSkeleton";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
@@ -69,7 +69,9 @@ export default async function TodayPage() {
           </Suspense>
         </section>
 
-        <LegacyTodayBoard />
+        <Suspense fallback={<SectionSkeleton label="weekly board" />}>
+          <WeekBoardSection userId={user.id} />
+        </Suspense>
       </TodayModalProvider>
     </div>
   );
