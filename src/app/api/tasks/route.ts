@@ -13,6 +13,12 @@ import { queueTaskStatusTransition } from '@/lib/task-status-transitions';
 import { calculateFinalPriorityScore, calculatePriorityBoosts, getHighPriorityStakeholderNames } from '@/lib/priority';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import { fetchTaskDependencySummaries } from '@/lib/task-dependencies';
+import {
+  queryNeedsReviewCount,
+  queryTopThreeTasks,
+  queryWaitingSummary,
+  queryWeeklyBoardTasks,
+} from '@/lib/today/queries';
 import { validateOptionalTimestamp } from '@/lib/validate';
 import type { TaskStatus, TaskType, EstimateSource, BlockedReason } from '@/types/database';
 
@@ -84,36 +90,13 @@ export async function GET(request: NextRequest) {
     const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
 
     if (view === 'needs_review_count') {
-      const { count, error } = await supabase
-        .from('tasks')
-        .select('id', { count: 'exact', head: true })
-        .eq('user_id', userId)
-        .eq('needs_review', true)
-        .neq('status', 'Done')
-        .neq('status', 'Parked');
-
-      if (error) {
-        throw error;
-      }
-
-      return NextResponse.json({ count: count ?? 0 });
+      const count = await queryNeedsReviewCount(supabase, userId);
+      return NextResponse.json({ count });
     }
 
     if (view === 'top3') {
-      const { data, error } = await supabase
-        .from('tasks')
-        .select(TASK_WITH_RELATIONS_SELECT)
-        .eq('user_id', userId)
-        .in('status', ['Planned', 'In Progress'])
-        .order('priority_score', { ascending: false })
-        .order('id', { ascending: true })
-        .limit(3);
-
-      if (error) {
-        throw error;
-      }
-
-      return NextResponse.json(normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>));
+      const tasks = await queryTopThreeTasks(supabase, userId);
+      return NextResponse.json(tasks);
     }
 
     if (view === 'due_soon') {
@@ -167,54 +150,13 @@ export async function GET(request: NextRequest) {
         : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
       const weeklyLimit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 300) : 200;
 
-      const { data, error } = await supabase
-        .from('tasks')
-        .select(TASK_WITH_RELATIONS_SELECT)
-        .eq('user_id', userId)
-        .not('due_at', 'is', null)
-        .lte('due_at', weekEnd.toISOString())
-        .neq('status', 'Done')
-        .neq('status', 'Parked')
-        .order('due_at', { ascending: true })
-        .order('priority_score', { ascending: false })
-        .order('id', { ascending: true })
-        .limit(weeklyLimit);
-
-      if (error) {
-        throw error;
-      }
-
-      return NextResponse.json(normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>));
+      const tasks = await queryWeeklyBoardTasks(supabase, userId, weekEnd, weeklyLimit);
+      return NextResponse.json(tasks);
     }
 
     if (view === 'waiting_summary') {
       const waitingLimit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 30;
-      const { data, error } = await supabase
-        .from('tasks')
-        .select(TASK_WITH_RELATIONS_SELECT)
-        .eq('user_id', userId)
-        .eq('status', 'Blocked/Waiting')
-        .order('priority_score', { ascending: false })
-        .order('id', { ascending: true })
-        .limit(waitingLimit);
-
-      if (error) {
-        throw error;
-      }
-
-      const tasks = normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>);
-      const taskIds = tasks.map((task) => task.id);
-      const dependencyMap = await fetchTaskDependencySummaries(supabase, userId, taskIds);
-
-      const enrichedTasks = tasks.map((task) => {
-        const dependencies = dependencyMap.get(task.id) || [];
-        return {
-          ...task,
-          dependencies,
-          dependency_blocked: dependencies.some((dependency) => dependency.unresolved),
-        };
-      });
-
+      const enrichedTasks = await queryWaitingSummary(supabase, userId, waitingLimit);
       return NextResponse.json(enrichedTasks);
     }
 
