@@ -1278,6 +1278,7 @@ function createMcpServer(): McpServer {
       role: z.string().optional(),
       organization: z.string().optional(),
       notes: z.string().optional(),
+      is_high_priority: z.boolean().optional().describe('Boosts priority_score for tasks that mention this stakeholder'),
     },
     async (args) => {
       const res = await fetch('https://mission-control-orpin-chi.vercel.app/api/stakeholders', {
@@ -1304,6 +1305,7 @@ function createMcpServer(): McpServer {
       role: z.string().nullable().optional(),
       organization: z.string().nullable().optional(),
       notes: z.string().nullable().optional(),
+      is_high_priority: z.boolean().optional().describe('Boosts priority_score for tasks that mention this stakeholder'),
       context: STAKEHOLDER_CONTEXT_SCHEMA.optional().describe('Structured stakeholder memory to merge into existing context'),
     },
     async ({ stakeholder_id, ...updates }) => {

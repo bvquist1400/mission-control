@@ -1796,6 +1796,7 @@ export type Database = {
           created_at: string
           email: string | null
           id: string
+          is_high_priority: boolean
           name: string
           notes: string | null
           organization: string | null
@@ -1808,6 +1809,7 @@ export type Database = {
           created_at?: string
           email?: string | null
           id?: string
+          is_high_priority?: boolean
           name: string
           notes?: string | null
           organization?: string | null
@@ -1820,6 +1822,7 @@ export type Database = {
           created_at?: string
           email?: string | null
           id?: string
+          is_high_priority?: boolean
           name?: string
           notes?: string | null
           organization?: string | null

@@ -78,6 +78,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'name must be 200 characters or fewer' }, { status: 400 });
     }
 
+    if ('is_high_priority' in body && typeof body.is_high_priority !== 'boolean') {
+      return NextResponse.json({ error: 'is_high_priority must be a boolean' }, { status: 400 });
+    }
+
     const { data, error } = await supabase
       .from('stakeholders')
       .insert({
@@ -87,6 +91,7 @@ export async function POST(request: NextRequest) {
         role: asStringOrNull(body.role),
         organization: asStringOrNull(body.organization),
         notes: asStringOrNull(body.notes),
+        is_high_priority: typeof body.is_high_priority === 'boolean' ? body.is_high_priority : false,
       })
       .select()
       .single();

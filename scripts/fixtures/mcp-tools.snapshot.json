@@ -576,6 +576,10 @@
         },
         "notes": {
           "type": "string"
+        },
+        "is_high_priority": {
+          "description": "Boosts priority_score for tasks that mention this stakeholder",
+          "type": "boolean"
         }
       },
       "required": [
@@ -2374,6 +2378,10 @@
               "type": "null"
             }
           ]
+        },
+        "is_high_priority": {
+          "description": "Boosts priority_score for tasks that mention this stakeholder",
+          "type": "boolean"
         },
         "context": {
           "description": "Structured stakeholder memory to merge into existing context",

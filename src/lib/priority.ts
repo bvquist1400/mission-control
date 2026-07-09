@@ -1,9 +1,7 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { Task } from '@/types/database';
 
 // Priority scoring rules from spec Section 7
-
-// Known high-priority stakeholders
-const HIGH_PRIORITY_STAKEHOLDERS = ['nancy', 'heath'];
 
 // Urgency keywords that boost priority
 const URGENCY_KEYWORDS = ['sla', 'urgent', 'asap', 'outage', 'production issue', 'critical', 'emergency'];
@@ -15,15 +13,60 @@ interface PriorityBoosts {
   waitingPenalty: number;
 }
 
+// Per-request cache so a single API call doesn't re-fetch the same user's
+// high-priority stakeholder list on every task it processes.
+const highPriorityStakeholderCache = new WeakMap<SupabaseClient, Map<string, Promise<string[]>>>();
+
+/**
+ * Fetch the names of a user's high-priority stakeholders (stakeholders.is_high_priority = true).
+ * Cached per supabase client instance + userId for the lifetime of the request.
+ */
+export async function getHighPriorityStakeholderNames(
+  supabase: SupabaseClient,
+  userId: string
+): Promise<string[]> {
+  let userCache = highPriorityStakeholderCache.get(supabase);
+  if (!userCache) {
+    userCache = new Map();
+    highPriorityStakeholderCache.set(supabase, userCache);
+  }
+
+  const cached = userCache.get(userId);
+  if (cached) {
+    return cached;
+  }
+
+  const fetchPromise = (async () => {
+    const { data, error } = await supabase
+      .from('stakeholders')
+      .select('name')
+      .eq('user_id', userId)
+      .eq('is_high_priority', true);
+
+    if (error) {
+      throw error;
+    }
+
+    return (data || []).map((row) => (row as { name: string }).name);
+  })();
+
+  userCache.set(userId, fetchPromise);
+  return fetchPromise;
+}
+
 /**
  * Calculate stakeholder boost based on mentions
- * If Nancy or Heath mentioned: +20 (cap total at 30)
+ * If a high-priority stakeholder is mentioned: +20 per match (cap total at 30)
  */
-export function calculateStakeholderBoost(stakeholderMentions: string[]): number {
+export function calculateStakeholderBoost(
+  stakeholderMentions: string[],
+  highPriorityStakeholderNames: string[]
+): number {
   const normalizedMentions = stakeholderMentions.map((s) => s.toLowerCase());
+  const normalizedStakeholders = highPriorityStakeholderNames.map((s) => s.toLowerCase());
   let boost = 0;
 
-  for (const stakeholder of HIGH_PRIORITY_STAKEHOLDERS) {
+  for (const stakeholder of normalizedStakeholders) {
     if (normalizedMentions.some((m) => m.includes(stakeholder))) {
       boost += 20;
     }
@@ -85,10 +128,11 @@ export function calculatePriorityBoosts(
   stakeholderMentions: string[],
   dueAt: string | null,
   subjectOrTitle: string,
-  status: string
+  status: string,
+  highPriorityStakeholderNames: string[]
 ): PriorityBoosts {
   return {
-    stakeholder: calculateStakeholderBoost(stakeholderMentions),
+    stakeholder: calculateStakeholderBoost(stakeholderMentions, highPriorityStakeholderNames),
     dueProximity: calculateDueProximityBoost(dueAt),
     urgency: calculateUrgencyBoost(subjectOrTitle),
     waitingPenalty: calculateWaitingPenalty(status),
@@ -123,14 +167,19 @@ export function calculateFinalPriorityScore(
  * in compounds boosts on every edit (the pre-migration-044 bug). Rows written
  * before migration 044 fall back to priority_score as an approximation.
  */
-export function recalculateTaskPriority(task: Task, baseScore?: number): number {
+export function recalculateTaskPriority(
+  task: Task,
+  highPriorityStakeholderNames: string[],
+  baseScore?: number
+): number {
   const base = baseScore ?? task.base_priority ?? task.priority_score;
 
   const boosts = calculatePriorityBoosts(
     task.stakeholder_mentions,
     task.due_at,
     task.title,
-    task.status
+    task.status,
+    highPriorityStakeholderNames
   );
 
   return calculateFinalPriorityScore(base, boosts);

@@ -10,7 +10,7 @@ import {
   TASK_WITH_RELATIONS_SELECT,
 } from '@/lib/task-relations';
 import { queueTaskStatusTransition } from '@/lib/task-status-transitions';
-import { calculateFinalPriorityScore, calculatePriorityBoosts } from '@/lib/priority';
+import { calculateFinalPriorityScore, calculatePriorityBoosts, getHighPriorityStakeholderNames } from '@/lib/priority';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import { fetchTaskDependencySummaries } from '@/lib/task-dependencies';
 import { validateOptionalTimestamp } from '@/lib/validate';
@@ -449,11 +449,13 @@ export async function POST(request: NextRequest) {
     }
 
     const stakeholderMentions = toStringArray(body.stakeholder_mentions);
+    const highPriorityStakeholderNames = await getHighPriorityStakeholderNames(supabase, userId);
     const priorityBoosts = calculatePriorityBoosts(
       stakeholderMentions,
       dueAtResult.value,
       body.title.trim(),
-      status
+      status,
+      highPriorityStakeholderNames
     );
 
     const { data, error } = await supabase

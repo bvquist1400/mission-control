@@ -223,6 +223,7 @@ export interface Stakeholder {
   organization: string | null;
   notes: string | null;
   context: StakeholderContext | null;
+  is_high_priority: boolean;
   created_at: string;
   updated_at: string;
 }

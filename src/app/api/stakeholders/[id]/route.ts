@@ -82,6 +82,13 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if ('organization' in body) updates.organization = asStringOrNull(body.organization);
     if ('notes' in body) updates.notes = asStringOrNull(body.notes);
 
+    if ('is_high_priority' in body) {
+      if (typeof body.is_high_priority !== 'boolean') {
+        return NextResponse.json({ error: 'is_high_priority must be a boolean' }, { status: 400 });
+      }
+      updates.is_high_priority = body.is_high_priority;
+    }
+
     if ('context' in body) {
       if (!body.context || typeof body.context !== 'object' || Array.isArray(body.context)) {
         return NextResponse.json({ error: 'context must be an object' }, { status: 400 });

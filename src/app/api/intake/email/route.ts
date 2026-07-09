@@ -5,6 +5,7 @@ import { extractTaskMetadata } from '@/lib/extraction';
 import {
   calculatePriorityBoosts,
   calculateFinalPriorityScore,
+  getHighPriorityStakeholderNames,
 } from '@/lib/priority';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 
@@ -243,11 +244,13 @@ export async function POST(request: NextRequest) {
       implementationId = impl?.id || null;
     }
 
+    const highPriorityStakeholderNames = await getHighPriorityStakeholderNames(supabase, userId);
     const boosts = calculatePriorityBoosts(
       extraction.stakeholder_mentions,
       extraction.due_guess_iso,
       extraction.title,
-      'Backlog'
+      'Backlog',
+      highPriorityStakeholderNames
     );
     const finalPriority = calculateFinalPriorityScore(extraction.priority_score, boosts);
 

@@ -10,7 +10,7 @@ import {
   TASK_WITH_RELATIONS_SELECT,
 } from '@/lib/task-relations';
 import { queueTaskStatusTransition } from '@/lib/task-status-transitions';
-import { recalculateTaskPriority } from '@/lib/priority';
+import { getHighPriorityStakeholderNames, recalculateTaskPriority } from '@/lib/priority';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import { validateOptionalTimestamp } from '@/lib/validate';
 import type { Task, TaskStatus, TaskType } from '@/types/database';
@@ -311,7 +311,8 @@ export async function PATCH(
 
     if (needsPriorityRecalc && currentTask) {
       const mergedTask = { ...currentTask, ...updates };
-      updates.priority_score = recalculateTaskPriority(mergedTask);
+      const highPriorityStakeholderNames = await getHighPriorityStakeholderNames(supabase, userId);
+      updates.priority_score = recalculateTaskPriority(mergedTask, highPriorityStakeholderNames);
     }
 
     if ('estimated_minutes' in updates && !('estimate_source' in updates)) {

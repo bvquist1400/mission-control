@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { recalculateTaskPriority } from '@/lib/priority';
+import { getHighPriorityStakeholderNames, recalculateTaskPriority } from '@/lib/priority';
 import {
   normalizeTaskWithRelations,
   TASK_WITH_RELATIONS_SELECT,
@@ -36,10 +36,14 @@ export async function POST(
       throw fetchError;
     }
 
-    const priorityScore = recalculateTaskPriority({
-      ...currentTask,
-      status: 'Parked',
-    });
+    const highPriorityStakeholderNames = await getHighPriorityStakeholderNames(supabase, userId);
+    const priorityScore = recalculateTaskPriority(
+      {
+        ...currentTask,
+        status: 'Parked',
+      },
+      highPriorityStakeholderNames
+    );
 
     const { data, error } = await supabase
       .from('tasks')
