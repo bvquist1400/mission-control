@@ -188,7 +188,7 @@ function LoginContent() {
                 required
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
-                className="mt-1 w-full rounded-lg border border-stroke bg-white px-3 py-2 text-sm text-foreground outline-none focus:border-accent"
+                className="mt-1 w-full rounded-lg border border-stroke bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-accent"
                 placeholder="you@example.com"
                 autoComplete="email"
               />
@@ -203,7 +203,7 @@ function LoginContent() {
                 required
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
-                className="mt-1 w-full rounded-lg border border-stroke bg-white px-3 py-2 text-sm text-foreground outline-none focus:border-accent"
+                className="mt-1 w-full rounded-lg border border-stroke bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-accent"
                 placeholder="Your password"
                 autoComplete="current-password"
               />
@@ -228,7 +228,7 @@ function LoginContent() {
                 required
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
-                className="mt-1 w-full rounded-lg border border-stroke bg-white px-3 py-2 text-sm text-foreground outline-none focus:border-accent"
+                className="mt-1 w-full rounded-lg border border-stroke bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-accent"
                 placeholder="you@example.com"
                 autoComplete="email"
               />

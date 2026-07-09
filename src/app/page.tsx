@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { ErrorBanner } from "@/components/ui/ErrorBanner";
 import type { TaskCardData } from "@/components/tasks/TaskCard";
 import { getTaskVisualState, TaskStateBadge } from "@/components/tasks/task-state";
 import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
@@ -1552,11 +1553,7 @@ export default function TodayPage() {
         }
       />
 
-      {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
-          {error}
-        </div>
-      )}
+      {error && <ErrorBanner message={error} />}
 
       <FocusStatusBar />
 

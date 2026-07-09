@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { ErrorBanner } from "@/components/ui/ErrorBanner";
 import { CommitmentRow, type CommitmentRowData } from "@/components/stakeholders/CommitmentRow";
 import type { CommitmentStatus, CommitmentDirection } from "@/types/database";
 
@@ -216,9 +217,7 @@ export default function StakeholderDetailPage() {
     return (
       <div className="space-y-6">
         <PageHeader title="Stakeholder not found" />
-        {error && (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
-        )}
+        {error && <ErrorBanner message={error} />}
         <Link href="/stakeholders" className="text-sm text-accent hover:underline">
           Back to stakeholders
         </Link>
@@ -263,11 +262,7 @@ export default function StakeholderDetailPage() {
         }
       />
 
-      {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
-          {error}
-        </div>
-      )}
+      {error && <ErrorBanner message={error} />}
 
       {/* Edit Form */}
       {isEditing && (

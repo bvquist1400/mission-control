@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { ErrorBanner } from "@/components/ui/ErrorBanner";
 import { StakeholderCard, type StakeholderCardData } from "@/components/stakeholders/StakeholderCard";
 
 interface StakeholderDraft {
@@ -245,11 +246,7 @@ export default function StakeholdersPage() {
         )}
       </section>
 
-      {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
-          {error}
-        </div>
-      )}
+      {error && <ErrorBanner message={error} />}
 
       {loading ? (
         <LoadingSkeleton />

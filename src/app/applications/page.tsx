@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { ErrorBanner } from "@/components/ui/ErrorBanner";
 import { ImplementationCard, type ImplementationCardData } from "@/components/implementations/ImplementationCard";
 import { PhaseSelector } from "@/components/ui/PhaseSelector";
 import { RagSelector } from "@/components/ui/RagSelector";
@@ -415,11 +416,7 @@ export default function ImplementationsPage() {
         description="Portfolio snapshot for execution health, milestones, blockers, and ready-to-send status updates."
       />
 
-      {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
-          {error}
-        </div>
-      )}
+      {error && <ErrorBanner message={error} />}
 
       {!loading && implementations.length > 0 ? (
         <section className="rounded-card border border-stroke bg-panel p-4 shadow-sm">

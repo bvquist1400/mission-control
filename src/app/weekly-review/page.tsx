@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { ErrorBanner } from "@/components/ui/ErrorBanner";
 import { formatDateOnly, formatRelativeDate, localDateString } from "@/components/utils/dates";
 import type { ImplementationHealthScore, TaskWithImplementation } from "@/types/database";
 
@@ -125,11 +126,7 @@ export default function WeeklyReviewPage() {
         }
       />
 
-      {error ? (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
-          {error}
-        </div>
-      ) : null}
+      {error ? <ErrorBanner message={error} /> : null}
 
       {loading ? (
         <div className="space-y-4">
