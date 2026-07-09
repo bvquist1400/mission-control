@@ -7,6 +7,9 @@ import {
   fetchTaskDependencySummaries,
   type TaskDependencySummary,
 } from '@/lib/task-dependencies';
+import { buildDayWindows, calculateBusyStats } from '@/lib/calendar';
+import { DEFAULT_WORKDAY_CONFIG } from '@/lib/workday';
+import { calculateSprintProgressMetrics } from '@/lib/today/sprint-progress';
 import type { TaskWithImplementation } from '@/types/database';
 
 /**
@@ -24,6 +27,45 @@ export type WaitingSummaryTask = TaskWithImplementation & {
   dependencies: TaskDependencySummary[];
   dependency_blocked: boolean;
 };
+
+export interface TodayCalendarEvent {
+  title: string;
+  start: string;
+  end: string;
+  location: string | null;
+}
+
+export interface TodayCalendarResult {
+  events: TodayCalendarEvent[];
+  busyMinutes: number;
+}
+
+export interface CurrentSprintChip {
+  id: string;
+  name: string;
+  completedTasks: number;
+  totalTasks: number;
+  onTrack: boolean;
+}
+
+function getDateInTimeZone(date: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+
+  const year = parts.find((part) => part.type === 'year')?.value;
+  const month = parts.find((part) => part.type === 'month')?.value;
+  const day = parts.find((part) => part.type === 'day')?.value;
+
+  if (!year || !month || !day) {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  }
+
+  return `${year}-${month}-${day}`;
+}
 
 /**
  * Top 3 actionable tasks: Planned/In Progress ordered by priority_score DESC.
@@ -136,4 +178,112 @@ export async function queryNeedsReviewCount(
   }
 
   return count ?? 0;
+}
+
+/**
+ * Today's calendar events plus busy minutes, resolved in the given timezone
+ * (defaults to ET). Mirrors the inline logic of `/api/calendar/today`.
+ */
+export async function queryTodayCalendar(
+  supabase: SupabaseClient,
+  userId: string,
+  timeZone: string = DEFAULT_WORKDAY_CONFIG.timezone
+): Promise<TodayCalendarResult> {
+  const today = getDateInTimeZone(new Date(), timeZone);
+  const rangeContext = buildDayWindows(
+    { rangeStart: today, rangeEnd: today },
+    { ...DEFAULT_WORKDAY_CONFIG, timezone: timeZone }
+  );
+
+  const { data, error } = await supabase
+    .from('calendar_events')
+    .select('start_at, end_at, title')
+    .eq('user_id', userId)
+    .gte('end_at', rangeContext.utcRangeStart)
+    .lt('start_at', rangeContext.utcRangeEndExclusive)
+    .order('start_at', { ascending: true });
+
+  if (error) {
+    throw error;
+  }
+
+  const rows = (data || []) as Array<{ start_at: string; end_at: string; title: string }>;
+  const events = rows.map((row) => ({
+    title: row.title,
+    start: row.start_at,
+    end: row.end_at,
+    location: null as string | null,
+  }));
+
+  const stats = calculateBusyStats(rows, rangeContext.windows);
+
+  return { events, busyMinutes: stats.busyMinutes };
+}
+
+/**
+ * The sprint containing "today" (in the given timezone), reduced to the fields
+ * the Today header chip needs: name, completed/total task counts, and whether
+ * it is on track (via `calculateSprintProgressMetrics`). Returns null when no
+ * sprint spans today. Matches the current-sprint selection used by the legacy
+ * client (`start_date <= today <= end_date`, most recent start wins).
+ */
+export async function queryCurrentSprintChip(
+  supabase: SupabaseClient,
+  userId: string,
+  timeZone: string = DEFAULT_WORKDAY_CONFIG.timezone,
+  holidaySet?: ReadonlySet<string>
+): Promise<CurrentSprintChip | null> {
+  const todayDate = getDateInTimeZone(new Date(), timeZone);
+
+  const { data: sprints, error: sprintError } = await supabase
+    .from('sprints')
+    .select('id, name, start_date, end_date')
+    .eq('user_id', userId)
+    .lte('start_date', todayDate)
+    .gte('end_date', todayDate)
+    .order('start_date', { ascending: false })
+    .limit(1);
+
+  if (sprintError) {
+    throw sprintError;
+  }
+
+  const sprint = (sprints || [])[0] as
+    | { id: string; name: string; start_date: string; end_date: string }
+    | undefined;
+
+  if (!sprint) {
+    return null;
+  }
+
+  const { data: taskRows, error: tasksError } = await supabase
+    .from('tasks')
+    .select('status')
+    .eq('user_id', userId)
+    .eq('sprint_id', sprint.id);
+
+  if (tasksError) {
+    throw tasksError;
+  }
+
+  const rows = (taskRows || []) as Array<{ status: string }>;
+  const totalTasks = rows.length;
+  const completedTasks = rows.filter((row) => row.status === 'Done').length;
+
+  const metrics = calculateSprintProgressMetrics({
+    sprintStartDate: sprint.start_date,
+    sprintEndDate: sprint.end_date,
+    totalTasks,
+    completedTasks,
+    todayDate,
+    holidaySet,
+  });
+
+  return {
+    id: sprint.id,
+    name: sprint.name,
+    completedTasks,
+    totalTasks,
+    onTrack: metrics.onTrack,
+  };
 }

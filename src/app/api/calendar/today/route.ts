@@ -1,13 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { buildDayWindows, calculateBusyStats } from '@/lib/calendar';
+import { queryTodayCalendar } from '@/lib/today/queries';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import { DEFAULT_WORKDAY_CONFIG } from '@/lib/workday';
-
-interface CalendarTodayRow {
-  start_at: string;
-  end_at: string;
-  title: string;
-}
 
 function isValidTimeZone(timeZone: string): boolean {
   try {
@@ -52,37 +46,11 @@ export async function GET(request: NextRequest) {
         : DEFAULT_WORKDAY_CONFIG.timezone;
 
     const today = getDateInTimeZone(new Date(), effectiveTimeZone);
-    const range = { rangeStart: today, rangeEnd: today };
-    const rangeContext = buildDayWindows(range, {
-      ...DEFAULT_WORKDAY_CONFIG,
-      timezone: effectiveTimeZone,
-    });
-
-    const { data, error } = await supabase
-      .from('calendar_events')
-      .select('start_at, end_at, title')
-      .eq('user_id', userId)
-      .gte('end_at', rangeContext.utcRangeStart)
-      .lt('start_at', rangeContext.utcRangeEndExclusive)
-      .order('start_at', { ascending: true });
-
-    if (error) {
-      throw error;
-    }
-
-    const rows = (data || []) as CalendarTodayRow[];
-    const events = rows.map((row) => ({
-      title: row.title,
-      start: row.start_at,
-      end: row.end_at,
-      location: null as string | null,
-    }));
-
-    const stats = calculateBusyStats(rows, rangeContext.windows);
+    const { events, busyMinutes } = await queryTodayCalendar(supabase, userId, effectiveTimeZone);
 
     return NextResponse.json({
       events,
-      busyMinutes: stats.busyMinutes,
+      busyMinutes,
       date: today,
       timeZone: effectiveTimeZone,
     });
