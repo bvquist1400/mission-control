@@ -48,7 +48,7 @@ Hierarchy is DB-enforced (migration 046, project wins): a task in a project inhe
 
 - RLS: 4-policy pattern (SELECT, INSERT, UPDATE, DELETE) on every table
 - `updated_at` triggers: reuse `set_updated_at()` function
-- Migrations: `supabase/migrations/` (latest: 046)
+- Migrations: `supabase/migrations/` (latest: 050)
 
 ### Schema Types
 
