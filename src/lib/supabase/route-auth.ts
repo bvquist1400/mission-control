@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import type { SupabaseClient, User } from '@supabase/supabase-js';
 import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase/server';
 import { withCorsHeaders } from '@/lib/cors';
+import { secureCompare } from '@/lib/secure-compare';
 import { readInternalAuthContext } from '@/lib/supabase/internal-auth';
 
 export type AuthSource = 'session' | 'bearer' | 'legacy_api_key' | 'actions_api_key' | 'mcp_oauth';
@@ -105,9 +106,9 @@ async function requireMachineKeyRoute(request: NextRequest): Promise<RouteAuthRe
 
   let authSource: MachineAuthSource | null = null;
 
-  if (legacyApiKey && providedApiKey === legacyApiKey) {
+  if (legacyApiKey && secureCompare(providedApiKey, legacyApiKey)) {
     authSource = 'legacy_api_key';
-  } else if (actionsApiKey && providedApiKey === actionsApiKey) {
+  } else if (actionsApiKey && secureCompare(providedApiKey, actionsApiKey)) {
     authSource = 'actions_api_key';
   }
 

@@ -8,13 +8,14 @@ import { requireAuthenticatedRoute } from "@/lib/supabase/route-auth";
 import type { AuthenticatedRouteContext } from "@/lib/supabase/route-auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { readInternalAuthContext } from "@/lib/supabase/internal-auth";
+import { secureCompare } from '@/lib/secure-compare';
 
 function hasCronAccess(request: NextRequest): boolean {
   const cronSecret = process.env.CRON_SECRET;
   const authHeader = request.headers.get("authorization");
   const bearerToken = authHeader?.toLowerCase().startsWith("bearer ") ? authHeader.slice(7).trim() : null;
 
-  return Boolean(cronSecret && bearerToken === cronSecret);
+  return Boolean(cronSecret && secureCompare(bearerToken, cronSecret));
 }
 
 function configuredPipelineUserId(): string | null {

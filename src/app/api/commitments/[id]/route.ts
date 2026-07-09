@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
+import { validateOptionalTimestamp } from '@/lib/validate';
 import type { CommitmentStatus, CommitmentDirection } from '@/types/database';
 
 const VALID_STATUSES: CommitmentStatus[] = ['Open', 'Done', 'Dropped'];
@@ -56,7 +57,13 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       }
     }
 
-    if ('due_at' in body) updates.due_at = asStringOrNull(body.due_at);
+    if ('due_at' in body) {
+      const dueAtResult = validateOptionalTimestamp(body.due_at, 'due_at');
+      if (!dueAtResult.ok) {
+        return NextResponse.json({ error: dueAtResult.error }, { status: 400 });
+      }
+      updates.due_at = dueAtResult.value;
+    }
     if ('notes' in body) updates.notes = asStringOrNull(body.notes);
     if ('task_id' in body) updates.task_id = asStringOrNull(body.task_id);
 

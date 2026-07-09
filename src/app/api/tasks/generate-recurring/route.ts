@@ -5,8 +5,11 @@ import {
   buildRecurringDueAt,
   coerceTaskRecurrence,
 } from '@/lib/recurrence';
+import { getDateOnlyInTimeZone } from '@/lib/date-only';
+import { secureCompare } from '@/lib/secure-compare';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
 import { readInternalAuthContext } from '@/lib/supabase/internal-auth';
+import { DEFAULT_WORKDAY_CONFIG } from '@/lib/workday';
 import type { TaskRecurrence } from '@/types/database';
 
 interface RecurringTaskRow {
@@ -18,6 +21,7 @@ interface RecurringTaskRow {
   project_id: string | null;
   task_type: string;
   priority_score: number;
+  base_priority: number;
   estimated_minutes: number;
   estimate_source: string;
   due_at: string | null;
@@ -38,7 +42,8 @@ interface CreatedTaskRow {
 }
 
 function getTodayDateOnly(): string {
-  return new Date().toISOString().slice(0, 10);
+  // "Today" must match the app's ET day boundary (sync-today, briefs), not UTC.
+  return getDateOnlyInTimeZone(DEFAULT_WORKDAY_CONFIG.timezone);
 }
 
 function isAuthorized(request: NextRequest): boolean {
@@ -52,11 +57,11 @@ function isAuthorized(request: NextRequest): boolean {
   const bearerToken = authHeader?.toLowerCase().startsWith('bearer ') ? authHeader.slice(7).trim() : null;
   const providedApiKey = request.headers.get('x-mission-control-key');
 
-  if (cronSecret && bearerToken === cronSecret) {
+  if (cronSecret && secureCompare(bearerToken, cronSecret)) {
     return true;
   }
 
-  if (apiKey && providedApiKey === apiKey) {
+  if (apiKey && secureCompare(providedApiKey, apiKey)) {
     return true;
   }
 
@@ -74,7 +79,7 @@ async function runGeneration(request: NextRequest): Promise<NextResponse> {
     const { data, error } = await supabase
       .from('tasks')
       .select(
-        'id, user_id, title, description, implementation_id, project_id, task_type, priority_score, estimated_minutes, estimate_source, due_at, needs_review, stakeholder_mentions, pinned_excerpt, recurrence'
+        'id, user_id, title, description, implementation_id, project_id, task_type, priority_score, base_priority, estimated_minutes, estimate_source, due_at, needs_review, stakeholder_mentions, pinned_excerpt, recurrence'
       )
       .not('recurrence', 'is', null)
       .order('user_id', { ascending: true })
@@ -162,6 +167,7 @@ async function runGeneration(request: NextRequest): Promise<NextResponse> {
               status: 'Backlog',
               task_type: template.task_type,
               priority_score: template.priority_score,
+              base_priority: template.base_priority ?? template.priority_score,
               estimated_minutes: template.estimated_minutes,
               estimate_source: template.estimate_source,
               due_at: buildRecurringDueAt(template.due_at, recurrence.next_due),

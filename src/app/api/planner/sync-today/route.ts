@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { withCorsHeaders } from "@/lib/cors";
+import { getDateOnlyInTimeZone } from "@/lib/date-only";
 import { requireMissionControlApiKeyRoute } from "@/lib/supabase/route-auth";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
 
@@ -12,6 +13,8 @@ interface SyncTodayRpcRow {
   promoted: number | null;
   demoted: number | null;
   skipped_pinned: number | null;
+  skipped_in_progress: number | null;
+  skipped_ineligible: number | null;
   sync_at: string | null;
 }
 
@@ -19,25 +22,6 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-
 
 function corsJson(request: NextRequest, body: unknown, init?: ResponseInit): NextResponse {
   return withCorsHeaders(NextResponse.json(body, init), request);
-}
-
-function getDateInTimeZone(timeZone: string): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-
-  const year = parts.find((part) => part.type === "year")?.value;
-  const month = parts.find((part) => part.type === "month")?.value;
-  const day = parts.find((part) => part.type === "day")?.value;
-
-  if (!year || !month || !day) {
-    return new Date().toISOString().slice(0, 10);
-  }
-
-  return `${year}-${month}-${day}`;
 }
 
 function parseTaskIds(value: unknown): { taskIds: string[] | null; error: string | null } {
@@ -111,7 +95,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const supabase = createSupabaseAdminClient();
-    const todayEt = getDateInTimeZone(DEFAULT_WORKDAY_CONFIG.timezone);
+    const todayEt = getDateOnlyInTimeZone(DEFAULT_WORKDAY_CONFIG.timezone);
 
     const { data, error } = await supabase.rpc("sync_today_tasks", {
       p_user_id: apiUserId,
@@ -127,6 +111,8 @@ export async function POST(request: NextRequest) {
     const promoted = Number(row?.promoted ?? 0);
     const demoted = Number(row?.demoted ?? 0);
     const skippedPinned = Number(row?.skipped_pinned ?? 0);
+    const skippedInProgress = Number(row?.skipped_in_progress ?? 0);
+    const skippedIneligible = Number(row?.skipped_ineligible ?? 0);
     const syncAt = row?.sync_at ?? new Date().toISOString();
 
     const { error: logError } = await supabase.from("today_sync_events").insert({
@@ -146,6 +132,8 @@ export async function POST(request: NextRequest) {
       promoted,
       demoted,
       skipped_pinned: skippedPinned,
+      skipped_in_progress: skippedInProgress,
+      skipped_ineligible: skippedIneligible,
       sync_at: syncAt,
     });
   } catch (error) {

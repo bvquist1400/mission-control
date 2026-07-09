@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { isPostgrestNotFound } from '@/lib/supabase/errors';
 import { fetchTaskDependenciesForTask } from '@/lib/task-dependencies';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import type { CommitmentStatus, TaskStatus } from '@/types/database';
@@ -32,6 +33,10 @@ export async function GET(
       .eq('id', id)
       .eq('user_id', userId)
       .single();
+
+    if (taskError && !isPostgrestNotFound(taskError)) {
+      throw taskError;
+    }
 
     if (taskError || !task) {
       return NextResponse.json({ error: 'Task not found' }, { status: 404 });
@@ -67,6 +72,10 @@ export async function POST(
       .eq('id', id)
       .eq('user_id', userId)
       .single();
+
+    if (taskError && !isPostgrestNotFound(taskError)) {
+      throw taskError;
+    }
 
     if (taskError || !task) {
       return NextResponse.json({ error: 'Task not found' }, { status: 404 });
@@ -123,6 +132,10 @@ export async function POST(
         .eq('user_id', userId)
         .single();
 
+      if (dependencyTaskError && !isPostgrestNotFound(dependencyTaskError)) {
+        throw dependencyTaskError;
+      }
+
       if (dependencyTaskError || !dependencyTask) {
         return NextResponse.json({ error: 'Dependency task not found' }, { status: 404 });
       }
@@ -138,6 +151,10 @@ export async function POST(
         .eq('id', dependsOnCommitmentId)
         .eq('user_id', userId)
         .single();
+
+      if (dependencyCommitmentError && !isPostgrestNotFound(dependencyCommitmentError)) {
+        throw dependencyCommitmentError;
+      }
 
       if (dependencyCommitmentError || !dependencyCommitment) {
         return NextResponse.json({ error: 'Dependency commitment not found' }, { status: 404 });

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { isPostgrestNotFound } from '@/lib/supabase/errors';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 
 // GET /api/tasks/[id]/checklist - Get checklist items for a task
@@ -58,6 +59,10 @@ export async function POST(
       .eq('id', id)
       .eq('user_id', userId)
       .single();
+
+    if (taskError && !isPostgrestNotFound(taskError)) {
+      throw taskError;
+    }
 
     if (taskError || !task) {
       return NextResponse.json({ error: 'Task not found' }, { status: 404 });

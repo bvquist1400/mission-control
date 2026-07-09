@@ -87,3 +87,22 @@ export function isMondayToFridaySprintRange(startDate: string, endDate: string):
   const range = resolveSprintWeekRange(startDate, endDate);
   return range !== null && range.startDate === startDate && range.endDate === endDate;
 }
+
+export function getDateOnlyInTimeZone(timeZone: string, now: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now);
+
+  const year = parts.find((part) => part.type === 'year')?.value;
+  const month = parts.find((part) => part.type === 'month')?.value;
+  const day = parts.find((part) => part.type === 'day')?.value;
+
+  if (!year || !month || !day) {
+    return now.toISOString().slice(0, 10);
+  }
+
+  return `${year}-${month}-${day}`;
+}

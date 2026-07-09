@@ -117,9 +117,14 @@ export function calculateFinalPriorityScore(
 /**
  * Recalculate priority score for a task
  * Call this when task fields change (due date, status, etc.)
+ *
+ * The base must be the un-boosted base_priority — never the stored
+ * priority_score, which already includes boosts. Feeding priority_score back
+ * in compounds boosts on every edit (the pre-migration-044 bug). Rows written
+ * before migration 044 fall back to priority_score as an approximation.
  */
 export function recalculateTaskPriority(task: Task, baseScore?: number): number {
-  const base = baseScore ?? task.priority_score;
+  const base = baseScore ?? task.base_priority ?? task.priority_score;
 
   const boosts = calculatePriorityBoosts(
     task.stakeholder_mentions,

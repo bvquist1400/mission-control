@@ -5,6 +5,7 @@ import { readInternalAuthContext } from '@/lib/supabase/internal-auth';
 import { requireAuthenticatedRoute, type AuthenticatedRouteContext } from '@/lib/supabase/route-auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
 import { DEFAULT_WORKDAY_CONFIG } from '@/lib/workday';
+import { secureCompare } from '@/lib/secure-compare';
 
 const DEFAULT_SYNC_DAYS_AHEAD = 30;
 const MAX_SYNC_DAYS_AHEAD = 60;
@@ -14,7 +15,7 @@ function hasCronAccess(request: NextRequest): boolean {
   const authHeader = request.headers.get('authorization');
   const bearerToken = authHeader?.toLowerCase().startsWith('bearer ') ? authHeader.slice(7).trim() : null;
 
-  return Boolean(cronSecret && bearerToken === cronSecret);
+  return Boolean(cronSecret && secureCompare(bearerToken, cronSecret));
 }
 
 function configuredCalendarSyncUserId(): string | null {

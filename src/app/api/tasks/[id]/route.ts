@@ -12,6 +12,7 @@ import {
 import { queueTaskStatusTransition } from '@/lib/task-status-transitions';
 import { recalculateTaskPriority } from '@/lib/priority';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
+import { validateOptionalTimestamp } from '@/lib/validate';
 import type { Task, TaskStatus, TaskType } from '@/types/database';
 
 const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done'];
@@ -101,6 +102,8 @@ export async function PATCH(
       'waiting_on',
       'follow_up_at',
       'tags',
+      'stakeholder_mentions',
+      'priority_score',
       'pinned_excerpt',
       'pinned',
     ];
@@ -124,8 +127,26 @@ export async function PATCH(
         updates[field] = asStringOrNull(value);
       } else if (field === 'description') {
         updates[field] = asStringOrNull(value);
+      } else if (field === 'due_at' || field === 'follow_up_at') {
+        const result = validateOptionalTimestamp(value, field);
+        if (!result.ok) {
+          return NextResponse.json({ error: result.error }, { status: 400 });
+        }
+        updates[field] = result.value;
       } else if (field === 'tags') {
         updates[field] = normalizeTaskTags(value);
+      } else if (field === 'stakeholder_mentions') {
+        if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
+          return NextResponse.json({ error: 'stakeholder_mentions must be an array of strings' }, { status: 400 });
+        }
+        updates[field] = (value as string[]).map((item) => item.trim()).filter(Boolean);
+      } else if (field === 'priority_score') {
+        // Caller-supplied priority becomes the new un-boosted base; the stored
+        // priority_score is recomputed below with boosts applied on top.
+        if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100) {
+          return NextResponse.json({ error: 'priority_score must be a number from 0 to 100' }, { status: 400 });
+        }
+        updates.base_priority = Math.round(value);
       } else if (field === 'title' && typeof value === 'string') {
         updates[field] = value.trim();
       } else {
@@ -188,7 +209,9 @@ export async function PATCH(
       'project_id' in updates
       || 'section_id' in updates
       || 'status' in updates
-      || 'due_at' in updates;
+      || 'due_at' in updates
+      || 'base_priority' in updates
+      || 'stakeholder_mentions' in updates;
 
     if (needsCurrentTask) {
       const { data: fetchedTask, error: fetchError } = await supabase
@@ -280,7 +303,11 @@ export async function PATCH(
       }
     }
 
-    const needsPriorityRecalc = 'status' in updates || 'due_at' in updates;
+    const needsPriorityRecalc =
+      'status' in updates
+      || 'due_at' in updates
+      || 'base_priority' in updates
+      || 'stakeholder_mentions' in updates;
 
     if (needsPriorityRecalc && currentTask) {
       const mergedTask = { ...currentTask, ...updates };

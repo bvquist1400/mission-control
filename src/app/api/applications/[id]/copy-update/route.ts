@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { isPostgrestNotFound } from '@/lib/supabase/errors';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 
 const STATUS_UPDATE_AUTHORS = ['Brent', 'Assistant'] as const;
@@ -57,6 +58,10 @@ export async function POST(
       .eq('id', id)
       .eq('user_id', userId)
       .single();
+
+    if (implError && !isPostgrestNotFound(implError)) {
+      throw implError;
+    }
 
     if (implError || !implementation) {
       return NextResponse.json({ error: 'Application not found' }, { status: 404 });

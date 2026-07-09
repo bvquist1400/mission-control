@@ -5,6 +5,7 @@ import { getAllowedCorsOrigin, applyCorsHeaders } from '@/lib/cors';
 import { getCanonicalAppUrl, getUpstreamApiUrl, isMcpDeployment } from '@/lib/mcp/config';
 import { fetchMissionControlItemById, searchMissionControlData } from '@/lib/mcp/search';
 import { PROJECT_STAGE_VALUES } from '@/lib/project-stage';
+import { secureCompare } from '@/lib/secure-compare';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
 import { z } from 'zod';
 
@@ -203,21 +204,21 @@ function authenticateLegacyMcp(request: Request): LegacyMcpAuthResult | Response
     });
   }
 
-  // Accept API key via header, Bearer token, or ?key= query param
+  // Accept API key via header or Bearer token only. Query-param keys are not
+  // supported: URLs land in access logs and intermediaries.
   const customKey = request.headers.get('x-mission-control-key');
   const authHeader = request.headers.get('authorization');
   const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
-  const urlKey = new URL(request.url).searchParams.get('key');
-  const apiKey = customKey || bearerToken || urlKey;
+  const apiKey = customKey || bearerToken;
 
-  if (apiKey && validApiKey && apiKey === validApiKey) {
+  if (apiKey && validApiKey && secureCompare(apiKey, validApiKey)) {
     return {
       apiKey,
       userId: process.env.MISSION_CONTROL_USER_ID?.trim() || null,
     };
   }
 
-  if (apiKey && actionsApiKey && apiKey === actionsApiKey) {
+  if (apiKey && actionsApiKey && secureCompare(apiKey, actionsApiKey)) {
     return new Response(JSON.stringify({ error: 'The actions API key cannot access /api/mcp' }), {
       status: 403,
       headers: { 'Content-Type': 'application/json' },
@@ -380,6 +381,7 @@ function createMcpServer(): McpServer {
       implementation_id: z.string().optional().describe('Filter by application UUID'),
       project_id: z.string().optional().describe('Filter by project UUID'),
       section_id: z.string().optional().describe('Filter by project section UUID'),
+      sprint_id: z.string().optional().describe('Filter by sprint UUID'),
       due_soon: z.boolean().optional().describe('Due within 48 hours, excluding Done and Parked'),
       include_done: z.boolean().optional().describe('Include completed tasks (default: excluded)'),
       include_parked: z.boolean().optional().describe('Include parked tasks (default: excluded)'),
@@ -394,6 +396,7 @@ function createMcpServer(): McpServer {
       if (args.implementation_id) url.searchParams.set('implementation_id', args.implementation_id);
       if (args.project_id) url.searchParams.set('project_id', args.project_id);
       if (args.section_id) url.searchParams.set('section_id', args.section_id);
+      if (args.sprint_id) url.searchParams.set('sprint_id', args.sprint_id);
       if (args.due_soon) url.searchParams.set('due_soon', 'true');
       if (args.include_done) url.searchParams.set('include_done', 'true');
       if (args.include_parked) url.searchParams.set('include_parked', 'true');
@@ -462,6 +465,7 @@ function createMcpServer(): McpServer {
       estimated_minutes: z.number().min(1).max(480).optional().describe('Time estimate in minutes'),
       estimate_source: z.enum(['default', 'llm', 'manual']).optional().describe('How the estimate was chosen'),
       due_at: z.string().optional().describe('Due date as ISO string'),
+      follow_up_at: z.string().optional().describe('Follow-up date as ISO string'),
       priority_score: z.number().min(0).max(100).optional().describe('Priority 0-100'),
       blocker: z.boolean().optional().describe('Is this a blocker?'),
       needs_review: z.boolean().optional().describe('Flag for review'),
@@ -469,6 +473,7 @@ function createMcpServer(): McpServer {
       implementation_id: z.string().optional().describe('Application UUID to link to'),
       project_id: z.string().optional().describe('Project UUID to link to'),
       section_id: z.string().optional().describe('Project section UUID to link to'),
+      sprint_id: z.string().optional().describe('Sprint UUID to assign the task to'),
       tags: z.array(z.string()).optional().describe('Freeform lowercase tags'),
       stakeholder_mentions: z.array(z.string()).optional().describe('Stakeholder names'),
       source_type: z.string().optional().describe('Source label, e.g. Manual or Recurring'),
@@ -515,6 +520,8 @@ function createMcpServer(): McpServer {
       section_id: z.string().nullable().optional().describe('Project section UUID or null to unlink'),
       sprint_id: z.string().nullable().optional().describe('Sprint UUID or null to unlink'),
       tags: z.array(z.string()).optional(),
+      stakeholder_mentions: z.array(z.string()).optional().describe('Replace the stakeholder name mentions on the task'),
+      priority_score: z.number().min(0).max(100).optional().describe('New base priority 0-100; urgency/stakeholder/due-date boosts are applied on top'),
       pinned_excerpt: z.string().nullable().optional(),
       pinned: z.boolean().optional(),
     },

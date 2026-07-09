@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
 import type { TaskCardData } from "@/components/tasks/TaskCard";
+import { getTaskVisualState, TaskStateBadge } from "@/components/tasks/task-state";
 import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
 import { CapacityMeter } from "@/components/today/CapacityMeter";
 import { FocusStatusBar } from "@/components/today/FocusStatusBar";
@@ -160,6 +161,8 @@ function taskToCardData(
     pinned: Boolean(task.pinned),
     syncedToday,
     implementationName: task.implementation?.name ?? null,
+    dependencyBlocked: Boolean(task.dependency_blocked),
+    updatedAt: task.updated_at ?? null,
   };
 }
 
@@ -809,6 +812,14 @@ function WeeklyTaskCard({
         className="block w-full text-left focus:outline-none focus-visible:rounded-lg focus-visible:ring-2 focus-visible:ring-accent/50"
       >
         <h3 className="text-sm font-semibold leading-snug text-foreground">{task.title}</h3>
+        {(() => {
+          const state = getTaskVisualState({
+            status: task.status,
+            dependencyBlocked: task.dependencyBlocked,
+            updatedAt: task.updatedAt,
+          });
+          return state ? <TaskStateBadge state={state} className="mt-1" /> : null;
+        })()}
       </button>
 
       <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">

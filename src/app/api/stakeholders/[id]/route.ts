@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { isPostgrestNotFound } from '@/lib/supabase/errors';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import { mergeStakeholderContext, normalizeStakeholderContext } from '@/lib/stakeholders';
 
@@ -25,6 +26,10 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       .eq('id', id)
       .eq('user_id', userId)
       .single();
+
+    if (error && !isPostgrestNotFound(error)) {
+      throw error;
+    }
 
     if (error || !stakeholder) {
       return NextResponse.json({ error: 'Stakeholder not found' }, { status: 404 });
@@ -88,6 +93,10 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         .eq('id', id)
         .eq('user_id', userId)
         .single();
+
+      if (fetchError && !isPostgrestNotFound(fetchError)) {
+        throw fetchError;
+      }
 
       if (fetchError || !stakeholder) {
         return NextResponse.json({ error: 'Stakeholder not found' }, { status: 404 });

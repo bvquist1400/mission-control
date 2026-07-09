@@ -1,0 +1,2659 @@
+[
+  {
+    "name": "accept_artifact",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "artifact_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "description": "Open artifact UUID"
+        }
+      },
+      "required": [
+        "artifact_id"
+      ]
+    }
+  },
+  {
+    "name": "add_task_comment",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "description": "Task UUID"
+        },
+        "content": {
+          "type": "string",
+          "description": "Comment text"
+        }
+      },
+      "required": [
+        "task_id",
+        "content"
+      ]
+    }
+  },
+  {
+    "name": "apply_artifact",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "artifact_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "description": "Accepted artifact UUID"
+        }
+      },
+      "required": [
+        "artifact_id"
+      ]
+    }
+  },
+  {
+    "name": "archive_note",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "note_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "description": "Note UUID"
+        }
+      },
+      "required": [
+        "note_id"
+      ]
+    }
+  },
+  {
+    "name": "clear_focus",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "clear_task_recurrence",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "description": "Task UUID"
+        }
+      },
+      "required": [
+        "task_id"
+      ]
+    }
+  },
+  {
+    "name": "create_application",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Application name (required)"
+        },
+        "phase": {
+          "default": "Intake",
+          "type": "string",
+          "enum": [
+            "Intake",
+            "Discovery",
+            "Design",
+            "Build",
+            "Test",
+            "Training",
+            "GoLive",
+            "Hypercare",
+            "Steady State",
+            "Sundown"
+          ]
+        },
+        "rag": {
+          "default": "Green",
+          "type": "string",
+          "enum": [
+            "Green",
+            "Yellow",
+            "Red"
+          ]
+        },
+        "target_date": {
+          "description": "Target date (ISO)",
+          "type": "string"
+        },
+        "status_summary": {
+          "type": "string"
+        },
+        "next_milestone": {
+          "type": "string"
+        },
+        "next_milestone_date": {
+          "type": "string"
+        },
+        "stakeholders": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "keywords": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "name"
+      ]
+    }
+  },
+  {
+    "name": "create_application_status_update",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "application_id": {
+          "type": "string",
+          "description": "Application UUID"
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Status update text to store in the application log"
+        },
+        "created_by": {
+          "description": "Who authored the status update; defaults to Assistant for MCP-created notes",
+          "type": "string",
+          "enum": [
+            "Brent",
+            "Assistant"
+          ]
+        },
+        "sync_status_summary": {
+          "description": "When true or omitted, also update application.status_summary to the same note",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "application_id",
+        "note"
+      ]
+    }
+  },
+  {
+    "name": "create_commitment",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "stakeholder_id": {
+          "type": "string",
+          "description": "Stakeholder UUID"
+        },
+        "title": {
+          "type": "string",
+          "description": "Commitment title (required)"
+        },
+        "direction": {
+          "type": "string",
+          "enum": [
+            "ours",
+            "theirs"
+          ],
+          "description": "\"ours\" = we promised them, \"theirs\" = they promised us"
+        },
+        "status": {
+          "default": "Open",
+          "type": "string",
+          "enum": [
+            "Open",
+            "Done",
+            "Dropped"
+          ]
+        },
+        "due_at": {
+          "description": "Due date (ISO)",
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        },
+        "task_id": {
+          "description": "Link to a task UUID",
+          "type": "string"
+        }
+      },
+      "required": [
+        "stakeholder_id",
+        "title",
+        "direction"
+      ]
+    }
+  },
+  {
+    "name": "create_meeting_note",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "calendar_event": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "enum": [
+                "local",
+                "ical",
+                "graph"
+              ],
+              "description": "Calendar provider source"
+            },
+            "external_event_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Stored calendar external_event_id"
+            },
+            "start_at": {
+              "type": "string",
+              "description": "Calendar event start timestamp (ISO)"
+            }
+          },
+          "required": [
+            "source",
+            "external_event_id",
+            "start_at"
+          ]
+        },
+        "implementation_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "body_markdown": {
+          "type": "string"
+        },
+        "pinned": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "calendar_event"
+      ]
+    }
+  },
+  {
+    "name": "create_note",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Note title"
+        },
+        "body_markdown": {
+          "type": "string"
+        },
+        "note_type": {
+          "type": "string",
+          "enum": [
+            "working_note",
+            "meeting_note",
+            "application_note",
+            "decision_note",
+            "prep_note",
+            "retrospective_note"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "archived"
+          ]
+        },
+        "pinned": {
+          "type": "boolean"
+        },
+        "last_reviewed_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "title"
+      ]
+    }
+  },
+  {
+    "name": "create_note_decision",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "note_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "description": "Note UUID"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Decision title"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Decision summary"
+        },
+        "decision_status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "superseded",
+            "reversed"
+          ]
+        },
+        "decided_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decided_by_stakeholder_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "note_id",
+        "title",
+        "summary"
+      ]
+    }
+  },
+  {
+    "name": "create_project",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Project name (required)"
+        },
+        "description": {
+          "type": "string"
+        },
+        "implementation_id": {
+          "description": "Application UUID to link to",
+          "type": "string"
+        },
+        "stage": {
+          "default": "Planned",
+          "type": "string",
+          "enum": [
+            "Proposed",
+            "Planned",
+            "Ready",
+            "In Progress",
+            "Blocked",
+            "Review",
+            "Done",
+            "On Hold",
+            "Cancelled"
+          ]
+        },
+        "rag": {
+          "default": "Green",
+          "type": "string",
+          "enum": [
+            "Green",
+            "Yellow",
+            "Red"
+          ]
+        },
+        "target_date": {
+          "description": "Target date (ISO date YYYY-MM-DD)",
+          "type": "string"
+        },
+        "servicenow_spm_id": {
+          "description": "ServiceNow SPM project ID",
+          "type": "string"
+        },
+        "status_summary": {
+          "type": "string"
+        },
+        "portfolio_rank": {
+          "description": "Positive integer for ordering within the portfolio",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "name"
+      ]
+    }
+  },
+  {
+    "name": "create_project_section",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "type": "string",
+          "description": "Project UUID"
+        },
+        "name": {
+          "type": "string",
+          "description": "Section name"
+        },
+        "sort_order": {
+          "description": "Integer sort order",
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "project_id",
+        "name"
+      ]
+    }
+  },
+  {
+    "name": "create_sprint",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Sprint name"
+        },
+        "start_date": {
+          "type": "string",
+          "description": "Start date YYYY-MM-DD"
+        },
+        "end_date": {
+          "type": "string",
+          "description": "End date YYYY-MM-DD"
+        },
+        "theme": {
+          "description": "Optional sprint theme",
+          "type": "string"
+        },
+        "focus_implementation_id": {
+          "description": "Application UUID to focus the sprint on",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "start_date",
+        "end_date"
+      ]
+    }
+  },
+  {
+    "name": "create_stakeholder",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name (required)"
+        },
+        "email": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "organization": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    }
+  },
+  {
+    "name": "create_task",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Task title (required)"
+        },
+        "description": {
+          "description": "Task description",
+          "type": "string"
+        },
+        "status": {
+          "default": "Backlog",
+          "type": "string",
+          "enum": [
+            "Backlog",
+            "Planned",
+            "In Progress",
+            "Blocked/Waiting",
+            "Parked",
+            "Done"
+          ]
+        },
+        "task_type": {
+          "default": "Task",
+          "type": "string",
+          "enum": [
+            "Task",
+            "Ticket",
+            "MeetingPrep",
+            "FollowUp",
+            "Admin",
+            "Build"
+          ]
+        },
+        "estimated_minutes": {
+          "description": "Time estimate in minutes",
+          "type": "number",
+          "minimum": 1,
+          "maximum": 480
+        },
+        "estimate_source": {
+          "description": "How the estimate was chosen",
+          "type": "string",
+          "enum": [
+            "default",
+            "llm",
+            "manual"
+          ]
+        },
+        "due_at": {
+          "description": "Due date as ISO string",
+          "type": "string"
+        },
+        "follow_up_at": {
+          "description": "Follow-up date as ISO string",
+          "type": "string"
+        },
+        "priority_score": {
+          "description": "Priority 0-100",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "blocker": {
+          "description": "Is this a blocker?",
+          "type": "boolean"
+        },
+        "needs_review": {
+          "description": "Flag for review",
+          "type": "boolean"
+        },
+        "waiting_on": {
+          "description": "Who/what is this waiting on",
+          "type": "string"
+        },
+        "implementation_id": {
+          "description": "Application UUID to link to",
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Project UUID to link to",
+          "type": "string"
+        },
+        "section_id": {
+          "description": "Project section UUID to link to",
+          "type": "string"
+        },
+        "sprint_id": {
+          "description": "Sprint UUID to assign the task to",
+          "type": "string"
+        },
+        "tags": {
+          "description": "Freeform lowercase tags",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "stakeholder_mentions": {
+          "description": "Stakeholder names",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "source_type": {
+          "description": "Source label, e.g. Manual or Recurring",
+          "type": "string"
+        },
+        "source_url": {
+          "description": "Source URL for traceability",
+          "type": "string"
+        },
+        "pinned_excerpt": {
+          "description": "Pinned source excerpt",
+          "type": "string"
+        },
+        "blocked_by_task_id": {
+          "description": "Task UUID this new task should depend on",
+          "type": "string"
+        },
+        "initial_comment": {
+          "description": "Creates first comment on the task",
+          "type": "string"
+        },
+        "initial_checklist": {
+          "description": "Creates checklist items",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "title"
+      ]
+    }
+  },
+  {
+    "name": "create_task_from_note",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "note_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "description": "Note UUID"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Task title"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "implementation_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sprint_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "Backlog",
+            "Planned",
+            "In Progress",
+            "Blocked/Waiting",
+            "Parked",
+            "Done"
+          ]
+        },
+        "task_type": {
+          "type": "string",
+          "enum": [
+            "Task",
+            "Ticket",
+            "MeetingPrep",
+            "FollowUp",
+            "Admin",
+            "Build"
+          ]
+        },
+        "estimated_minutes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 480
+        },
+        "estimate_source": {
+          "type": "string",
+          "enum": [
+            "default",
+            "llm",
+            "manual"
+          ]
+        },
+        "due_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "priority_score": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "blocker": {
+          "type": "boolean"
+        },
+        "needs_review": {
+          "type": "boolean"
+        },
+        "waiting_on": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "relationship_type": {
+          "type": "string",
+          "enum": [
+            "linked",
+            "created_from",
+            "discussed_in"
+          ]
+        }
+      },
+      "required": [
+        "note_id",
+        "title"
+      ]
+    }
+  },
+  {
+    "name": "delete_project",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "type": "string",
+          "description": "Project UUID"
+        }
+      },
+      "required": [
+        "project_id"
+      ]
+    }
+  },
+  {
+    "name": "delete_project_section",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "section_id": {
+          "type": "string",
+          "description": "Project section UUID"
+        }
+      },
+      "required": [
+        "section_id"
+      ]
+    }
+  },
+  {
+    "name": "delete_sprint",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "sprint_id": {
+          "type": "string",
+          "description": "Sprint UUID"
+        }
+      },
+      "required": [
+        "sprint_id"
+      ]
+    }
+  },
+  {
+    "name": "delete_task",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "description": "Task UUID"
+        }
+      },
+      "required": [
+        "task_id"
+      ]
+    }
+  },
+  {
+    "name": "dismiss_artifact",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "artifact_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "description": "Open artifact UUID"
+        }
+      },
+      "required": [
+        "artifact_id"
+      ]
+    }
+  },
+  {
+    "name": "fetch",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Typed search result id such as record:task:<id>, email:<id>, or calendar:<id>"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    }
+  },
+  {
+    "name": "generate_application_copy_update",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "application_id": {
+          "type": "string",
+          "description": "Application UUID"
+        },
+        "save_to_log": {
+          "description": "When true or omitted, save the generated snippet to the application status update log",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "application_id"
+      ]
+    }
+  },
+  {
+    "name": "generate_recurring_tasks",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "get_application",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "application_id": {
+          "type": "string",
+          "description": "Application UUID"
+        }
+      },
+      "required": [
+        "application_id"
+      ]
+    }
+  },
+  {
+    "name": "get_application_health_scores",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "get_brief_digest",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "mode": {
+          "default": "auto",
+          "description": "Briefing mode",
+          "type": "string",
+          "enum": [
+            "morning",
+            "midday",
+            "eod",
+            "auto"
+          ]
+        },
+        "date": {
+          "description": "ISO date (YYYY-MM-DD). Defaults to today ET.",
+          "type": "string"
+        },
+        "since": {
+          "description": "Optional ISO timestamp to define the activity window for midday/eod updates.",
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_brief_render",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "mode": {
+          "default": "auto",
+          "description": "Briefing mode",
+          "type": "string",
+          "enum": [
+            "morning",
+            "midday",
+            "eod",
+            "auto"
+          ]
+        },
+        "date": {
+          "description": "ISO date (YYYY-MM-DD). Defaults to today ET.",
+          "type": "string"
+        },
+        "since": {
+          "description": "Optional ISO timestamp to define the activity window for midday/eod updates.",
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_briefing",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "mode": {
+          "default": "auto",
+          "description": "Briefing mode",
+          "type": "string",
+          "enum": [
+            "morning",
+            "midday",
+            "eod",
+            "auto"
+          ]
+        },
+        "date": {
+          "description": "ISO date (YYYY-MM-DD). Defaults to today ET.",
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_briefing_narrative",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "mode": {
+          "default": "auto",
+          "description": "Briefing mode",
+          "type": "string",
+          "enum": [
+            "morning",
+            "midday",
+            "eod",
+            "auto"
+          ]
+        },
+        "date": {
+          "description": "ISO date (YYYY-MM-DD). Defaults to today ET.",
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_calendar",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "range_start": {
+          "type": "string",
+          "description": "Start date (YYYY-MM-DD)"
+        },
+        "range_end": {
+          "type": "string",
+          "description": "End date (YYYY-MM-DD)"
+        }
+      },
+      "required": [
+        "range_start",
+        "range_end"
+      ]
+    }
+  },
+  {
+    "name": "get_focus",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "include_history": {
+          "description": "Include recent directives",
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_monthly_review",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "date": {
+          "description": "ISO date (YYYY-MM-DD). Defaults to today ET and reviews the current month-to-date.",
+          "type": "string"
+        },
+        "persist": {
+          "description": "When true, also persist the monthly snapshot.",
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_note",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "note_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "description": "Note UUID"
+        }
+      },
+      "required": [
+        "note_id"
+      ]
+    }
+  },
+  {
+    "name": "get_plan",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "get_project",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "type": "string",
+          "description": "Project UUID"
+        }
+      },
+      "required": [
+        "project_id"
+      ]
+    }
+  },
+  {
+    "name": "get_sprint",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "sprint_id": {
+          "type": "string",
+          "description": "Sprint UUID"
+        }
+      },
+      "required": [
+        "sprint_id"
+      ]
+    }
+  },
+  {
+    "name": "get_stakeholder",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "stakeholder_id": {
+          "type": "string",
+          "description": "Stakeholder UUID"
+        }
+      },
+      "required": [
+        "stakeholder_id"
+      ]
+    }
+  },
+  {
+    "name": "get_task",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "description": "Task UUID"
+        }
+      },
+      "required": [
+        "task_id"
+      ]
+    }
+  },
+  {
+    "name": "get_task_checklist",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "description": "Task UUID"
+        }
+      },
+      "required": [
+        "task_id"
+      ]
+    }
+  },
+  {
+    "name": "get_weekly_review",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "date": {
+          "description": "ISO date (YYYY-MM-DD). Defaults to today ET and reviews the current week-to-date.",
+          "type": "string"
+        },
+        "persist": {
+          "description": "When true, also persist the weekly snapshot for later monthly review.",
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "link_note_to_entity",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "note_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "description": "Note UUID"
+        },
+        "entity_type": {
+          "type": "string",
+          "enum": [
+            "task",
+            "calendar_event",
+            "implementation",
+            "project",
+            "stakeholder",
+            "commitment",
+            "sprint"
+          ]
+        },
+        "entity_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Entity id or canonical encoded calendar entity id"
+        },
+        "link_role": {
+          "type": "string",
+          "enum": [
+            "primary_context",
+            "meeting_for",
+            "related_task",
+            "decision_about",
+            "prep_for",
+            "reference"
+          ]
+        }
+      },
+      "required": [
+        "note_id",
+        "entity_type",
+        "entity_id"
+      ]
+    }
+  },
+  {
+    "name": "link_task_to_note",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "note_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "description": "Note UUID"
+        },
+        "task_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "description": "Task UUID"
+        },
+        "relationship_type": {
+          "type": "string",
+          "enum": [
+            "linked",
+            "created_from",
+            "discussed_in"
+          ]
+        }
+      },
+      "required": [
+        "note_id",
+        "task_id"
+      ]
+    }
+  },
+  {
+    "name": "list_application_status_updates",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "application_id": {
+          "type": "string",
+          "description": "Application UUID"
+        },
+        "limit": {
+          "description": "Maximum number of log entries to return; defaults to 10",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        }
+      },
+      "required": [
+        "application_id"
+      ]
+    }
+  },
+  {
+    "name": "list_applications",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "with_stats": {
+          "description": "Include blockers_count and next_action",
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "list_commitments",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "stakeholder_id": {
+          "type": "string",
+          "description": "Stakeholder UUID"
+        }
+      },
+      "required": [
+        "stakeholder_id"
+      ]
+    }
+  },
+  {
+    "name": "list_notes",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "note_type": {
+          "type": "string",
+          "enum": [
+            "working_note",
+            "meeting_note",
+            "application_note",
+            "decision_note",
+            "prep_note",
+            "retrospective_note"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "archived"
+          ]
+        },
+        "pinned": {
+          "type": "boolean"
+        },
+        "entity_type": {
+          "type": "string",
+          "enum": [
+            "task",
+            "calendar_event",
+            "implementation",
+            "project",
+            "stakeholder",
+            "commitment",
+            "sprint"
+          ]
+        },
+        "entity_id": {
+          "description": "Entity id for task, implementation, project, stakeholder, commitment, sprint, or encoded calendar entity id",
+          "type": "string"
+        },
+        "link_role": {
+          "type": "string",
+          "enum": [
+            "primary_context",
+            "meeting_for",
+            "related_task",
+            "decision_about",
+            "prep_for",
+            "reference"
+          ]
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    }
+  },
+  {
+    "name": "list_open_artifacts",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "list_parked_tasks",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "implementation_id": {
+          "description": "Filter by application UUID",
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Filter by project UUID",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Max results (default 100)",
+          "type": "number",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "offset": {
+          "description": "Result offset for pagination",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 5000
+        }
+      }
+    }
+  },
+  {
+    "name": "list_project_sections",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "type": "string",
+          "description": "Project UUID"
+        }
+      },
+      "required": [
+        "project_id"
+      ]
+    }
+  },
+  {
+    "name": "list_projects",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "implementation_id": {
+          "description": "Filter by application UUID",
+          "type": "string"
+        },
+        "with_stats": {
+          "description": "Include task counts, blocker count, and linked application info",
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "list_sprints",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "list_stakeholders",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "search": {
+          "description": "Search by name, email, or organization",
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "list_task_comments",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "description": "Task UUID"
+        }
+      },
+      "required": [
+        "task_id"
+      ]
+    }
+  },
+  {
+    "name": "list_tasks",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "status": {
+          "description": "Filter by status",
+          "type": "string",
+          "enum": [
+            "Backlog",
+            "Planned",
+            "In Progress",
+            "Blocked/Waiting",
+            "Parked",
+            "Done"
+          ]
+        },
+        "needs_review": {
+          "description": "Only tasks flagged for review",
+          "type": "boolean"
+        },
+        "tag": {
+          "description": "Filter to tasks containing this lowercase tag",
+          "type": "string"
+        },
+        "implementation_id": {
+          "description": "Filter by application UUID",
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Filter by project UUID",
+          "type": "string"
+        },
+        "section_id": {
+          "description": "Filter by project section UUID",
+          "type": "string"
+        },
+        "sprint_id": {
+          "description": "Filter by sprint UUID",
+          "type": "string"
+        },
+        "due_soon": {
+          "description": "Due within 48 hours, excluding Done and Parked",
+          "type": "boolean"
+        },
+        "include_done": {
+          "description": "Include completed tasks (default: excluded)",
+          "type": "boolean"
+        },
+        "include_parked": {
+          "description": "Include parked tasks (default: excluded)",
+          "type": "boolean"
+        },
+        "limit": {
+          "description": "Max results (default 100)",
+          "type": "number",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "offset": {
+          "description": "Result offset for pagination",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 5000
+        }
+      }
+    }
+  },
+  {
+    "name": "park_task",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "description": "Task UUID"
+        }
+      },
+      "required": [
+        "task_id"
+      ]
+    }
+  },
+  {
+    "name": "search",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Free-text query"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    }
+  },
+  {
+    "name": "set_focus",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "Description of the focus directive"
+        },
+        "scope_type": {
+          "type": "string",
+          "enum": [
+            "implementation",
+            "project",
+            "stakeholder",
+            "task_type",
+            "query"
+          ],
+          "description": "What kind of thing to focus on"
+        },
+        "scope_id": {
+          "description": "UUID — for scope_type=implementation or project",
+          "type": "string"
+        },
+        "scope_value": {
+          "description": "String value — for stakeholder/task_type/query",
+          "type": "string"
+        },
+        "strength": {
+          "default": "strong",
+          "type": "string",
+          "enum": [
+            "nudge",
+            "strong",
+            "hard"
+          ]
+        },
+        "reason": {
+          "description": "Why this focus matters",
+          "type": "string"
+        },
+        "starts_at": {
+          "type": "string"
+        },
+        "ends_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "scope_type"
+      ]
+    }
+  },
+  {
+    "name": "set_task_recurrence",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "description": "Task UUID"
+        },
+        "frequency": {
+          "type": "string",
+          "enum": [
+            "daily",
+            "weekly",
+            "biweekly",
+            "monthly"
+          ],
+          "description": "Recurring cadence"
+        },
+        "next_due": {
+          "description": "Next scheduled date YYYY-MM-DD. Defaults from task due date or today.",
+          "type": "string"
+        },
+        "day_of_week": {
+          "description": "For weekly/biweekly schedules, 0=Sunday through 6=Saturday",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 6
+        },
+        "day_of_month": {
+          "description": "For monthly schedules, preferred day of month",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 31
+        }
+      },
+      "required": [
+        "task_id",
+        "frequency"
+      ]
+    }
+  },
+  {
+    "name": "sync_today",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "task_ids": {
+          "minItems": 1,
+          "maxItems": 20,
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Task UUIDs to keep on Today"
+        }
+      },
+      "required": [
+        "task_ids"
+      ]
+    }
+  },
+  {
+    "name": "trigger_intelligence_run",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "unlink_note_from_entity",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "note_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "description": "Note UUID"
+        },
+        "entity_type": {
+          "type": "string",
+          "enum": [
+            "task",
+            "calendar_event",
+            "implementation",
+            "project",
+            "stakeholder",
+            "commitment",
+            "sprint"
+          ]
+        },
+        "entity_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Entity id or canonical encoded calendar entity id"
+        },
+        "link_role": {
+          "type": "string",
+          "enum": [
+            "primary_context",
+            "meeting_for",
+            "related_task",
+            "decision_about",
+            "prep_for",
+            "reference"
+          ]
+        }
+      },
+      "required": [
+        "note_id",
+        "entity_type",
+        "entity_id"
+      ]
+    }
+  },
+  {
+    "name": "update_application",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "application_id": {
+          "type": "string",
+          "description": "Application UUID"
+        },
+        "name": {
+          "type": "string"
+        },
+        "phase": {
+          "type": "string",
+          "enum": [
+            "Intake",
+            "Discovery",
+            "Design",
+            "Build",
+            "Test",
+            "Training",
+            "GoLive",
+            "Hypercare",
+            "Steady State",
+            "Sundown"
+          ]
+        },
+        "rag": {
+          "type": "string",
+          "enum": [
+            "Green",
+            "Yellow",
+            "Red"
+          ]
+        },
+        "target_date": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status_summary": {
+          "type": "string"
+        },
+        "next_milestone": {
+          "type": "string"
+        },
+        "next_milestone_date": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stakeholders": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "keywords": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "priority_weight": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "priority_note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "portfolio_rank": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "application_id"
+      ]
+    }
+  },
+  {
+    "name": "update_commitment",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "commitment_id": {
+          "type": "string",
+          "description": "Commitment UUID"
+        },
+        "title": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "Open",
+            "Done",
+            "Dropped"
+          ]
+        },
+        "direction": {
+          "type": "string",
+          "enum": [
+            "ours",
+            "theirs"
+          ]
+        },
+        "due_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "done_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "commitment_id"
+      ]
+    }
+  },
+  {
+    "name": "update_note",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "note_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "description": "Note UUID"
+        },
+        "title": {
+          "type": "string"
+        },
+        "body_markdown": {
+          "type": "string"
+        },
+        "note_type": {
+          "type": "string",
+          "enum": [
+            "working_note",
+            "meeting_note",
+            "application_note",
+            "decision_note",
+            "prep_note",
+            "retrospective_note"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "archived"
+          ]
+        },
+        "pinned": {
+          "type": "boolean"
+        },
+        "last_reviewed_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "note_id"
+      ]
+    }
+  },
+  {
+    "name": "update_note_decision_status",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "note_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "description": "Note UUID"
+        },
+        "decision_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "description": "Decision UUID"
+        },
+        "decision_status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "superseded",
+            "reversed"
+          ],
+          "description": "Updated decision status"
+        },
+        "decided_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decided_by_stakeholder_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "note_id",
+        "decision_id",
+        "decision_status"
+      ]
+    }
+  },
+  {
+    "name": "update_project",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "type": "string",
+          "description": "Project UUID"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "implementation_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stage": {
+          "type": "string",
+          "enum": [
+            "Proposed",
+            "Planned",
+            "Ready",
+            "In Progress",
+            "Blocked",
+            "Review",
+            "Done",
+            "On Hold",
+            "Cancelled"
+          ]
+        },
+        "rag": {
+          "type": "string",
+          "enum": [
+            "Green",
+            "Yellow",
+            "Red"
+          ]
+        },
+        "target_date": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "servicenow_spm_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status_summary": {
+          "type": "string"
+        },
+        "portfolio_rank": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "project_id"
+      ]
+    }
+  },
+  {
+    "name": "update_project_section",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "section_id": {
+          "type": "string",
+          "description": "Project section UUID"
+        },
+        "name": {
+          "description": "Section name",
+          "type": "string"
+        },
+        "sort_order": {
+          "description": "Integer sort order",
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "section_id"
+      ]
+    }
+  },
+  {
+    "name": "update_sprint",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "sprint_id": {
+          "type": "string",
+          "description": "Sprint UUID"
+        },
+        "name": {
+          "type": "string"
+        },
+        "start_date": {
+          "description": "Start date YYYY-MM-DD",
+          "type": "string"
+        },
+        "end_date": {
+          "description": "End date YYYY-MM-DD",
+          "type": "string"
+        },
+        "theme": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "focus_implementation_id": {
+          "description": "Application UUID or null to unlink",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "sprint_id"
+      ]
+    }
+  },
+  {
+    "name": "update_stakeholder",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "stakeholder_id": {
+          "type": "string",
+          "description": "Stakeholder UUID"
+        },
+        "name": {
+          "type": "string"
+        },
+        "email": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "organization": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "context": {
+          "description": "Structured stakeholder memory to merge into existing context",
+          "type": "object",
+          "properties": {
+            "last_contacted_at": {
+              "description": "Last contact timestamp (ISO)",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "preferred_contact": {
+              "description": "Preferred contact method",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "current_priorities": {
+              "description": "Current stakeholder priorities",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "notes": {
+              "description": "Structured context notes",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "required": [
+        "stakeholder_id"
+      ]
+    }
+  },
+  {
+    "name": "update_task",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "description": "Task UUID"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "Backlog",
+            "Planned",
+            "In Progress",
+            "Blocked/Waiting",
+            "Parked",
+            "Done"
+          ]
+        },
+        "task_type": {
+          "type": "string",
+          "enum": [
+            "Task",
+            "Ticket",
+            "MeetingPrep",
+            "FollowUp",
+            "Admin",
+            "Build"
+          ]
+        },
+        "estimated_minutes": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 480
+        },
+        "estimate_source": {
+          "type": "string",
+          "enum": [
+            "default",
+            "llm",
+            "manual"
+          ]
+        },
+        "actual_minutes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "due_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "needs_review": {
+          "type": "boolean"
+        },
+        "blocker": {
+          "type": "boolean"
+        },
+        "waiting_on": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "follow_up_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "implementation_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project_id": {
+          "description": "Project UUID or null to unlink",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "section_id": {
+          "description": "Project section UUID or null to unlink",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sprint_id": {
+          "description": "Sprint UUID or null to unlink",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "stakeholder_mentions": {
+          "description": "Replace the stakeholder name mentions on the task",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "priority_score": {
+          "description": "New base priority 0-100; urgency/stakeholder/due-date boosts are applied on top",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "pinned_excerpt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pinned": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "task_id"
+      ]
+    }
+  },
+  {
+    "name": "update_task_checklist",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "description": "Task UUID"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Checklist item UUID"
+              },
+              "is_done": {
+                "type": "boolean",
+                "description": "Whether the item is done"
+              }
+            },
+            "required": [
+              "id",
+              "is_done"
+            ]
+          },
+          "description": "Items to update"
+        }
+      },
+      "required": [
+        "task_id",
+        "items"
+      ]
+    }
+  }
+]

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { isPostgrestNotFound } from '@/lib/supabase/errors';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import type { CommentSource } from '@/types/database';
 
@@ -82,6 +83,10 @@ export async function POST(
       .eq('id', id)
       .eq('user_id', userId)
       .single();
+
+    if (taskError && !isPostgrestNotFound(taskError)) {
+      throw taskError;
+    }
 
     if (taskError || !task) {
       return NextResponse.json({ error: 'Task not found' }, { status: 404 });

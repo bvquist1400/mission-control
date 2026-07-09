@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { isPostgrestNotFound } from '@/lib/supabase/errors';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import type { CommitmentStatus, CommitmentDirection } from '@/types/database';
 
@@ -28,6 +29,10 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       .eq('id', stakeholderId)
       .eq('user_id', userId)
       .single();
+
+    if (stakeholderError && !isPostgrestNotFound(stakeholderError)) {
+      throw stakeholderError;
+    }
 
     if (stakeholderError || !stakeholder) {
       return NextResponse.json({ error: 'Stakeholder not found' }, { status: 404 });
@@ -70,6 +75,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       .eq('user_id', userId)
       .single();
 
+    if (stakeholderError && !isPostgrestNotFound(stakeholderError)) {
+      throw stakeholderError;
+    }
+
     if (stakeholderError || !stakeholder) {
       return NextResponse.json({ error: 'Stakeholder not found' }, { status: 404 });
     }
@@ -103,6 +112,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         .eq('id', taskId)
         .eq('user_id', userId)
         .single();
+
+      if (taskError && !isPostgrestNotFound(taskError)) {
+        throw taskError;
+      }
 
       if (taskError || !task) {
         return NextResponse.json({ error: 'task_id is invalid' }, { status: 400 });

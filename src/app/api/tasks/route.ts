@@ -10,8 +10,10 @@ import {
   TASK_WITH_RELATIONS_SELECT,
 } from '@/lib/task-relations';
 import { queueTaskStatusTransition } from '@/lib/task-status-transitions';
+import { calculateFinalPriorityScore, calculatePriorityBoosts } from '@/lib/priority';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import { fetchTaskDependencySummaries } from '@/lib/task-dependencies';
+import { validateOptionalTimestamp } from '@/lib/validate';
 import type { TaskStatus, TaskType, EstimateSource } from '@/types/database';
 
 const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done'];
@@ -366,6 +368,16 @@ export async function POST(request: NextRequest) {
       ? clampNumber(Math.round(body.estimated_minutes), 1, 480)
       : 30;
 
+    const dueAtResult = validateOptionalTimestamp(body.due_at, 'due_at');
+    if (!dueAtResult.ok) {
+      return NextResponse.json({ error: dueAtResult.error }, { status: 400 });
+    }
+
+    const followUpAtResult = validateOptionalTimestamp(body.follow_up_at, 'follow_up_at');
+    if (!followUpAtResult.ok) {
+      return NextResponse.json({ error: followUpAtResult.error }, { status: 400 });
+    }
+
     const implementationId = asStringOrNull(body.implementation_id);
     if (implementationId) {
       const { data: implementation, error: implementationError } = await supabase
@@ -436,6 +448,14 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const stakeholderMentions = toStringArray(body.stakeholder_mentions);
+    const priorityBoosts = calculatePriorityBoosts(
+      stakeholderMentions,
+      dueAtResult.value,
+      body.title.trim(),
+      status
+    );
+
     const { data, error } = await supabase
       .from('tasks')
       .insert({
@@ -448,14 +468,16 @@ export async function POST(request: NextRequest) {
         sprint_id: sprintId,
         status,
         task_type: taskType,
-        priority_score: priorityScore,
+        base_priority: priorityScore,
+        priority_score: calculateFinalPriorityScore(priorityScore, priorityBoosts),
         estimated_minutes: estimatedMinutes,
         estimate_source: estimateSource,
-        due_at: asStringOrNull(body.due_at),
+        due_at: dueAtResult.value,
+        follow_up_at: followUpAtResult.value,
         needs_review: typeof body.needs_review === 'boolean' ? body.needs_review : false,
         blocker: typeof body.blocker === 'boolean' ? body.blocker : false,
         waiting_on: asStringOrNull(body.waiting_on),
-        stakeholder_mentions: toStringArray(body.stakeholder_mentions),
+        stakeholder_mentions: stakeholderMentions,
         tags: normalizeTaskTags(body.tags),
         source_type: asStringOrNull(body.source_type) || 'Manual',
         source_url: asStringOrNull(body.source_url),

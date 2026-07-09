@@ -18,6 +18,12 @@ npm run build        # Production build (runs tsc)
 npx tsc --noEmit     # Type-check without building
 ```
 
+## Priority Model
+
+- `tasks.base_priority` is the un-boosted base (0-100); `tasks.priority_score` is always derived as `clamp(base_priority + boosts, 0, 100)` via `recalculateTaskPriority()` in `src/lib/priority.ts`.
+- Never feed `priority_score` back in as the base — that recreates the pre-migration-044 compounding bug.
+- API `priority_score` inputs (create/PATCH/MCP) set `base_priority`; the stored score is recomputed server-side.
+
 ## Data Hierarchy
 
 ```
@@ -31,19 +37,23 @@ Implementation (Application) -> Project -> Task
 - Auth: use `requireAuthenticatedRoute()` from `@/lib/supabase/route-auth`
 - CORS: wrap all responses with `withCorsHeaders()` from `@/lib/cors`
 - PATCH: always use an explicit `allowedFields` allowlist
+- Not-found checks: only translate PGRST116 into 404 (use `isPostgrestNotFound()` from `@/lib/supabase/errors`); rethrow other errors as 500s
+- Timestamp inputs: validate with `validateOptionalTimestamp()` from `@/lib/validate` before insert/update
+- Secret/API-key comparisons: use `secureCompare()` from `@/lib/secure-compare`, never `===`
 - Supabase queries: always filter by `user_id`
 
 ### Database
 
 - RLS: 4-policy pattern (SELECT, INSERT, UPDATE, DELETE) on every table
 - `updated_at` triggers: reuse `set_updated_at()` function
-- Migrations: `supabase/migrations/` (latest: 032)
+- Migrations: `supabase/migrations/` (latest: 045)
 
 ### MCP Server
 
 - Stateless per-request transports with `enableJsonResponse: true`
 - Tools call the HTTP API internally via fetch
 - Responses wrapped with `toMcpResponse()` which adds `current_time_et`
+- Tool surface is a live contract: `npm run test:mcp-contract` diffs tool names + input schemas against `scripts/fixtures/mcp-tools.snapshot.json`; rerun with `--update` and commit when a change is intentional
 - Proxy deployment (`DEPLOYMENT_ROLE=mcp`) at `mission-control-mcp.vercel.app`
 - Proxy must: strip `content-encoding`/`transfer-encoding`/`content-length` from upstream headers, add CORS headers explicitly, use `sessionIdGenerator` (clients require `mcp-session-id`)
 - OAuth: RFC 8414/9728 flow with PKCE, dynamic client registration, token rotation

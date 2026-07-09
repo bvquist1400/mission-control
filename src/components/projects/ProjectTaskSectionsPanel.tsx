@@ -780,10 +780,14 @@ export function ProjectTaskSectionsPanel({
                         <span className="rounded-full bg-panel-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
                           {(() => {
                             const parkedCount = sectionTasks.filter((t) => t.status === "Parked").length;
+                            const blockedCount = sectionTasks.filter((t) => t.status === "Blocked/Waiting").length;
                             const total = sectionTasks.length;
-                            if (parkedCount === 0) return `${total} task${total === 1 ? "" : "s"}`;
-                            const active = total - parkedCount;
-                            return `${total} task${total === 1 ? "" : "s"} (${active} active, ${parkedCount} parked)`;
+                            if (parkedCount === 0 && blockedCount === 0) return `${total} task${total === 1 ? "" : "s"}`;
+                            const active = total - parkedCount - blockedCount;
+                            const parts = [`${active} active`];
+                            if (blockedCount > 0) parts.push(`${blockedCount} blocked`);
+                            if (parkedCount > 0) parts.push(`${parkedCount} parked`);
+                            return `${total} task${total === 1 ? "" : "s"} (${parts.join(", ")})`;
                           })()}
                         </span>
                       </div>

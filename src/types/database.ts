@@ -74,6 +74,7 @@ export interface Task {
   status: TaskStatus;
   task_type: TaskType;
   priority_score: number;
+  base_priority: number;
   estimated_minutes: number;
   actual_minutes: number | null;
   recurrence: TaskRecurrence | null;

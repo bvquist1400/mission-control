@@ -259,6 +259,7 @@ export async function POST(request: NextRequest) {
         implementation_id: implementationId,
         status: 'Backlog',
         task_type: extraction.task_type,
+        base_priority: Math.max(0, Math.min(100, Math.round(extraction.priority_score))),
         priority_score: finalPriority,
         estimated_minutes: extraction.estimated_minutes,
         estimate_source: 'llm',

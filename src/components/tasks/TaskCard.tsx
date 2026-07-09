@@ -1,4 +1,5 @@
 import type { MouseEvent } from "react";
+import { getTaskVisualState, TaskStateBadge } from "@/components/tasks/task-state";
 import { TaskTagChips } from "@/components/tasks/TaskTagChips";
 import type { TaskStatus } from "@/types/database";
 
@@ -16,6 +17,8 @@ export interface TaskCardData {
   syncedToday?: boolean;
   implementationName?: string | null;
   tags: string[];
+  dependencyBlocked?: boolean;
+  updatedAt?: string | null;
 }
 
 interface TaskCardProps {
@@ -59,6 +62,12 @@ function PinIcon({ pinned }: { pinned: boolean }) {
 }
 
 export function TaskCard({ task, pinning = false, onTogglePinned }: TaskCardProps) {
+  const visualState = getTaskVisualState({
+    status: task.status,
+    dependencyBlocked: task.dependencyBlocked,
+    updatedAt: task.updatedAt,
+  });
+
   function handlePinClick(event: MouseEvent<HTMLButtonElement>) {
     event.preventDefault();
     event.stopPropagation();
@@ -74,11 +83,12 @@ export function TaskCard({ task, pinning = false, onTogglePinned }: TaskCardProp
     <article
       className={`rounded-card border border-stroke bg-panel p-4 shadow-sm transition-colors hover:border-foreground/20 hover:bg-panel-muted/50 ${
         task.pinned ? "border-l-4 border-l-amber-400/80" : ""
-      }`}
+      } ${visualState?.rowClass ?? ""}`}
     >
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <h3 className="text-sm font-semibold leading-relaxed text-foreground">{task.title}</h3>
+          {visualState ? <TaskStateBadge state={visualState} className="mt-1" /> : null}
           {task.tags.length > 0 ? (
             <TaskTagChips tags={task.tags} className="mt-2" />
           ) : null}
