@@ -76,6 +76,25 @@ Hierarchy is DB-enforced (migration 046, project wins): a task in a project inhe
 - Secondary buttons: `border border-stroke bg-panel text-muted-foreground hover:bg-panel-muted`
 - Detail pages: server component wraps params, passes id to client component
 
+### Today page architecture
+
+- `src/app/page.tsx` is a server component: it resolves the Supabase user
+  (redirect to `/login`), renders `PageHeader` + `FocusStatusBar`, then streams
+  each section inside its own `<Suspense>` boundary.
+- Sections live in `src/components/today/sections/`. Each is an async server
+  component (`NowPanelSection`, `MeetingsSection`, `WeekBoardSection`,
+  `WaitingStripSection`, `TodayHeaderChips`) that awaits the shared query layer
+  and either renders a server-only card or hydrates a client island (`NowPanel`,
+  `WeekBoard`, `WaitingStrip`) with fetched data as props.
+- All Today data comes from `src/lib/today/queries.ts` (the same functions back
+  the `/api/tasks?view=…`, `/api/calendar/today`, and
+  `/api/planner/sync-today/latest` routes). Server-side rendering uses ET
+  (`DEFAULT_WORKDAY_CONFIG.timezone`); there is no client timezone plumbing.
+- `TodayModalProvider` (client context) owns the single `TaskDetailModal`; any
+  island opens a task via `useTodayModal().openTask` and registers its tasks via
+  `registerTasks`. Mutations PATCH then call `router.refresh()` to re-stream the
+  affected sections.
+
 ## Key Files
 
 | Purpose | Path |
@@ -86,6 +105,10 @@ Hierarchy is DB-enforced (migration 046, project wins): a task in a project inhe
 | Notes relation helpers | `src/lib/notes-relations.ts` |
 | Calendar event identity helper | `src/lib/calendar-event-identity.ts` |
 | Sidebar nav | `src/components/layout/Sidebar.tsx` |
+| Today page (server shell) | `src/app/page.tsx` |
+| Today shared query layer | `src/lib/today/queries.ts` |
+| Today server/client sections | `src/components/today/sections/` |
+| Today shared modal provider | `src/components/today/TodayModalProvider.tsx` |
 | MCP server (all tools) | `src/app/api/mcp/route.ts` |
 | MCP OAuth | `src/lib/mcp/oauth.ts` |
 | MCP proxy config | `src/lib/mcp/config.ts` |
