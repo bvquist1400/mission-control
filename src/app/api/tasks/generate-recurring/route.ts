@@ -42,6 +42,10 @@ interface CreatedTaskRow {
   id: string;
 }
 
+interface ClaimedInstanceRow {
+  id: string;
+}
+
 function getTodayDateOnly(): string {
   // "Today" must match the app's ET day boundary (sync-today, briefs), not UTC.
   return getDateOnlyInTimeZone(DEFAULT_WORKDAY_CONFIG.timezone);
@@ -154,6 +158,37 @@ async function runGeneration(request: NextRequest): Promise<NextResponse> {
         if (existingInstanceKeys.has(instanceKey)) {
           skippedExisting += 1;
         } else {
+          // The in-memory check above is a cheap pre-filter; this claim row is the
+          // authority. A unique (template_task_id, scheduled_date) constraint means
+          // only one concurrent run can win the claim for a given occurrence.
+          const { data: claimedInstance, error: claimError } = await supabase
+            .from('recurring_instances')
+            .upsert(
+              {
+                user_id: template.user_id,
+                template_task_id: template.id,
+                scheduled_date: recurrence.next_due,
+              },
+              { onConflict: 'template_task_id,scheduled_date', ignoreDuplicates: true }
+            )
+            .select('id');
+
+          if (claimError) {
+            errors.push(`Failed to claim ${template.id} for ${recurrence.next_due}: ${claimError.message}`);
+            break;
+          }
+
+          const claim = (claimedInstance || [])[0] as ClaimedInstanceRow | undefined;
+
+          if (!claim) {
+            // Another run already claimed this occurrence.
+            existingInstanceKeys.add(instanceKey);
+            skippedExisting += 1;
+            recurrence = advanceTaskRecurrence(recurrence);
+            templateChanged = true;
+            continue;
+          }
+
           const { data: createdTask, error: insertError } = await supabase
             .from('tasks')
             .insert({
@@ -188,6 +223,7 @@ async function runGeneration(request: NextRequest): Promise<NextResponse> {
 
           if (insertError) {
             errors.push(`Failed to generate ${template.id} for ${recurrence.next_due}: ${insertError.message}`);
+            await supabase.from('recurring_instances').delete().eq('id', claim.id);
             break;
           }
 
@@ -216,11 +252,24 @@ async function runGeneration(request: NextRequest): Promise<NextResponse> {
                 );
               }
 
+              await supabase.from('recurring_instances').delete().eq('id', claim.id);
+
               errors.push(
                 `Failed to clone checklist for ${template.id} on ${recurrence.next_due}: ${checklistInsertError.message}`
               );
               break;
             }
+          }
+
+          const { error: claimUpdateError } = await supabase
+            .from('recurring_instances')
+            .update({ task_id: (createdTask as CreatedTaskRow).id })
+            .eq('id', claim.id);
+
+          if (claimUpdateError) {
+            errors.push(
+              `Failed to link claim to task ${(createdTask as CreatedTaskRow).id} for ${template.id} on ${recurrence.next_due}: ${claimUpdateError.message}`
+            );
           }
 
           existingInstanceKeys.add(instanceKey);

@@ -1704,6 +1704,48 @@ export type Database = {
           },
         ]
       }
+      recurring_instances: {
+        Row: {
+          created_at: string
+          id: string
+          scheduled_date: string
+          task_id: string | null
+          template_task_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          scheduled_date: string
+          task_id?: string | null
+          template_task_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          scheduled_date?: string
+          task_id?: string | null
+          template_task_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "recurring_instances_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "recurring_instances_template_task_id_fkey"
+            columns: ["template_task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       sprints: {
         Row: {
           created_at: string
