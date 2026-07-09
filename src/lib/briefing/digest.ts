@@ -1102,6 +1102,18 @@ function formatStatusUpdateRecommendationLine(item: DailyBriefStatusUpdateRecomm
   return `- ${pieces.join(". ")}`;
 }
 
+const OPEN_REVIEW_RENDER_LIMIT = 10;
+
+function renderOpenReviewSection(items: DailyBriefOpenReviewItem[]): string {
+  const shown = items.slice(0, OPEN_REVIEW_RENDER_LIMIT);
+  const remaining = items.length - shown.length;
+  const lines = ["## ⚠️ Open Review Items", ...shown.map(formatOpenReviewItemLine)];
+  if (remaining > 0) {
+    lines.push(`- …and ${remaining} more — review the full list in the artifact inbox.`);
+  }
+  return lines.join("\n");
+}
+
 function formatOpenReviewItemLine(item: DailyBriefOpenReviewItem): string {
   return `- ${item.artifact_type} — ${item.task_title} [${item.task_id}] — ${item.suggested_action}`;
 }
@@ -1208,12 +1220,7 @@ function renderMarkdown(payload: {
     );
 
     if (genericOpenReviewItems.length > 0) {
-      sections.push(
-        [
-          "## ⚠️ Open Review Items",
-          ...genericOpenReviewItems.map(formatOpenReviewItemLine),
-        ].join("\n")
-      );
+      sections.push(renderOpenReviewSection(genericOpenReviewItems));
     }
 
     if (recentlyUnblocked.length > 0) {
@@ -1299,6 +1306,9 @@ function renderMarkdown(payload: {
         ),
       ].join("\n")
     );
+    if (genericOpenReviewItems.length > 0) {
+      sections.push(renderOpenReviewSection(genericOpenReviewItems));
+    }
     if (payload.statusUpdateRecommendations.length > 0) {
       sections.push(
         [
@@ -1737,7 +1747,7 @@ export async function buildDailyBriefDigest({
     fetchStakeholders(supabase, userId),
     fetchTaskCommentsForDay(supabase, userId, dayWindows.utcRangeStart, dayWindows.utcRangeEndExclusive),
     fetchCurrentSprint(supabase, userId, requestedDate),
-    resolvedMode === "morning"
+    resolvedMode === "morning" || resolvedMode === "eod"
       ? readBriefingOpenReviewItems(supabase, userId)
       : resolvedMode === "midday"
         ? readBriefingOpenReviewItems(supabase, userId, { families: [RECENTLY_UNBLOCKED_FAMILY] })
