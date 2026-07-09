@@ -14,13 +14,18 @@ import { calculateFinalPriorityScore, calculatePriorityBoosts, getHighPrioritySt
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import { fetchTaskDependencySummaries } from '@/lib/task-dependencies';
 import { validateOptionalTimestamp } from '@/lib/validate';
-import type { TaskStatus, TaskType, EstimateSource } from '@/types/database';
+import type { TaskStatus, TaskType, EstimateSource, BlockedReason } from '@/types/database';
 
 const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done'];
 const VALID_TASK_TYPES: TaskType[] = ['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build'];
 const VALID_ESTIMATE_SOURCES: EstimateSource[] = ['default', 'llm', 'manual'];
+const VALID_BLOCKED_REASONS: BlockedReason[] = ['prerequisite', 'need_info', 'decision', 'approval', 'external', 'other'];
 function isValidStatus(value: string): value is TaskStatus {
   return VALID_STATUSES.includes(value as TaskStatus);
+}
+
+function isValidBlockedReason(value: string): value is BlockedReason {
+  return VALID_BLOCKED_REASONS.includes(value as BlockedReason);
 }
 
 function isValidTaskType(value: string): value is TaskType {
@@ -378,6 +383,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: followUpAtResult.error }, { status: 400 });
     }
 
+    // Validate blocked_reason if provided
+    const blockedReasonInput = asStringOrNull(body.blocked_reason);
+    let blockedReason: BlockedReason | null = null;
+    if (blockedReasonInput) {
+      if (!isValidBlockedReason(blockedReasonInput)) {
+        return NextResponse.json(
+          { error: `Invalid blocked_reason. Must be one of: ${VALID_BLOCKED_REASONS.join(', ')}` },
+          { status: 400 }
+        );
+      }
+      blockedReason = blockedReasonInput;
+    }
+
     const implementationId = asStringOrNull(body.implementation_id);
     if (implementationId) {
       const { data: implementation, error: implementationError } = await supabase
@@ -479,6 +497,7 @@ export async function POST(request: NextRequest) {
         needs_review: typeof body.needs_review === 'boolean' ? body.needs_review : false,
         blocker: typeof body.blocker === 'boolean' ? body.blocker : false,
         waiting_on: asStringOrNull(body.waiting_on),
+        blocked_reason: blockedReason,
         stakeholder_mentions: stakeholderMentions,
         tags: normalizeTaskTags(body.tags),
         source_type: asStringOrNull(body.source_type) || 'Manual',

@@ -666,6 +666,18 @@
           "description": "Who/what is this waiting on",
           "type": "string"
         },
+        "blocked_reason": {
+          "description": "Structured category for why the task is blocked",
+          "type": "string",
+          "enum": [
+            "prerequisite",
+            "need_info",
+            "decision",
+            "approval",
+            "external",
+            "other"
+          ]
+        },
         "implementation_id": {
           "description": "Application UUID to link to. Ignored when project_id is set and that project has an application — the task inherits the project's application.",
           "type": "string"
@@ -2529,6 +2541,25 @@
           "anyOf": [
             {
               "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "blocked_reason": {
+          "description": "Structured category for why the task is blocked",
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "prerequisite",
+                "need_info",
+                "decision",
+                "approval",
+                "external",
+                "other"
+              ]
             },
             {
               "type": "null"

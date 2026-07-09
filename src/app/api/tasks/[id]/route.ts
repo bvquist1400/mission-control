@@ -13,12 +13,17 @@ import { queueTaskStatusTransition } from '@/lib/task-status-transitions';
 import { getHighPriorityStakeholderNames, recalculateTaskPriority } from '@/lib/priority';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import { validateOptionalTimestamp } from '@/lib/validate';
-import type { Task, TaskStatus, TaskType } from '@/types/database';
+import type { Task, TaskStatus, TaskType, BlockedReason } from '@/types/database';
 
 const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done'];
 const VALID_TASK_TYPES: TaskType[] = ['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build'];
+const VALID_BLOCKED_REASONS: BlockedReason[] = ['prerequisite', 'need_info', 'decision', 'approval', 'external', 'other'];
 function isValidStatus(value: string): value is TaskStatus {
   return VALID_STATUSES.includes(value as TaskStatus);
+}
+
+function isValidBlockedReason(value: string): value is BlockedReason {
+  return VALID_BLOCKED_REASONS.includes(value as BlockedReason);
 }
 
 function isValidTaskType(value: string): value is TaskType {
@@ -100,6 +105,7 @@ export async function PATCH(
       'needs_review',
       'blocker',
       'waiting_on',
+      'blocked_reason',
       'follow_up_at',
       'tags',
       'stakeholder_mentions',
@@ -124,6 +130,8 @@ export async function PATCH(
       } else if (field === 'sprint_id') {
         updates[field] = asStringOrNull(value);
       } else if (field === 'waiting_on') {
+        updates[field] = asStringOrNull(value);
+      } else if (field === 'blocked_reason') {
         updates[field] = asStringOrNull(value);
       } else if (field === 'description') {
         updates[field] = asStringOrNull(value);
@@ -171,6 +179,16 @@ export async function PATCH(
       if (typeof status !== 'string' || !isValidStatus(status)) {
         return NextResponse.json(
           { error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}` },
+          { status: 400 }
+        );
+      }
+    }
+
+    if ('blocked_reason' in updates && updates.blocked_reason !== null) {
+      const blockedReason = updates.blocked_reason;
+      if (typeof blockedReason !== 'string' || !isValidBlockedReason(blockedReason)) {
+        return NextResponse.json(
+          { error: `Invalid blocked_reason. Must be one of: ${VALID_BLOCKED_REASONS.join(', ')}` },
           { status: 400 }
         );
       }

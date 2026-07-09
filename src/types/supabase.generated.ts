@@ -2040,6 +2040,7 @@ export type Database = {
         Row: {
           actual_minutes: number | null
           base_priority: number
+          blocked_reason: Database["public"]["Enums"]["blocked_reason"] | null
           blocker: boolean
           created_at: string
           description: string | null
@@ -2072,6 +2073,7 @@ export type Database = {
         Insert: {
           actual_minutes?: number | null
           base_priority?: number
+          blocked_reason?: Database["public"]["Enums"]["blocked_reason"] | null
           blocker?: boolean
           created_at?: string
           description?: string | null
@@ -2104,6 +2106,7 @@ export type Database = {
         Update: {
           actual_minutes?: number | null
           base_priority?: number
+          blocked_reason?: Database["public"]["Enums"]["blocked_reason"] | null
           blocker?: boolean
           created_at?: string
           description?: string | null
@@ -2212,6 +2215,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      add_business_days: {
+        Args: { num_days: number; start_date: string }
+        Returns: string
+      }
       get_blocked_by_tasks: {
         Args: { p_task_id: string }
         Returns: {
@@ -2318,6 +2325,13 @@ export type Database = {
       }
     }
     Enums: {
+      blocked_reason:
+        | "prerequisite"
+        | "need_info"
+        | "decision"
+        | "approval"
+        | "external"
+        | "other"
       commitment_direction: "ours" | "theirs"
       commitment_status: "Open" | "Done" | "Dropped"
       estimate_source: "default" | "llm" | "manual"
@@ -2487,6 +2501,14 @@ export const Constants = {
   },
   public: {
     Enums: {
+      blocked_reason: [
+        "prerequisite",
+        "need_info",
+        "decision",
+        "approval",
+        "external",
+        "other",
+      ],
       commitment_direction: ["ours", "theirs"],
       commitment_status: ["Open", "Done", "Dropped"],
       estimate_source: ["default", "llm", "manual"],

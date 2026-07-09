@@ -1,5 +1,6 @@
 export type TaskStatus = "Backlog" | "Planned" | "In Progress" | "Blocked/Waiting" | "Parked" | "Done";
 export type TaskType = "Task" | "Ticket" | "MeetingPrep" | "FollowUp" | "Admin" | "Build";
+export type BlockedReason = "prerequisite" | "need_info" | "decision" | "approval" | "external" | "other";
 export type CommentSource = "manual" | "system" | "llm";
 export type CommitmentStatus = "Open" | "Done" | "Dropped";
 export type CommitmentDirection = "ours" | "theirs";
@@ -83,6 +84,7 @@ export interface Task {
   needs_review: boolean;
   blocker: boolean;
   waiting_on: string | null;
+  blocked_reason: BlockedReason | null;
   follow_up_at: string | null;
   stakeholder_mentions: string[];
   tags: string[];
@@ -315,6 +317,7 @@ export interface TaskUpdatePayload {
   needs_review?: boolean;
   blocker?: boolean;
   waiting_on?: string | null;
+  blocked_reason?: BlockedReason | null;
   follow_up_at?: string | null;
   tags?: string[];
   pinned_excerpt?: string | null;
