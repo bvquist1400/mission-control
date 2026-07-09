@@ -48,6 +48,25 @@ export interface CurrentSprintChip {
   onTrack: boolean;
 }
 
+export interface LatestSyncSummary {
+  task_ids: string[];
+  promoted: number;
+  demoted: number;
+  skipped_pinned: number;
+  synced_at: string;
+}
+
+function isMissingSyncEventTable(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  const maybeCode = 'code' in error ? String((error as { code?: unknown }).code || '') : '';
+  const maybeMessage = 'message' in error ? String((error as { message?: unknown }).message || '') : '';
+
+  return maybeCode === '42P01' || (maybeMessage.includes('today_sync_events') && maybeMessage.includes('not exist'));
+}
+
 function getDateInTimeZone(date: Date, timeZone: string): string {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone,
@@ -285,5 +304,50 @@ export async function queryCurrentSprintChip(
     completedTasks,
     totalTasks,
     onTrack: metrics.onTrack,
+  };
+}
+
+/**
+ * Most recent today-sync event, or null when none exists / the table is
+ * missing. Mirrors the inline logic of `/api/planner/sync-today/latest`.
+ */
+export async function queryLatestSyncEvent(
+  supabase: SupabaseClient,
+  userId: string
+): Promise<LatestSyncSummary | null> {
+  const { data, error } = await supabase
+    .from('today_sync_events')
+    .select('task_ids, promoted, demoted, skipped_pinned, synced_at')
+    .eq('user_id', userId)
+    .order('synced_at', { ascending: false })
+    .limit(1);
+
+  if (error) {
+    if (isMissingSyncEventTable(error)) {
+      return null;
+    }
+    throw error;
+  }
+
+  const row = (data?.[0] || null) as
+    | {
+        task_ids: string[] | null;
+        promoted: number | null;
+        demoted: number | null;
+        skipped_pinned: number | null;
+        synced_at: string | null;
+      }
+    | null;
+
+  if (!row) {
+    return null;
+  }
+
+  return {
+    task_ids: Array.isArray(row.task_ids) ? row.task_ids : [],
+    promoted: Number(row.promoted ?? 0),
+    demoted: Number(row.demoted ?? 0),
+    skipped_pinned: Number(row.skipped_pinned ?? 0),
+    synced_at: row.synced_at ?? new Date().toISOString(),
   };
 }

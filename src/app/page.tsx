@@ -3,7 +3,9 @@ import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { FocusStatusBar } from "@/components/today/FocusStatusBar";
 import { LegacyTodayBoard } from "@/components/today/LegacyTodayBoard";
+import { TodayModalProvider } from "@/components/today/TodayModalProvider";
 import { MeetingsSection } from "@/components/today/sections/MeetingsSection";
+import { NowPanelSection } from "@/components/today/sections/NowPanelSection";
 import { TodayHeaderChips } from "@/components/today/sections/TodayHeaderChips";
 import { SectionSkeleton } from "@/components/today/sections/SectionSkeleton";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
@@ -57,11 +59,18 @@ export default async function TodayPage() {
 
       <FocusStatusBar />
 
-      <Suspense fallback={<SectionSkeleton label="today's meetings" />}>
-        <MeetingsSection userId={user.id} />
-      </Suspense>
+      <TodayModalProvider>
+        <section className="grid gap-4 xl:grid-cols-[2fr_1fr]">
+          <Suspense fallback={<SectionSkeleton label="now panel" />}>
+            <NowPanelSection userId={user.id} />
+          </Suspense>
+          <Suspense fallback={<SectionSkeleton label="today's meetings" />}>
+            <MeetingsSection userId={user.id} />
+          </Suspense>
+        </section>
 
-      <LegacyTodayBoard />
+        <LegacyTodayBoard />
+      </TodayModalProvider>
     </div>
   );
 }
