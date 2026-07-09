@@ -663,7 +663,7 @@
           "type": "string"
         },
         "implementation_id": {
-          "description": "Application UUID to link to",
+          "description": "Application UUID to link to. Ignored when project_id is set and that project has an application — the task inherits the project's application.",
           "type": "string"
         },
         "project_id": {
@@ -2538,6 +2538,7 @@
           ]
         },
         "implementation_id": {
+          "description": "Application UUID or null. Overridden by the project's application when the task belongs to a project that has one.",
           "anyOf": [
             {
               "type": "string"

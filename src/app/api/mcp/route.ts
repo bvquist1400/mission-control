@@ -470,7 +470,7 @@ function createMcpServer(): McpServer {
       blocker: z.boolean().optional().describe('Is this a blocker?'),
       needs_review: z.boolean().optional().describe('Flag for review'),
       waiting_on: z.string().optional().describe('Who/what is this waiting on'),
-      implementation_id: z.string().optional().describe('Application UUID to link to'),
+      implementation_id: z.string().optional().describe('Application UUID to link to. Ignored when project_id is set and that project has an application — the task inherits the project\'s application.'),
       project_id: z.string().optional().describe('Project UUID to link to'),
       section_id: z.string().optional().describe('Project section UUID to link to'),
       sprint_id: z.string().optional().describe('Sprint UUID to assign the task to'),
@@ -515,7 +515,7 @@ function createMcpServer(): McpServer {
       blocker: z.boolean().optional(),
       waiting_on: z.string().nullable().optional(),
       follow_up_at: z.string().nullable().optional(),
-      implementation_id: z.string().nullable().optional(),
+      implementation_id: z.string().nullable().optional().describe('Application UUID or null. Overridden by the project\'s application when the task belongs to a project that has one.'),
       project_id: z.string().nullable().optional().describe('Project UUID or null to unlink'),
       section_id: z.string().nullable().optional().describe('Project section UUID or null to unlink'),
       sprint_id: z.string().nullable().optional().describe('Sprint UUID or null to unlink'),
@@ -1997,7 +1997,7 @@ function createMcpServer(): McpServer {
 
   mcp.tool(
     'apply_artifact',
-    'Mark an accepted intelligence artifact as handled/applied after acting on it.',
+    'Mark an accepted intelligence artifact as applied. This is bookkeeping only (status transition + ledger) — it does NOT execute the suggested action. Perform the underlying change (e.g. park the task, update the due date) with the appropriate tool FIRST, then call this to record it as handled.',
     {
       artifact_id: z.string().uuid().describe('Accepted artifact UUID'),
     },

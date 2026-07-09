@@ -32,6 +32,8 @@ npx tsc --noEmit     # Type-check without building
 Implementation (Application) -> Project -> Task
 ```
 
+Hierarchy is DB-enforced (migration 046, project wins): a task in a project inherits the project's `implementation_id` via trigger; re-pointing a project cascades to its tasks. Caller-supplied `implementation_id` is overridden when the project has an application; kept only when the project has none or the task has no project.
+
 ## Architecture Rules
 
 ### API Routes
@@ -48,7 +50,7 @@ Implementation (Application) -> Project -> Task
 
 - RLS: 4-policy pattern (SELECT, INSERT, UPDATE, DELETE) on every table
 - `updated_at` triggers: reuse `set_updated_at()` function
-- Migrations: `supabase/migrations/` (latest: 045)
+- Migrations: `supabase/migrations/` (latest: 046)
 
 ### MCP Server
 
