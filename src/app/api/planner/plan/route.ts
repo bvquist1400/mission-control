@@ -8,6 +8,7 @@ import {
   type PlannerTaskLike,
 } from '@/lib/planner';
 import { fetchDependencyBlockedTaskIds } from '@/lib/task-dependencies';
+import { getHighPriorityStakeholderNames } from '@/lib/priority';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import { DEFAULT_WORKDAY_CONFIG } from '@/lib/workday';
 
@@ -114,7 +115,6 @@ const UPCOMING_MEETING_CONTEXT_HORIZON_HOURS = 48;
 const MEETING_CONTEXT_MAX_BOOST = 14;
 const MEETING_PREP_MIN_TOKEN_OVERLAP = 2;
 const NON_MEETING_PREP_MIN_TOKEN_OVERLAP = 3;
-const HIGH_PRIORITY_STAKEHOLDERS = ['nancy', 'heath'];
 const WEIGHT_MULTIPLIER_TABLE = [0.6, 0.7, 0.8, 0.9, 0.95, 1.0, 1.1, 1.25, 1.4, 1.6, 1.8];
 const DIRECTIVE_STRENGTH_MULTIPLIERS: Record<DirectiveStrength, { match: number; nonMatch: number }> = {
   nudge: { match: 1.2, nonMatch: 0.95 },
@@ -371,10 +371,13 @@ function priorityWeightToMultiplier(priorityWeight: number | null | undefined): 
   return WEIGHT_MULTIPLIER_TABLE[normalized] ?? 1;
 }
 
-function calculateStakeholderBoost(stakeholderMentions: string[] | null): number {
+function calculateStakeholderBoost(
+  stakeholderMentions: string[] | null,
+  highPriorityStakeholderNames: string[]
+): number {
   const normalized = (stakeholderMentions || []).map((value) => value.toLowerCase());
-  const hasHighPriority = HIGH_PRIORITY_STAKEHOLDERS.some((name) =>
-    normalized.some((mention) => mention.includes(name))
+  const hasHighPriority = highPriorityStakeholderNames.some((name) =>
+    normalized.some((mention) => mention.includes(name.toLowerCase()))
   );
   return hasHighPriority ? 10 : 0;
 }
@@ -451,9 +454,10 @@ function toRankedTask(
   directive: FocusDirectiveRow | null,
   implementationSignals: Map<string, ImplementationSignal>,
   meetingSignals: MeetingContextSignal[],
-  plannerConfig: PlannerConfig
+  plannerConfig: PlannerConfig,
+  highPriorityStakeholderNames: string[]
 ): RankedTask {
-  const stakeholderBoost = calculateStakeholderBoost(task.stakeholder_mentions);
+  const stakeholderBoost = calculateStakeholderBoost(task.stakeholder_mentions, highPriorityStakeholderNames);
   const implementationSignal = task.implementation_id ? implementationSignals.get(task.implementation_id) : undefined;
   const implementationWeight = implementationSignal?.priorityWeight ?? 5;
   let implementationMultiplier = priorityWeightToMultiplier(implementationWeight);
@@ -875,10 +879,11 @@ export async function POST(request: NextRequest) {
     const implementationSignals = await loadImplementationSignals(supabase, userId);
     const activeDirective = await loadActiveDirective(supabase, userId, nowMs);
     const meetingContextSignals = await loadUpcomingMeetingContextSignals(supabase, userId, nowMs);
+    const highPriorityStakeholderNames = await getHighPriorityStakeholderNames(supabase, userId);
 
     const allRankedTasks = tasksWithDependencyState
       .map((task) =>
-        toRankedTask(task, nowMs, activeDirective, implementationSignals, meetingContextSignals, plannerConfig)
+        toRankedTask(task, nowMs, activeDirective, implementationSignals, meetingContextSignals, plannerConfig, highPriorityStakeholderNames)
       )
       .sort((a, b) => {
         if (a.finalScore !== b.finalScore) {
