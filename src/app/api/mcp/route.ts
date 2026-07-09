@@ -1999,7 +1999,7 @@ function createMcpServer(): McpServer {
 
   mcp.tool(
     'apply_artifact',
-    'Mark an accepted intelligence artifact as applied. This is bookkeeping only (status transition + ledger) — it does NOT execute the suggested action. Perform the underlying change (e.g. park the task, update the due date) with the appropriate tool FIRST, then call this to record it as handled.',
+    'Apply an accepted intelligence artifact: executes the suggested action for the artifact type (stale_task parks the subject task; ambiguous_task flags the subject task needs_review), then records it as applied (status transition + ledger). Other artifact types have no executor yet and are recorded as applied without a side effect.',
     {
       artifact_id: z.string().uuid().describe('Accepted artifact UUID'),
     },
