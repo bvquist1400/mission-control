@@ -10,7 +10,8 @@ import { secureCompare } from '@/lib/secure-compare';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
 import { readInternalAuthContext } from '@/lib/supabase/internal-auth';
 import { DEFAULT_WORKDAY_CONFIG } from '@/lib/workday';
-import type { TaskRecurrence } from '@/types/database';
+import type { EstimateSource, TaskRecurrence, TaskType } from '@/types/database';
+import type { Json } from '@/types/supabase.generated';
 
 interface RecurringTaskRow {
   id: string;
@@ -19,11 +20,11 @@ interface RecurringTaskRow {
   description: string | null;
   implementation_id: string | null;
   project_id: string | null;
-  task_type: string;
+  task_type: TaskType;
   priority_score: number;
   base_priority: number;
   estimated_minutes: number;
-  estimate_source: string;
+  estimate_source: EstimateSource;
   due_at: string | null;
   needs_review: boolean;
   stakeholder_mentions: string[];
@@ -180,7 +181,7 @@ async function runGeneration(request: NextRequest): Promise<NextResponse> {
               source_url: null,
               pinned_excerpt: template.pinned_excerpt,
               pinned: false,
-              recurrence: buildGeneratedTaskRecurrenceMarker(recurrence, recurrence.next_due),
+              recurrence: buildGeneratedTaskRecurrenceMarker(recurrence, recurrence.next_due) as unknown as Json,
             })
             .select('id')
             .single();
@@ -236,7 +237,7 @@ async function runGeneration(request: NextRequest): Promise<NextResponse> {
 
       const { error: updateError } = await supabase
         .from('tasks')
-        .update({ recurrence })
+        .update({ recurrence: recurrence as unknown as Json })
         .eq('id', template.id)
         .eq('user_id', template.user_id);
 

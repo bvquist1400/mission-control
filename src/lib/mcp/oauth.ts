@@ -13,6 +13,7 @@ import {
   validateScopeInput,
 } from '@/lib/mcp/shared';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
+import type { Json } from '@/types/supabase.generated';
 import type { AuthenticatedRouteContext } from '@/lib/supabase/route-auth';
 
 export {
@@ -149,7 +150,7 @@ export async function createRegisteredMcpClient(input: {
     response_types: ['code'],
     token_endpoint_auth_method: 'none',
     scope: input.scope,
-    metadata,
+    metadata: metadata as Json,
     created_at: nowIso,
   };
 

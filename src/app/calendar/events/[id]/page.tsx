@@ -3,6 +3,7 @@ import { MeetingDetailView, type MeetingDetailEvent } from "@/components/calenda
 import { decorateCalendarEvent, parseEventPeople } from "@/lib/calendar";
 import { buildCalendarEntityId, decodeCalendarEventIdentity } from "@/lib/calendar-event-identity";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import type { CalendarEventSource } from "@/lib/calendar-event-identity";
 
 interface MeetingDetailPageProps {
   params: Promise<{
@@ -106,7 +107,7 @@ export default async function CalendarEventDetailPage({ params }: MeetingDetailP
   }
 
   const decoratedEvent = decorateCalendarEvent({
-    source: event.source,
+    source: event.source as CalendarEventSource,
     start_at: event.start_at,
     end_at: event.end_at,
     title: event.title,
@@ -119,7 +120,7 @@ export default async function CalendarEventDetailPage({ params }: MeetingDetailP
   });
 
   const meetingEvent: MeetingDetailEvent = {
-    source: event.source,
+    source: event.source as CalendarEventSource,
     start_at: event.start_at,
     end_at: event.end_at,
     title: event.title,

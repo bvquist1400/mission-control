@@ -14,6 +14,8 @@
     "test:today-sprint": "node --experimental-strip-types scripts/test-today-sprint-progress.mjs",
     "test:mcp-oauth": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-mcp-oauth.mjs",
     "test:mcp-contract": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-mcp-contract.mjs",
+    "gen:types": "supabase gen types typescript --linked > src/types/supabase.generated.ts",
+    "test:types-drift": "node scripts/test-types-drift.mjs",
     "test:notes": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-notes.mjs",
     "test:intelligence-layer": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-intelligence-layer.mjs",
     "test:intelligence-layer-run": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-intelligence-layer-run.mjs",

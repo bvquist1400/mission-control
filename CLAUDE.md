@@ -52,6 +52,12 @@ Hierarchy is DB-enforced (migration 046, project wins): a task in a project inhe
 - `updated_at` triggers: reuse `set_updated_at()` function
 - Migrations: `supabase/migrations/` (latest: 046)
 
+### Schema Types
+
+- `src/types/supabase.generated.ts` is generated truth — never edit by hand. Regenerate after every migration: `npm run gen:types`; verify with `npm run test:types-drift`.
+- `src/types/database.ts` remains the domain layer (narrowed unions like `TaskStatus`); `src/types/type-assertions.ts` compile-time-pins its row interfaces to the generated schema (key parity + nullability), so `npx tsc --noEmit` fails on drift.
+- Supabase clients are typed with `<Database>` — inserts/updates are schema- and enum-checked at compile time. JSONB domain shapes (e.g. `TaskRecurrence`) cast via `as unknown as Json` at the write boundary.
+
 ### MCP Server
 
 - Stateless per-request transports with `enableJsonResponse: true`

@@ -222,7 +222,7 @@ export interface Stakeholder {
   role: string | null;
   organization: string | null;
   notes: string | null;
-  context: StakeholderContext;
+  context: StakeholderContext | null;
   created_at: string;
   updated_at: string;
 }

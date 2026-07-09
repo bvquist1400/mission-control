@@ -89,8 +89,8 @@ export async function POST(request: NextRequest) {
   }
 
   const { taskIds, error: taskIdError } = parseTaskIds(body.task_ids);
-  if (taskIdError) {
-    return corsJson(request, { error: taskIdError }, { status: 400 });
+  if (taskIdError || !taskIds) {
+    return corsJson(request, { error: taskIdError ?? "task_ids is required" }, { status: 400 });
   }
 
   try {
