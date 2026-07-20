@@ -978,6 +978,7 @@ function createMcpServer(): McpServer {
       target_date: z.string().optional().describe('Target date (ISO date YYYY-MM-DD)'),
       servicenow_spm_id: z.string().optional().describe('ServiceNow SPM project ID'),
       status_summary: z.string().optional(),
+      tags: z.array(z.string()).optional().describe('Freeform lowercase tags'),
       portfolio_rank: z.number().int().min(1).optional().describe('Positive integer for ordering within the portfolio'),
     },
     async (args) => {
@@ -1151,6 +1152,7 @@ function createMcpServer(): McpServer {
       target_date: z.string().nullable().optional(),
       servicenow_spm_id: z.string().nullable().optional(),
       status_summary: z.string().optional(),
+      tags: z.array(z.string()).optional().describe('Freeform lowercase tags'),
       portfolio_rank: z.number().int().min(1).optional(),
     },
     async ({ project_id, ...updates }) => {
@@ -1799,6 +1801,7 @@ function createMcpServer(): McpServer {
     {},
     async () => {
       const res = await fetch('https://mission-control-orpin-chi.vercel.app/api/planner/plan', {
+        method: 'POST',
         headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
       });
       const data = await res.json();

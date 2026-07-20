@@ -11,6 +11,7 @@ import { fetchDependencyBlockedTaskIds } from '@/lib/task-dependencies';
 import { getHighPriorityStakeholderNames } from '@/lib/priority';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import { DEFAULT_WORKDAY_CONFIG } from '@/lib/workday';
+import { excludePersonalTasks } from '@/lib/personal-exclusion';
 
 type PlannerMode = 'today' | 'now';
 type DirectiveStrength = 'nudge' | 'strong' | 'hard';
@@ -38,6 +39,8 @@ interface TaskRow {
   updated_at: string;
   pinned_excerpt: string | null;
   pinned: boolean;
+  tags: string[];
+  project: { tags: string[] } | { tags: string[] }[] | null;
   dependency_blocked?: boolean;
 }
 
@@ -855,7 +858,7 @@ export async function POST(request: NextRequest) {
     const tasksResult = await supabase
       .from('tasks')
       .select(
-        'id, title, implementation_id, project_id, priority_score, due_at, follow_up_at, waiting_on, blocker, status, estimated_minutes, stakeholder_mentions, task_type, updated_at, pinned_excerpt, pinned'
+        'id, title, implementation_id, project_id, priority_score, due_at, follow_up_at, waiting_on, blocker, status, estimated_minutes, stakeholder_mentions, task_type, updated_at, pinned_excerpt, pinned, tags, project:projects(tags)'
       )
       .eq('user_id', userId)
       .neq('status', 'Done')
@@ -866,7 +869,7 @@ export async function POST(request: NextRequest) {
       throw tasksResult.error;
     }
 
-    const tasks = (tasksResult.data || []) as TaskRow[];
+    const tasks = excludePersonalTasks((tasksResult.data || []) as TaskRow[]);
     const dependencyBlockedTaskIds = await fetchDependencyBlockedTaskIds(
       supabase,
       userId,

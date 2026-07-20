@@ -12,6 +12,7 @@ interface RelatedProject {
   name: string;
   stage?: string | null;
   rag?: string | null;
+  tags?: string[] | null;
 }
 
 interface RelatedSprint {
@@ -33,7 +34,7 @@ interface RelatedSection {
 type MaybeRelation<T> = T | T[] | null | undefined;
 
 export const TASK_WITH_RELATIONS_SELECT =
-  "*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag), sprint:sprints(id, name, start_date, end_date, theme), section:project_sections(id, project_id, name, sort_order, created_at)";
+  "*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag, tags), sprint:sprints(id, name, start_date, end_date, theme), section:project_sections(id, project_id, name, sort_order, created_at)";
 
 function getSingleRelation<T>(value: MaybeRelation<T>): T | null {
   if (Array.isArray(value)) {

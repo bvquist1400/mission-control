@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { normalizeDateOnly } from '@/lib/briefing/review-snapshots';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import type { ProjectStatusUpdatePayload, RagStatus } from '@/types/database';
+import { hasPersonalTag } from '@/lib/personal-exclusion';
 
 const RAG_STATUS_VALUES: RagStatus[] = ['Green', 'Yellow', 'Red'];
 
@@ -122,7 +123,7 @@ export async function GET(request: NextRequest) {
 
     let query = supabase
       .from('project_status_updates')
-      .select('*, project:projects(id, name), implementation:implementations(id, name, phase, rag, portfolio_rank)')
+      .select('*, project:projects(id, name, tags), implementation:implementations(id, name, phase, rag, portfolio_rank)')
       .eq('user_id', userId)
       .order('captured_for_date', { ascending: false })
       .order('updated_at', { ascending: false })
@@ -149,7 +150,9 @@ export async function GET(request: NextRequest) {
       throw error;
     }
 
-    return NextResponse.json(data || []);
+    return NextResponse.json(
+      (data || []).filter((update) => !hasPersonalTag(update.project as { tags?: string[] | null } | null))
+    );
   } catch (error) {
     console.error('Error fetching project status updates:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
@@ -217,13 +220,17 @@ export async function POST(request: NextRequest) {
 
     const { data: project, error: projectError } = await supabase
       .from('projects')
-      .select('id, name, implementation_id')
+      .select('id, name, implementation_id, tags')
       .eq('id', projectId)
       .eq('user_id', userId)
       .single();
 
     if (projectError || !project) {
       return NextResponse.json({ error: 'project_id is invalid' }, { status: 400 });
+    }
+
+    if (hasPersonalTag(project as { tags?: string[] | null })) {
+      return NextResponse.json({ error: 'Personal projects cannot create automated status updates' }, { status: 403 });
     }
 
     const { data: update, error: upsertError } = await supabase

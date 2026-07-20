@@ -48,6 +48,7 @@ import {
   type SectionAwareTaskLike,
 } from "@/lib/project-sections";
 import { requireAuthenticatedRoute } from "@/lib/supabase/route-auth";
+import { excludePersonalTasks } from "@/lib/personal-exclusion";
 import {
   normalizeTaskWithRelationsList,
   TASK_WITH_RELATIONS_SELECT,
@@ -246,7 +247,7 @@ async function fetchTasks(supabase: SupabaseClient, userId: string): Promise<Tas
     return [];
   }
 
-  return normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>);
+  return excludePersonalTasks(normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>));
 }
 
 async function fetchImplementations(

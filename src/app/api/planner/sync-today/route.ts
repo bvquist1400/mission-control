@@ -15,6 +15,7 @@ interface SyncTodayRpcRow {
   skipped_pinned: number | null;
   skipped_in_progress: number | null;
   skipped_ineligible: number | null;
+  skipped_personal: number | null;
   sync_at: string | null;
 }
 
@@ -113,6 +114,7 @@ export async function POST(request: NextRequest) {
     const skippedPinned = Number(row?.skipped_pinned ?? 0);
     const skippedInProgress = Number(row?.skipped_in_progress ?? 0);
     const skippedIneligible = Number(row?.skipped_ineligible ?? 0);
+    const skippedPersonal = Number(row?.skipped_personal ?? 0);
     const syncAt = row?.sync_at ?? new Date().toISOString();
 
     const { error: logError } = await supabase.from("today_sync_events").insert({
@@ -134,6 +136,7 @@ export async function POST(request: NextRequest) {
       skipped_pinned: skippedPinned,
       skipped_in_progress: skippedInProgress,
       skipped_ineligible: skippedIneligible,
+      skipped_personal: skippedPersonal,
       sync_at: syncAt,
     });
   } catch (error) {

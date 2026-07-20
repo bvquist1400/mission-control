@@ -58,6 +58,7 @@ import type {
   WorkSprintSummary,
 } from "@/lib/work-intelligence/types";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
+import { excludePersonalTasks } from "@/lib/personal-exclusion";
 import type { CommitmentDirection, NoteWithDetails, TaskStatus } from "@/types/database";
 
 const ET_TIMEZONE = DEFAULT_WORKDAY_CONFIG.timezone;
@@ -1436,7 +1437,9 @@ async function fetchTasks(supabase: SupabaseClient, userId: string): Promise<Tas
     throw error;
   }
 
-  return normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>) as TaskWithRelations[];
+  return excludePersonalTasks(
+    normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>) as TaskWithRelations[]
+  );
 }
 
 async function fetchMeetingNotesByEntity(

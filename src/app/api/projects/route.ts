@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { DEFAULT_PROJECT_STAGE, PROJECT_STAGE_VALUES, normalizeProjectStage } from '@/lib/project-stage';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
+import { normalizeTaskTags } from '@/lib/task-tags';
 
 interface ProjectTaskStats {
   openTaskCount: number;
@@ -285,6 +286,7 @@ export async function POST(request: NextRequest) {
       servicenow_spm_id: typeof body.servicenow_spm_id === 'string' ? body.servicenow_spm_id.trim() || null : null,
       status_summary: typeof body.status_summary === 'string' ? body.status_summary : '',
       description: typeof body.description === 'string' ? body.description || null : null,
+      tags: normalizeTaskTags(body.tags),
       portfolio_rank: typeof body.portfolio_rank === 'number' ? body.portfolio_rank : nextRank,
     };
 

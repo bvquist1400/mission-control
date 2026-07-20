@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { DEFAULT_PROJECT_STAGE, PROJECT_STAGE_VALUES, normalizeProjectStage } from '@/lib/project-stage';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
+import { normalizeTaskTags } from '@/lib/task-tags';
 
 function withNormalizedProjectStage<T extends Record<string, unknown>>(project: T): T & { stage: string } {
   const rest = { ...project } as T & { phase?: unknown };
@@ -103,6 +104,7 @@ export async function PATCH(
       'servicenow_spm_id',
       'status_summary',
       'portfolio_rank',
+      'tags',
     ];
 
     if (typeof body.name === 'string' && body.name.trim().length === 0) {
@@ -158,6 +160,8 @@ export async function PATCH(
         updates[field] = Math.max(1, Math.round(value));
       } else if (field === 'servicenow_spm_id' && typeof value === 'string') {
         updates[field] = value.trim() || null;
+      } else if (field === 'tags') {
+        updates[field] = normalizeTaskTags(value);
       } else {
         updates[field] = value;
       }
