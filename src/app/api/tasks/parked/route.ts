@@ -29,6 +29,7 @@ export async function GET(request: NextRequest) {
       .select(TASK_WITH_RELATIONS_SELECT)
       .eq('user_id', userId)
       .eq('status', 'Parked')
+      .eq('is_recurring_template', false)
       .order('updated_at', { ascending: false })
       .order('id', { ascending: true })
       .range(offset, offset + limit - 1);

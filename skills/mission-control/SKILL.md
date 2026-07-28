@@ -169,7 +169,7 @@ POST /api/tasks/:id/recur
 Body:
 ```json
 {
-  "frequency": "daily",
+  "frequency": "weekday",
   "next_due": "2026-03-04",
   "day_of_week": null,
   "day_of_month": null
@@ -177,17 +177,32 @@ Body:
 ```
 Notes:
 - accepts either `{ ...fields }` or `{ "recurrence": { ...fields } }`
-- setting recurrence parks the template task and clears `sprint_id`
-- `DELETE /api/tasks/:id/recur` removes recurrence from the task
+- frequencies are `daily`, `weekday` (Monday-Friday), `weekly`, `biweekly`, and `monthly`
+- setting recurrence flags the task with `is_recurring_template`, parks it, and clears `sprint_id`
+- a recurrence due today is generated eagerly when configured
+- generated instances receive `recurring_template_id` and a local end-of-day `due_at`
+- templates expose `latest_instance_id` and `last_generated_at`
+- `DELETE /api/tasks/:id/recur` removes recurrence; pass `?mark_done=true` to also finish the template
 
 **MCP tools:** `set_task_recurrence`, `clear_task_recurrence`
+
+#### List recurring templates and instances
+```
+GET /api/tasks/recurring
+```
+Returns active templates together with today's instance, the latest instance,
+their scheduled dates, and the visible generation policy. The automatic job
+runs at local midnight in `America/New_York` using paired 04:00/05:00 UTC
+triggers for DST safety.
+
+**MCP tool:** `list_recurring_tasks`
 
 #### Generate recurring tasks
 ```
 GET /api/tasks/generate-recurring
 POST /api/tasks/generate-recurring
 ```
-Intended for cron or manual trigger. Generates due recurring instances as new `Backlog` tasks, then advances each template’s `next_due`.
+Intended for cron or manual trigger. Idempotently generates due recurring instances as new `Backlog` tasks with explicit linkage and local end-of-day due timestamps, then advances each template’s `next_due`.
 
 **MCP tool:** `generate_recurring_tasks`
 
@@ -808,6 +823,9 @@ Returns:
 
 **"Make this recur every week"**
 → `POST /api/tasks/:id/recur` or use `set_task_recurrence`
+
+**"Show my recurring tasks and today's instances"**
+→ `GET /api/tasks/recurring` or use `list_recurring_tasks`
 
 **"Create next recurring tasks now"**
 → `POST /api/tasks/generate-recurring` or use `generate_recurring_tasks`

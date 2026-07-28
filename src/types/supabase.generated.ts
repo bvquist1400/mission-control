@@ -1660,6 +1660,7 @@ export type Database = {
           servicenow_spm_id: string | null
           stage: Database["public"]["Enums"]["project_stage"]
           status_summary: string
+          tags: string[]
           target_date: string | null
           updated_at: string
           user_id: string
@@ -1675,6 +1676,7 @@ export type Database = {
           servicenow_spm_id?: string | null
           stage?: Database["public"]["Enums"]["project_stage"]
           status_summary?: string
+          tags?: string[]
           target_date?: string | null
           updated_at?: string
           user_id: string
@@ -1690,6 +1692,7 @@ export type Database = {
           servicenow_spm_id?: string | null
           stage?: Database["public"]["Enums"]["project_stage"]
           status_summary?: string
+          tags?: string[]
           target_date?: string | null
           updated_at?: string
           user_id?: string
@@ -2051,12 +2054,16 @@ export type Database = {
           id: string
           implementation_id: string | null
           inbox_item_id: string | null
+          is_recurring_template: boolean
+          last_generated_at: string | null
+          latest_instance_id: string | null
           needs_review: boolean
           pinned: boolean
           pinned_excerpt: string | null
           priority_score: number
           project_id: string | null
           recurrence: Json | null
+          recurring_template_id: string | null
           section_id: string | null
           source_type: string
           source_url: string | null
@@ -2084,12 +2091,16 @@ export type Database = {
           id?: string
           implementation_id?: string | null
           inbox_item_id?: string | null
+          is_recurring_template?: boolean
+          last_generated_at?: string | null
+          latest_instance_id?: string | null
           needs_review?: boolean
           pinned?: boolean
           pinned_excerpt?: string | null
           priority_score?: number
           project_id?: string | null
           recurrence?: Json | null
+          recurring_template_id?: string | null
           section_id?: string | null
           source_type?: string
           source_url?: string | null
@@ -2117,12 +2128,16 @@ export type Database = {
           id?: string
           implementation_id?: string | null
           inbox_item_id?: string | null
+          is_recurring_template?: boolean
+          last_generated_at?: string | null
+          latest_instance_id?: string | null
           needs_review?: boolean
           pinned?: boolean
           pinned_excerpt?: string | null
           priority_score?: number
           project_id?: string | null
           recurrence?: Json | null
+          recurring_template_id?: string | null
           section_id?: string | null
           source_type?: string
           source_url?: string | null
@@ -2152,10 +2167,24 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "tasks_latest_instance_id_fkey"
+            columns: ["latest_instance_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "tasks_project_id_fkey"
             columns: ["project_id"]
             isOneToOne: false
             referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tasks_recurring_template_id_fkey"
+            columns: ["recurring_template_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
             referencedColumns: ["id"]
           },
           {
@@ -2299,6 +2328,7 @@ export type Database = {
           promoted: number
           skipped_in_progress: number
           skipped_ineligible: number
+          skipped_personal: number
           skipped_pinned: number
           sync_at: string
         }[]

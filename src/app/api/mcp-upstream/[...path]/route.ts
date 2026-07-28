@@ -42,6 +42,7 @@ import * as taskChecklistRoute from '@/app/api/tasks/[id]/checklist/route';
 import * as taskRecurrenceRoute from '@/app/api/tasks/[id]/recur/route';
 import * as taskParkRoute from '@/app/api/tasks/park/[id]/route';
 import * as parkedTasksRoute from '@/app/api/tasks/parked/route';
+import * as recurringTasksRoute from '@/app/api/tasks/recurring/route';
 import * as generateRecurringRoute from '@/app/api/tasks/generate-recurring/route';
 import { requireMcpOauthRoute } from '@/lib/mcp/oauth';
 import { writeInternalAuthContext } from '@/lib/supabase/internal-auth';
@@ -245,6 +246,10 @@ async function handleRequest(
 
   if (segments[0] === 'tasks' && segments[1] === 'parked' && segments.length === 2) {
     return invokeStatic(parkedTasksRoute.GET, requestWithContext);
+  }
+
+  if (segments[0] === 'tasks' && segments[1] === 'recurring' && segments.length === 2) {
+    return invokeStatic(recurringTasksRoute.GET, requestWithContext);
   }
 
   if (segments[0] === 'tasks' && segments[1] === 'generate-recurring' && segments.length === 2) {

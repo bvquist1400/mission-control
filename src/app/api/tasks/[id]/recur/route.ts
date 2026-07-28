@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { coerceTaskRecurrence, normalizeTaskRecurrenceInput } from '@/lib/recurrence';
+import {
+  buildClearTaskRecurrenceUpdates,
+  coerceTaskRecurrence,
+  normalizeTaskRecurrenceInput,
+} from '@/lib/recurrence';
+import { generateRecurringTasks } from '@/lib/recurring-task-generator';
 import {
   normalizeTaskWithRelations,
   TASK_WITH_RELATIONS_SELECT,
@@ -7,7 +12,15 @@ import {
 import { queueTaskStatusTransition } from '@/lib/task-status-transitions';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 
-function isGeneratedRecurringInstance(taskId: string, recurrence: unknown): boolean {
+function isGeneratedRecurringInstance(
+  taskId: string,
+  recurrence: unknown,
+  recurringTemplateId: string | null
+): boolean {
+  if (recurringTemplateId && recurringTemplateId !== taskId) {
+    return true;
+  }
+
   const normalized = coerceTaskRecurrence(recurrence);
   return normalized !== null && !normalized.enabled && normalized.template_task_id !== null && normalized.template_task_id !== taskId;
 }
@@ -28,7 +41,7 @@ export async function POST(
 
     const { data: currentTask, error: currentTaskError } = await supabase
       .from('tasks')
-      .select('id, user_id, title, status, due_at, recurrence')
+      .select('id, user_id, title, status, due_at, recurrence, recurring_template_id')
       .eq('id', id)
       .eq('user_id', userId)
       .single();
@@ -41,7 +54,7 @@ export async function POST(
       throw currentTaskError;
     }
 
-    if (isGeneratedRecurringInstance(id, currentTask.recurrence)) {
+    if (isGeneratedRecurringInstance(id, currentTask.recurrence, currentTask.recurring_template_id)) {
       return NextResponse.json(
         { error: 'Recurring instances cannot be edited. Configure recurrence on the template task.' },
         { status: 400 }
@@ -64,6 +77,8 @@ export async function POST(
 
     const updates: Record<string, unknown> = {
       recurrence,
+      is_recurring_template: recurrence !== null,
+      recurring_template_id: null,
     };
 
     if (recurrence !== null && currentTask.status !== 'Done') {
@@ -71,13 +86,11 @@ export async function POST(
       updates.sprint_id = null;
     }
 
-    const { data, error: updateError } = await supabase
+    const { error: updateError } = await supabase
       .from('tasks')
       .update(updates)
       .eq('id', id)
       .eq('user_id', userId)
-      .select(TASK_WITH_RELATIONS_SELECT)
-      .single();
 
     if (updateError) {
       throw updateError;
@@ -92,7 +105,25 @@ export async function POST(
       });
     }
 
-    return NextResponse.json(normalizeTaskWithRelations(data as Record<string, unknown>));
+    const generationResult = recurrence !== null
+      ? await generateRecurringTasks(supabase, { userId, templateTaskId: id })
+      : null;
+
+    const { data: refreshedTask, error: refreshedTaskError } = await supabase
+      .from('tasks')
+      .select(TASK_WITH_RELATIONS_SELECT)
+      .eq('id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (refreshedTaskError) {
+      throw refreshedTaskError;
+    }
+
+    return NextResponse.json({
+      ...normalizeTaskWithRelations(refreshedTask as Record<string, unknown>),
+      recurrence_generation: generationResult,
+    });
   } catch (error) {
     console.error('Error configuring recurring task:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
@@ -115,7 +146,7 @@ export async function DELETE(
 
     const { data: currentTask, error: currentTaskError } = await supabase
       .from('tasks')
-      .select('id, recurrence')
+      .select('id, status, recurrence, recurring_template_id')
       .eq('id', id)
       .eq('user_id', userId)
       .single();
@@ -128,16 +159,27 @@ export async function DELETE(
       throw currentTaskError;
     }
 
-    if (isGeneratedRecurringInstance(id, currentTask.recurrence)) {
+    if (isGeneratedRecurringInstance(id, currentTask.recurrence, currentTask.recurring_template_id)) {
       return NextResponse.json(
         { error: 'Recurring instances cannot be edited. Configure recurrence on the template task.' },
         { status: 400 }
       );
     }
 
+    const markDoneFromQuery = request.nextUrl.searchParams.get('mark_done') === 'true';
+    let markDoneFromBody = false;
+    try {
+      const body = (await request.json()) as Record<string, unknown>;
+      markDoneFromBody = body.mark_done === true;
+    } catch {
+      // DELETE bodies are optional; query-string callers remain supported.
+    }
+    const markDone = markDoneFromQuery || markDoneFromBody;
+    const updates = buildClearTaskRecurrenceUpdates(markDone);
+
     const { data, error } = await supabase
       .from('tasks')
-      .update({ recurrence: null })
+      .update(updates)
       .eq('id', id)
       .eq('user_id', userId)
       .select(TASK_WITH_RELATIONS_SELECT)
@@ -145,6 +187,15 @@ export async function DELETE(
 
     if (error) {
       throw error;
+    }
+
+    if (markDone && currentTask.status !== 'Done') {
+      queueTaskStatusTransition(supabase, {
+        userId,
+        taskId: id,
+        fromStatus: currentTask.status,
+        toStatus: 'Done',
+      });
     }
 
     return NextResponse.json(normalizeTaskWithRelations(data as Record<string, unknown>));

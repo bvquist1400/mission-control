@@ -48,7 +48,7 @@ Hierarchy is DB-enforced (migration 046, project wins): a task in a project inhe
 
 - RLS: 4-policy pattern (SELECT, INSERT, UPDATE, DELETE) on every table
 - `updated_at` triggers: reuse `set_updated_at()` function
-- Migrations: `supabase/migrations/` (latest: 050)
+- Migrations: `supabase/migrations/` (latest: 052)
 
 ### Schema Types
 
@@ -100,6 +100,8 @@ Hierarchy is DB-enforced (migration 046, project wins): a task in a project inhe
 | Purpose | Path |
 |---|---|
 | Database types | `src/types/database.ts` |
+| Recurrence rules | `src/lib/recurrence.ts` |
+| Recurring generator | `src/lib/recurring-task-generator.ts` |
 | Notes service surface | `src/lib/notes.ts` |
 | Notes shared helpers | `src/lib/notes-shared.ts` |
 | Notes relation helpers | `src/lib/notes-relations.ts` |

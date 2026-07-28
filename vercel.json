@@ -18,7 +18,7 @@
     },
     {
       "path": "/api/tasks/generate-recurring",
-      "schedule": "0 11 * * *"
+      "schedule": "0 4,5 * * *"
     },
     {
       "path": "/api/intelligence/run",

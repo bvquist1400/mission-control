@@ -7,7 +7,7 @@ export type CommitmentDirection = "ours" | "theirs";
 export type TaskDependencyType = "task" | "commitment";
 export type TaskDependencyStatus = TaskStatus | CommitmentStatus;
 export type RiskLevel = "green" | "yellow" | "red";
-export type TaskRecurrenceFrequency = "daily" | "weekly" | "biweekly" | "monthly";
+export type TaskRecurrenceFrequency = "daily" | "weekday" | "weekly" | "biweekly" | "monthly";
 export type HealthTrend = "improving" | "stable" | "degrading" | "unknown";
 export type HealthLabel = "Healthy" | "Watch" | "At Risk" | "Critical";
 export type ReviewPeriod = "eod" | "weekly" | "monthly";
@@ -79,6 +79,10 @@ export interface Task {
   estimated_minutes: number;
   actual_minutes: number | null;
   recurrence: TaskRecurrence | null;
+  recurring_template_id: string | null;
+  is_recurring_template: boolean;
+  latest_instance_id: string | null;
+  last_generated_at: string | null;
   estimate_source: EstimateSource;
   due_at: string | null;
   needs_review: boolean;
@@ -367,6 +371,7 @@ export interface Project {
   target_date: string | null;
   servicenow_spm_id: string | null;
   status_summary: string;
+  tags: string[];
   portfolio_rank: number;
   created_at: string;
   updated_at: string;

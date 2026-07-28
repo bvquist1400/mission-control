@@ -1,6 +1,7 @@
 import type { TaskRecurrence, TaskRecurrenceFrequency } from '@/types/database';
+import { DEFAULT_WORKDAY_CONFIG } from '@/lib/workday';
 
-export const RECURRENCE_FREQUENCIES = ['daily', 'weekly', 'biweekly', 'monthly'] as const;
+export const RECURRENCE_FREQUENCIES = ['daily', 'weekday', 'weekly', 'biweekly', 'monthly'] as const;
 
 export type RecurrenceFrequency = TaskRecurrenceFrequency;
 
@@ -164,7 +165,12 @@ export function normalizeTaskRecurrenceInput(
     return { recurrence: null, error: 'next_due must be YYYY-MM-DD' };
   }
 
-  const anchorDate = inferAnchorDate(taskDueAt, requestedNextDue);
+  let anchorDate = inferAnchorDate(taskDueAt, requestedNextDue);
+  if (frequency === 'weekday') {
+    while ([0, 6].includes(parseDateOnly(anchorDate).getUTCDay())) {
+      anchorDate = addDays(anchorDate, 1);
+    }
+  }
   const anchor = parseDateOnly(anchorDate);
   let dayOfWeek: number | null = null;
   let dayOfMonth: number | null = null;
@@ -221,6 +227,11 @@ export function advanceTaskRecurrence(recurrence: TaskRecurrence): TaskRecurrenc
 
   if (recurrence.frequency === 'daily') {
     nextDue = addDays(recurrence.next_due, 1);
+  } else if (recurrence.frequency === 'weekday') {
+    nextDue = addDays(recurrence.next_due, 1);
+    while ([0, 6].includes(parseDateOnly(nextDue).getUTCDay())) {
+      nextDue = addDays(nextDue, 1);
+    }
   } else if (recurrence.frequency === 'weekly') {
     nextDue = addDays(recurrence.next_due, 7);
   } else if (recurrence.frequency === 'biweekly') {
@@ -243,27 +254,72 @@ export function buildGeneratedTaskRecurrenceMarker(template: TaskRecurrence, sch
   };
 }
 
-export function buildRecurringDueAt(taskDueAt: string | null, scheduledDate: string): string | null {
+function getTimeZoneOffsetMilliseconds(date: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const representedUtc = Date.UTC(
+    Number(values.year),
+    Number(values.month) - 1,
+    Number(values.day),
+    Number(values.hour),
+    Number(values.minute),
+    Number(values.second)
+  );
+
+  return representedUtc - Math.floor(date.getTime() / 1000) * 1000;
+}
+
+export function buildRecurringDueAt(
+  scheduledDate: string,
+  timeZone: string = DEFAULT_WORKDAY_CONFIG.timezone
+): string {
   const [year, month, day] = scheduledDate.split('-').map((part) => Number.parseInt(part, 10));
+  const localEndAsUtc = Date.UTC(year, month - 1, day, 23, 59, 59, 999);
+  let candidate = new Date(localEndAsUtc);
 
-  if (!taskDueAt) {
-    return null;
-  }
+  // Re-evaluate once after applying the initial offset so dates near a DST
+  // transition use the offset that is active at the scheduled local time.
+  candidate = new Date(localEndAsUtc - getTimeZoneOffsetMilliseconds(candidate, timeZone));
+  candidate = new Date(localEndAsUtc - getTimeZoneOffsetMilliseconds(candidate, timeZone));
+  return candidate.toISOString();
+}
 
-  const sourceDate = new Date(taskDueAt);
-  if (!Number.isFinite(sourceDate.getTime())) {
-    return null;
-  }
+export function buildRecurringInstanceMetadata(
+  templateId: string,
+  templateRecurrence: TaskRecurrence,
+  scheduledDate: string,
+  timeZone: string = DEFAULT_WORKDAY_CONFIG.timezone
+): {
+  recurring_template_id: string;
+  is_recurring_template: false;
+  due_at: string;
+  recurrence: TaskRecurrence;
+} {
+  return {
+    recurring_template_id: templateId,
+    is_recurring_template: false,
+    due_at: buildRecurringDueAt(scheduledDate, timeZone),
+    recurrence: buildGeneratedTaskRecurrenceMarker(templateRecurrence, scheduledDate),
+  };
+}
 
-  return new Date(
-    Date.UTC(
-      year,
-      month - 1,
-      day,
-      sourceDate.getUTCHours(),
-      sourceDate.getUTCMinutes(),
-      sourceDate.getUTCSeconds(),
-      sourceDate.getUTCMilliseconds()
-    )
-  ).toISOString();
+export function buildClearTaskRecurrenceUpdates(markDone: boolean): {
+  recurrence: null;
+  is_recurring_template: false;
+  status?: 'Done';
+} {
+  return {
+    recurrence: null,
+    is_recurring_template: false,
+    ...(markDone ? { status: 'Done' as const } : {}),
+  };
 }

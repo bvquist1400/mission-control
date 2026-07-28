@@ -91,6 +91,10 @@
         "task_id": {
           "type": "string",
           "description": "Task UUID"
+        },
+        "mark_done": {
+          "description": "Also mark the former template Done (default false for backward compatibility)",
+          "type": "boolean"
         }
       },
       "required": [
@@ -474,6 +478,13 @@
         },
         "status_summary": {
           "type": "string"
+        },
+        "tags": {
+          "description": "Freeform lowercase tags",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "portfolio_rank": {
           "description": "Positive integer for ordering within the portfolio",
@@ -1578,6 +1589,23 @@
     }
   },
   {
+    "name": "list_recurring_tasks",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "implementation_id": {
+          "description": "Filter by application UUID",
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Filter by project UUID",
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
     "name": "list_sprints",
     "inputSchema": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -1785,11 +1813,12 @@
           "type": "string",
           "enum": [
             "daily",
+            "weekday",
             "weekly",
             "biweekly",
             "monthly"
           ],
-          "description": "Recurring cadence"
+          "description": "Recurring cadence; weekday means Monday through Friday only"
         },
         "next_due": {
           "description": "Next scheduled date YYYY-MM-DD. Defaults from task due date or today.",
@@ -2252,6 +2281,13 @@
         },
         "status_summary": {
           "type": "string"
+        },
+        "tags": {
+          "description": "Freeform lowercase tags",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "portfolio_rank": {
           "type": "integer",

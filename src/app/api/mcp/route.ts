@@ -11,7 +11,7 @@ import { z } from 'zod';
 
 const ET_TIMEZONE = 'America/New_York';
 const LEGACY_APP_ORIGIN = 'https://mission-control-orpin-chi.vercel.app';
-const TASK_RECURRENCE_FREQUENCIES = ['daily', 'weekly', 'biweekly', 'monthly'] as const;
+const TASK_RECURRENCE_FREQUENCIES = ['daily', 'weekday', 'weekly', 'biweekly', 'monthly'] as const;
 const NOTE_TYPE_VALUES = [
   'working_note',
   'meeting_note',
@@ -373,7 +373,7 @@ function createMcpServer(): McpServer {
   // ── LIST TASKS ────────────────────────────────────────────────────────
   mcp.tool(
     'list_tasks',
-    'List tasks with optional filters. Returns tasks sorted by priority.',
+    'List tasks with optional filters, sorted by priority. Recurring instances expose recurring_template_id and templates expose is_recurring_template/latest_instance_id; use list_recurring_tasks for the paired series view.',
     {
       status: z.enum(['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done']).optional().describe('Filter by status'),
       needs_review: z.boolean().optional().describe('Only tasks flagged for review'),
@@ -414,7 +414,7 @@ function createMcpServer(): McpServer {
   // ── LIST PARKED TASKS ─────────────────────────────────────────────────
   mcp.tool(
     'list_parked_tasks',
-    'List only parked tasks using the dedicated parking-lot endpoint.',
+    'List deprioritized parked tasks. Recurring templates are excluded; use list_recurring_tasks for those.',
     {
       implementation_id: z.string().optional().describe('Filter by application UUID'),
       project_id: z.string().optional().describe('Filter by project UUID'),
@@ -436,10 +436,31 @@ function createMcpServer(): McpServer {
     }
   );
 
+  // ── LIST RECURRING TASKS ─────────────────────────────────────────────
+  mcp.tool(
+    'list_recurring_tasks',
+    'List active recurring templates with today\'s instance, the most recent instance and status, next scheduled date, last_generated_at, and the deterministic generation schedule.',
+    {
+      implementation_id: z.string().optional().describe('Filter by application UUID'),
+      project_id: z.string().optional().describe('Filter by project UUID'),
+    },
+    async (args) => {
+      const url = new URL('/api/tasks/recurring', 'https://mission-control-orpin-chi.vercel.app');
+      if (args.implementation_id) url.searchParams.set('implementation_id', args.implementation_id);
+      if (args.project_id) url.searchParams.set('project_id', args.project_id);
+
+      const res = await fetch(url.toString(), {
+        headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
+      });
+      const data = await res.json();
+      return toMcpResponse(data);
+    }
+  );
+
   // ── GET TASK ──────────────────────────────────────────────────────────
   mcp.tool(
     'get_task',
-    'Get a single task by ID, including implementation details.',
+    'Get a single task by ID, including implementation details and explicit recurring template/instance linkage fields.',
     {
       task_id: z.string().describe('Task UUID'),
     },
@@ -587,10 +608,10 @@ function createMcpServer(): McpServer {
   // ── TASK RECURRENCE ───────────────────────────────────────────────────
   mcp.tool(
     'set_task_recurrence',
-    'Configure a task as a recurring template. This parks the template (unless already Done) and clears any sprint assignment.',
+    'Configure a task as a recurring template. The template is a persistent generator, is flagged is_recurring_template, is parked unless already Done, and is separate from generated Backlog instances. Instances receive due_at at local end-of-day and recurring_template_id; the template exposes latest_instance_id and last_generated_at. Use list_recurring_tasks to retrieve templates with today\'s/latest instance in one call. If next_due is today or earlier, due instances are generated eagerly.',
     {
       task_id: z.string().describe('Task UUID'),
-      frequency: z.enum(TASK_RECURRENCE_FREQUENCIES).describe('Recurring cadence'),
+      frequency: z.enum(TASK_RECURRENCE_FREQUENCIES).describe('Recurring cadence; weekday means Monday through Friday only'),
       next_due: z.string().optional().describe('Next scheduled date YYYY-MM-DD. Defaults from task due date or today.'),
       day_of_week: z.number().int().min(0).max(6).optional().describe('For weekly/biweekly schedules, 0=Sunday through 6=Saturday'),
       day_of_month: z.number().int().min(1).max(31).optional().describe('For monthly schedules, preferred day of month'),
@@ -614,13 +635,18 @@ function createMcpServer(): McpServer {
 
   mcp.tool(
     'clear_task_recurrence',
-    'Remove recurrence from a task template.',
+    'Stop future generation for a recurring template. Optionally mark the template Done so it does not remain as an orphaned parked task. Existing instances and linkage history are preserved.',
     {
       task_id: z.string().describe('Task UUID'),
+      mark_done: z.boolean().optional().describe('Also mark the former template Done (default false for backward compatibility)'),
     },
-    async ({ task_id }) => {
+    async ({ task_id, mark_done }) => {
+      const url = new URL(
+        `https://mission-control-orpin-chi.vercel.app/api/tasks/${task_id}/recur`
+      );
+      if (mark_done) url.searchParams.set('mark_done', 'true');
       const res = await fetch(
-        `https://mission-control-orpin-chi.vercel.app/api/tasks/${task_id}/recur`,
+        url.toString(),
         {
           method: 'DELETE',
           headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
@@ -633,7 +659,7 @@ function createMcpServer(): McpServer {
 
   mcp.tool(
     'generate_recurring_tasks',
-    'Manually run the recurring-task generator now.',
+    'Manually run the idempotent recurring-task generator now. The normal schedule runs at local midnight America/New_York, with a paired UTC run for DST safety, and setting a recurrence due today generates eagerly.',
     {},
     async () => {
       const res = await fetch('https://mission-control-orpin-chi.vercel.app/api/tasks/generate-recurring', {

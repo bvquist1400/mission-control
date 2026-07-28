@@ -37,6 +37,7 @@ export const TASK_TYPE_OPTIONS: Array<{ value: TaskType; label: string }> = [
 
 const RECURRENCE_LABELS: Record<TaskRecurrenceFrequency, string> = {
   daily: "Daily",
+  weekday: "Weekdays (Mon-Fri)",
   weekly: "Weekly",
   biweekly: "Every 2 Weeks",
   monthly: "Monthly",
@@ -60,6 +61,10 @@ interface TaskMetaEditorProps {
 }
 
 function isGeneratedRecurringInstance(task: TaskWithImplementation): boolean {
+  if (task.recurring_template_id && task.recurring_template_id !== task.id) {
+    return true;
+  }
+
   const recurrence = task.recurrence;
   return recurrence !== null
     && !recurrence.enabled
@@ -652,7 +657,7 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
           <div>
             <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recurrence</h5>
             <p className="mt-1 text-[11px] text-muted-foreground">
-              Configure repeating tasks here. Templates are parked and removed from sprint assignment when recurrence is enabled.
+              Configure repeating tasks here. Templates are flagged separately from the parking lot and removed from sprint assignment.
             </p>
           </div>
           {!generatedInstance ? (
