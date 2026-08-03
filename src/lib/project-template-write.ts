@@ -49,7 +49,7 @@ export const PROJECT_STAGE_VALUES: ProjectStage[] = [
 
 export const RAG_VALUES: RagStatus[] = ['Green', 'Yellow', 'Red'];
 export const TASK_TYPE_VALUES: TaskType[] = ['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build'];
-export const TASK_STATUS_VALUES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done'];
+export const TASK_STATUS_VALUES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Missed', 'Done'];
 
 function asString(value: unknown): string | null {
   if (typeof value !== 'string') {

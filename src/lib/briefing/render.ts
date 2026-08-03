@@ -234,6 +234,7 @@ function buildRenderPromptContext(digest: DailyBriefDigestResponse): Record<stri
       blocked: digest.tasks.blocked.slice(0, 2).map(formatPromptTask),
       in_progress: digest.tasks.in_progress.slice(0, 2).map(formatPromptTask),
       completed_today: digest.tasks.completed_today.slice(0, 2).map(formatPromptTask),
+      missed_yesterday: digest.tasks.missed_yesterday.slice(0, 2).map(formatPromptTask),
       stale_followups: digest.tasks.stale_followups.slice(0, 2).map(formatPromptTask),
       rolled_to_tomorrow: digest.tasks.rolled_to_tomorrow.slice(0, 3).map(formatPromptTask),
       tomorrow_prep: digest.tasks.tomorrow_prep.slice(0, 3).map(formatPromptTask),
@@ -311,6 +312,7 @@ function buildReferencePool(digest: DailyBriefDigestResponse): string[] {
     ...digest.tasks.blocked,
     ...digest.tasks.in_progress,
     ...digest.tasks.completed_today,
+    ...digest.tasks.missed_yesterday,
     ...digest.tasks.stale_followups,
     ...digest.tasks.rolled_to_tomorrow,
   ].flatMap((task) => [task.id, task.title]);
@@ -1110,6 +1112,15 @@ function renderBriefHtml(
                   </tr>
                 </table>` : ""}
 
+                ${digest.mode === "morning" && digest.tasks.missed_yesterday.length > 0 ? `
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                  <tr>
+                    <td style="padding:18px 32px 0 32px;">
+                      ${renderDigestTaskListCard("Missed yesterday", digest.tasks.missed_yesterday, "")}
+                    </td>
+                  </tr>
+                </table>` : ""}
+
                 ${((digest.mode === "morning" || digest.mode === "midday") && recentlyUnblocked.length > 0) ? `
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
                   <tr>
@@ -1396,6 +1407,9 @@ function renderBriefText(
     lines.push("", "Tasks Due Soon:", ...renderTextTaskItems(digest.tasks.due_soon, "No overdue or due-soon tasks."));
     lines.push("", "Blocked:", ...renderTextTaskItems(digest.tasks.blocked, "No blocked work."));
     lines.push("", "In Progress:", ...renderTextTaskItems(digest.tasks.in_progress, "Nothing is marked In Progress."));
+    if (digest.tasks.missed_yesterday.length > 0) {
+      lines.push("", "Missed Yesterday:", ...renderTextTaskItems(digest.tasks.missed_yesterday, ""));
+    }
     if (genericOpenReviewItems.length > 0) {
       lines.push(
         "",

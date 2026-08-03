@@ -74,6 +74,7 @@ export async function POST(
       .eq('implementation_id', id)
       .eq('blocker', true)
       .neq('status', 'Done')
+      .neq('status', 'Missed')
       .order('priority_score', { ascending: false })
       .limit(5);
 

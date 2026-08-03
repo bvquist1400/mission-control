@@ -2,7 +2,7 @@
 
 import type { TaskStatus } from "@/types/database";
 
-const statuses: TaskStatus[] = ["Backlog", "Planned", "In Progress", "Blocked/Waiting", "Parked", "Done"];
+const statuses: TaskStatus[] = ["Backlog", "Planned", "In Progress", "Blocked/Waiting", "Parked", "Missed", "Done"];
 
 interface StatusSelectorProps {
   value: TaskStatus;

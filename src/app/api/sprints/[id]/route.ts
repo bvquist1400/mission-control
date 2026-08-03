@@ -3,7 +3,7 @@ import { isDateOnlyAfter, normalizeDateOnly } from '@/lib/date-only';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import type { TaskStatus } from '@/types/database';
 
-const TASK_STATUS_ORDER: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done'];
+const TASK_STATUS_ORDER: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Missed', 'Done'];
 
 function asStringOrNull(value: unknown): string | null {
   if (typeof value !== 'string') {
@@ -35,6 +35,7 @@ function createTaskGroups() {
       'In Progress': [],
       'Blocked/Waiting': [],
       Parked: [],
+      Missed: [],
       Done: [],
     }
   );
@@ -90,7 +91,7 @@ export async function GET(
       taskGroups[status].push(task);
     }
 
-    const totalTasks = (tasks || []).length;
+    const totalTasks = (tasks || []).filter((task) => task.status !== 'Missed').length;
     const completedTasks = taskGroups.Done.length;
     const completionPct = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
 

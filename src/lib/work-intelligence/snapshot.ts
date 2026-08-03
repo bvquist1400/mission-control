@@ -311,7 +311,7 @@ export function buildWorkIntelligenceSnapshot(input: BuildWorkIntelligenceSnapsh
   const nowMs = input.now.getTime();
   const commentActivity = buildCommentActivityMap(input.taskComments, input.window.since);
 
-  const openTasks = input.tasks.filter((task) => task.status !== "Done" && task.status !== "Parked");
+  const openTasks = input.tasks.filter((task) => task.status !== "Done" && task.status !== "Parked" && task.status !== "Missed");
   const plannedTasks = openTasks.filter((task) => task.status === "Planned");
   const remainingEvents = input.events.filter((event) => event.temporal_status !== "past");
   const dueSoonTasks = openTasks

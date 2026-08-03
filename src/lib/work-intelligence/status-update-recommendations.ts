@@ -88,7 +88,7 @@ function buildMovementTasks(
   snapshot: Pick<WorkIntelligenceSnapshot, "tasks" | "commentActivity" | "window">
 ): MovementTask[] {
   return snapshot.tasks
-    .filter((task) => task.status !== "Parked")
+    .filter((task) => task.status !== "Parked" && task.status !== "Missed")
     .map((task) => {
       const latestMovementAt = getTaskLatestMovementAt(task, snapshot.commentActivity);
       return latestMovementAt

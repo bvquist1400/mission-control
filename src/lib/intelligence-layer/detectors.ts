@@ -393,6 +393,7 @@ function buildRecentlyUnblockedContract(
     || context.task.dependency_blocked
     || context.task.status === "Done"
     || context.task.status === "Parked"
+    || context.task.status === "Missed"
   ) {
     return null;
   }

@@ -47,7 +47,8 @@ export async function GET(
       .eq('user_id', userId)
       .eq('project_id', id)
       .eq('blocker', true)
-      .neq('status', 'Done');
+      .neq('status', 'Done')
+      .neq('status', 'Missed');
 
     const { data: openTasks } = await supabase
       .from('tasks')
@@ -55,6 +56,7 @@ export async function GET(
       .eq('user_id', userId)
       .eq('project_id', id)
       .neq('status', 'Done')
+      .neq('status', 'Missed')
       .order('priority_score', { ascending: false })
       .limit(10);
 

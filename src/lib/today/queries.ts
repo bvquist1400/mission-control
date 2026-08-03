@@ -111,7 +111,7 @@ export async function queryTopThreeTasks(
 }
 
 /**
- * Tasks with a due date on or before `weekEnd`, excluding Done/Parked.
+ * Tasks with a due date on or before `weekEnd`, excluding Done/Parked/Missed.
  * Mirrors the `view=weekly_board` branch.
  */
 export async function queryWeeklyBoardTasks(
@@ -128,6 +128,7 @@ export async function queryWeeklyBoardTasks(
     .lte('due_at', weekEnd.toISOString())
     .neq('status', 'Done')
     .neq('status', 'Parked')
+    .neq('status', 'Missed')
     .order('due_at', { ascending: true })
     .order('priority_score', { ascending: false })
     .order('id', { ascending: true })
@@ -177,7 +178,7 @@ export async function queryWaitingSummary(
 }
 
 /**
- * Count of open tasks flagged needs_review (excluding Done/Parked).
+ * Count of open tasks flagged needs_review (excluding Done/Parked/Missed).
  * Mirrors the `view=needs_review_count` branch.
  */
 export async function queryNeedsReviewCount(
@@ -190,7 +191,8 @@ export async function queryNeedsReviewCount(
     .eq('user_id', userId)
     .eq('needs_review', true)
     .neq('status', 'Done')
-    .neq('status', 'Parked');
+    .neq('status', 'Parked')
+    .neq('status', 'Missed');
 
   if (error) {
     throw error;

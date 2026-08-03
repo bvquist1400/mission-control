@@ -45,7 +45,7 @@ async function executeStaleTaskApply(
     return { executed: false, executorAction: null, reason: "Subject task no longer exists" };
   }
 
-  if (task.status === "Parked" || task.status === "Done") {
+  if (task.status === "Parked" || task.status === "Missed" || task.status === "Done") {
     return { executed: false, executorAction: null, reason: `Task is already ${task.status}` };
   }
 

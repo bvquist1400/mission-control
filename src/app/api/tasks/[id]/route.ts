@@ -15,7 +15,7 @@ import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import { validateOptionalTimestamp } from '@/lib/validate';
 import type { Task, TaskStatus, TaskType, BlockedReason } from '@/types/database';
 
-const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done'];
+const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Missed', 'Done'];
 const VALID_TASK_TYPES: TaskType[] = ['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build'];
 const VALID_BLOCKED_REASONS: BlockedReason[] = ['prerequisite', 'need_info', 'decision', 'approval', 'external', 'other'];
 function isValidStatus(value: string): value is TaskStatus {

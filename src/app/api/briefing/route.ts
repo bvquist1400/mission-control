@@ -371,6 +371,9 @@ export async function GET(request: NextRequest) {
       if (task.status === "Parked") {
         return false;
       }
+      if (task.status === "Missed") {
+        return false;
+      }
       // Due today or high priority
       if (task.due_at && task.due_at <= todayEnd) return true;
       if (task.priority_score >= 70 && (task.status === "Planned" || task.status === "In Progress")) return true;
@@ -465,7 +468,7 @@ export async function GET(request: NextRequest) {
 
       // Estimate tomorrow's capacity (no meetings known yet may be incomplete)
       const tomorrowCapacity = calculateCapacity(
-        allTasks.filter((t) => t.status !== "Done" && t.status !== "Parked") as Task[],
+        allTasks.filter((t) => t.status !== "Done" && t.status !== "Parked" && t.status !== "Missed") as Task[],
         new Set(),
         tomorrowCalendar.stats.busyMinutes
       );

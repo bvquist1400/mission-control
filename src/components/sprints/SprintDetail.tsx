@@ -19,7 +19,7 @@ interface SprintDraft {
   focusImplementationId: string;
 }
 
-const STATUS_ORDER: TaskStatus[] = ["Backlog", "Planned", "In Progress", "Blocked/Waiting", "Parked", "Done"];
+const STATUS_ORDER: TaskStatus[] = ["Backlog", "Planned", "In Progress", "Blocked/Waiting", "Parked", "Missed", "Done"];
 
 function formatDueDate(value: string | null): string {
   if (!value) {
@@ -41,6 +41,8 @@ function statusTone(status: TaskStatus): string {
       return "border-amber-500/30 bg-amber-500/10";
     case "Done":
       return "border-emerald-500/30 bg-emerald-500/10";
+    case "Missed":
+      return "border-rose-500/30 bg-rose-500/10";
     default:
       return "border-stroke bg-panel";
   }

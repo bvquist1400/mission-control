@@ -190,7 +190,7 @@ export function computeImplementationHealthScores(
   const scores = implementations
     .map((implementation) => {
       const implementationTasks = tasks.filter((task) => task.implementation_id === implementation.id);
-      const openTasks = implementationTasks.filter((task) => task.status !== 'Done' && task.status !== 'Parked');
+      const openTasks = implementationTasks.filter((task) => task.status !== 'Done' && task.status !== 'Parked' && task.status !== 'Missed');
       const blockerCount = openTasks.filter((task) => task.blocker).length;
       const blockedWaitingCount = openTasks.filter((task) => task.status === 'Blocked/Waiting').length;
       const mostRecentDoneTask = implementationTasks

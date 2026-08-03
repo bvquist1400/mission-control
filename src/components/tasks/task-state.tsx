@@ -11,7 +11,7 @@ import type { TaskStatus } from "@/types/database";
 
 export const STALE_TASK_THRESHOLD_DAYS = 14;
 
-export type TaskVisualStateKey = "parked" | "dependency_blocked" | "blocked" | "stale";
+export type TaskVisualStateKey = "parked" | "missed" | "dependency_blocked" | "blocked" | "stale";
 
 export interface TaskVisualState {
   key: TaskVisualStateKey;
@@ -25,6 +25,12 @@ const STATE_STYLES: Record<TaskVisualStateKey, TaskVisualState> = {
     key: "parked",
     label: "Parked",
     badgeClass: "bg-panel-muted text-muted-foreground",
+    rowClass: "opacity-60",
+  },
+  missed: {
+    key: "missed",
+    label: "Missed",
+    badgeClass: "bg-rose-500/15 text-rose-400",
     rowClass: "opacity-60",
   },
   dependency_blocked: {
@@ -59,6 +65,10 @@ export interface TaskVisualStateInput {
 export function getTaskVisualState(input: TaskVisualStateInput): TaskVisualState | null {
   if (input.status === "Parked") {
     return STATE_STYLES.parked;
+  }
+
+  if (input.status === "Missed") {
+    return STATE_STYLES.missed;
   }
 
   if (input.dependencyBlocked) {

@@ -140,7 +140,7 @@ function formatShortDateTime(value: string | null): string | null {
 
 function buildTaskHref(result: MissionControlSearchResult, rawId: string | null): string {
   const status = readString(result.metadata?.status);
-  if (!rawId || status === 'Done' || status === 'Parked') {
+  if (!rawId || status === 'Done' || status === 'Parked' || status === 'Missed') {
     return toRelativeHref(result.url);
   }
 

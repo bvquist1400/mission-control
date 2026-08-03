@@ -1089,7 +1089,7 @@ export async function workWeeklyReviewRead(input: WorkWeeklyReviewReadInput): Pr
     .filter((task) => isStalledTask(task, referenceNow, referenceIso))
     .sort((left, right) => left.updated_at.localeCompare(right.updated_at));
   const pendingDecisions = allTasks
-    .filter((task) => task.status !== "Done" && task.status !== "Parked" && task.needs_review)
+    .filter((task) => task.status !== "Done" && task.status !== "Parked" && task.status !== "Missed" && task.needs_review)
     .sort((left, right) => {
       if (right.priority_score !== left.priority_score) {
         return right.priority_score - left.priority_score;

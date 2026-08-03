@@ -22,7 +22,7 @@ type ImplementationFilter = "All" | "Unassigned" | string;
 type ProjectFilter = "All" | "Unassigned" | string;
 type SprintFilter = "All" | "Unassigned" | string;
 
-const STATUS_FILTER_OPTIONS: StatusFilter[] = ["All", "Backlog", "Planned", "In Progress", "Blocked/Waiting", "Parked", "Done"];
+const STATUS_FILTER_OPTIONS: StatusFilter[] = ["All", "Backlog", "Planned", "In Progress", "Blocked/Waiting", "Parked", "Missed", "Done"];
 const REVIEW_FILTER_OPTIONS: ReviewFilter[] = ["All", "Needs review", "Ready"];
 
 function reviewFilterFromParam(value: string | null): ReviewFilter {
@@ -72,6 +72,7 @@ async function fetchAllTaskPages(includeCompleted: boolean): Promise<TaskWithImp
     const page = await fetchTaskPage({
       include_done: includeCompleted ? "true" : "false",
       include_parked: "true",
+      include_missed: "true",
       limit: String(TASKS_PAGE_SIZE),
       offset: String(offset),
     });
@@ -269,6 +270,10 @@ export function BacklogList() {
     const normalizedSearch = searchQuery.trim().toLowerCase();
 
     return tasks.filter((task) => {
+      if (statusFilter === "All" && task.status === "Missed") {
+        return false;
+      }
+
       if (
         normalizedSearch
         && !task.title.toLowerCase().includes(normalizedSearch)

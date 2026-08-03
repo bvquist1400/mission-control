@@ -2393,6 +2393,7 @@ export type Database = {
         | "In Progress"
         | "Blocked/Waiting"
         | "Parked"
+        | "Missed"
         | "Done"
       task_type:
         | "Ticket"
@@ -2572,6 +2573,7 @@ export const Constants = {
         "In Progress",
         "Blocked/Waiting",
         "Parked",
+        "Missed",
         "Done",
       ],
       task_type: [

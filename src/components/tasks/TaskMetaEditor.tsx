@@ -120,6 +120,9 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
   const [recurrenceFrequencyDraft, setRecurrenceFrequencyDraft] = useState<TaskRecurrenceFrequency>(
     editableRecurrence?.frequency ?? "weekly"
   );
+  const [recurrenceAutoMarkMissedDraft, setRecurrenceAutoMarkMissedDraft] = useState(
+    editableRecurrence?.auto_mark_missed ?? false
+  );
   const [recurrenceNextDueDraft, setRecurrenceNextDueDraft] = useState(defaultRecurrenceNextDue);
   const [recurrenceDayOfWeekDraft, setRecurrenceDayOfWeekDraft] = useState(
     String(editableRecurrence?.day_of_week ?? getDayOfWeekFromDate(defaultRecurrenceNextDue))
@@ -153,6 +156,7 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
     setTagInput("");
     setRecurrenceEnabledDraft(Boolean(nextRecurrence));
     setRecurrenceFrequencyDraft(nextRecurrence?.frequency ?? "weekly");
+    setRecurrenceAutoMarkMissedDraft(nextRecurrence?.auto_mark_missed ?? false);
     setRecurrenceNextDueDraft(nextDefaultRecurrenceDate);
     setRecurrenceDayOfWeekDraft(String(nextRecurrence?.day_of_week ?? getDayOfWeekFromDate(nextDefaultRecurrenceDate)));
     setRecurrenceDayOfMonthDraft(String(nextRecurrence?.day_of_month ?? getDayOfMonthFromDate(nextDefaultRecurrenceDate)));
@@ -303,6 +307,7 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
     || (recurrenceEnabledDraft && (
       editableRecurrence === null
       || recurrenceFrequencyDraft !== editableRecurrence.frequency
+      || recurrenceAutoMarkMissedDraft !== editableRecurrence.auto_mark_missed
       || normalizedRecurrenceNextDue !== editableRecurrence.next_due
       || (recurrenceNeedsDayOfWeek && recurrenceDayOfWeek !== editableRecurrence.day_of_week)
       || (recurrenceNeedsDayOfMonth && recurrenceDayOfMonth !== editableRecurrence.day_of_month)
@@ -399,6 +404,7 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
       } else {
         const payload: Record<string, unknown> = {
           frequency: recurrenceFrequencyDraft,
+          auto_mark_missed: recurrenceAutoMarkMissedDraft,
         };
 
         if (normalizedRecurrenceNextDue) {
@@ -700,7 +706,8 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
             </label>
 
             {recurrenceEnabledDraft ? (
-              <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <div className="mt-3 space-y-3">
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <label className="space-y-1">
                   <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Frequency</span>
                   <select
@@ -771,6 +778,23 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
                     />
                   </label>
                 ) : null}
+                </div>
+
+                <label className="flex items-start gap-2 rounded border border-stroke bg-panel px-3 py-2 text-sm text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={recurrenceAutoMarkMissedDraft}
+                    onChange={(event) => setRecurrenceAutoMarkMissedDraft(event.target.checked)}
+                    disabled={isMutating}
+                    className="mt-0.5 h-4 w-4 rounded border-stroke accent-accent"
+                  />
+                  <span>
+                    <span className="block font-medium">Auto-mark prior occurrence missed</span>
+                    <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                      When the series advances, older unfinished occurrences become Missed instead of accumulating in the active backlog.
+                    </span>
+                  </span>
+                </label>
               </div>
             ) : (
               <p className="mt-3 text-sm text-muted-foreground">

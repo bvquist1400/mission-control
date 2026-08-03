@@ -621,6 +621,7 @@
             "In Progress",
             "Blocked/Waiting",
             "Parked",
+            "Missed",
             "Done"
           ]
         },
@@ -817,6 +818,7 @@
             "In Progress",
             "Blocked/Waiting",
             "Parked",
+            "Missed",
             "Done"
           ]
         },
@@ -1657,6 +1659,7 @@
             "In Progress",
             "Blocked/Waiting",
             "Parked",
+            "Missed",
             "Done"
           ]
         },
@@ -1685,7 +1688,7 @@
           "type": "string"
         },
         "due_soon": {
-          "description": "Due within 48 hours, excluding Done and Parked",
+          "description": "Due within 48 hours, excluding Done, Parked, and Missed",
           "type": "boolean"
         },
         "include_done": {
@@ -1694,6 +1697,10 @@
         },
         "include_parked": {
           "description": "Include parked tasks (default: excluded)",
+          "type": "boolean"
+        },
+        "include_missed": {
+          "description": "Include missed recurring occurrences (default: excluded)",
           "type": "boolean"
         },
         "limit": {
@@ -1835,6 +1842,10 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 31
+        },
+        "auto_mark_missed": {
+          "description": "When true, older unfinished occurrences become Missed as the series advances; defaults to false and preserves the existing value when omitted",
+          "type": "boolean"
         }
       },
       "required": [
@@ -2518,6 +2529,7 @@
             "In Progress",
             "Blocked/Waiting",
             "Parked",
+            "Missed",
             "Done"
           ]
         },

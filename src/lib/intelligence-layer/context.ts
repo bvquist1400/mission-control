@@ -191,7 +191,7 @@ async function fetchTasks(
   if (taskIds && taskIds.length > 0) {
     query = query.in("id", [...new Set(taskIds)]);
   } else {
-    query = query.neq("status", "Done").neq("status", "Parked");
+    query = query.neq("status", "Done").neq("status", "Parked").neq("status", "Missed");
   }
 
   const { data, error } = await query;

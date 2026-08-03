@@ -53,7 +53,7 @@ export const NOTE_TASK_RELATIONSHIP_TYPES: NoteTaskRelationshipType[] = [
 
 export const NOTE_DECISION_STATUSES: NoteDecisionStatus[] = ['active', 'superseded', 'reversed'];
 
-const VALID_TASK_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done'];
+const VALID_TASK_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Missed', 'Done'];
 const VALID_TASK_TYPES: TaskType[] = ['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build'];
 const VALID_ESTIMATE_SOURCES: EstimateSource[] = ['default', 'llm', 'manual'];
 

@@ -373,18 +373,19 @@ function createMcpServer(): McpServer {
   // ── LIST TASKS ────────────────────────────────────────────────────────
   mcp.tool(
     'list_tasks',
-    'List tasks with optional filters, sorted by priority. Recurring instances expose recurring_template_id and templates expose is_recurring_template/latest_instance_id; use list_recurring_tasks for the paired series view.',
+    'List active tasks with optional filters, sorted by priority. Done, Parked, and Missed are excluded by default. Recurring instances expose recurring_template_id and templates expose is_recurring_template/latest_instance_id; use list_recurring_tasks for the paired series view.',
     {
-      status: z.enum(['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done']).optional().describe('Filter by status'),
+      status: z.enum(['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Missed', 'Done']).optional().describe('Filter by status'),
       needs_review: z.boolean().optional().describe('Only tasks flagged for review'),
       tag: z.string().optional().describe('Filter to tasks containing this lowercase tag'),
       implementation_id: z.string().optional().describe('Filter by application UUID'),
       project_id: z.string().optional().describe('Filter by project UUID'),
       section_id: z.string().optional().describe('Filter by project section UUID'),
       sprint_id: z.string().optional().describe('Filter by sprint UUID'),
-      due_soon: z.boolean().optional().describe('Due within 48 hours, excluding Done and Parked'),
+      due_soon: z.boolean().optional().describe('Due within 48 hours, excluding Done, Parked, and Missed'),
       include_done: z.boolean().optional().describe('Include completed tasks (default: excluded)'),
       include_parked: z.boolean().optional().describe('Include parked tasks (default: excluded)'),
+      include_missed: z.boolean().optional().describe('Include missed recurring occurrences (default: excluded)'),
       limit: z.number().min(1).max(500).optional().describe('Max results (default 100)'),
       offset: z.number().min(0).max(5000).optional().describe('Result offset for pagination'),
     },
@@ -400,6 +401,7 @@ function createMcpServer(): McpServer {
       if (args.due_soon) url.searchParams.set('due_soon', 'true');
       if (args.include_done) url.searchParams.set('include_done', 'true');
       if (args.include_parked) url.searchParams.set('include_parked', 'true');
+      if (args.include_missed) url.searchParams.set('include_missed', 'true');
       if (args.limit) url.searchParams.set('limit', String(args.limit));
       if (typeof args.offset === 'number') url.searchParams.set('offset', String(args.offset));
 
@@ -481,7 +483,7 @@ function createMcpServer(): McpServer {
     {
       title: z.string().describe('Task title (required)'),
       description: z.string().optional().describe('Task description'),
-      status: z.enum(['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done']).default('Backlog'),
+      status: z.enum(['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Missed', 'Done']).default('Backlog'),
       task_type: z.enum(['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build']).default('Task'),
       estimated_minutes: z.number().min(1).max(480).optional().describe('Time estimate in minutes'),
       estimate_source: z.enum(['default', 'llm', 'manual']).optional().describe('How the estimate was chosen'),
@@ -527,7 +529,7 @@ function createMcpServer(): McpServer {
       task_id: z.string().describe('Task UUID'),
       title: z.string().optional(),
       description: z.string().nullable().optional(),
-      status: z.enum(['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done']).optional(),
+      status: z.enum(['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Missed', 'Done']).optional(),
       task_type: z.enum(['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build']).optional(),
       estimated_minutes: z.number().min(1).max(480).optional(),
       estimate_source: z.enum(['default', 'llm', 'manual']).optional(),
@@ -608,13 +610,14 @@ function createMcpServer(): McpServer {
   // ── TASK RECURRENCE ───────────────────────────────────────────────────
   mcp.tool(
     'set_task_recurrence',
-    'Configure a task as a recurring template. The template is a persistent generator, is flagged is_recurring_template, is parked unless already Done, and is separate from generated Backlog instances. Instances receive due_at at local end-of-day and recurring_template_id; the template exposes latest_instance_id and last_generated_at. Use list_recurring_tasks to retrieve templates with today\'s/latest instance in one call. If next_due is today or earlier, due instances are generated eagerly.',
+    'Configure a task as a recurring template. The template is a persistent generator, is flagged is_recurring_template, is parked unless already Done, and is separate from generated Backlog instances. Instances receive due_at at local end-of-day and recurring_template_id; the template exposes latest_instance_id and last_generated_at. Use list_recurring_tasks to retrieve templates with today\'s/latest instance in one call. If next_due is today or earlier, due instances are generated eagerly. Set auto_mark_missed once on a series to mark older unfinished occurrences Missed whenever the next occurrence is generated.',
     {
       task_id: z.string().describe('Task UUID'),
       frequency: z.enum(TASK_RECURRENCE_FREQUENCIES).describe('Recurring cadence; weekday means Monday through Friday only'),
       next_due: z.string().optional().describe('Next scheduled date YYYY-MM-DD. Defaults from task due date or today.'),
       day_of_week: z.number().int().min(0).max(6).optional().describe('For weekly/biweekly schedules, 0=Sunday through 6=Saturday'),
       day_of_month: z.number().int().min(1).max(31).optional().describe('For monthly schedules, preferred day of month'),
+      auto_mark_missed: z.boolean().optional().describe('When true, older unfinished occurrences become Missed as the series advances; defaults to false and preserves the existing value when omitted'),
     },
     async ({ task_id, ...recurrence }) => {
       const res = await fetch(
@@ -1658,7 +1661,7 @@ function createMcpServer(): McpServer {
       implementation_id: z.string().nullable().optional(),
       project_id: z.string().nullable().optional(),
       sprint_id: z.string().nullable().optional(),
-      status: z.enum(['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done']).optional(),
+      status: z.enum(['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Missed', 'Done']).optional(),
       task_type: z.enum(['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build']).optional(),
       estimated_minutes: z.number().int().min(1).max(480).optional(),
       estimate_source: z.enum(['default', 'llm', 'manual']).optional(),

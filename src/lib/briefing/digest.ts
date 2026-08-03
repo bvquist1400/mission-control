@@ -19,7 +19,7 @@ import {
 import { buildCalendarEntityId } from "@/lib/calendar-event-identity";
 import { detectBriefingMode, formatETTime, getTodayET, getTomorrowET, type BriefingMode } from "@/lib/briefing";
 import { identifyPrepTasks, type TaskInput } from "@/lib/briefing/prep-tasks";
-import { normalizeDateOnly } from "@/lib/date-only";
+import { addDateOnlyDays, normalizeDateOnly } from "@/lib/date-only";
 import { readIntelligenceTaskContexts } from "@/lib/intelligence-layer";
 import { hydrateNotes } from "@/lib/notes-relations";
 import { normalizeNoteRow } from "@/lib/notes-shared";
@@ -193,7 +193,7 @@ export interface DailyBriefSyncRecommendation {
   reason: string;
 }
 
-export interface DailyBriefOpenReviewItem extends BriefingOpenReviewItem {}
+export type DailyBriefOpenReviewItem = BriefingOpenReviewItem;
 
 export type DailyBriefSprintSummary = WorkSprintSummary;
 
@@ -203,6 +203,7 @@ export interface DailyBriefDigestCounts {
   blocked: number;
   in_progress: number;
   done_today: number;
+  missed_yesterday: number;
   remaining_meetings: number;
   stale_followups: number;
   open_commitments_theirs: number;
@@ -235,6 +236,7 @@ export interface DailyBriefDigestResponse {
     blocked: DailyBriefDigestTaskItem[];
     in_progress: DailyBriefDigestTaskItem[];
     completed_today: DailyBriefDigestTaskItem[];
+    missed_yesterday: DailyBriefDigestTaskItem[];
     stale_followups: DailyBriefDigestTaskItem[];
     rolled_to_tomorrow: DailyBriefDigestTaskItem[];
     tomorrow_prep: DailyBriefDigestTaskItem[];
@@ -862,7 +864,8 @@ function buildMorningNarrative(
   dueSoon: DailyBriefDigestTaskItem[],
   blocked: DailyBriefDigestTaskItem[],
   inProgress: DailyBriefDigestTaskItem[],
-  meetings: DailyBriefDigestMeetingItem[]
+  meetings: DailyBriefDigestMeetingItem[],
+  missedYesterday: DailyBriefDigestTaskItem[]
 ): string {
   const sentences: string[] = [];
   sentences.push(
@@ -873,6 +876,15 @@ function buildMorningNarrative(
 
   if (sprint) {
     sentences.push(`Sprint check: ${sprint.health_assessment}`);
+  }
+
+  if (missedYesterday.length > 0) {
+    const titles = [...new Set(missedYesterday.map((task) => task.title))];
+    sentences.push(
+      titles.length === 1
+        ? `${titles[0]} was not completed yesterday and is recorded as Missed; today's occurrence is a separate task.`
+        : `${missedYesterday.length} recurring occurrence${missedYesterday.length === 1 ? " was" : "s were"} not completed yesterday and are recorded as Missed rather than carried into today's backlog.`
+    );
   }
 
   if (blocked.length > 0) {
@@ -1170,6 +1182,7 @@ function renderMarkdown(payload: {
   blocked: DailyBriefDigestTaskItem[];
   inProgress: DailyBriefDigestTaskItem[];
   completedToday: DailyBriefDigestTaskItem[];
+  missedYesterday: DailyBriefDigestTaskItem[];
   staleFollowups: DailyBriefDigestTaskItem[];
   rolledOver: DailyBriefDigestTaskItem[];
   tomorrowPrep: DailyBriefDigestTaskItem[];
@@ -1219,6 +1232,15 @@ function renderMarkdown(payload: {
         ...(payload.inProgress.length > 0 ? renderTaskLinesByProjectSection(payload.inProgress, "- Nothing is marked In Progress.", payload.projectSections) : []),
       ].join("\n")
     );
+
+    if (payload.missedYesterday.length > 0) {
+      sections.push(
+        [
+          "## Missed Yesterday",
+          ...renderTaskLinesByProjectSection(payload.missedYesterday, "", payload.projectSections),
+        ].join("\n")
+      );
+    }
 
     if (genericOpenReviewItems.length > 0) {
       sections.push(renderOpenReviewSection(genericOpenReviewItems));
@@ -1863,6 +1885,22 @@ export async function buildDailyBriefDigest({
       : snapshot.completedTodayTasks.map((task) => toTaskDigestItem(task, now, requestedDate, commentActivity, effectiveSince)),
       projectIdsWithSections
     );
+  const previousDate = addDateOnlyDays(requestedDate, -1);
+  const baseMissedYesterdayDigest = annotateProjectSectionState(
+    allTasks
+      .filter((task) => {
+        if (task.status !== "Missed" || !task.due_at || !previousDate) {
+          return false;
+        }
+        return new Date(task.due_at).toLocaleDateString("en-CA", { timeZone: ET_TIMEZONE }) === previousDate;
+      })
+      .map((task) => ({
+        ...toTaskDigestItem(task, now, requestedDate, commentActivity, effectiveSince),
+        due_label: `Missed ${formatDateOnlyLabel(previousDate ?? requestedDate)}`,
+        reason: "The recurring occurrence expired unfinished",
+      })),
+    projectIdsWithSections
+  );
   const baseRolledOverDigest =
     annotateProjectSectionState(
       resolvedMode === "eod" && eodReview
@@ -1893,6 +1931,7 @@ export async function buildDailyBriefDigest({
     ...baseBlockedDigest,
     ...baseInProgressDigest,
     ...baseCompletedTodayDigest,
+    ...baseMissedYesterdayDigest,
     ...baseRolledOverDigest,
     ...baseStaleFollowupDigest,
     ...baseTomorrowPrepDigest,
@@ -1910,6 +1949,7 @@ export async function buildDailyBriefDigest({
   const blockedDigest = applyTaskNoteContext(baseBlockedDigest, noteContextByTaskId);
   const inProgressDigest = applyTaskNoteContext(baseInProgressDigest, noteContextByTaskId);
   const completedTodayDigest = applyTaskNoteContext(baseCompletedTodayDigest, noteContextByTaskId);
+  const missedYesterdayDigest = applyTaskNoteContext(baseMissedYesterdayDigest, noteContextByTaskId);
   const rolledOverDigest = applyTaskNoteContext(baseRolledOverDigest, noteContextByTaskId);
   const staleFollowupDigest = applyTaskNoteContext(baseStaleFollowupDigest, noteContextByTaskId);
   const tomorrowPrepDigest = applyTaskNoteContext(baseTomorrowPrepDigest, noteContextByTaskId);
@@ -1930,6 +1970,7 @@ export async function buildDailyBriefDigest({
     blocked: snapshot.coreCounts.blocked,
     in_progress: snapshot.coreCounts.inProgress,
     done_today: snapshot.coreCounts.doneToday,
+    missed_yesterday: missedYesterdayDigest.length,
     remaining_meetings: meetings.length,
     stale_followups: snapshot.coreCounts.followUpRisks,
     open_commitments_theirs: openCommitments.filter((item) => item.direction === "theirs").length,
@@ -1948,7 +1989,7 @@ export async function buildDailyBriefDigest({
 
   const narrative =
     resolvedMode === "morning"
-      ? buildMorningNarrative(sprint, dueSoonDigest, blockedDigest, inProgressDigest, meetings)
+      ? buildMorningNarrative(sprint, dueSoonDigest, blockedDigest, inProgressDigest, meetings, missedYesterdayDigest)
       : resolvedMode === "midday"
         ? buildMiddayNarrative(completedTodayDigest, dueSoonDigest, blockedDigest, inProgressDigest, meetings)
         : buildEodNarrative(
@@ -1997,6 +2038,7 @@ export async function buildDailyBriefDigest({
     blocked: blockedDigest,
     inProgress: inProgressDigest,
     completedToday: completedTodayDigest,
+    missedYesterday: missedYesterdayDigest,
     staleFollowups: staleFollowupDigest,
     rolledOver: resolvedMode === "eod" ? rolledOverDigest : [],
     tomorrowPrep: resolvedMode === "eod" ? tomorrowPrepDigest : [],
@@ -2026,6 +2068,7 @@ export async function buildDailyBriefDigest({
       blocked: blockedDigest,
       in_progress: inProgressDigest,
       completed_today: completedTodayDigest,
+      missed_yesterday: missedYesterdayDigest,
       stale_followups: staleFollowupDigest,
       rolled_to_tomorrow: resolvedMode === "eod" ? rolledOverDigest : [],
       tomorrow_prep: resolvedMode === "eod" ? tomorrowPrepDigest : [],

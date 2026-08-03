@@ -174,13 +174,14 @@ export async function GET(request: NextRequest) {
 
       const isDone = task.status === 'Done';
       const isParked = task.status === 'Parked';
+      const isMissed = task.status === 'Missed';
       const checklistCounts = checklistCountsByTask.get(task.id) ?? { total: 0, done: 0 };
 
-      if (!isDone && !isParked) {
+      if (!isDone && !isParked && !isMissed) {
         stats.openTaskCount += 1;
       }
 
-      if (!isParked) {
+      if (!isParked && !isMissed) {
         stats.totalTaskCount += 1;
         if (isDone) {
           stats.completedTaskCount += 1;
@@ -197,7 +198,7 @@ export async function GET(request: NextRequest) {
         }
       }
 
-      if (task.blocker && !isDone) {
+      if (task.blocker && !isDone && !isMissed) {
         stats.blockersCount += 1;
       }
     }

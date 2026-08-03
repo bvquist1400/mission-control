@@ -1,4 +1,4 @@
-export type TaskStatus = "Backlog" | "Planned" | "In Progress" | "Blocked/Waiting" | "Parked" | "Done";
+export type TaskStatus = "Backlog" | "Planned" | "In Progress" | "Blocked/Waiting" | "Parked" | "Missed" | "Done";
 export type TaskType = "Task" | "Ticket" | "MeetingPrep" | "FollowUp" | "Admin" | "Build";
 export type BlockedReason = "prerequisite" | "need_info" | "decision" | "approval" | "external" | "other";
 export type CommentSource = "manual" | "system" | "llm";
@@ -38,6 +38,7 @@ export type EstimateSource = "default" | "llm" | "manual";
 export interface TaskRecurrence {
   enabled: boolean;
   frequency: TaskRecurrenceFrequency;
+  auto_mark_missed: boolean;
   day_of_week: number | null;
   day_of_month: number | null;
   next_due: string;

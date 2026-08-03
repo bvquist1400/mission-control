@@ -22,7 +22,7 @@ import {
 import { validateOptionalTimestamp } from '@/lib/validate';
 import type { TaskStatus, TaskType, EstimateSource, BlockedReason } from '@/types/database';
 
-const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Done'];
+const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Missed', 'Done'];
 const VALID_TASK_TYPES: TaskType[] = ['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build'];
 const VALID_ESTIMATE_SOURCES: EstimateSource[] = ['default', 'llm', 'manual'];
 const VALID_BLOCKED_REASONS: BlockedReason[] = ['prerequisite', 'need_info', 'decision', 'approval', 'external', 'other'];
@@ -83,6 +83,7 @@ export async function GET(request: NextRequest) {
     const sectionId = searchParams.get('section_id');
     const includeDone = searchParams.get('include_done') === 'true';
     const includeParked = searchParams.get('include_parked') === 'true';
+    const includeMissed = searchParams.get('include_missed') === 'true';
     const view = searchParams.get('view');
     const rawLimit = Number.parseInt(searchParams.get('limit') || '100', 10);
     const rawOffset = Number.parseInt(searchParams.get('offset') || '0', 10);
@@ -128,6 +129,7 @@ export async function GET(request: NextRequest) {
         .lte('due_at', in48h.toISOString())
         .neq('status', 'Done')
         .neq('status', 'Parked')
+        .neq('status', 'Missed')
         .order('due_at', { ascending: true })
         .order('id', { ascending: true })
         .limit(fetchLimit);
@@ -204,7 +206,8 @@ export async function GET(request: NextRequest) {
         .not('due_at', 'is', null)
         .lte('due_at', in48h.toISOString())
         .neq('status', 'Done')
-        .neq('status', 'Parked');
+        .neq('status', 'Parked')
+        .neq('status', 'Missed');
     }
 
     if (!includeDone && status !== 'Done') {
@@ -213,6 +216,10 @@ export async function GET(request: NextRequest) {
 
     if (!includeParked && status !== 'Parked') {
       query = query.neq('status', 'Parked');
+    }
+
+    if (!includeMissed && status !== 'Missed') {
+      query = query.neq('status', 'Missed');
     }
 
     const { data, error } = await query;

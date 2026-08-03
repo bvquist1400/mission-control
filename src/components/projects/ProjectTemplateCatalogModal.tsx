@@ -159,6 +159,7 @@ const taskStatusStyles: Record<TaskStatus, string> = {
   "In Progress": "border-indigo-500/30 text-indigo-300",
   "Blocked/Waiting": "border-amber-500/35 text-amber-300",
   Parked: "border-zinc-500/40 text-zinc-400",
+  Missed: "border-rose-500/35 text-rose-300",
   Done: "border-emerald-500/35 text-emerald-300",
 };
 

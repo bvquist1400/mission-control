@@ -69,7 +69,12 @@ export async function POST(
     }
 
     const recurrenceInput = Object.prototype.hasOwnProperty.call(body, 'recurrence') ? body.recurrence : body;
-    const { recurrence, error } = normalizeTaskRecurrenceInput(recurrenceInput, id, currentTask.due_at);
+    const { recurrence, error } = normalizeTaskRecurrenceInput(
+      recurrenceInput,
+      id,
+      currentTask.due_at,
+      currentTask.recurrence
+    );
 
     if (error) {
       return NextResponse.json({ error }, { status: 400 });

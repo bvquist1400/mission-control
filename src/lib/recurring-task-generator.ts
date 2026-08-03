@@ -1,12 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   advanceTaskRecurrence,
+  buildRecurringDueAt,
   buildRecurringInstanceMetadata,
   coerceTaskRecurrence,
 } from '@/lib/recurrence';
 import { getDateOnlyInTimeZone } from '@/lib/date-only';
 import { DEFAULT_WORKDAY_CONFIG } from '@/lib/workday';
-import type { EstimateSource, TaskRecurrence, TaskType } from '@/types/database';
+import type { EstimateSource, TaskRecurrence, TaskStatus, TaskType } from '@/types/database';
 import type { Json } from '@/types/supabase.generated';
 
 export const RECURRING_TASK_GENERATION_POLICY = {
@@ -16,7 +17,10 @@ export const RECURRING_TASK_GENERATION_POLICY = {
   confirmation_run_local: '01:00 during EDT; the prior 04:00 UTC run is 23:00 during EST',
   eager_when_configured_for_today: true,
   catches_up_missed_dates: true,
+  auto_mark_missed_is_opt_in: true,
 } as const;
+
+const AUTO_MISSABLE_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting'];
 
 interface RecurringTaskRow {
   id: string;
@@ -55,6 +59,11 @@ interface LatestClaimRow {
   created_at: string;
 }
 
+interface AutoMissableTaskRow {
+  id: string;
+  status: TaskStatus;
+}
+
 export interface GenerateRecurringTasksOptions {
   userId?: string;
   templateTaskId?: string;
@@ -71,7 +80,80 @@ export interface GenerateRecurringTasksResult {
   advanced_templates: number;
   skipped_existing: number;
   skipped_invalid: number;
+  auto_missed_tasks: number;
   errors: string[];
+}
+
+export async function autoMarkPriorOccurrencesMissed(
+  supabase: SupabaseClient,
+  template: RecurringTaskRow,
+  recurrence: TaskRecurrence,
+  today: string,
+  transitionedAt: string
+): Promise<{ count: number; errors: string[] }> {
+  if (!recurrence.auto_mark_missed) {
+    return { count: 0, errors: [] };
+  }
+
+  const cutoffDueAt = buildRecurringDueAt(today);
+  const { data: candidates, error: candidateError } = await supabase
+    .from('tasks')
+    .select('id, status')
+    .eq('user_id', template.user_id)
+    .eq('recurring_template_id', template.id)
+    .lt('due_at', cutoffDueAt)
+    .in('status', AUTO_MISSABLE_STATUSES);
+
+  if (candidateError) {
+    return {
+      count: 0,
+      errors: [`Failed to find prior open instances for ${template.id}: ${candidateError.message}`],
+    };
+  }
+
+  const rows = (candidates || []) as AutoMissableTaskRow[];
+  if (rows.length === 0) {
+    return { count: 0, errors: [] };
+  }
+
+  const previousStatusById = new Map(rows.map((row) => [row.id, row.status]));
+  const { data: updatedRows, error: updateError } = await supabase
+    .from('tasks')
+    .update({ status: 'Missed' })
+    .eq('user_id', template.user_id)
+    .eq('recurring_template_id', template.id)
+    .in('id', rows.map((row) => row.id))
+    .in('status', AUTO_MISSABLE_STATUSES)
+    .select('id');
+
+  if (updateError) {
+    return {
+      count: 0,
+      errors: [`Failed to mark prior instances Missed for ${template.id}: ${updateError.message}`],
+    };
+  }
+
+  const updatedIds = (updatedRows || []).map((row) => row.id);
+  if (updatedIds.length === 0) {
+    return { count: 0, errors: [] };
+  }
+
+  const { error: transitionError } = await supabase
+    .from('task_status_transitions')
+    .insert(updatedIds.map((taskId) => ({
+      user_id: template.user_id,
+      task_id: taskId,
+      from_status: previousStatusById.get(taskId) ?? null,
+      to_status: 'Missed',
+      transitioned_at: transitionedAt,
+    })));
+
+  return {
+    count: updatedIds.length,
+    errors: transitionError
+      ? [`Marked prior instances Missed for ${template.id}, but failed to record transitions: ${transitionError.message}`]
+      : [],
+  };
 }
 
 export async function generateRecurringTasks(
@@ -138,6 +220,7 @@ export async function generateRecurringTasks(
   let createdTasks = 0;
   let advancedTemplates = 0;
   let skippedExisting = 0;
+  let autoMissedTasks = 0;
   const errors: string[] = [];
 
   for (const template of templates) {
@@ -259,6 +342,16 @@ export async function generateRecurringTasks(
       templateChanged = true;
     }
 
+    const autoMissResult = await autoMarkPriorOccurrencesMissed(
+      supabase,
+      template,
+      recurrence,
+      today,
+      runAt.toISOString()
+    );
+    autoMissedTasks += autoMissResult.count;
+    errors.push(...autoMissResult.errors);
+
     if (!templateChanged) {
       continue;
     }
@@ -310,6 +403,7 @@ export async function generateRecurringTasks(
     advanced_templates: advancedTemplates,
     skipped_existing: skippedExisting,
     skipped_invalid: skippedInvalid,
+    auto_missed_tasks: autoMissedTasks,
     errors,
   };
 }

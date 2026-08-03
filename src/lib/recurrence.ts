@@ -73,6 +73,7 @@ export function coerceTaskRecurrence(value: unknown): TaskRecurrence | null {
   const candidate = value as Record<string, unknown>;
   const enabled = typeof candidate.enabled === 'boolean' ? candidate.enabled : null;
   const frequency = typeof candidate.frequency === 'string' ? candidate.frequency : null;
+  const autoMarkMissed = typeof candidate.auto_mark_missed === 'boolean' ? candidate.auto_mark_missed : false;
   const dayOfWeek = candidate.day_of_week;
   const dayOfMonth = candidate.day_of_month;
   const nextDue = typeof candidate.next_due === 'string' ? candidate.next_due : null;
@@ -110,6 +111,7 @@ export function coerceTaskRecurrence(value: unknown): TaskRecurrence | null {
   return {
     enabled,
     frequency: frequency as RecurrenceFrequency,
+    auto_mark_missed: autoMarkMissed,
     day_of_week: normalizedDayOfWeek,
     day_of_month: normalizedDayOfMonth,
     next_due: nextDue,
@@ -133,7 +135,8 @@ function inferAnchorDate(taskDueAt: string | null, providedNextDue: string | nul
 export function normalizeTaskRecurrenceInput(
   input: unknown,
   taskId: string,
-  taskDueAt: string | null
+  taskDueAt: string | null,
+  existingValue?: unknown
 ): { recurrence: TaskRecurrence | null; error: string | null } {
   if (input === null) {
     return { recurrence: null, error: null };
@@ -144,6 +147,7 @@ export function normalizeTaskRecurrenceInput(
   }
 
   const body = input as Record<string, unknown>;
+  const existing = coerceTaskRecurrence(existingValue);
   const enabled = typeof body.enabled === 'boolean' ? body.enabled : true;
 
   if (!enabled) {
@@ -158,6 +162,12 @@ export function normalizeTaskRecurrenceInput(
   }
 
   const frequency = body.frequency as RecurrenceFrequency;
+  if (body.auto_mark_missed !== undefined && typeof body.auto_mark_missed !== 'boolean') {
+    return { recurrence: null, error: 'auto_mark_missed must be a boolean' };
+  }
+  const autoMarkMissed = typeof body.auto_mark_missed === 'boolean'
+    ? body.auto_mark_missed
+    : existing?.auto_mark_missed ?? false;
   const requestedNextDue =
     typeof body.next_due === 'string' && body.next_due.trim().length > 0 ? body.next_due.trim() : null;
 
@@ -213,6 +223,7 @@ export function normalizeTaskRecurrenceInput(
     recurrence: {
       enabled: true,
       frequency,
+      auto_mark_missed: autoMarkMissed,
       day_of_week: dayOfWeek,
       day_of_month: dayOfMonth,
       next_due: anchorDate,
