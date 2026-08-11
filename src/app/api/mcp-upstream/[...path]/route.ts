@@ -24,6 +24,9 @@ import * as focusRoute from '@/app/api/focus/route';
 import * as focusItemRoute from '@/app/api/focus/[id]/route';
 import * as focusClearRoute from '@/app/api/focus/clear/route';
 import * as calendarRoute from '@/app/api/calendar/route';
+import * as intelligenceArtifactsRoute from '@/app/api/intelligence/artifacts/route';
+import * as intelligenceArtifactStatusRoute from '@/app/api/intelligence/artifacts/[id]/status/route';
+import * as intelligenceArtifactApplyRoute from '@/app/api/intelligence/artifacts/[id]/apply/route';
 import * as plannerPlanRoute from '@/app/api/planner/plan/route';
 import * as plannerSyncTodayRoute from '@/app/api/planner/sync-today/route';
 import * as projectsRoute from '@/app/api/projects/route';
@@ -399,6 +402,21 @@ async function handleRequest(
   if (segments[0] === 'calendar' && segments.length === 1) {
     if (request.method === 'GET') return invokeStatic(calendarRoute.GET, requestWithContext);
     if (request.method === 'PATCH') return invokeStatic(calendarRoute.PATCH, requestWithContext);
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'intelligence' && segments[1] === 'artifacts' && segments.length === 2) {
+    if (request.method === 'GET') return invokeStatic(intelligenceArtifactsRoute.GET, requestWithContext);
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'intelligence' && segments[1] === 'artifacts' && segments[2] && segments[3] === 'status' && segments.length === 4) {
+    if (request.method === 'POST') return invokeDynamic(intelligenceArtifactStatusRoute.POST, requestWithContext, { id: segments[2] });
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'intelligence' && segments[1] === 'artifacts' && segments[2] && segments[3] === 'apply' && segments.length === 4) {
+    if (request.method === 'POST') return invokeDynamic(intelligenceArtifactApplyRoute.POST, requestWithContext, { id: segments[2] });
     return methodNotAllowed();
   }
 

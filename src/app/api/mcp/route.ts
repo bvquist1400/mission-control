@@ -121,6 +121,26 @@ async function fetch(input: string | URL, init?: RequestInit): Promise<Response>
   });
 }
 
+async function readMcpUpstreamJson(response: Response, operation: string): Promise<unknown> {
+  const body = await response.text();
+
+  if (!response.ok) {
+    throw new Error(
+      `Failed to reach intelligence artifacts backend while ${operation}: ${response.status} ${body || response.statusText}`
+    );
+  }
+
+  if (!body.trim()) {
+    throw new Error(`Intelligence artifacts backend returned an empty response while ${operation}`);
+  }
+
+  try {
+    return JSON.parse(body);
+  } catch {
+    throw new Error(`Intelligence artifacts backend returned invalid JSON while ${operation}`);
+  }
+}
+
 function getCurrentTimeEt(): string {
   return new Date().toLocaleString('en-US', {
     timeZone: ET_TIMEZONE,
@@ -1934,7 +1954,7 @@ function createMcpServer(): McpServer {
     async () => {
       const runtime = getRuntimeConfig();
       const res = await fetch(`${LEGACY_APP_ORIGIN}/api/intelligence/artifacts`);
-      const data = await res.json();
+      const data = await readMcpUpstreamJson(res, 'listing artifacts');
       const payload = data as {
         open?: Array<{
           artifact_id?: string;
@@ -2007,7 +2027,7 @@ function createMcpServer(): McpServer {
         },
         body: JSON.stringify({ action: 'accept' }),
       });
-      const data = await res.json();
+      const data = await readMcpUpstreamJson(res, 'accepting an artifact');
       return toMcpResponse(data);
     }
   );
@@ -2026,7 +2046,7 @@ function createMcpServer(): McpServer {
         },
         body: JSON.stringify({ action: 'dismiss' }),
       });
-      const data = await res.json();
+      const data = await readMcpUpstreamJson(res, 'dismissing an artifact');
       return toMcpResponse(data);
     }
   );
@@ -2041,7 +2061,7 @@ function createMcpServer(): McpServer {
       const res = await fetch(`${LEGACY_APP_ORIGIN}/api/intelligence/artifacts/${artifact_id}/apply`, {
         method: 'POST',
       });
-      const data = await res.json();
+      const data = await readMcpUpstreamJson(res, 'applying an artifact');
       return toMcpResponse(data);
     }
   );
