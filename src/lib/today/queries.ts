@@ -118,9 +118,10 @@ export async function queryWeeklyBoardTasks(
   supabase: SupabaseClient,
   userId: string,
   weekEnd: Date,
-  limit = 200
+  limit = 200,
+  weekStart?: Date
 ): Promise<TaskWithImplementation[]> {
-  const { data, error } = await supabase
+  let query = supabase
     .from('tasks')
     .select(TASK_WITH_RELATIONS_SELECT)
     .eq('user_id', userId)
@@ -131,8 +132,13 @@ export async function queryWeeklyBoardTasks(
     .neq('status', 'Missed')
     .order('due_at', { ascending: true })
     .order('priority_score', { ascending: false })
-    .order('id', { ascending: true })
-    .limit(limit);
+    .order('id', { ascending: true });
+
+  if (weekStart) {
+    query = query.gte('due_at', weekStart.toISOString());
+  }
+
+  const { data, error } = await query.limit(limit);
 
   if (error) {
     throw error;

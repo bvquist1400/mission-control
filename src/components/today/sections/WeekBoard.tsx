@@ -4,11 +4,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ErrorBanner } from "@/components/ui/ErrorBanner";
+import { Modal } from "@/components/ui/Modal";
 import type { TaskCardData } from "@/components/tasks/TaskCard";
+import { TaskCreateForm } from "@/components/tasks/TaskCreateForm";
 import { getTaskVisualState, TaskStateBadge } from "@/components/tasks/task-state";
 import { useTodayModal } from "@/components/today/TodayModalProvider";
-import type { TaskWithImplementation } from "@/types/database";
+import { useSprints } from "@/hooks/useSprints";
+import type { ImplementationSummary, TaskWithImplementation } from "@/types/database";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
+import {
+  addDateOnlyDays,
+  getDisplayedWeekRange,
+  isDueAtInWeekStarting,
+} from "@/lib/today/week-board";
 
 const TIME_ZONE = DEFAULT_WORKDAY_CONFIG.timezone;
 
@@ -135,23 +143,13 @@ function getDueState(dueAt: string | null, now: Date, timeZone: string): TaskCar
   return "Due Soon";
 }
 
-function addLocalDays(date: Date, days: number): Date {
-  const next = new Date(date);
-  next.setDate(next.getDate() + days);
-  return next;
-}
-
-function getStartOfWorkWeek(now: Date): Date {
-  const start = new Date(now);
-  const day = start.getDay();
-  const daysFromMonday = day === 0 ? -6 : 1 - day;
-  start.setDate(start.getDate() + daysFromMonday);
-  start.setHours(0, 0, 0, 0);
-  return start;
-}
-
-function formatColumnDate(date: Date, timeZone: string): string {
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone }).format(date);
+function formatDateOnlyLabel(dateOnly: string, includeYear = false): string {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    ...(includeYear ? { year: "numeric" } : {}),
+    timeZone: "UTC",
+  }).format(new Date(`${dateOnly}T12:00:00Z`));
 }
 
 function buildDateOnlyDueAt(dateOnly: string): string {
@@ -173,16 +171,18 @@ function compareTasksByDueThenPriority(a: WeekBoardTaskData, b: WeekBoardTaskDat
   return a.title.localeCompare(b.title);
 }
 
-function buildWeekBoardColumns(tasks: WeekBoardTaskData[], now: Date, timeZone: string): WeekBoardColumn[] {
-  const todayDate = getDateInTimeZone(now, timeZone);
-  const weekStart = getStartOfWorkWeek(now);
-  const monday = getDateInTimeZone(weekStart, timeZone);
-  const tuesday = getDateInTimeZone(addLocalDays(weekStart, 1), timeZone);
-  const wednesday = getDateInTimeZone(addLocalDays(weekStart, 2), timeZone);
-  const thursday = getDateInTimeZone(addLocalDays(weekStart, 3), timeZone);
-  const friday = getDateInTimeZone(addLocalDays(weekStart, 4), timeZone);
-  const saturday = getDateInTimeZone(addLocalDays(weekStart, 5), timeZone);
-  const sunday = getDateInTimeZone(addLocalDays(weekStart, 6), timeZone);
+function buildWeekBoardColumns(
+  tasks: WeekBoardTaskData[],
+  weekStart: string,
+  todayDate: string
+): WeekBoardColumn[] {
+  const monday = weekStart;
+  const tuesday = addDateOnlyDays(weekStart, 1);
+  const wednesday = addDateOnlyDays(weekStart, 2);
+  const thursday = addDateOnlyDays(weekStart, 3);
+  const friday = addDateOnlyDays(weekStart, 4);
+  const saturday = addDateOnlyDays(weekStart, 5);
+  const sunday = addDateOnlyDays(weekStart, 6);
   const grouped: Record<WeekColumnKey, WeekBoardTaskData[]> = {
     monday: [],
     tuesday: [],
@@ -197,7 +197,7 @@ function buildWeekBoardColumns(tasks: WeekBoardTaskData[], now: Date, timeZone: 
       continue;
     }
 
-    const dueDate = getDateInTimeZone(new Date(task.dueAt), timeZone);
+    const dueDate = getDateInTimeZone(new Date(task.dueAt), TIME_ZONE);
     if (dueDate <= monday) {
       grouped.monday.push(task);
     } else if (dueDate === tuesday) {
@@ -217,7 +217,7 @@ function buildWeekBoardColumns(tasks: WeekBoardTaskData[], now: Date, timeZone: 
     {
       key: "monday",
       title: "Monday",
-      subtitle: formatColumnDate(weekStart, timeZone),
+      subtitle: formatDateOnlyLabel(monday),
       tasks: grouped.monday.sort(compareTasksByDueThenPriority),
       dueDate: monday,
       isCurrentDay: monday === todayDate,
@@ -225,7 +225,7 @@ function buildWeekBoardColumns(tasks: WeekBoardTaskData[], now: Date, timeZone: 
     {
       key: "tuesday",
       title: "Tuesday",
-      subtitle: formatColumnDate(addLocalDays(weekStart, 1), timeZone),
+      subtitle: formatDateOnlyLabel(tuesday),
       tasks: grouped.tuesday.sort(compareTasksByDueThenPriority),
       dueDate: tuesday,
       isCurrentDay: tuesday === todayDate,
@@ -233,7 +233,7 @@ function buildWeekBoardColumns(tasks: WeekBoardTaskData[], now: Date, timeZone: 
     {
       key: "wednesday",
       title: "Wednesday",
-      subtitle: formatColumnDate(addLocalDays(weekStart, 2), timeZone),
+      subtitle: formatDateOnlyLabel(wednesday),
       tasks: grouped.wednesday.sort(compareTasksByDueThenPriority),
       dueDate: wednesday,
       isCurrentDay: wednesday === todayDate,
@@ -241,7 +241,7 @@ function buildWeekBoardColumns(tasks: WeekBoardTaskData[], now: Date, timeZone: 
     {
       key: "thursday",
       title: "Thursday",
-      subtitle: formatColumnDate(addLocalDays(weekStart, 3), timeZone),
+      subtitle: formatDateOnlyLabel(thursday),
       tasks: grouped.thursday.sort(compareTasksByDueThenPriority),
       dueDate: thursday,
       isCurrentDay: thursday === todayDate,
@@ -249,7 +249,7 @@ function buildWeekBoardColumns(tasks: WeekBoardTaskData[], now: Date, timeZone: 
     {
       key: "friday",
       title: "Friday",
-      subtitle: formatColumnDate(addLocalDays(weekStart, 4), timeZone),
+      subtitle: formatDateOnlyLabel(friday),
       tasks: grouped.friday.sort(compareTasksByDueThenPriority),
       dueDate: friday,
       isCurrentDay: friday === todayDate,
@@ -257,7 +257,7 @@ function buildWeekBoardColumns(tasks: WeekBoardTaskData[], now: Date, timeZone: 
     {
       key: "weekend",
       title: "Weekend",
-      subtitle: `${formatColumnDate(addLocalDays(weekStart, 5), timeZone)} - ${formatColumnDate(addLocalDays(weekStart, 6), timeZone)}`,
+      subtitle: `${formatDateOnlyLabel(saturday)} - ${formatDateOnlyLabel(sunday)}`,
       tasks: grouped.weekend.sort(compareTasksByDueThenPriority),
       dueDate: saturday,
       isCurrentDay: saturday === todayDate || sunday === todayDate,
@@ -428,6 +428,7 @@ function WeeklyBoardColumn({
   onDragEndTask,
   onDropTask,
   onDropTargetChange,
+  onCreateTask,
 }: {
   column: WeekBoardColumn;
   completingIds: Set<string>;
@@ -442,6 +443,7 @@ function WeeklyBoardColumn({
   onDragEndTask: () => void;
   onDropTask: (taskId: string, dueDate: string) => void;
   onDropTargetChange: (key: WeekColumnKey | null) => void;
+  onCreateTask?: (dueDate: string) => void;
 }) {
   const isDropTarget = dropTargetKey === column.key;
 
@@ -483,9 +485,22 @@ function WeeklyBoardColumn({
           </h3>
           <p className="text-xs text-muted-foreground">{column.subtitle}</p>
         </div>
-        <span className="rounded-full border border-stroke bg-panel px-2 py-0.5 text-xs font-bold text-foreground">
-          {column.tasks.length}
-        </span>
+        <div className="flex items-center gap-1.5">
+          <span className="rounded-full border border-stroke bg-panel px-2 py-0.5 text-xs font-bold text-foreground">
+            {column.tasks.length}
+          </span>
+          {onCreateTask ? (
+            <button
+              type="button"
+              onClick={() => onCreateTask(column.dueDate)}
+              aria-label={`Add task due ${column.title}, ${column.subtitle}`}
+              title={`Add task due ${column.title}`}
+              className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-stroke bg-panel text-sm font-bold text-muted-foreground transition hover:border-accent/50 hover:bg-accent-soft hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+            >
+              +
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {column.tasks.length === 0 ? (
@@ -687,6 +702,7 @@ export function WeekBoard({
 }: WeekBoardProps) {
   const router = useRouter();
   const { openTask, registerTasks } = useTodayModal();
+  const { sprints } = useSprints();
 
   const [tasks, setTasks] = useState<TaskWithImplementation[]>(weekBoardTasks);
   const [waiting, setWaiting] = useState<TaskWithImplementation[]>(waitingTasks);
@@ -698,12 +714,28 @@ export function WeekBoard({
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [showOverdueQueue, setShowOverdueQueue] = useState(false);
   const [scrollToOverdueQueue, setScrollToOverdueQueue] = useState(false);
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [weekLoading, setWeekLoading] = useState(false);
+  const [createDueDate, setCreateDueDate] = useState<string | null>(null);
+  const [implementations, setImplementations] = useState<ImplementationSummary[]>([]);
+  const [implementationsLoading, setImplementationsLoading] = useState(false);
+  const [implementationsLoadRequest, setImplementationsLoadRequest] = useState(0);
+  const [implementationsError, setImplementationsError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const overdueQueueRef = useRef<HTMLElement | null>(null);
 
   // Reconcile local optimistic state with freshly streamed server props.
   useEffect(() => {
-    setTasks(weekBoardTasks);
+    const currentWeekEnd = getDisplayedWeekRange(new Date(), TIME_ZONE).end;
+    setTasks((current) => [
+      ...current.filter((task) => {
+        if (!task.due_at) {
+          return false;
+        }
+        return getDateInTimeZone(new Date(task.due_at), TIME_ZONE) > currentWeekEnd;
+      }),
+      ...weekBoardTasks,
+    ]);
   }, [weekBoardTasks]);
 
   useEffect(() => {
@@ -721,6 +753,12 @@ export function WeekBoard({
 
   const syncedSet = useMemo(() => new Set(syncedTaskIds), [syncedTaskIds]);
   const now = new Date(nowMs);
+  const currentWeekRange = getDisplayedWeekRange(now, TIME_ZONE);
+  const selectedWeekStart = addDateOnlyDays(currentWeekRange.start, weekOffset * 7);
+  const selectedWeekEnd = addDateOnlyDays(selectedWeekStart, 6);
+  const todayDate = getDateInTimeZone(now, TIME_ZONE);
+  const isCurrentWeek = weekOffset === 0;
+  const selectedWeekLabel = `${formatDateOnlyLabel(selectedWeekStart)} – ${formatDateOnlyLabel(selectedWeekEnd, true)}`;
 
   const weekBoard = useMemo(
     () => tasks.map((task) => taskToWeekBoardData(task, getDueState(task.due_at, now, TIME_ZONE), syncedSet.has(task.id))),
@@ -731,14 +769,88 @@ export function WeekBoard({
   const waitingOn = useMemo(() => waiting.map(taskToWaitingTask), [waiting]);
 
   const overdueTasks = weekBoard.filter((task) => task.dueState === "Overdue");
-  const scheduledWeekTasks = weekBoard.filter((task) => task.dueState !== "Overdue");
-  const weekColumns = buildWeekBoardColumns(scheduledWeekTasks, now, TIME_ZONE);
+  const scheduledWeekTasks = weekBoard.filter((task) =>
+    isDueAtInWeekStarting(task.dueAt, selectedWeekStart, TIME_ZONE)
+  );
+  const weekColumns = buildWeekBoardColumns(scheduledWeekTasks, selectedWeekStart, todayDate);
   const weekdayColumns = weekColumns.filter((column) => column.key !== "weekend");
   const weekendColumn = weekColumns.find((column) => column.key === "weekend") ?? null;
   const boardTaskCount = scheduledWeekTasks.length;
   const overdueCount = overdueTasks.length;
   const todayDueCount = scheduledWeekTasks.filter((task) => task.dueState === "Due Today").length;
   const boardMinutes = scheduledWeekTasks.reduce((sum, task) => sum + task.estimatedMinutes, 0);
+
+  useEffect(() => {
+    if (isCurrentWeek) {
+      setWeekLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const params = new URLSearchParams({
+      view: "weekly_board",
+      week_start_date: selectedWeekStart,
+      week_end_date: selectedWeekEnd,
+      limit: "300",
+    });
+
+    setWeekLoading(true);
+    setError(null);
+    fetch(`/api/tasks?${params.toString()}`, { cache: "no-store", signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error("Failed to load the selected week");
+        }
+        return response.json() as Promise<TaskWithImplementation[]>;
+      })
+      .then((selectedTasks) => {
+        setTasks((current) => [
+          ...current.filter((task) => !isDueAtInWeekStarting(task.due_at, selectedWeekStart, TIME_ZONE)),
+          ...selectedTasks,
+        ]);
+      })
+      .catch((loadError: unknown) => {
+        if ((loadError as { name?: string }).name !== "AbortError") {
+          setError(loadError instanceof Error ? loadError.message : "Failed to load the selected week");
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setWeekLoading(false);
+        }
+      });
+
+    return () => controller.abort();
+  }, [isCurrentWeek, selectedWeekEnd, selectedWeekStart]);
+
+  useEffect(() => {
+    if (!createDueDate || implementations.length > 0) {
+      return;
+    }
+
+    const controller = new AbortController();
+    setImplementationsLoading(true);
+    setImplementationsError(null);
+    fetch("/api/applications", { cache: "no-store", signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error("Failed to load applications");
+        }
+        return response.json() as Promise<ImplementationSummary[]>;
+      })
+      .then((rows) => {
+        setImplementationsLoading(false);
+        setImplementations(Array.isArray(rows) ? rows : []);
+      })
+      .catch((loadError: unknown) => {
+        if ((loadError as { name?: string }).name !== "AbortError") {
+          setImplementationsLoading(false);
+          setImplementationsError(loadError instanceof Error ? loadError.message : "Failed to load applications");
+        }
+      });
+
+    return () => controller.abort();
+  }, [createDueDate, implementations.length, implementationsLoadRequest]);
 
   useEffect(() => {
     if (overdueCount === 0 && showOverdueQueue) {
@@ -859,6 +971,12 @@ export function WeekBoard({
     setScrollToOverdueQueue(true);
   }
 
+  function handleTaskCreated(task: TaskWithImplementation) {
+    setTasks((current) => [task, ...current.filter((item) => item.id !== task.id)]);
+    setError(null);
+    router.refresh();
+  }
+
   return (
     <div className="space-y-8">
       {error && <ErrorBanner message={error} />}
@@ -866,7 +984,9 @@ export function WeekBoard({
       <section className="space-y-4">
         <div className="flex flex-wrap gap-2">
           <article className="rounded-xl border border-stroke bg-panel px-3 py-2 shadow-sm">
-            <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-muted-foreground">This Week</p>
+            <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-muted-foreground">
+              {isCurrentWeek ? "This Week" : "Selected Week"}
+            </p>
             <p className="mt-0.5 text-sm font-semibold text-foreground">
               {boardTaskCount} <span className="font-medium text-muted-foreground">tasks · {boardMinutes} min</span>
             </p>
@@ -892,9 +1012,13 @@ export function WeekBoard({
             </p>
           </button>
           <article className="rounded-xl border border-accent/40 bg-accent-soft px-3 py-2 shadow-sm">
-            <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-red-200">Due Today</p>
+            <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-red-200">
+              {isCurrentWeek ? "Due Today" : "Viewing"}
+            </p>
             <p className="mt-0.5 text-sm font-semibold text-foreground">
-              {todayDueCount} {todayDueCount === 1 ? "task" : "tasks"} due today
+              {isCurrentWeek
+                ? `${todayDueCount} ${todayDueCount === 1 ? "task" : "tasks"} due today`
+                : selectedWeekLabel}
             </p>
           </article>
         </div>
@@ -902,18 +1026,54 @@ export function WeekBoard({
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <h2 className="text-lg font-semibold text-foreground">Weekly Board</h2>
-            <p className="text-xs text-muted-foreground">Updated {formatUpdatedTime(updatedAt, TIME_ZONE)}</p>
+            <p className="text-xs text-muted-foreground">
+              {selectedWeekLabel} · Updated {formatUpdatedTime(updatedAt, TIME_ZONE)}
+            </p>
           </div>
-          <div className="flex flex-wrap gap-2 text-[11px] font-semibold">
-            <span className="rounded-full border border-red-500/30 bg-red-500/10 px-2 py-1 text-red-300">Red queue = overdue</span>
-            <span className="rounded-full border border-accent/40 bg-accent-soft px-2 py-1 text-red-100">Accent = due today</span>
-            <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-200">Amber = blocked / waiting / review</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setWeekOffset((current) => current - 1)}
+              aria-label="View previous week"
+              className="rounded-lg border border-stroke bg-panel px-3 py-1.5 text-xs font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground"
+            >
+              ← Previous
+            </button>
+            {!isCurrentWeek ? (
+              <button
+                type="button"
+                onClick={() => setWeekOffset(0)}
+                className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white transition hover:opacity-90"
+              >
+                Current week
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setWeekOffset((current) => current + 1)}
+              aria-label="View next week"
+              className="rounded-lg border border-stroke bg-panel px-3 py-1.5 text-xs font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground"
+            >
+              Next →
+            </button>
           </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2 text-[11px] font-semibold">
+          <span className="rounded-full border border-red-500/30 bg-red-500/10 px-2 py-1 text-red-300">Red queue = overdue</span>
+          <span className="rounded-full border border-accent/40 bg-accent-soft px-2 py-1 text-red-100">Accent = due today</span>
+          <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-200">Amber = blocked / waiting / review</span>
         </div>
 
         {hasError ? (
           <p className="rounded-md border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
             Weekly board refresh failed. Showing available data.
+          </p>
+        ) : null}
+
+        {weekLoading ? (
+          <p className="rounded-md border border-stroke bg-panel-muted px-3 py-2 text-xs text-muted-foreground" role="status">
+            Loading {selectedWeekLabel}…
           </p>
         ) : null}
 
@@ -937,6 +1097,7 @@ export function WeekBoard({
               }}
               onDropTask={handleMoveTask}
               onDropTargetChange={setDropTargetKey}
+              onCreateTask={setCreateDueDate}
             />
           ))}
         </div>
@@ -993,6 +1154,41 @@ export function WeekBoard({
           />
         </div>
       </section>
+
+      <Modal
+        open={createDueDate !== null}
+        onClose={() => setCreateDueDate(null)}
+        title={createDueDate ? `New Task · Due ${formatDateOnlyLabel(createDueDate, true)}` : "New Task"}
+        size="wide"
+      >
+        {implementationsLoading ? (
+          <p className="rounded-md border border-stroke bg-panel-muted px-3 py-4 text-sm text-muted-foreground" role="status">
+            Loading task options…
+          </p>
+        ) : implementationsError ? (
+          <div className="rounded-md border border-amber-400/30 bg-amber-500/10 px-3 py-3 text-sm text-amber-200">
+            <p>{implementationsError}</p>
+            <button
+              type="button"
+              onClick={() => setImplementationsLoadRequest((current) => current + 1)}
+              className="mt-2 rounded-md border border-amber-400/30 bg-panel px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-panel-muted"
+            >
+              Retry
+            </button>
+          </div>
+        ) : createDueDate ? (
+          <TaskCreateForm
+            key={createDueDate}
+            implementations={implementations}
+            sprints={sprints}
+            defaultDueDate={createDueDate}
+            initiallyOpen
+            hideLauncher
+            onTaskCreated={handleTaskCreated}
+            onRequestClose={() => setCreateDueDate(null)}
+          />
+        ) : null}
+      </Modal>
     </div>
   );
 }

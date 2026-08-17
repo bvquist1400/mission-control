@@ -14,6 +14,7 @@
     "test:calendar-api": "node scripts/test-calendar-api-contract.mjs",
     "test:sprint-dates": "node --experimental-strip-types scripts/test-sprint-date-ranges.mjs",
     "test:today-sprint": "node --experimental-strip-types scripts/test-today-sprint-progress.mjs",
+    "test:week-board": "node --experimental-strip-types scripts/test-week-board.mjs",
     "test:mcp-oauth": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-mcp-oauth.mjs",
     "test:mcp-intelligence-artifacts": "node scripts/test-mcp-intelligence-artifact-routing.mjs",
     "test:mcp-contract": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-mcp-contract.mjs",

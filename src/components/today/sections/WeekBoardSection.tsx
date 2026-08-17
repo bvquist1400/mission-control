@@ -8,62 +8,16 @@ import {
 import { WeekBoard } from "@/components/today/sections/WeekBoard";
 import type { TaskWithImplementation } from "@/types/database";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
+import { addDateOnlyDays, getDateStartInTimeZone, getDisplayedWeekRange } from "@/lib/today/week-board";
 
 const TIME_ZONE = DEFAULT_WORKDAY_CONFIG.timezone;
 
-function getEtDateOnly(date: Date): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: TIME_ZONE }).format(date);
-}
-
-/** Offset (timezone - UTC) in ms at the given instant, for TIME_ZONE. */
-function getTimeZoneOffsetMs(date: Date): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: TIME_ZONE,
-    hour12: false,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).formatToParts(date);
-
-  const map: Record<string, string> = {};
-  for (const part of parts) {
-    map[part.type] = part.value;
-  }
-  const asUtc = Date.UTC(
-    Number(map.year),
-    Number(map.month) - 1,
-    Number(map.day),
-    Number(map.hour === "24" ? "0" : map.hour),
-    Number(map.minute),
-    Number(map.second)
-  );
-  return asUtc - date.getTime();
-}
-
 /**
- * End of the current work week — Saturday 23:59:59.999 in ET, expressed as a
- * UTC instant. Matches the boundary the legacy client sent to
- * `/api/tasks?view=weekly_board`.
+ * End of the current Monday-Sunday week in ET, expressed as a UTC instant.
  */
 function getEndOfWeekDate(now: Date): Date {
-  const todayEt = getEtDateOnly(now); // YYYY-MM-DD
-  const [year, month, day] = todayEt.split("-").map(Number);
-  const dow = new Date(Date.UTC(year, month - 1, day)).getUTCDay(); // 0=Sun..6=Sat
-  const saturday = new Date(Date.UTC(year, month - 1, day + (6 - dow)));
-  const naiveEndUtc = Date.UTC(
-    saturday.getUTCFullYear(),
-    saturday.getUTCMonth(),
-    saturday.getUTCDate(),
-    23,
-    59,
-    59,
-    999
-  );
-  const offset = getTimeZoneOffsetMs(new Date(naiveEndUtc));
-  return new Date(naiveEndUtc - offset);
+  const { end } = getDisplayedWeekRange(now, TIME_ZONE);
+  return new Date(getDateStartInTimeZone(addDateOnlyDays(end, 1), TIME_ZONE).getTime() - 1);
 }
 
 export async function WeekBoardSection({ userId }: { userId: string }) {

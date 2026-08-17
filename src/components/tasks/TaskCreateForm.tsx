@@ -17,6 +17,10 @@ interface TaskCreateFormProps {
   sprints?: SprintWithImplementation[];
   onTaskCreated?: (task: TaskWithImplementation) => void;
   defaultNeedsReview?: boolean;
+  defaultDueDate?: string;
+  initiallyOpen?: boolean;
+  hideLauncher?: boolean;
+  onRequestClose?: () => void;
 }
 
 interface TaskDraft {
@@ -76,14 +80,18 @@ function findAdminImplId(implementations: ImplementationSummary[]): string {
   return match?.id ?? "";
 }
 
-function createInitialDraft(defaultNeedsReview: boolean, implementations: ImplementationSummary[]): TaskDraft {
+function createInitialDraft(
+  defaultNeedsReview: boolean,
+  implementations: ImplementationSummary[],
+  defaultDueDate = ""
+): TaskDraft {
   return {
     title: "",
     description: "",
     implementationId: findAdminImplId(implementations),
     sprintId: "",
     estimatedMinutes: 30,
-    dueDate: "",
+    dueDate: defaultDueDate,
     status: "Backlog",
     taskType: "Task",
     blocker: false,
@@ -92,7 +100,7 @@ function createInitialDraft(defaultNeedsReview: boolean, implementations: Implem
   };
 }
 
-function createInitialQcDraft(): QuickCaptureDraft {
+function createInitialQcDraft(defaultDueDate = ""): QuickCaptureDraft {
   return {
     rawText: "",
     title: "",
@@ -100,7 +108,7 @@ function createInitialQcDraft(): QuickCaptureDraft {
     implementationId: "",
     sprintId: "",
     estimatedMinutes: 30,
-    dueDate: "",
+    dueDate: defaultDueDate,
     status: "Backlog",
     taskType: "Admin",
     blocker: false,
@@ -202,17 +210,21 @@ export function TaskCreateForm({
   sprints = [],
   onTaskCreated,
   defaultNeedsReview = false,
+  defaultDueDate = "",
+  initiallyOpen = false,
+  hideLauncher = false,
+  onRequestClose,
 }: TaskCreateFormProps) {
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useState(initiallyOpen);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useState<TaskDraft>(() => createInitialDraft(defaultNeedsReview, implementations));
+  const [draft, setDraft] = useState<TaskDraft>(() => createInitialDraft(defaultNeedsReview, implementations, defaultDueDate));
 
   // Quick Capture state
   const [activeTab, setActiveTab] = useState<ActiveTab>("manual");
   const [parseState, setParseState] = useState<ParseState>("idle");
   const [parseError, setParseError] = useState<string | null>(null);
-  const [qcDraft, setQcDraft] = useState<QuickCaptureDraft>(createInitialQcDraft);
+  const [qcDraft, setQcDraft] = useState<QuickCaptureDraft>(() => createInitialQcDraft(defaultDueDate));
 
   const handleSubmit = useCallback(async () => {
     const title = draft.title.trim();
@@ -257,14 +269,15 @@ export function TaskCreateForm({
 
       const createdTask = (await response.json()) as TaskWithImplementation;
       onTaskCreated?.(createdTask);
-      setDraft(createInitialDraft(defaultNeedsReview, implementations));
+      setDraft(createInitialDraft(defaultNeedsReview, implementations, defaultDueDate));
       setIsOpen(false);
+      onRequestClose?.();
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : "Failed to create task");
     } finally {
       setIsCreating(false);
     }
-  }, [draft, defaultNeedsReview, implementations, onTaskCreated]);
+  }, [draft, defaultDueDate, defaultNeedsReview, implementations, onRequestClose, onTaskCreated]);
 
   async function createTask(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -314,7 +327,7 @@ export function TaskCreateForm({
         description: current.rawText.trim().slice(0, 8000),
         taskType: extraction.task_type,
         estimatedMinutes: extraction.estimated_minutes,
-        dueDate: extraction.due_guess_iso ?? "",
+        dueDate: extraction.due_guess_iso ?? current.dueDate,
         blocker: extraction.blocker,
         sendToTriage: extraction.needs_review,
         needsReview: extraction.needs_review,
@@ -413,15 +426,16 @@ export function TaskCreateForm({
         onTaskCreated?.(createdTask);
       }
 
-      setQcDraft(createInitialQcDraft());
+      setQcDraft(createInitialQcDraft(defaultDueDate));
       setParseState("idle");
       setIsOpen(false);
+      onRequestClose?.();
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : "Failed to create task(s)");
     } finally {
       setIsCreating(false);
     }
-  }, [qcDraft, onTaskCreated]);
+  }, [defaultDueDate, onRequestClose, qcDraft, onTaskCreated]);
 
   // Keyboard shortcut: Cmd+Enter or Ctrl+Enter to submit
   useEffect(() => {
@@ -445,8 +459,8 @@ export function TaskCreateForm({
   const splitTaskCount = normalizeTaskItems(qcDraft.suggestedTasks).length;
 
   return (
-    <section className="rounded-card border border-stroke bg-panel p-4 shadow-sm">
-      <div className="flex items-center justify-between gap-3">
+    <section className={hideLauncher ? "" : "rounded-card border border-stroke bg-panel p-4 shadow-sm"}>
+      {!hideLauncher ? <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold text-foreground">Add Task</h2>
           <p className="text-xs text-muted-foreground">Create a manual task or paste text for AI-assisted extraction.</p>
@@ -461,10 +475,10 @@ export function TaskCreateForm({
         >
           {isOpen ? "Close" : "+ New Task"}
         </button>
-      </div>
+      </div> : null}
 
       {isOpen ? (
-        <div className="mt-4 border-t border-stroke pt-4">
+        <div className={hideLauncher ? "" : "mt-4 border-t border-stroke pt-4"}>
           {/* Tab bar */}
           <div className="mb-4 flex gap-1 rounded-lg border border-stroke bg-panel-muted p-1">
             <button
@@ -659,8 +673,9 @@ export function TaskCreateForm({
                     type="button"
                     onClick={() => {
                       setError(null);
-                      setDraft(createInitialDraft(defaultNeedsReview, implementations));
+                      setDraft(createInitialDraft(defaultNeedsReview, implementations, defaultDueDate));
                       setIsOpen(false);
+                      onRequestClose?.();
                     }}
                     disabled={isCreating}
                     className="rounded-lg border border-stroke bg-panel px-3 py-2 text-sm font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
@@ -969,9 +984,10 @@ export function TaskCreateForm({
                         type="button"
                         onClick={() => {
                           setError(null);
-                          setQcDraft(createInitialQcDraft());
+                          setQcDraft(createInitialQcDraft(defaultDueDate));
                           setParseState("idle");
                           setIsOpen(false);
+                          onRequestClose?.();
                         }}
                         disabled={isCreating}
                         className="rounded-lg border border-stroke bg-panel px-3 py-2 text-sm font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"

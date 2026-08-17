@@ -19,6 +19,8 @@ import {
   queryWaitingSummary,
   queryWeeklyBoardTasks,
 } from '@/lib/today/queries';
+import { addDateOnlyDays, getDateStartInTimeZone } from '@/lib/today/week-board';
+import { DEFAULT_WORKDAY_CONFIG } from '@/lib/workday';
 import { validateOptionalTimestamp } from '@/lib/validate';
 import type { TaskStatus, TaskType, EstimateSource, BlockedReason } from '@/types/database';
 
@@ -145,14 +147,29 @@ export async function GET(request: NextRequest) {
     }
 
     if (view === 'weekly_board') {
+      const dateOnlyPattern = /^\d{4}-\d{2}-\d{2}$/;
+      const weekStartDate = searchParams.get('week_start_date');
+      const weekEndDate = searchParams.get('week_end_date');
       const weekEndParam = searchParams.get('week_end');
       const parsedWeekEnd = weekEndParam ? new Date(weekEndParam) : null;
-      const weekEnd = parsedWeekEnd && Number.isFinite(parsedWeekEnd.getTime())
-        ? parsedWeekEnd
-        : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      const selectedWeekStart = weekStartDate && dateOnlyPattern.test(weekStartDate)
+        ? getDateStartInTimeZone(weekStartDate, DEFAULT_WORKDAY_CONFIG.timezone)
+        : undefined;
+      const selectedWeekEnd = weekEndDate && dateOnlyPattern.test(weekEndDate)
+        ? new Date(
+          getDateStartInTimeZone(
+            addDateOnlyDays(weekEndDate, 1),
+            DEFAULT_WORKDAY_CONFIG.timezone
+          ).getTime() - 1
+        )
+        : null;
+      const weekEnd = selectedWeekEnd
+        ?? (parsedWeekEnd && Number.isFinite(parsedWeekEnd.getTime())
+          ? parsedWeekEnd
+          : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
       const weeklyLimit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 300) : 200;
 
-      const tasks = await queryWeeklyBoardTasks(supabase, userId, weekEnd, weeklyLimit);
+      const tasks = await queryWeeklyBoardTasks(supabase, userId, weekEnd, weeklyLimit, selectedWeekStart);
       return NextResponse.json(tasks);
     }
 
