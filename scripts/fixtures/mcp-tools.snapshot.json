@@ -728,6 +728,14 @@
           "description": "Source URL for traceability",
           "type": "string"
         },
+        "external_source_system": {
+          "description": "External source namespace, e.g. taskadvisor",
+          "type": "string"
+        },
+        "external_source_id": {
+          "description": "Identifier within the external source system",
+          "type": "string"
+        },
         "pinned_excerpt": {
           "description": "Pinned source excerpt",
           "type": "string"
@@ -1687,6 +1695,14 @@
           "description": "Filter by sprint UUID",
           "type": "string"
         },
+        "external_source_system": {
+          "description": "Filter by external source namespace",
+          "type": "string"
+        },
+        "external_source_id": {
+          "description": "Filter by external source identifier",
+          "type": "string"
+        },
         "due_soon": {
           "description": "Due within 48 hours, excluding Done, Parked, and Missed",
           "type": "boolean"
@@ -1716,6 +1732,38 @@
           "maximum": 5000
         }
       }
+    }
+  },
+  {
+    "name": "lookup_tasks_by_external_ids",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "external_source_system": {
+          "type": "string",
+          "minLength": 1,
+          "description": "External source namespace, e.g. taskadvisor or servicenow_spm"
+        },
+        "external_source_ids": {
+          "minItems": 1,
+          "maxItems": 500,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "External identifiers to resolve"
+        },
+        "project_id": {
+          "description": "Optionally restrict matches to a project UUID",
+          "type": "string"
+        }
+      },
+      "required": [
+        "external_source_system",
+        "external_source_ids"
+      ]
     }
   },
   {
@@ -2699,6 +2747,43 @@
         },
         "pinned": {
           "type": "boolean"
+        },
+        "source_type": {
+          "description": "Source label, e.g. Manual or Recurring",
+          "type": "string"
+        },
+        "source_url": {
+          "description": "Source URL for traceability, or null to clear",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "external_source_system": {
+          "description": "External source namespace, or null to clear",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "external_source_id": {
+          "description": "Identifier within the external source system, or null to clear",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [

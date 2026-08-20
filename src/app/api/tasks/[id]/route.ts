@@ -13,6 +13,11 @@ import { queueTaskStatusTransition } from '@/lib/task-status-transitions';
 import { getHighPriorityStakeholderNames, recalculateTaskPriority } from '@/lib/priority';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import { validateOptionalTimestamp } from '@/lib/validate';
+import {
+  externalSourceConflictPayload,
+  isTaskExternalSourceUniqueViolation,
+  normalizeExternalSourceValue,
+} from '@/lib/task-external-source';
 import type { Task, TaskStatus, TaskType, BlockedReason } from '@/types/database';
 
 const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Missed', 'Done'];
@@ -112,6 +117,10 @@ export async function PATCH(
       'priority_score',
       'pinned_excerpt',
       'pinned',
+      'source_type',
+      'source_url',
+      'external_source_system',
+      'external_source_id',
     ];
 
     const updates: Record<string, unknown> = {};
@@ -135,6 +144,18 @@ export async function PATCH(
         updates[field] = asStringOrNull(value);
       } else if (field === 'description') {
         updates[field] = asStringOrNull(value);
+      } else if (field === 'source_type') {
+        const sourceType = normalizeExternalSourceValue(value);
+        if (!sourceType) {
+          return NextResponse.json({ error: 'source_type cannot be empty' }, { status: 400 });
+        }
+        updates[field] = sourceType;
+      } else if (
+        field === 'source_url'
+        || field === 'external_source_system'
+        || field === 'external_source_id'
+      ) {
+        updates[field] = normalizeExternalSourceValue(value);
       } else if (field === 'due_at' || field === 'follow_up_at') {
         const result = validateOptionalTimestamp(value, field);
         if (!result.ok) {
@@ -229,7 +250,9 @@ export async function PATCH(
       || 'status' in updates
       || 'due_at' in updates
       || 'base_priority' in updates
-      || 'stakeholder_mentions' in updates;
+      || 'stakeholder_mentions' in updates
+      || 'external_source_system' in updates
+      || 'external_source_id' in updates;
 
     if (needsCurrentTask) {
       const { data: fetchedTask, error: fetchError } = await supabase
@@ -247,6 +270,45 @@ export async function PATCH(
       }
 
       currentTask = fetchedTask as Task;
+    }
+
+    if (currentTask && ('external_source_system' in updates || 'external_source_id' in updates)) {
+      const externalSourceSystem = ('external_source_system' in updates
+        ? updates.external_source_system
+        : currentTask.external_source_system) as string | null;
+      const externalSourceId = ('external_source_id' in updates
+        ? updates.external_source_id
+        : currentTask.external_source_id) as string | null;
+
+      if (externalSourceId && !externalSourceSystem) {
+        return NextResponse.json(
+          { error: 'external_source_system is required when external_source_id is provided' },
+          { status: 400 }
+        );
+      }
+
+      if (externalSourceSystem && externalSourceId) {
+        const { data: conflictingTask, error: conflictLookupError } = await supabase
+          .from('tasks')
+          .select('id, title')
+          .eq('user_id', userId)
+          .eq('external_source_system', externalSourceSystem)
+          .eq('external_source_id', externalSourceId)
+          .neq('id', id)
+          .maybeSingle();
+
+        if (conflictLookupError) throw conflictLookupError;
+        if (conflictingTask) {
+          return NextResponse.json(
+            externalSourceConflictPayload({
+              external_source_system: externalSourceSystem,
+              external_source_id: externalSourceId,
+              task: conflictingTask,
+            }),
+            { status: 409 }
+          );
+        }
+      }
     }
 
     const implementationId = updates.implementation_id;
@@ -346,6 +408,31 @@ export async function PATCH(
       .single();
 
     if (error) {
+      if (isTaskExternalSourceUniqueViolation(error)) {
+        const externalSourceSystem = (updates.external_source_system ?? currentTask?.external_source_system) as string | null;
+        const externalSourceId = (updates.external_source_id ?? currentTask?.external_source_id) as string | null;
+        if (externalSourceSystem && externalSourceId) {
+          const { data: conflictingTask } = await supabase
+            .from('tasks')
+            .select('id, title')
+            .eq('user_id', userId)
+            .eq('external_source_system', externalSourceSystem)
+            .eq('external_source_id', externalSourceId)
+            .neq('id', id)
+            .maybeSingle();
+
+          if (conflictingTask) {
+            return NextResponse.json(
+              externalSourceConflictPayload({
+                external_source_system: externalSourceSystem,
+                external_source_id: externalSourceId,
+                task: conflictingTask,
+              }),
+              { status: 409 }
+            );
+          }
+        }
+      }
       if (error.code === 'PGRST116') {
         return NextResponse.json({ error: 'Task not found' }, { status: 404 });
       }

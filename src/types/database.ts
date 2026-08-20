@@ -95,6 +95,8 @@ export interface Task {
   tags: string[];
   source_type: string;
   source_url: string | null;
+  external_source_system: string | null;
+  external_source_id: string | null;
   inbox_item_id: string | null;
   pinned_excerpt: string | null;
   pinned: boolean;
@@ -327,6 +329,10 @@ export interface TaskUpdatePayload {
   tags?: string[];
   pinned_excerpt?: string | null;
   pinned?: boolean;
+  source_type?: string;
+  source_url?: string | null;
+  external_source_system?: string | null;
+  external_source_id?: string | null;
 }
 
 // Implementation summary for dropdowns

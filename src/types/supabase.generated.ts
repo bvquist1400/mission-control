@@ -2050,6 +2050,8 @@ export type Database = {
           due_at: string | null
           estimate_source: Database["public"]["Enums"]["estimate_source"]
           estimated_minutes: number
+          external_source_id: string | null
+          external_source_system: string | null
           follow_up_at: string | null
           id: string
           implementation_id: string | null
@@ -2087,6 +2089,8 @@ export type Database = {
           due_at?: string | null
           estimate_source?: Database["public"]["Enums"]["estimate_source"]
           estimated_minutes?: number
+          external_source_id?: string | null
+          external_source_system?: string | null
           follow_up_at?: string | null
           id?: string
           implementation_id?: string | null
@@ -2124,6 +2128,8 @@ export type Database = {
           due_at?: string | null
           estimate_source?: Database["public"]["Enums"]["estimate_source"]
           estimated_minutes?: number
+          external_source_id?: string | null
+          external_source_system?: string | null
           follow_up_at?: string | null
           id?: string
           implementation_id?: string | null

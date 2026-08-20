@@ -31,8 +31,11 @@
     "test:task-notes-ui": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-task-notes-panel.mjs",
     "test:work-intelligence": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-work-intelligence.mjs",
     "test:project-sections": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-project-sections.mjs",
+    "test:task-external-source": "node --experimental-strip-types scripts/test-task-external-source.mjs",
     "backfill:project-sections:dry-run": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/backfill-project-sections.mjs",
-    "backfill:project-sections:apply": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/backfill-project-sections.mjs --apply"
+    "backfill:project-sections:apply": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/backfill-project-sections.mjs --apply",
+    "backfill:task-external-source:dry-run": "node --experimental-strip-types scripts/backfill-task-external-source-ids.mjs",
+    "backfill:task-external-source:apply": "node --experimental-strip-types scripts/backfill-task-external-source-ids.mjs --apply"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",

@@ -402,6 +402,8 @@ function createMcpServer(): McpServer {
       project_id: z.string().optional().describe('Filter by project UUID'),
       section_id: z.string().optional().describe('Filter by project section UUID'),
       sprint_id: z.string().optional().describe('Filter by sprint UUID'),
+      external_source_system: z.string().optional().describe('Filter by external source namespace'),
+      external_source_id: z.string().optional().describe('Filter by external source identifier'),
       due_soon: z.boolean().optional().describe('Due within 48 hours, excluding Done, Parked, and Missed'),
       include_done: z.boolean().optional().describe('Include completed tasks (default: excluded)'),
       include_parked: z.boolean().optional().describe('Include parked tasks (default: excluded)'),
@@ -418,6 +420,8 @@ function createMcpServer(): McpServer {
       if (args.project_id) url.searchParams.set('project_id', args.project_id);
       if (args.section_id) url.searchParams.set('section_id', args.section_id);
       if (args.sprint_id) url.searchParams.set('sprint_id', args.sprint_id);
+      if (args.external_source_system) url.searchParams.set('external_source_system', args.external_source_system);
+      if (args.external_source_id) url.searchParams.set('external_source_id', args.external_source_id);
       if (args.due_soon) url.searchParams.set('due_soon', 'true');
       if (args.include_done) url.searchParams.set('include_done', 'true');
       if (args.include_parked) url.searchParams.set('include_parked', 'true');
@@ -430,6 +434,29 @@ function createMcpServer(): McpServer {
       });
       const data = await res.json();
       return toMcpResponse(data);
+    }
+  );
+
+  // ── LOOK UP TASKS BY EXTERNAL IDS ────────────────────────────────────
+  mcp.tool(
+    'lookup_tasks_by_external_ids',
+    'Resolve up to 500 external task identifiers to Mission Control tasks in one call and explicitly return unmatched identifiers.',
+    {
+      external_source_system: z.string().min(1).describe('External source namespace, e.g. taskadvisor or servicenow_spm'),
+      external_source_ids: z.array(z.string().min(1)).min(1).max(500).describe('External identifiers to resolve'),
+      project_id: z.string().optional().describe('Optionally restrict matches to a project UUID'),
+    },
+    async (args) => {
+      const res = await fetch('https://mission-control-orpin-chi.vercel.app/api/tasks/lookup-external', {
+        method: 'POST',
+        headers: {
+          'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY!,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(args),
+      });
+      const data = await res.json();
+      return { ...toMcpResponse(data), ...(res.ok ? {} : { isError: true }) };
     }
   );
 
@@ -522,6 +549,8 @@ function createMcpServer(): McpServer {
       stakeholder_mentions: z.array(z.string()).optional().describe('Stakeholder names'),
       source_type: z.string().optional().describe('Source label, e.g. Manual or Recurring'),
       source_url: z.string().optional().describe('Source URL for traceability'),
+      external_source_system: z.string().optional().describe('External source namespace, e.g. taskadvisor'),
+      external_source_id: z.string().optional().describe('Identifier within the external source system'),
       pinned_excerpt: z.string().optional().describe('Pinned source excerpt'),
       blocked_by_task_id: z.string().optional().describe('Task UUID this new task should depend on'),
       initial_comment: z.string().optional().describe('Creates first comment on the task'),
@@ -537,7 +566,7 @@ function createMcpServer(): McpServer {
         body: JSON.stringify(args),
       });
       const data = await res.json();
-      return toMcpResponse(data);
+      return { ...toMcpResponse(data), ...(res.ok ? {} : { isError: true }) };
     }
   );
 
@@ -569,6 +598,10 @@ function createMcpServer(): McpServer {
       priority_score: z.number().min(0).max(100).optional().describe('New base priority 0-100; urgency/stakeholder/due-date boosts are applied on top'),
       pinned_excerpt: z.string().nullable().optional(),
       pinned: z.boolean().optional(),
+      source_type: z.string().optional().describe('Source label, e.g. Manual or Recurring'),
+      source_url: z.string().nullable().optional().describe('Source URL for traceability, or null to clear'),
+      external_source_system: z.string().nullable().optional().describe('External source namespace, or null to clear'),
+      external_source_id: z.string().nullable().optional().describe('Identifier within the external source system, or null to clear'),
     },
     async ({ task_id, ...updates }) => {
       const res = await fetch(
@@ -583,7 +616,7 @@ function createMcpServer(): McpServer {
         }
       );
       const data = await res.json();
-      return toMcpResponse(data);
+      return { ...toMcpResponse(data), ...(res.ok ? {} : { isError: true }) };
     }
   );
 

@@ -39,6 +39,7 @@ import * as stakeholdersRoute from '@/app/api/stakeholders/route';
 import * as stakeholderRoute from '@/app/api/stakeholders/[id]/route';
 import * as stakeholderCommitmentsRoute from '@/app/api/stakeholders/[id]/commitments/route';
 import * as tasksRoute from '@/app/api/tasks/route';
+import * as taskExternalLookupRoute from '@/app/api/tasks/lookup-external/route';
 import * as taskRoute from '@/app/api/tasks/[id]/route';
 import * as taskCommentsRoute from '@/app/api/tasks/[id]/comments/route';
 import * as taskChecklistRoute from '@/app/api/tasks/[id]/checklist/route';
@@ -107,6 +108,14 @@ function getRequiredScopesForPath(pathSegments: string[], method: string): reado
     pathSegments[2] === 'recur'
   ) {
     return ['mcp.write'] as const;
+  }
+
+  if (
+    normalizedMethod === 'POST'
+    && pathSegments[0] === 'tasks'
+    && pathSegments[1] === 'lookup-external'
+  ) {
+    return ['mcp.read'] as const;
   }
 
   if (normalizedMethod === 'DELETE') {
@@ -244,6 +253,11 @@ async function handleRequest(
   if (segments[0] === 'tasks' && segments.length === 1) {
     if (request.method === 'GET') return invokeStatic(tasksRoute.GET, requestWithContext);
     if (request.method === 'POST') return invokeStatic(tasksRoute.POST, requestWithContext);
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'tasks' && segments[1] === 'lookup-external' && segments.length === 2) {
+    if (request.method === 'POST') return invokeStatic(taskExternalLookupRoute.POST, requestWithContext);
     return methodNotAllowed();
   }
 

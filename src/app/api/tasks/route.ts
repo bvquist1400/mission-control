@@ -22,6 +22,11 @@ import {
 import { addDateOnlyDays, getDateStartInTimeZone } from '@/lib/today/week-board';
 import { DEFAULT_WORKDAY_CONFIG } from '@/lib/workday';
 import { validateOptionalTimestamp } from '@/lib/validate';
+import {
+  externalSourceConflictPayload,
+  isTaskExternalSourceUniqueViolation,
+  normalizeExternalSourceValue,
+} from '@/lib/task-external-source';
 import type { TaskStatus, TaskType, EstimateSource, BlockedReason } from '@/types/database';
 
 const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Missed', 'Done'];
@@ -83,6 +88,8 @@ export async function GET(request: NextRequest) {
     const tag = normalizeTaskTag(searchParams.get('tag') ?? '');
     const dueSoon = searchParams.get('due_soon');
     const sectionId = searchParams.get('section_id');
+    const externalSourceSystem = normalizeExternalSourceValue(searchParams.get('external_source_system'));
+    const externalSourceId = normalizeExternalSourceValue(searchParams.get('external_source_id'));
     const includeDone = searchParams.get('include_done') === 'true';
     const includeParked = searchParams.get('include_parked') === 'true';
     const includeMissed = searchParams.get('include_missed') === 'true';
@@ -216,6 +223,14 @@ export async function GET(request: NextRequest) {
       query = query.eq('section_id', sectionId);
     }
 
+    if (externalSourceSystem) {
+      query = query.eq('external_source_system', externalSourceSystem);
+    }
+
+    if (externalSourceId) {
+      query = query.eq('external_source_id', externalSourceId);
+    }
+
     if (dueSoon === 'true') {
       const now = new Date();
       const in48h = new Date(now.getTime() + 48 * 60 * 60 * 1000);
@@ -275,6 +290,15 @@ export async function POST(request: NextRequest) {
 
     const { supabase, userId } = auth.context;
     const body = (await request.json()) as Record<string, unknown>;
+
+    const externalSourceSystem = normalizeExternalSourceValue(body.external_source_system);
+    const externalSourceId = normalizeExternalSourceValue(body.external_source_id);
+    if (externalSourceId && !externalSourceSystem) {
+      return NextResponse.json(
+        { error: 'external_source_system is required when external_source_id is provided' },
+        { status: 400 }
+      );
+    }
 
     if (typeof body.title !== 'string' || body.title.trim().length === 0) {
       return NextResponse.json({ error: 'title is required' }, { status: 400 });
@@ -442,6 +466,28 @@ export async function POST(request: NextRequest) {
       highPriorityStakeholderNames
     );
 
+    if (externalSourceSystem && externalSourceId) {
+      const { data: conflictingTask, error: conflictLookupError } = await supabase
+        .from('tasks')
+        .select('id, title')
+        .eq('user_id', userId)
+        .eq('external_source_system', externalSourceSystem)
+        .eq('external_source_id', externalSourceId)
+        .maybeSingle();
+
+      if (conflictLookupError) throw conflictLookupError;
+      if (conflictingTask) {
+        return NextResponse.json(
+          externalSourceConflictPayload({
+            external_source_system: externalSourceSystem,
+            external_source_id: externalSourceId,
+            task: conflictingTask,
+          }),
+          { status: 409 }
+        );
+      }
+    }
+
     const { data, error } = await supabase
       .from('tasks')
       .insert({
@@ -468,12 +514,34 @@ export async function POST(request: NextRequest) {
         tags: normalizeTaskTags(body.tags),
         source_type: asStringOrNull(body.source_type) || 'Manual',
         source_url: asStringOrNull(body.source_url),
+        external_source_system: externalSourceSystem,
+        external_source_id: externalSourceId,
         pinned_excerpt: asStringOrNull(body.pinned_excerpt),
       })
       .select(TASK_WITH_RELATIONS_SELECT)
       .single();
 
     if (error) {
+      if (isTaskExternalSourceUniqueViolation(error) && externalSourceSystem && externalSourceId) {
+        const { data: conflictingTask } = await supabase
+          .from('tasks')
+          .select('id, title')
+          .eq('user_id', userId)
+          .eq('external_source_system', externalSourceSystem)
+          .eq('external_source_id', externalSourceId)
+          .maybeSingle();
+
+        if (conflictingTask) {
+          return NextResponse.json(
+            externalSourceConflictPayload({
+              external_source_system: externalSourceSystem,
+              external_source_id: externalSourceId,
+              task: conflictingTask,
+            }),
+            { status: 409 }
+          );
+        }
+      }
       throw error;
     }
 
