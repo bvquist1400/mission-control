@@ -734,7 +734,21 @@
         },
         "external_source_id": {
           "description": "Identifier within the external source system",
-          "type": "string"
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "pinned_excerpt": {
           "description": "Pinned source excerpt",
@@ -1701,7 +1715,14 @@
         },
         "external_source_id": {
           "description": "Filter by external source identifier",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            }
+          ]
         },
         "due_soon": {
           "description": "Due within 48 hours, excluding Done, Parked, and Missed",
@@ -1750,8 +1771,14 @@
           "maxItems": 500,
           "type": "array",
           "items": {
-            "type": "string",
-            "minLength": 1
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ]
           },
           "description": "External identifiers to resolve"
         },
@@ -2778,7 +2805,14 @@
           "description": "Identifier within the external source system, or null to clear",
           "anyOf": [
             {
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                }
+              ]
             },
             {
               "type": "null"

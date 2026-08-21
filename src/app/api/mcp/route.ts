@@ -12,6 +12,7 @@ import { z } from 'zod';
 const ET_TIMEZONE = 'America/New_York';
 const LEGACY_APP_ORIGIN = 'https://mission-control-orpin-chi.vercel.app';
 const TASK_RECURRENCE_FREQUENCIES = ['daily', 'weekday', 'weekly', 'biweekly', 'monthly'] as const;
+const EXTERNAL_SOURCE_ID_INPUT_SCHEMA = z.union([z.string(), z.number()]).transform((value) => String(value));
 const NOTE_TYPE_VALUES = [
   'working_note',
   'meeting_note',
@@ -403,7 +404,7 @@ function createMcpServer(): McpServer {
       section_id: z.string().optional().describe('Filter by project section UUID'),
       sprint_id: z.string().optional().describe('Filter by sprint UUID'),
       external_source_system: z.string().optional().describe('Filter by external source namespace'),
-      external_source_id: z.string().optional().describe('Filter by external source identifier'),
+      external_source_id: EXTERNAL_SOURCE_ID_INPUT_SCHEMA.optional().describe('Filter by external source identifier'),
       due_soon: z.boolean().optional().describe('Due within 48 hours, excluding Done, Parked, and Missed'),
       include_done: z.boolean().optional().describe('Include completed tasks (default: excluded)'),
       include_parked: z.boolean().optional().describe('Include parked tasks (default: excluded)'),
@@ -443,7 +444,7 @@ function createMcpServer(): McpServer {
     'Resolve up to 500 external task identifiers to Mission Control tasks in one call and explicitly return unmatched identifiers.',
     {
       external_source_system: z.string().min(1).describe('External source namespace, e.g. taskadvisor or servicenow_spm'),
-      external_source_ids: z.array(z.string().min(1)).min(1).max(500).describe('External identifiers to resolve'),
+      external_source_ids: z.array(EXTERNAL_SOURCE_ID_INPUT_SCHEMA).min(1).max(500).describe('External identifiers to resolve'),
       project_id: z.string().optional().describe('Optionally restrict matches to a project UUID'),
     },
     async (args) => {
@@ -550,7 +551,7 @@ function createMcpServer(): McpServer {
       source_type: z.string().optional().describe('Source label, e.g. Manual or Recurring'),
       source_url: z.string().optional().describe('Source URL for traceability'),
       external_source_system: z.string().optional().describe('External source namespace, e.g. taskadvisor'),
-      external_source_id: z.string().optional().describe('Identifier within the external source system'),
+      external_source_id: EXTERNAL_SOURCE_ID_INPUT_SCHEMA.nullable().optional().describe('Identifier within the external source system'),
       pinned_excerpt: z.string().optional().describe('Pinned source excerpt'),
       blocked_by_task_id: z.string().optional().describe('Task UUID this new task should depend on'),
       initial_comment: z.string().optional().describe('Creates first comment on the task'),
@@ -601,7 +602,7 @@ function createMcpServer(): McpServer {
       source_type: z.string().optional().describe('Source label, e.g. Manual or Recurring'),
       source_url: z.string().nullable().optional().describe('Source URL for traceability, or null to clear'),
       external_source_system: z.string().nullable().optional().describe('External source namespace, or null to clear'),
-      external_source_id: z.string().nullable().optional().describe('Identifier within the external source system, or null to clear'),
+      external_source_id: EXTERNAL_SOURCE_ID_INPUT_SCHEMA.nullable().optional().describe('Identifier within the external source system, or null to clear'),
     },
     async ({ task_id, ...updates }) => {
       const res = await fetch(

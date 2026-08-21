@@ -50,6 +50,14 @@ export function normalizeExternalSourceValue(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+export function normalizeExternalSourceId(value: unknown): string | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+
+  return normalizeExternalSourceValue(value);
+}
+
 export function isTaskExternalSourceUniqueViolation(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const candidate = error as { code?: unknown; constraint?: unknown; message?: unknown; details?: unknown };

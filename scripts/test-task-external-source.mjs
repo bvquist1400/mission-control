@@ -11,7 +11,13 @@ const {
   externalSourceConflictPayload,
   formatExternalSourceLookup,
   isTaskExternalSourceUniqueViolation,
+  normalizeExternalSourceId,
 } = await import(moduleUrl);
+
+assert.equal(normalizeExternalSourceId(" 40474495 "), "40474495");
+assert.equal(normalizeExternalSourceId(40474495), "40474495");
+assert.equal(normalizeExternalSourceId("SN-123"), "SN-123");
+assert.equal(normalizeExternalSourceId(Number.NaN), null);
 
 assert.equal(
   isTaskExternalSourceUniqueViolation({

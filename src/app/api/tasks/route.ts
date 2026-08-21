@@ -25,6 +25,7 @@ import { validateOptionalTimestamp } from '@/lib/validate';
 import {
   externalSourceConflictPayload,
   isTaskExternalSourceUniqueViolation,
+  normalizeExternalSourceId,
   normalizeExternalSourceValue,
 } from '@/lib/task-external-source';
 import type { TaskStatus, TaskType, EstimateSource, BlockedReason } from '@/types/database';
@@ -292,7 +293,7 @@ export async function POST(request: NextRequest) {
     const body = (await request.json()) as Record<string, unknown>;
 
     const externalSourceSystem = normalizeExternalSourceValue(body.external_source_system);
-    const externalSourceId = normalizeExternalSourceValue(body.external_source_id);
+    const externalSourceId = normalizeExternalSourceId(body.external_source_id);
     if (externalSourceId && !externalSourceSystem) {
       return NextResponse.json(
         { error: 'external_source_system is required when external_source_id is provided' },

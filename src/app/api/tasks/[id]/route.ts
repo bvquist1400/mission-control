@@ -16,6 +16,7 @@ import { validateOptionalTimestamp } from '@/lib/validate';
 import {
   externalSourceConflictPayload,
   isTaskExternalSourceUniqueViolation,
+  normalizeExternalSourceId,
   normalizeExternalSourceValue,
 } from '@/lib/task-external-source';
 import type { Task, TaskStatus, TaskType, BlockedReason } from '@/types/database';
@@ -153,9 +154,10 @@ export async function PATCH(
       } else if (
         field === 'source_url'
         || field === 'external_source_system'
-        || field === 'external_source_id'
       ) {
         updates[field] = normalizeExternalSourceValue(value);
+      } else if (field === 'external_source_id') {
+        updates[field] = normalizeExternalSourceId(value);
       } else if (field === 'due_at' || field === 'follow_up_at') {
         const result = validateOptionalTimestamp(value, field);
         if (!result.ok) {

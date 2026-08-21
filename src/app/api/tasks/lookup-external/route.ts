@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { formatExternalSourceLookup, normalizeExternalSourceValue } from '@/lib/task-external-source';
+import {
+  formatExternalSourceLookup,
+  normalizeExternalSourceId,
+  normalizeExternalSourceValue,
+} from '@/lib/task-external-source';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 
 const MAX_EXTERNAL_SOURCE_IDS = 500;
@@ -17,7 +21,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (!Array.isArray(body.external_source_ids)) {
-      return NextResponse.json({ error: 'external_source_ids must be an array of strings' }, { status: 400 });
+      return NextResponse.json({ error: 'external_source_ids must be an array of strings or numbers' }, { status: 400 });
     }
 
     if (body.external_source_ids.length === 0 || body.external_source_ids.length > MAX_EXTERNAL_SOURCE_IDS) {
@@ -27,9 +31,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const externalSourceIds = body.external_source_ids.map(normalizeExternalSourceValue);
+    const externalSourceIds = body.external_source_ids.map(normalizeExternalSourceId);
     if (externalSourceIds.some((value) => value === null)) {
-      return NextResponse.json({ error: 'external_source_ids must contain non-empty strings' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'external_source_ids must contain non-empty strings or finite numbers' },
+        { status: 400 }
+      );
     }
 
     const requestedIds = externalSourceIds as string[];

@@ -53,6 +53,22 @@ async function rpc(body) {
   return JSON.parse(payload);
 }
 
+const initializeResult = await rpc({
+  jsonrpc: "2.0",
+  id: 0,
+  method: "initialize",
+  params: {
+    protocolVersion: "2025-06-18",
+    capabilities: {},
+    clientInfo: { name: "mcp-contract-test", version: "1.0.0" },
+  },
+});
+
+if (initializeResult.result?.capabilities?.tools?.listChanged !== true) {
+  console.error("MCP server must advertise tools.listChanged=true so clients can refresh cached manifests.");
+  process.exit(1);
+}
+
 const result = await rpc({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
 
 if (result.error) {
