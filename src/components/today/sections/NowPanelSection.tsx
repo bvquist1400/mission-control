@@ -9,6 +9,7 @@ import {
 import { NowPanel, type NowPanelMeeting } from "@/components/today/sections/NowPanel";
 import type { TaskWithImplementation } from "@/types/database";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
+import type { TaskScope } from "@/lib/personal-exclusion";
 
 const TIME_ZONE = DEFAULT_WORKDAY_CONFIG.timezone;
 
@@ -50,14 +51,14 @@ function buildSyncNote(sync: LatestSyncSummary | null, now: Date): string {
   return `Synced today at ${time} · ${sync.promoted} promoted`;
 }
 
-export async function NowPanelSection({ userId }: { userId: string }) {
+export async function NowPanelSection({ userId, mode }: { userId: string; mode: TaskScope }) {
   const supabase = await createSupabaseServerClient();
   const now = new Date();
   const nowMs = now.getTime();
 
   let topTasks: TaskWithImplementation[] = [];
   try {
-    topTasks = await queryTopThreeTasks(supabase, userId);
+    topTasks = await queryTopThreeTasks(supabase, userId, mode);
   } catch (error) {
     console.error("Failed to load top tasks:", error);
   }
@@ -70,12 +71,16 @@ export async function NowPanelSection({ userId }: { userId: string }) {
     console.error("Failed to load next meeting:", error);
   }
 
-  let syncNote = "Not synced today.";
-  try {
-    const sync = await queryLatestSyncEvent(supabase, userId);
-    syncNote = buildSyncNote(sync, now);
-  } catch (error) {
-    console.error("Failed to load sync summary:", error);
+  let syncNote = mode === "personal"
+    ? "Personal tasks are not included in automated Today sync."
+    : "Not synced today.";
+  if (mode !== "personal") {
+    try {
+      const sync = await queryLatestSyncEvent(supabase, userId);
+      syncNote = buildSyncNote(sync, now);
+    } catch (error) {
+      console.error("Failed to load sync summary:", error);
+    }
   }
 
   return <NowPanel topTasks={topTasks} nextMeeting={nextMeeting} syncNote={syncNote} />;

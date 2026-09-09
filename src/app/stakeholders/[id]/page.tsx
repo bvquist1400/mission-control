@@ -7,6 +7,9 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { ErrorBanner } from "@/components/ui/ErrorBanner";
 import { CommitmentRow, type CommitmentRowData } from "@/components/stakeholders/CommitmentRow";
 import type { CommitmentStatus, CommitmentDirection } from "@/types/database";
+import { Button } from "@/components/ui/Button";
+import { Input, Select, Textarea } from "@/components/ui/Field";
+import { cardClasses } from "@/components/ui/Card";
 
 interface StakeholderDetail {
   id: string;
@@ -218,7 +221,7 @@ export default function StakeholderDetailPage() {
       <div className="space-y-6">
         <PageHeader title="Stakeholder not found" />
         {error && <ErrorBanner message={error} />}
-        <Link href="/stakeholders" className="text-sm text-accent hover:underline">
+        <Link href="/stakeholders" className="text-sm text-accent-text hover:underline">
           Back to stakeholders
         </Link>
       </div>
@@ -235,29 +238,19 @@ export default function StakeholderDetailPage() {
         description={[stakeholder.role, stakeholder.organization].filter(Boolean).join(" at ") || undefined}
         actions={
           <div className="flex gap-2">
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => {
-                setEditDraft({
-                  name: stakeholder.name,
-                  email: stakeholder.email || "",
-                  role: stakeholder.role || "",
-                  organization: stakeholder.organization || "",
-                  notes: stakeholder.notes || "",
-                });
+                setEditDraft({ name: stakeholder.name, email: stakeholder.email || "", role: stakeholder.role || "", organization: stakeholder.organization || "", notes: stakeholder.notes || "", });
                 setIsEditing(true);
               }}
-              className="rounded-lg border border-stroke bg-panel px-3 py-1.5 text-xs font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground"
             >
               Edit
-            </button>
-            <button
-              type="button"
-              onClick={handleDelete}
-              className="rounded-lg border border-red-200 bg-panel px-3 py-1.5 text-xs font-semibold text-red-600 transition hover:bg-red-50"
-            >
+            </Button>
+            <Button variant="danger" size="sm" onClick={handleDelete}>
               Delete
-            </button>
+            </Button>
           </div>
         }
       />
@@ -272,69 +265,55 @@ export default function StakeholderDetailPage() {
             <div className="grid gap-3 md:grid-cols-2">
               <label className="block space-y-1">
                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Name *</span>
-                <input
+                <Input
                   value={editDraft.name}
                   onChange={(e) => setEditDraft((d) => ({ ...d, name: e.target.value }))}
                   disabled={isSaving}
-                  className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                 />
               </label>
               <label className="block space-y-1">
                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Email</span>
-                <input
+                <Input
                   type="email"
                   value={editDraft.email}
                   onChange={(e) => setEditDraft((d) => ({ ...d, email: e.target.value }))}
                   disabled={isSaving}
-                  className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                 />
               </label>
               <label className="block space-y-1">
                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Role</span>
-                <input
+                <Input
                   value={editDraft.role}
                   onChange={(e) => setEditDraft((d) => ({ ...d, role: e.target.value }))}
                   disabled={isSaving}
-                  className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                 />
               </label>
               <label className="block space-y-1">
                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Organization</span>
-                <input
+                <Input
                   value={editDraft.organization}
                   onChange={(e) => setEditDraft((d) => ({ ...d, organization: e.target.value }))}
                   disabled={isSaving}
-                  className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                 />
               </label>
             </div>
             <label className="block space-y-1">
               <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Notes</span>
-              <textarea
+              <Textarea
                 value={editDraft.notes}
                 onChange={(e) => setEditDraft((d) => ({ ...d, notes: e.target.value }))}
                 rows={3}
                 disabled={isSaving}
                 placeholder="Context, preferences, relationship notes..."
-                className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
               />
             </label>
             <div className="flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setIsEditing(false)}
-                disabled={isSaving}
-                className="rounded-lg border border-stroke bg-panel px-3 py-2 text-sm font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
-              >
+              <Button variant="secondary" onClick={() => setIsEditing(false)} disabled={isSaving}>
                 Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={isSaving}
-                className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-              >
+              </Button>
+              <Button variant="primary" type="submit" disabled={isSaving}>
                 {isSaving ? "Saving..." : "Save"}
-              </button>
+              </Button>
             </div>
           </form>
         </section>
@@ -342,7 +321,7 @@ export default function StakeholderDetailPage() {
 
       {/* Info Panel */}
       {!isEditing && (
-        <section className="rounded-card border border-stroke bg-panel p-4 shadow-sm">
+        <section className={cardClasses({ padding: "sm" })}>
           <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <InfoField label="Email" value={stakeholder.email} />
             <InfoField label="Role" value={stakeholder.role} />
@@ -364,13 +343,9 @@ export default function StakeholderDetailPage() {
               {openCommitments.length} open{closedCommitments.length > 0 ? `, ${closedCommitments.length} closed` : ""}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => setIsAddingCommitment((open) => !open)}
-            className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white transition hover:opacity-90"
-          >
+          <Button variant="primary" size="sm" onClick={() => setIsAddingCommitment((open) => !open)}>
             {isAddingCommitment ? "Close" : "+ Commitment"}
-          </button>
+          </Button>
         </div>
 
         {/* Add Commitment Form */}
@@ -378,71 +353,59 @@ export default function StakeholderDetailPage() {
           <form onSubmit={handleCreateCommitment} className="rounded-card border border-stroke bg-panel p-4 shadow-sm space-y-3">
             <label className="block space-y-1">
               <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">What was committed? *</span>
-              <input
+              <Input
                 value={commitmentDraft.title}
                 onChange={(e) => setCommitmentDraft((d) => ({ ...d, title: e.target.value }))}
                 placeholder="e.g., Deliver UAT results by Friday"
                 disabled={isCreatingCommitment}
-                className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
               />
             </label>
 
             <div className="grid gap-3 md:grid-cols-3">
               <label className="block space-y-1">
                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Direction</span>
-                <select
+                <Select
                   value={commitmentDraft.direction}
                   onChange={(e) => setCommitmentDraft((d) => ({ ...d, direction: e.target.value as CommitmentDirection }))}
                   disabled={isCreatingCommitment}
-                  className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <option value="ours">We owe them</option>
                   <option value="theirs">They owe us</option>
-                </select>
+                </Select>
               </label>
 
               <label className="block space-y-1">
                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Due Date</span>
-                <input
+                <Input
                   type="date"
                   value={commitmentDraft.due_at}
                   onChange={(e) => setCommitmentDraft((d) => ({ ...d, due_at: e.target.value }))}
                   disabled={isCreatingCommitment}
-                  className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                 />
               </label>
 
               <label className="block space-y-1">
                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Notes</span>
-                <input
+                <Input
                   value={commitmentDraft.notes}
                   onChange={(e) => setCommitmentDraft((d) => ({ ...d, notes: e.target.value }))}
                   placeholder="Optional context"
                   disabled={isCreatingCommitment}
-                  className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                 />
               </label>
             </div>
 
             <div className="flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setCommitmentDraft(INITIAL_COMMITMENT_DRAFT);
-                  setIsAddingCommitment(false);
-                }}
+              <Button
+                variant="secondary"
+                onClick={() => { setCommitmentDraft(INITIAL_COMMITMENT_DRAFT); setIsAddingCommitment(false); }}
                 disabled={isCreatingCommitment}
-                className="rounded-lg border border-stroke bg-panel px-3 py-2 text-sm font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={isCreatingCommitment}
-                className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-              >
+              </Button>
+              <Button variant="primary" type="submit" disabled={isCreatingCommitment}>
                 {isCreatingCommitment ? "Adding..." : "Add"}
-              </button>
+              </Button>
             </div>
           </form>
         )}
@@ -481,7 +444,7 @@ export default function StakeholderDetailPage() {
         )}
       </section>
 
-      <Link href="/stakeholders" className="inline-block text-sm text-accent hover:underline">
+      <Link href="/stakeholders" className="inline-block text-sm text-accent-text hover:underline">
         Back to all stakeholders
       </Link>
     </div>

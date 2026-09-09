@@ -33,12 +33,12 @@ export function PrepTaskList({ tasks, title = "Prep Tasks", maxTasks = 5 }: Prep
               <div className="flex items-center gap-1.5">
                 <Link
                   href={`/tasks/${prepTask.task.id}`}
-                  className="block truncate text-sm font-medium text-foreground hover:text-accent"
+                  className="block truncate text-sm font-medium text-foreground hover:text-accent-text"
                 >
                   {prepTask.task.title}
                 </Link>
                 {prepTask.task.implementation_phase === "Sundown" && (
-                  <span className="rounded bg-orange-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-orange-300">
+                  <span className="rounded bg-orange-500/15 px-1.5 py-0.5 text-xs font-semibold text-orange-300">
                     Sundown
                   </span>
                 )}
@@ -90,12 +90,12 @@ export function RolledOverList({ tasks, title = "Rolling Over" }: RolledOverList
             <span className="text-yellow-400">&#8594;</span>
             <Link
               href={`/tasks/${task.id}`}
-              className="truncate text-sm text-foreground hover:text-accent"
+              className="truncate text-sm text-foreground hover:text-accent-text"
             >
               {task.title}
             </Link>
             {task.implementation_phase === "Sundown" && (
-              <span className="rounded bg-orange-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-orange-300">
+              <span className="rounded bg-orange-500/15 px-1.5 py-0.5 text-xs font-semibold text-orange-300">
                 Sundown
               </span>
             )}

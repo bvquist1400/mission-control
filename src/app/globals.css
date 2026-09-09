@@ -3,12 +3,30 @@
 :root {
   --background: #0d1117;
   --foreground: #e6edf3;
-  --muted-foreground: #7d8590;
+  /* Lifted from #7d8590: the old value measured 4.08:1 on --panel-muted, under WCAG AA. */
+  --muted-foreground: #8b949e;
   --panel: #161b22;
   --panel-muted: #21262d;
   --stroke: #30363d;
   --accent: #c41e3a;
   --accent-soft: rgba(196, 30, 58, 0.15);
+  /*
+   * --accent is a fill colour only: white on it measures 5.84:1, but as text it
+   * measures 2.96:1 on --panel, below even the 3:1 floor for UI components.
+   * Use --accent-text for accent-coloured type, icons and focus rings (6.2:1).
+   */
+  --accent-text: #f0748a;
+  --danger: #ff7b72;
+  --danger-soft: rgba(248, 81, 73, 0.12);
+  --danger-soft-hover: rgba(248, 81, 73, 0.22);
+  --danger-border: rgba(248, 81, 73, 0.4);
+  --warning: #d29922;
+  --warning-soft: rgba(210, 153, 34, 0.12);
+  --warning-border: rgba(210, 153, 34, 0.4);
+  --success: #3fb950;
+  --success-soft: rgba(63, 185, 80, 0.12);
+  --success-soft-hover: rgba(63, 185, 80, 0.22);
+  --success-border: rgba(63, 185, 80, 0.4);
   --scrollbar-track: color-mix(in oklab, var(--panel) 88%, black);
   --scrollbar-thumb: color-mix(in oklab, var(--accent) 52%, var(--panel-muted));
   --scrollbar-thumb-hover: color-mix(in oklab, var(--accent) 68%, var(--panel-muted));
@@ -23,6 +41,18 @@
   --color-stroke: var(--stroke);
   --color-accent: var(--accent);
   --color-accent-soft: var(--accent-soft);
+  --color-accent-text: var(--accent-text);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-danger-soft-hover: var(--danger-soft-hover);
+  --color-danger-border: var(--danger-border);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-warning-border: var(--warning-border);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-success-soft-hover: var(--success-soft-hover);
+  --color-success-border: var(--success-border);
   --font-sans: "Avenir Next", "Trebuchet MS", "Segoe UI", sans-serif;
   --font-mono: "IBM Plex Mono", "SFMono-Regular", "Menlo", monospace;
   --radius-card: 1rem;
@@ -77,6 +107,38 @@ body {
 
 a {
   color: inherit;
+}
+
+/*
+ * Global keyboard focus indicator. Declared outside @layer so it beats the
+ * ~135 `outline-none` utilities scattered through the components, which
+ * otherwise leave keyboard users with no visible focus state at all.
+ * Pointer interaction is unaffected: :focus-visible only matches keyboard focus.
+ */
+:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+
+@keyframes toast-enter {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.toast-enter {
+  animation: toast-enter 160ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast-enter {
+    animation: none;
+  }
 }
 
 /* Native select popups can render on light OS menus; keep option text legible. */

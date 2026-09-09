@@ -2,6 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { Button } from "@/components/ui/Button";
+import { Input, Select } from "@/components/ui/Field";
+import { cardClasses } from "@/components/ui/Card";
 
 type PlannerMode = "today" | "now";
 
@@ -724,7 +727,7 @@ export function PlannerCard({ autoReplanKey = null, onAutoReplanHandled, onTaskC
   );
 
   return (
-    <section className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+    <section className={cardClasses()}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold text-foreground">Plans</h2>
@@ -751,52 +754,48 @@ export function PlannerCard({ autoReplanKey = null, onAutoReplanHandled, onTaskC
         <div className="flex flex-wrap items-end gap-2">
           <label className="space-y-1">
             <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">Date</span>
-            <input
+            <Input
               type="date"
               value={selectedDate}
               onChange={(event) => setSelectedDate(event.target.value)}
               disabled={loading || refreshing || replanning}
-              className="rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
             />
           </label>
 
           <label className="space-y-1">
             <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">Mode</span>
-            <select
+            <Select
               value={mode}
               onChange={(event) => setMode(event.target.value as PlannerMode)}
               disabled={loading || refreshing || replanning}
-              className="rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <option value="today">Today</option>
               <option value="now">Now</option>
-            </select>
+            </Select>
           </label>
 
-          <button
-            type="button"
+          <Button
+            variant="secondary"
             onClick={() => void handleRefresh()}
             disabled={loading || refreshing || replanning}
             aria-label="Refresh plan"
-            className="rounded-lg border border-stroke px-3 py-2 text-sm font-semibold text-foreground transition hover:bg-panel-muted disabled:cursor-not-allowed disabled:opacity-60"
           >
             {refreshing ? "Refreshing..." : "Refresh"}
-          </button>
+          </Button>
 
-          <button
-            type="button"
+          <Button
+            variant="primary"
             onClick={() => void handleReplan()}
             disabled={loading || refreshing || replanning}
             aria-label="Generate new plan"
-            className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {replanning ? "Replanning..." : "Replan"}
-          </button>
+          </Button>
         </div>
       </div>
 
       {error && (
-        <p className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+        <p className="mt-3 rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
           {error}
         </p>
       )}
@@ -930,7 +929,7 @@ export function PlannerCard({ autoReplanKey = null, onAutoReplanHandled, onTaskC
                           onClick={() => void handleTogglePinned(item.taskId, isPinned)}
                         />
                       </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                         {typeof reason?.directiveMatched === "boolean" ? (
                           <span>{reason.directiveMatched ? "Focus match" : "Outside focus"}</span>
                         ) : null}

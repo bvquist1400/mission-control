@@ -5,6 +5,8 @@ import { formatDateOnly } from "@/components/utils/dates";
 import { ProjectStageBadge } from "@/components/ui/ProjectStageBadge";
 import { RagBadge } from "@/components/ui/RagBadge";
 import type { ProjectCardData } from "@/components/projects/ProjectCard";
+import { PersonalBadge } from "@/components/ui/PersonalBadge";
+import { cardClasses } from "@/components/ui/Card";
 
 interface ProjectTableProps {
   projects: ProjectCardData[];
@@ -12,7 +14,7 @@ interface ProjectTableProps {
 
 export function ProjectTable({ projects }: ProjectTableProps) {
   return (
-    <section className="rounded-card border border-stroke bg-panel shadow-sm">
+    <section className={cardClasses({ padding: "none" })}>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[1240px] text-sm">
           <thead className="border-b border-stroke bg-panel-muted/50">
@@ -33,13 +35,16 @@ export function ProjectTable({ projects }: ProjectTableProps) {
             {projects.map((project) => (
               <tr key={project.id} className="border-b border-stroke/60 last:border-b-0 hover:bg-panel-muted/30">
                 <td className="px-3 py-2.5 align-top">
-                  <Link
-                    href={`/projects/${project.id}`}
-                    title={project.name}
-                    className="block max-w-[300px] truncate font-medium text-foreground hover:text-accent hover:underline"
-                  >
-                    {project.name}
-                  </Link>
+                  <div className="flex max-w-[300px] items-center gap-2">
+                    <Link
+                      href={`/projects/${project.id}`}
+                      title={project.name}
+                      className="min-w-0 truncate font-medium text-foreground hover:text-accent-text hover:underline"
+                    >
+                      {project.name}
+                    </Link>
+                    {project.isPersonal ? <PersonalBadge className="shrink-0" /> : null}
+                  </div>
                 </td>
                 <td className="px-3 py-2.5 align-top">
                   <ProjectStageBadge stage={project.stage} />
@@ -50,7 +55,7 @@ export function ProjectTable({ projects }: ProjectTableProps) {
                 <td className="px-3 py-2.5 text-right align-top font-medium text-foreground">{project.portfolioRank}</td>
                 <td className="px-3 py-2.5 align-top text-muted-foreground">
                   {project.implementationName && project.implementationId ? (
-                    <Link href={`/applications/${project.implementationId}`} className="text-accent hover:underline">
+                    <Link href={`/applications/${project.implementationId}`} className="text-accent-text hover:underline">
                       {project.implementationName}
                     </Link>
                   ) : (

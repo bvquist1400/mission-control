@@ -1,6 +1,7 @@
 "use client";
 
 import type { ImplPhase } from "@/types/database";
+import { Select } from "@/components/ui/Field";
 
 const phases: ImplPhase[] = [
   "Intake",
@@ -36,17 +37,17 @@ interface PhaseSelectorProps {
 
 export function PhaseSelector({ value, onChange, disabled }: PhaseSelectorProps) {
   return (
-    <select
+    <Select
+      size="sm"
       value={value}
       onChange={(event) => onChange(event.target.value as ImplPhase)}
       disabled={disabled}
-      className="rounded-lg border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
     >
       {phases.map((phase) => (
         <option key={phase} value={phase}>
           {phaseLabels[phase]}
         </option>
       ))}
-    </select>
+    </Select>
   );
 }

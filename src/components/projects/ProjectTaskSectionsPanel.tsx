@@ -17,6 +17,10 @@ import type {
   TaskStatus,
   TaskWithImplementation,
 } from "@/types/database";
+import { Button } from "@/components/ui/Button";
+import { Input, Select } from "@/components/ui/Field";
+import { cardClasses } from "@/components/ui/Card";
+import { badgeClasses } from "@/components/ui/Badge";
 
 interface ProjectTaskSectionsPanelProps {
   projectId: string;
@@ -536,20 +540,17 @@ export function ProjectTaskSectionsPanel({
           Include completed tasks
         </label>
 
-        <button
-          type="button"
+        <Button
+          variant="secondary"
+          size="sm"
           onClick={() => {
             setShowCreateSectionForm((current) => !current);
             setSectionMutationError(null);
-            setCreateSectionDraft({
-              name: "",
-              sortOrder: String(nextSectionSortOrder(sortedSections)),
-            });
+            setCreateSectionDraft({ name: "", sortOrder: String(nextSectionSortOrder(sortedSections)), });
           }}
-          className="rounded border border-stroke bg-panel px-3 py-2 text-xs font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground"
         >
           {showCreateSectionForm ? "Cancel section" : "Add section"}
-        </button>
+        </Button>
       </div>
 
       {showCreateSectionForm ? (
@@ -557,39 +558,33 @@ export function ProjectTaskSectionsPanel({
           <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_120px_auto]">
             <label className="space-y-1">
               <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Section name</span>
-              <input
+              <Input
                 value={createSectionDraft.name}
-                onChange={(event) =>
-                  setCreateSectionDraft((current) => ({ ...current, name: event.target.value }))
-                }
+                onChange={(event) => setCreateSectionDraft((current) => ({ ...current, name: event.target.value })) }
                 placeholder="e.g. Discovery"
                 disabled={creatingSection}
-                className="w-full rounded border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
               />
             </label>
 
             <label className="space-y-1">
               <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Sort order</span>
-              <input
+              <Input
                 type="number"
                 value={createSectionDraft.sortOrder}
-                onChange={(event) =>
-                  setCreateSectionDraft((current) => ({ ...current, sortOrder: event.target.value }))
-                }
+                onChange={(event) => setCreateSectionDraft((current) => ({ ...current, sortOrder: event.target.value })) }
                 disabled={creatingSection}
-                className="w-full rounded border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
               />
             </label>
 
             <div className="flex items-end">
-              <button
-                type="button"
+              <Button
+                variant="primary"
+                size="sm"
                 onClick={() => void handleCreateSection()}
                 disabled={creatingSection}
-                className="rounded bg-accent px-3 py-2 text-xs font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {creatingSection ? "Creating..." : "Create section"}
-              </button>
+              </Button>
             </div>
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
@@ -599,13 +594,13 @@ export function ProjectTaskSectionsPanel({
       ) : null}
 
       {error ? (
-        <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+        <p className="rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
           {error}
         </p>
       ) : null}
 
       {sectionMutationError ? (
-        <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+        <p className="rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
           {sectionMutationError}
         </p>
       ) : null}
@@ -622,11 +617,11 @@ export function ProjectTaskSectionsPanel({
             className="min-w-[220px] flex-1 rounded border-0 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-60"
           />
 
-          <select
+          <Select
+            size="xs"
             value={inlineSectionId}
             onChange={(event) => setInlineSectionId(event.target.value)}
             disabled={addingTask}
-            className="rounded border border-stroke bg-panel px-2 py-1 text-xs text-foreground outline-none focus:border-accent disabled:opacity-60"
           >
             <option value="">{sortedSections.length === 0 ? "Unsectioned" : "No section"}</option>
             {sortedSections.map((section) => (
@@ -634,69 +629,54 @@ export function ProjectTaskSectionsPanel({
                 {section.name}
               </option>
             ))}
-          </select>
+          </Select>
 
-          <select
+          <Select
+            size="xs"
             value={inlineStatus}
             onChange={(event) => setInlineStatus(event.target.value as TaskStatus)}
             disabled={addingTask}
-            className="rounded border border-stroke bg-panel px-2 py-1 text-xs text-foreground outline-none focus:border-accent disabled:opacity-60"
           >
             {(["Backlog", "Planned", "In Progress", "Blocked/Waiting", "Parked"] as TaskStatus[]).map((status) => (
               <option key={status} value={status}>
                 {status}
               </option>
             ))}
-          </select>
+          </Select>
 
           <div className="flex gap-1">
             {[5, 15, 30, 60, 90].map((minutes) => (
-              <button
+              <Button variant="toggle" size="xs" active={inlineEstimate === minutes}
                 key={minutes}
-                type="button"
                 onClick={() => setInlineEstimate(minutes)}
-                disabled={addingTask}
-                className={`rounded px-2 py-1 text-xs font-medium transition ${
-                  inlineEstimate === minutes
-                    ? "bg-accent text-white"
-                    : "border border-stroke bg-panel text-muted-foreground hover:text-foreground"
-                }`}
-              >
+                disabled={addingTask}>
                 {minutes}m
-              </button>
+              </Button>
             ))}
           </div>
 
-          <button
-            type="button"
+          <Button
+            variant="primary"
+            size="sm"
             onClick={() => void handleInlineTaskAdd()}
             disabled={addingTask || !inlineTitle.trim()}
-            className="rounded bg-accent px-3 py-1 text-xs font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {addingTask ? "Adding..." : "Add"}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setInlineRowActive(false);
-              setInlineTitle("");
-              setInlineError(null);
-            }}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => { setInlineRowActive(false); setInlineTitle(""); setInlineError(null); }}
             disabled={addingTask}
-            className="rounded border border-stroke bg-panel px-3 py-1 text-xs font-medium text-muted-foreground transition hover:text-foreground disabled:opacity-60"
           >
             Cancel
-          </button>
+          </Button>
         </div>
       ) : (
-        <button
-          type="button"
-          onClick={() => setInlineRowActive(true)}
-          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground transition hover:bg-panel-muted hover:text-foreground"
-        >
+        <Button variant="ghost" className="flex w-full" onClick={() => setInlineRowActive(true)}>
           <span className="text-base leading-none">+</span>
           <span>Add task</span>
-        </button>
+        </Button>
       )}
 
       {inlineError ? (
@@ -725,51 +705,45 @@ export function ProjectTaskSectionsPanel({
             const isDeleting = deletingSectionId === section.id;
 
             return (
-              <section key={section.id} className="min-w-0 space-y-3 rounded-card border border-stroke bg-panel p-4 shadow-sm">
+              <section key={section.id} className={cardClasses({ padding: "sm", className: "min-w-0 space-y-3" })}>
                 {isEditing ? (
                   <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_120px_auto]">
                     <label className="space-y-1">
                       <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Section name</span>
-                      <input
+                      <Input
                         value={editSectionDraft.name}
-                        onChange={(event) =>
-                          setEditSectionDraft((current) => ({ ...current, name: event.target.value }))
-                        }
+                        onChange={(event) => setEditSectionDraft((current) => ({ ...current, name: event.target.value })) }
                         disabled={isSaving}
-                        className="w-full rounded border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
                       />
                     </label>
 
                     <label className="space-y-1">
                       <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Sort order</span>
-                      <input
+                      <Input
                         type="number"
                         value={editSectionDraft.sortOrder}
-                        onChange={(event) =>
-                          setEditSectionDraft((current) => ({ ...current, sortOrder: event.target.value }))
-                        }
+                        onChange={(event) => setEditSectionDraft((current) => ({ ...current, sortOrder: event.target.value })) }
                         disabled={isSaving}
-                        className="w-full rounded border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
                       />
                     </label>
 
                     <div className="flex items-end gap-2">
-                      <button
-                        type="button"
+                      <Button
+                        variant="primary"
+                        size="sm"
                         onClick={() => void handleSaveSection(section)}
                         disabled={isSaving}
-                        className="rounded bg-accent px-3 py-2 text-xs font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         {isSaving ? "Saving..." : "Save"}
-                      </button>
-                      <button
-                        type="button"
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
                         onClick={() => setEditingSectionId(null)}
                         disabled={isSaving}
-                        className="rounded border border-stroke bg-panel px-3 py-2 text-xs font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         Cancel
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 ) : (
@@ -777,7 +751,7 @@ export function ProjectTaskSectionsPanel({
                     <div>
                       <div className="flex items-center gap-2">
                         <h3 className="text-sm font-semibold text-foreground">{section.name}</h3>
-                        <span className="rounded-full bg-panel-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                        <span className={badgeClasses({ size: "sm" })}>
                           {(() => {
                             const parkedCount = sectionTasks.filter((t) => t.status === "Parked").length;
                             const blockedCount = sectionTasks.filter((t) => t.status === "Blocked/Waiting").length;
@@ -797,33 +771,29 @@ export function ProjectTaskSectionsPanel({
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setInlineSectionId(section.id);
-                          setInlineRowActive(true);
-                          setInlineError(null);
-                        }}
-                        className="rounded border border-stroke bg-panel px-2.5 py-1.5 text-xs font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground"
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => { setInlineSectionId(section.id); setInlineRowActive(true); setInlineError(null); }}
                       >
                         New task here
-                      </button>
-                      <button
-                        type="button"
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
                         onClick={() => beginEditingSection(section)}
                         disabled={Boolean(deletingSectionId)}
-                        className="rounded border border-stroke bg-panel px-2.5 py-1.5 text-xs font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         Edit
-                      </button>
-                      <button
-                        type="button"
+                      </Button>
+                      <Button
+                        variant="danger"
+                        size="sm"
                         onClick={() => void handleDeleteSection(section)}
                         disabled={isDeleting}
-                        className="rounded border border-red-300 bg-red-50 px-2.5 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         {isDeleting ? "Deleting..." : "Delete"}
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 )}
@@ -849,12 +819,12 @@ export function ProjectTaskSectionsPanel({
           })}
 
           {unsectionedTasks.length > 0 ? (
-            <section className="min-w-0 space-y-3 rounded-card border border-stroke bg-panel p-4 shadow-sm">
+            <section className={cardClasses({ padding: "sm", className: "min-w-0 space-y-3" })}>
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <div className="flex items-center gap-2">
                     <h3 className="text-sm font-semibold text-foreground">Unsectioned</h3>
-                    <span className="rounded-full bg-panel-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                    <span className={badgeClasses({ size: "sm" })}>
                       {unsectionedTasks.length} task{unsectionedTasks.length === 1 ? "" : "s"}
                     </span>
                   </div>

@@ -9,6 +9,7 @@ import { WeekBoard } from "@/components/today/sections/WeekBoard";
 import type { TaskWithImplementation } from "@/types/database";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
 import { addDateOnlyDays, getDateStartInTimeZone, getDisplayedWeekRange } from "@/lib/today/week-board";
+import type { TaskScope } from "@/lib/personal-exclusion";
 
 const TIME_ZONE = DEFAULT_WORKDAY_CONFIG.timezone;
 
@@ -20,15 +21,15 @@ function getEndOfWeekDate(now: Date): Date {
   return new Date(getDateStartInTimeZone(addDateOnlyDays(end, 1), TIME_ZONE).getTime() - 1);
 }
 
-export async function WeekBoardSection({ userId }: { userId: string }) {
+export async function WeekBoardSection({ userId, mode }: { userId: string; mode: TaskScope }) {
   const supabase = await createSupabaseServerClient();
   const now = new Date();
   const weekEnd = getEndOfWeekDate(now);
 
   const [weekBoardRes, waitingRes, needsReviewRes, syncRes] = await Promise.allSettled([
-    queryWeeklyBoardTasks(supabase, userId, weekEnd, 200),
-    queryWaitingSummary(supabase, userId, 30),
-    queryNeedsReviewCount(supabase, userId),
+    queryWeeklyBoardTasks(supabase, userId, weekEnd, 200, undefined, mode),
+    queryWaitingSummary(supabase, userId, 30, mode),
+    queryNeedsReviewCount(supabase, userId, mode),
     queryLatestSyncEvent(supabase, userId),
   ]);
 
@@ -63,6 +64,7 @@ export async function WeekBoardSection({ userId }: { userId: string }) {
       syncedTaskIds={syncedTaskIds}
       updatedAt={now.toISOString()}
       hasError={hasError}
+      mode={mode}
     />
   );
 }

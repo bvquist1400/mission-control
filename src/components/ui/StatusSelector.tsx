@@ -1,6 +1,7 @@
 "use client";
 
 import type { TaskStatus } from "@/types/database";
+import { Select } from "@/components/ui/Field";
 
 const statuses: TaskStatus[] = ["Backlog", "Planned", "In Progress", "Blocked/Waiting", "Parked", "Missed", "Done"];
 
@@ -11,16 +12,12 @@ interface StatusSelectorProps {
 
 export function StatusSelector({ value, onChange }: StatusSelectorProps) {
   return (
-    <select
-      value={value}
-      onChange={(event) => onChange(event.target.value as TaskStatus)}
-      className="rounded-lg border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
-    >
+    <Select size="sm" value={value} onChange={(event) => onChange(event.target.value as TaskStatus)}>
       {statuses.map((status) => (
         <option key={status} value={status}>
           {status}
         </option>
       ))}
-    </select>
+    </Select>
   );
 }

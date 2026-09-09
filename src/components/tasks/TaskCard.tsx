@@ -28,9 +28,9 @@ interface TaskCardProps {
 }
 
 const dueStateStyles: Record<DueState, string> = {
-  Overdue: "border-red-200 bg-red-50 text-red-700",
-  "Due Today": "border-amber-200 bg-amber-50 text-amber-700",
-  "Due Soon": "border-slate-200 bg-slate-100 text-slate-700",
+  Overdue: "border-danger-border bg-danger-soft text-danger",
+  "Due Today": "border-amber-500/40 bg-amber-500/10 text-amber-300",
+  "Due Soon": "border-stroke bg-panel-muted text-muted-foreground",
 };
 
 function formatDueDate(date: string | null): string {
@@ -95,7 +95,7 @@ export function TaskCard({ task, pinning = false, onTogglePinned }: TaskCardProp
         </div>
         <div className="flex items-center gap-1.5">
           {task.syncedToday ? (
-            <span className="shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-400">
+            <span className="shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-semibold text-emerald-400">
               Synced Today
             </span>
           ) : null}
@@ -118,7 +118,7 @@ export function TaskCard({ task, pinning = false, onTogglePinned }: TaskCardProp
             )}
           </button>
           {task.blocker ? (
-            <span className="shrink-0 rounded-full bg-red-500/15 px-2 py-0.5 text-[11px] font-semibold text-red-400">Blocker</span>
+            <span className="shrink-0 rounded-full bg-red-500/15 px-2 py-0.5 text-xs font-semibold text-red-400">Blocker</span>
           ) : null}
         </div>
       </div>
@@ -133,7 +133,7 @@ export function TaskCard({ task, pinning = false, onTogglePinned }: TaskCardProp
           <dd className="flex items-center gap-2 font-semibold text-foreground">
             <span>{formatDueDate(task.dueAt)}</span>
             {task.dueState ? (
-              <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${dueStateStyles[task.dueState]}`}>
+              <span className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${dueStateStyles[task.dueState]}`}>
                 {task.dueState}
               </span>
             ) : null}

@@ -8,6 +8,9 @@ import { ImplementationCard, type ImplementationCardData } from "@/components/im
 import { PhaseSelector } from "@/components/ui/PhaseSelector";
 import { RagSelector } from "@/components/ui/RagSelector";
 import type { ImplPhase, ImplementationHealthScore, RagStatus } from "@/types/database";
+import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Field";
+import { cardClasses } from "@/components/ui/Card";
 
 interface ImplementationDraft {
   name: string;
@@ -419,7 +422,7 @@ export default function ImplementationsPage() {
       {error && <ErrorBanner message={error} />}
 
       {!loading && implementations.length > 0 ? (
-        <section className="rounded-card border border-stroke bg-panel p-4 shadow-sm">
+        <section className={cardClasses({ padding: "sm" })}>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-sm font-semibold text-foreground">Priority Ranking</h2>
@@ -461,7 +464,7 @@ export default function ImplementationsPage() {
                       <td className="border-b border-stroke/70 px-3 py-2">
                         <div className="flex items-center gap-2">
                           <span
-                            className={`select-none rounded border border-stroke px-1.5 py-0.5 text-[10px] text-muted-foreground ${
+                            className={`select-none rounded border border-stroke px-1.5 py-0.5 text-xs text-muted-foreground ${
                               isReordering ? "cursor-not-allowed opacity-60" : "cursor-grab"
                             }`}
                           >
@@ -486,24 +489,24 @@ export default function ImplementationsPage() {
                       </td>
                       <td className="border-b border-stroke/70 px-3 py-2">
                         <div className="flex justify-end gap-1">
-                          <button
-                            type="button"
+                          <Button
+                            variant="secondary"
+                            size="xs"
                             onClick={() => void handleMoveByOffset(implementation.id, -1)}
                             disabled={isReordering || index === 0}
-                            className="rounded border border-stroke px-2 py-1 text-xs text-muted-foreground transition hover:bg-panel-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                             aria-label={`Move ${implementation.name} up`}
                           >
                             Up
-                          </button>
-                          <button
-                            type="button"
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            size="xs"
                             onClick={() => void handleMoveByOffset(implementation.id, 1)}
                             disabled={isReordering || index === implementations.length - 1}
-                            className="rounded border border-stroke px-2 py-1 text-xs text-muted-foreground transition hover:bg-panel-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                             aria-label={`Move ${implementation.name} down`}
                           >
                             Down
-                          </button>
+                          </Button>
                         </div>
                       </td>
                     </tr>
@@ -521,31 +524,26 @@ export default function ImplementationsPage() {
       ) : null}
 
       {/* Create Implementation Form */}
-      <section className="rounded-card border border-stroke bg-panel p-4 shadow-sm">
+      <section className={cardClasses({ padding: "sm" })}>
         <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="text-sm font-semibold text-foreground">Add Application</h2>
             <p className="text-xs text-muted-foreground">Track a new app, project, or initiative.</p>
           </div>
-          <button
-            type="button"
-            onClick={() => setIsCreateOpen((open) => !open)}
-            className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white transition hover:opacity-90"
-          >
+          <Button variant="primary" size="sm" onClick={() => setIsCreateOpen((open) => !open)}>
             {isCreateOpen ? "Close" : "+ New"}
-          </button>
+          </Button>
         </div>
 
         {isCreateOpen && (
           <form onSubmit={createImplementation} className="mt-4 space-y-4 border-t border-stroke pt-4">
             <label className="block space-y-1">
               <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Name</span>
-              <input
+              <Input
                 value={draft.name}
                 onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
                 placeholder="e.g., Workday Recruiting, ServiceNow ITSM..."
                 disabled={isCreating}
-                className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
               />
             </label>
 
@@ -570,58 +568,49 @@ export default function ImplementationsPage() {
 
               <label className="space-y-1">
                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Target Date</span>
-                <input
+                <Input
+                  size="sm"
                   type="date"
                   value={draft.targetDate}
                   onChange={(e) => setDraft((d) => ({ ...d, targetDate: e.target.value }))}
                   disabled={isCreating}
-                  className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                 />
               </label>
 
               <label className="space-y-1">
                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Next Milestone</span>
-                <input
+                <Input
+                  size="sm"
                   type="text"
                   value={draft.nextMilestone}
                   onChange={(e) => setDraft((d) => ({ ...d, nextMilestone: e.target.value }))}
                   placeholder="e.g., UAT Complete"
                   disabled={isCreating}
-                  className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                 />
               </label>
             </div>
 
             <label className="block space-y-1">
               <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status Summary</span>
-              <input
+              <Input
                 value={draft.statusSummary}
                 onChange={(e) => setDraft((d) => ({ ...d, statusSummary: e.target.value }))}
                 placeholder="Brief status for stakeholders..."
                 disabled={isCreating}
-                className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
               />
             </label>
 
             <div className="flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setDraft(INITIAL_DRAFT);
-                  setIsCreateOpen(false);
-                }}
+              <Button
+                variant="secondary"
+                onClick={() => { setDraft(INITIAL_DRAFT); setIsCreateOpen(false); }}
                 disabled={isCreating}
-                className="rounded-lg border border-stroke bg-panel px-3 py-2 text-sm font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={isCreating}
-                className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-              >
+              </Button>
+              <Button variant="primary" type="submit" disabled={isCreating}>
                 {isCreating ? "Creating..." : "Create"}
-              </button>
+              </Button>
             </div>
           </form>
         )}

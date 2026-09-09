@@ -9,14 +9,18 @@ import type { TaskCardData } from "@/components/tasks/TaskCard";
 import { TaskCreateForm } from "@/components/tasks/TaskCreateForm";
 import { getTaskVisualState, TaskStateBadge } from "@/components/tasks/task-state";
 import { useTodayModal } from "@/components/today/TodayModalProvider";
+import { useTaskMutation } from "@/hooks/useTaskMutation";
 import { useSprints } from "@/hooks/useSprints";
 import type { ImplementationSummary, TaskWithImplementation } from "@/types/database";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
+import { isPersonalTaskOrProject, PERSONAL_TAG, type TaskScope } from "@/lib/personal-exclusion";
+import { PersonalBadge } from "@/components/ui/PersonalBadge";
 import {
   addDateOnlyDays,
   getDisplayedWeekRange,
   isDueAtInWeekStarting,
 } from "@/lib/today/week-board";
+import { Button } from "@/components/ui/Button";
 
 const TIME_ZONE = DEFAULT_WORKDAY_CONFIG.timezone;
 
@@ -29,6 +33,7 @@ interface WeekBoardTaskData extends TaskCardData {
   followUpAt: string | null;
   needsReview: boolean;
   dependencyBlocked: boolean;
+  isPersonal: boolean;
 }
 
 interface WeekBoardColumn {
@@ -45,6 +50,7 @@ interface WaitingTask {
   title: string;
   waitingOn: string;
   followUpAt: string | null;
+  isPersonal: boolean;
 }
 
 interface WeekBoardProps {
@@ -54,6 +60,7 @@ interface WeekBoardProps {
   syncedTaskIds: string[];
   updatedAt: string;
   hasError: boolean;
+  mode: TaskScope;
 }
 
 function taskToCardData(
@@ -89,19 +96,19 @@ function taskToWeekBoardData(
     projectName: task.project?.name ?? null,
     waitingOn: task.waiting_on,
     followUpAt: task.follow_up_at,
+    isPersonal: isPersonalTaskOrProject(task),
     needsReview: task.needs_review,
     dependencyBlocked: Boolean(task.dependency_blocked),
   };
 }
 
-function taskToWaitingTask(
-  task: Pick<TaskWithImplementation, "id" | "title" | "waiting_on" | "follow_up_at">
-): WaitingTask {
+function taskToWaitingTask(task: TaskWithImplementation): WaitingTask {
   return {
     id: task.id,
     title: task.title,
     waitingOn: task.waiting_on || "Unknown",
     followUpAt: task.follow_up_at,
+    isPersonal: isPersonalTaskOrProject(task),
   };
 }
 
@@ -298,41 +305,8 @@ function getBoardEdgeClass(task: WeekBoardTaskData): string {
   return "border-l-stroke";
 }
 
-async function markTaskDone(taskId: string): Promise<void> {
-  const response = await fetch(`/api/tasks/${taskId}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ status: "Done" }),
-  });
 
-  if (!response.ok) {
-    throw new Error("Failed to mark task as done");
-  }
-}
 
-async function setTaskPinned(taskId: string, pinned: boolean): Promise<void> {
-  const response = await fetch(`/api/tasks/${taskId}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ pinned }),
-  });
-
-  if (!response.ok) {
-    throw new Error("Failed to update pinned state");
-  }
-}
-
-async function setTaskDueAt(taskId: string, dueAt: string): Promise<void> {
-  const response = await fetch(`/api/tasks/${taskId}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ due_at: dueAt }),
-  });
-
-  if (!response.ok) {
-    throw new Error("Failed to move task");
-  }
-}
 
 function WeeklyTaskCard({
   task,
@@ -376,6 +350,7 @@ function WeeklyTaskCard({
         className="block w-full text-left focus:outline-none focus-visible:rounded-lg focus-visible:ring-2 focus-visible:ring-accent/50"
       >
         <h3 className="text-sm font-semibold leading-snug text-foreground">{task.title}</h3>
+        {task.isPersonal ? <PersonalBadge className="mt-1" /> : null}
         {(() => {
           const state = getTaskVisualState({
             status: task.status,
@@ -387,15 +362,12 @@ function WeeklyTaskCard({
       </button>
 
       <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
-        <button
-          type="button"
+        <Button variant="success" size="sm"
           onClick={onDone}
           disabled={completing}
-          aria-label="Mark task complete"
-          className="rounded-md border border-green-500/30 bg-green-500/10 px-3 py-1.5 text-xs font-semibold text-green-400 transition hover:border-green-500/50 hover:bg-green-500/20 disabled:opacity-50"
-        >
+          aria-label="Mark task complete">
           {moving ? "Moving..." : completing ? "Marking..." : "✓ Done"}
-        </button>
+        </Button>
         <button
           type="button"
           onClick={() => onTogglePinned(task.id, !task.pinned)}
@@ -481,7 +453,7 @@ function WeeklyBoardColumn({
         <div>
           <h3 className="text-sm font-semibold text-foreground">
             {column.title}
-            {column.isCurrentDay ? <span className="ml-2 text-[11px] font-bold text-red-200">Today</span> : null}
+            {column.isCurrentDay ? <span className="ml-2 text-xs font-bold text-red-200">Today</span> : null}
           </h3>
           <p className="text-xs text-muted-foreground">{column.subtitle}</p>
         </div>
@@ -579,13 +551,10 @@ function OverdueQueueSection({
           <span className="rounded-full border border-red-400/30 bg-red-500/10 px-2 py-0.5 text-xs font-bold text-red-100">
             {tasks.length}
           </span>
-          <button
-            type="button"
-            onClick={onHide}
-            className="rounded-md border border-red-400/30 bg-red-500/10 px-3 py-1.5 text-xs font-semibold text-red-100 transition hover:bg-red-500/20"
-          >
+          <Button variant="danger" size="sm"
+            onClick={onHide}>
             Hide
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -656,6 +625,7 @@ function WaitingReviewColumn({
               className="block w-full text-left focus:outline-none focus-visible:rounded-lg focus-visible:ring-2 focus-visible:ring-accent/50"
             >
               <h3 className="text-sm font-semibold leading-relaxed text-foreground">{item.title}</h3>
+              {item.isPersonal ? <PersonalBadge className="mt-1" /> : null}
               <p className="mt-2 text-xs text-muted-foreground">
                 Waiting on {item.waitingOn}
                 {item.followUpAt ? ` · follow up ${formatDate(item.followUpAt)}` : ""}
@@ -699,11 +669,13 @@ export function WeekBoard({
   syncedTaskIds,
   updatedAt,
   hasError,
+  mode,
 }: WeekBoardProps) {
   const router = useRouter();
   const { openTask, registerTasks } = useTodayModal();
   const { sprints } = useSprints();
 
+  const { completeTask, updateTask } = useTaskMutation();
   const [tasks, setTasks] = useState<TaskWithImplementation[]>(weekBoardTasks);
   const [waiting, setWaiting] = useState<TaskWithImplementation[]>(waitingTasks);
   const [completingIds, setCompletingIds] = useState<Set<string>>(new Set());
@@ -792,6 +764,7 @@ export function WeekBoard({
       week_start_date: selectedWeekStart,
       week_end_date: selectedWeekEnd,
       limit: "300",
+      scope: mode,
     });
 
     setWeekLoading(true);
@@ -821,7 +794,7 @@ export function WeekBoard({
       });
 
     return () => controller.abort();
-  }, [isCurrentWeek, selectedWeekEnd, selectedWeekStart]);
+  }, [isCurrentWeek, mode, selectedWeekEnd, selectedWeekStart]);
 
   useEffect(() => {
     if (!createDueDate || implementations.length > 0) {
@@ -881,28 +854,43 @@ export function WeekBoard({
     if (completingIds.has(taskId)) {
       return;
     }
-    if (!window.confirm("Mark as done?")) {
+
+    const task =
+      tasks.find((item) => item.id === taskId) ?? waiting.find((item) => item.id === taskId);
+    if (!task) {
       return;
     }
+    const wasWaiting = waiting.some((item) => item.id === taskId);
+
+    // Put the row back exactly where it came from, for both a failed request
+    // and an undo. Guarded against double-insert if the server refresh wins the race.
+    const restore = () => {
+      const insert = (prev: TaskWithImplementation[]) =>
+        prev.some((item) => item.id === taskId) ? prev : [task, ...prev];
+      if (wasWaiting) {
+        setWaiting(insert);
+      } else {
+        setTasks(insert);
+      }
+    };
 
     setCompletingIds((prev) => new Set(prev).add(taskId));
     setError(null);
-    // Optimistically drop the task from both lists.
-    setTasks((prev) => prev.filter((task) => task.id !== taskId));
-    setWaiting((prev) => prev.filter((task) => task.id !== taskId));
 
-    try {
-      await markTaskDone(taskId);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to complete task");
-    } finally {
-      setCompletingIds((prev) => {
-        const next = new Set(prev);
-        next.delete(taskId);
-        return next;
-      });
-      router.refresh();
-    }
+    await completeTask(task, {
+      onOptimistic: () => {
+        setTasks((prev) => prev.filter((item) => item.id !== taskId));
+        setWaiting((prev) => prev.filter((item) => item.id !== taskId));
+      },
+      onRollback: restore,
+      onUndo: restore,
+    });
+
+    setCompletingIds((prev) => {
+      const next = new Set(prev);
+      next.delete(taskId);
+      return next;
+    });
   }
 
   async function handleTogglePinned(taskId: string, nextPinned: boolean) {
@@ -912,20 +900,25 @@ export function WeekBoard({
 
     setPinningIds((prev) => new Set(prev).add(taskId));
     setError(null);
-    setTasks((prev) => prev.map((task) => (task.id === taskId ? { ...task, pinned: nextPinned } : task)));
 
-    try {
-      await setTaskPinned(taskId, nextPinned);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update pin state");
-    } finally {
-      setPinningIds((prev) => {
-        const next = new Set(prev);
-        next.delete(taskId);
-        return next;
-      });
-      router.refresh();
-    }
+    const applyPinned = (pinned: boolean) =>
+      setTasks((prev) => prev.map((task) => (task.id === taskId ? { ...task, pinned } : task)));
+
+    await updateTask(
+      taskId,
+      { pinned: nextPinned },
+      {
+        onOptimistic: () => applyPinned(nextPinned),
+        onRollback: () => applyPinned(!nextPinned),
+        failureMessage: "Couldn't update the pin state.",
+      }
+    );
+
+    setPinningIds((prev) => {
+      const next = new Set(prev);
+      next.delete(taskId);
+      return next;
+    });
   }
 
   async function handleMoveTask(taskId: string, dateOnly: string) {
@@ -943,24 +936,31 @@ export function WeekBoard({
       return;
     }
 
+    const previousDueAt = task.due_at;
+
     setMovingIds((prev) => new Set(prev).add(taskId));
     setError(null);
-    setTasks((prev) => prev.map((item) => (item.id === taskId ? { ...item, due_at: nextDueAt } : item)));
 
-    try {
-      await setTaskDueAt(taskId, nextDueAt);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to move task");
-    } finally {
-      setMovingIds((prev) => {
-        const next = new Set(prev);
-        next.delete(taskId);
-        return next;
-      });
-      setDraggingTaskId(null);
-      setDropTargetKey(null);
-      router.refresh();
-    }
+    const applyDueAt = (dueAt: string | null) =>
+      setTasks((prev) => prev.map((item) => (item.id === taskId ? { ...item, due_at: dueAt } : item)));
+
+    await updateTask(
+      taskId,
+      { due_at: nextDueAt },
+      {
+        onOptimistic: () => applyDueAt(nextDueAt),
+        onRollback: () => applyDueAt(previousDueAt),
+        failureMessage: "Couldn't move the task.",
+      }
+    );
+
+    setMovingIds((prev) => {
+      const next = new Set(prev);
+      next.delete(taskId);
+      return next;
+    });
+    setDraggingTaskId(null);
+    setDropTargetKey(null);
   }
 
   function handleOpenOverdueQueue() {
@@ -984,7 +984,7 @@ export function WeekBoard({
       <section className="space-y-4">
         <div className="flex flex-wrap gap-2">
           <article className="rounded-xl border border-stroke bg-panel px-3 py-2 shadow-sm">
-            <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-muted-foreground">
+            <p className="text-xs font-bold uppercase tracking-[0.12em] text-muted-foreground">
               {isCurrentWeek ? "This Week" : "Selected Week"}
             </p>
             <p className="mt-0.5 text-sm font-semibold text-foreground">
@@ -1003,16 +1003,16 @@ export function WeekBoard({
                 : "cursor-default border-red-500/20 bg-red-500/5 opacity-70"
             }`}
           >
-            <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-red-300">Overdue</p>
+            <p className="text-xs font-bold uppercase tracking-[0.12em] text-red-300">Overdue</p>
             <p className="mt-0.5 text-sm font-semibold text-red-200">
               {overdueCount} {overdueCount === 1 ? "task needs" : "tasks need"} attention
             </p>
-            <p className="mt-1 text-[11px] font-medium text-red-100/80">
+            <p className="mt-1 text-xs font-medium text-red-100/80">
               {overdueCount > 0 ? "Open overdue queue" : "Nothing overdue"}
             </p>
           </button>
           <article className="rounded-xl border border-accent/40 bg-accent-soft px-3 py-2 shadow-sm">
-            <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-red-200">
+            <p className="text-xs font-bold uppercase tracking-[0.12em] text-red-200">
               {isCurrentWeek ? "Due Today" : "Viewing"}
             </p>
             <p className="mt-0.5 text-sm font-semibold text-foreground">
@@ -1031,35 +1031,31 @@ export function WeekBoard({
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => setWeekOffset((current) => current - 1)}
               aria-label="View previous week"
-              className="rounded-lg border border-stroke bg-panel px-3 py-1.5 text-xs font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground"
             >
               ← Previous
-            </button>
+            </Button>
             {!isCurrentWeek ? (
-              <button
-                type="button"
-                onClick={() => setWeekOffset(0)}
-                className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white transition hover:opacity-90"
-              >
+              <Button variant="primary" size="sm" onClick={() => setWeekOffset(0)}>
                 Current week
-              </button>
+              </Button>
             ) : null}
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => setWeekOffset((current) => current + 1)}
               aria-label="View next week"
-              className="rounded-lg border border-stroke bg-panel px-3 py-1.5 text-xs font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground"
             >
               Next →
-            </button>
+            </Button>
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-2 text-[11px] font-semibold">
+        <div className="flex flex-wrap gap-2 text-xs font-semibold">
           <span className="rounded-full border border-red-500/30 bg-red-500/10 px-2 py-1 text-red-300">Red queue = overdue</span>
           <span className="rounded-full border border-accent/40 bg-accent-soft px-2 py-1 text-red-100">Accent = due today</span>
           <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-200">Amber = blocked / waiting / review</span>
@@ -1077,7 +1073,7 @@ export function WeekBoard({
           </p>
         ) : null}
 
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           {weekdayColumns.map((column) => (
             <WeeklyBoardColumn
               key={column.key}
@@ -1182,6 +1178,7 @@ export function WeekBoard({
             implementations={implementations}
             sprints={sprints}
             defaultDueDate={createDueDate}
+            defaultTags={mode === "personal" ? [PERSONAL_TAG] : []}
             initiallyOpen
             hideLauncher
             onTaskCreated={handleTaskCreated}

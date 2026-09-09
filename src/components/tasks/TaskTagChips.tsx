@@ -1,4 +1,5 @@
 "use client";
+import { badgeClasses } from "@/components/ui/Badge";
 
 interface TaskTagChipsProps {
   tags: string[];
@@ -16,14 +17,14 @@ export function TaskTagChips({ tags, onRemove, className = "" }: TaskTagChipsPro
       {tags.map((tag) => (
         <span
           key={tag}
-          className="inline-flex items-center gap-1 rounded-full border border-stroke bg-panel-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground"
+          className={badgeClasses({ size: "sm" })}
         >
           <span>{tag}</span>
           {onRemove ? (
             <button
               type="button"
               onClick={() => onRemove(tag)}
-              className="rounded-full px-1 text-[10px] leading-none text-muted-foreground transition hover:bg-panel hover:text-foreground"
+              className="rounded-full px-1 text-xs leading-none text-muted-foreground transition hover:bg-panel hover:text-foreground"
               aria-label={`Remove tag ${tag}`}
             >
               x

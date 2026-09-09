@@ -1,11 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import { getTaskVisualState, TaskStateBadge } from "@/components/tasks/task-state";
 import { useTodayModal } from "@/components/today/TodayModalProvider";
+import { useTaskMutation } from "@/hooks/useTaskMutation";
 import type { TaskWithImplementation } from "@/types/database";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
+import { isPersonalTaskOrProject } from "@/lib/personal-exclusion";
+import { PersonalBadge } from "@/components/ui/PersonalBadge";
+import { Button } from "@/components/ui/Button";
 
 const TIME_ZONE = DEFAULT_WORKDAY_CONFIG.timezone;
 
@@ -77,11 +80,19 @@ function getDueLabel(dueAt: string | null, nowMs: number): string | null {
 }
 
 export function NowPanel({ topTasks, nextMeeting, syncNote }: NowPanelProps) {
-  const router = useRouter();
   const { openTask, registerTasks } = useTodayModal();
+  const { completeTask } = useTaskMutation();
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [completingIds, setCompletingIds] = useState<Set<string>>(new Set());
-  const [error, setError] = useState<string | null>(null);
+  // Locally hidden while the server re-streams; cleared whenever fresh props land
+  // so a task restored elsewhere (the detail modal) isn't filtered out forever.
+  const [completedIds, setCompletedIds] = useState<Set<string>>(new Set());
+  const [renderedTasks, setRenderedTasks] = useState(topTasks);
+
+  if (renderedTasks !== topTasks) {
+    setRenderedTasks(topTasks);
+    setCompletedIds(new Set());
+  }
 
   useEffect(() => {
     const intervalId = window.setInterval(() => setNowMs(Date.now()), 30_000);
@@ -92,35 +103,43 @@ export function NowPanel({ topTasks, nextMeeting, syncNote }: NowPanelProps) {
     registerTasks(topTasks);
   }, [topTasks, registerTasks]);
 
+  const visibleTasks = useMemo(
+    () => topTasks.filter((task) => !completedIds.has(task.id)),
+    [topTasks, completedIds]
+  );
+
   async function handleDone(task: TaskWithImplementation) {
     if (completingIds.has(task.id)) {
       return;
     }
-    if (!window.confirm("Mark as done?")) {
-      return;
-    }
 
     setCompletingIds((prev) => new Set(prev).add(task.id));
-    setError(null);
-    try {
-      const response = await fetch(`/api/tasks/${task.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "Done" }),
-      });
-      if (!response.ok) {
-        throw new Error("Failed to mark task as done");
-      }
-      router.refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to complete task");
-    } finally {
-      setCompletingIds((prev) => {
-        const next = new Set(prev);
-        next.delete(task.id);
-        return next;
-      });
-    }
+    // Hide immediately, matching the week board. The streamed props are the
+    // source of truth, so a failed request just needs the id released again.
+    setCompletedIds((prev) => new Set(prev).add(task.id));
+
+    await completeTask(task, {
+      onRollback: () => {
+        setCompletedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(task.id);
+          return next;
+        });
+      },
+      onUndo: () => {
+        setCompletedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(task.id);
+          return next;
+        });
+      },
+    });
+
+    setCompletingIds((prev) => {
+      const next = new Set(prev);
+      next.delete(task.id);
+      return next;
+    });
   }
 
   return (
@@ -128,12 +147,12 @@ export function NowPanel({ topTasks, nextMeeting, syncNote }: NowPanelProps) {
       <h2 className="text-xl font-bold text-foreground">Now</h2>
 
       <div className="mt-4 rounded-xl border border-stroke bg-panel-muted/60 p-4">
-        <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-muted-foreground">Next meeting</p>
+        <p className="text-xs font-bold uppercase tracking-[0.12em] text-muted-foreground">Next meeting</p>
         {nextMeeting ? (
           <div className="mt-1.5">
             <div className="flex items-baseline justify-between gap-3">
               <p className="text-lg font-semibold text-foreground">{nextMeeting.title || "Untitled meeting"}</p>
-              <span className="shrink-0 text-sm font-semibold text-accent">{formatCountdown(nextMeeting, nowMs)}</span>
+              <span className="shrink-0 text-sm font-semibold text-accent-text">{formatCountdown(nextMeeting, nowMs)}</span>
             </div>
             <p className="mt-1 text-sm text-muted-foreground">{formatTimeRange(nextMeeting.start, nextMeeting.end)}</p>
             {nextMeeting.location ? (
@@ -146,19 +165,14 @@ export function NowPanel({ topTasks, nextMeeting, syncNote }: NowPanelProps) {
       </div>
 
       <div className="mt-5">
-        <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-muted-foreground">Top priorities</p>
-        {error ? (
-          <p className="mt-2 rounded-md border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-            {error}
-          </p>
-        ) : null}
-        {topTasks.length === 0 ? (
+        <p className="text-xs font-bold uppercase tracking-[0.12em] text-muted-foreground">Top priorities</p>
+        {visibleTasks.length === 0 ? (
           <p className="mt-2 rounded-lg border border-dashed border-stroke bg-panel/50 px-3 py-5 text-center text-sm text-muted-foreground">
             No planned or in-progress tasks. Enjoy the clear runway.
           </p>
         ) : (
           <ul className="mt-2 space-y-2.5">
-            {topTasks.map((task) => {
+            {visibleTasks.map((task) => {
               const dueLabel = getDueLabel(task.due_at, nowMs);
               const state = getTaskVisualState({
                 status: task.status,
@@ -179,9 +193,10 @@ export function NowPanel({ topTasks, nextMeeting, syncNote }: NowPanelProps) {
                     >
                       <p className="text-base font-semibold leading-snug text-foreground">{task.title}</p>
                       <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                        {isPersonalTaskOrProject(task) ? <PersonalBadge /> : null}
                         {dueLabel ? (
                           <span
-                            className={`inline-flex rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                            className={`inline-flex rounded px-1.5 py-0.5 text-xs font-semibold ${
                               dueLabel === "Overdue"
                                 ? "bg-red-500/15 text-red-300"
                                 : dueLabel === "Due today"
@@ -194,19 +209,16 @@ export function NowPanel({ topTasks, nextMeeting, syncNote }: NowPanelProps) {
                         ) : null}
                         {state ? <TaskStateBadge state={state} /> : null}
                         {task.implementation?.name ? (
-                          <span className="text-[11px] text-muted-foreground">{task.implementation.name}</span>
+                          <span className="text-xs text-muted-foreground">{task.implementation.name}</span>
                         ) : null}
                       </div>
                     </button>
-                    <button
-                      type="button"
+                    <Button variant="success" size="sm" className="shrink-0"
                       onClick={() => handleDone(task)}
                       disabled={completing}
-                      aria-label="Mark task complete"
-                      className="shrink-0 rounded-md border border-green-500/30 bg-green-500/10 px-3 py-1.5 text-xs font-semibold text-green-400 transition hover:border-green-500/50 hover:bg-green-500/20 disabled:opacity-50"
-                    >
+                      aria-label="Mark task complete">
                       {completing ? "Marking..." : "✓ Done"}
-                    </button>
+                    </Button>
                   </div>
                 </li>
               );

@@ -9,8 +9,10 @@ import { WeekBoardSection } from "@/components/today/sections/WeekBoardSection";
 import { WaitingStripSection } from "@/components/today/sections/WaitingStripSection";
 import { TodayHeaderChips } from "@/components/today/sections/TodayHeaderChips";
 import { SectionSkeleton } from "@/components/today/sections/SectionSkeleton";
+import { TodayModeToggle } from "@/components/today/TodayModeToggle";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
+import { normalizeTaskScope } from "@/lib/personal-exclusion";
 
 export const dynamic = "force-dynamic";
 
@@ -23,7 +25,16 @@ function HeaderChipsFallback() {
   );
 }
 
-export default async function TodayPage() {
+export default async function TodayPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ mode?: string | string[] }>;
+}) {
+  const resolvedSearchParams = await searchParams;
+  const mode = normalizeTaskScope(
+    Array.isArray(resolvedSearchParams.mode) ? resolvedSearchParams.mode[0] : resolvedSearchParams.mode,
+    "work"
+  );
   const supabase = await createSupabaseServerClient();
   const {
     data: { user },
@@ -49,7 +60,7 @@ export default async function TodayPage() {
         actions={
           <div className="flex items-center gap-3">
             <Suspense fallback={<HeaderChipsFallback />}>
-              <TodayHeaderChips userId={user.id} />
+              <TodayHeaderChips userId={user.id} mode={mode} />
             </Suspense>
             <p className="rounded-full bg-panel-muted px-3 py-1.5 text-sm font-medium text-muted-foreground">
               {today}
@@ -58,24 +69,26 @@ export default async function TodayPage() {
         }
       />
 
+      <TodayModeToggle mode={mode} />
+
       <FocusStatusBar />
 
-      <TodayModalProvider>
+      <TodayModalProvider key={mode}>
         <section className="grid gap-4 xl:grid-cols-[2fr_1fr]">
           <Suspense fallback={<SectionSkeleton label="now panel" />}>
-            <NowPanelSection userId={user.id} />
+            <NowPanelSection userId={user.id} mode={mode} />
           </Suspense>
           <Suspense fallback={<SectionSkeleton label="today's meetings" />}>
-            <MeetingsSection userId={user.id} />
+            <MeetingsSection userId={user.id} mode={mode} />
           </Suspense>
         </section>
 
         <Suspense fallback={<SectionSkeleton label="weekly board" />}>
-          <WeekBoardSection userId={user.id} />
+          <WeekBoardSection userId={user.id} mode={mode} />
         </Suspense>
 
         <Suspense fallback={null}>
-          <WaitingStripSection userId={user.id} />
+          <WaitingStripSection userId={user.id} mode={mode} />
         </Suspense>
       </TodayModalProvider>
     </div>

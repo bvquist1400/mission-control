@@ -300,7 +300,7 @@ export interface LlmExtraction {
 // Task with joined implementation and project data (from API responses)
 export interface TaskWithImplementation extends Task {
   implementation: { id: string; name: string; phase?: ImplPhase; rag?: RagStatus } | null;
-  project: { id: string; name: string; stage?: ProjectStage; rag?: RagStatus } | null;
+  project: { id: string; name: string; stage?: ProjectStage; rag?: RagStatus; tags?: string[] } | null;
   sprint: { id: string; name: string; start_date: string; end_date: string; theme?: string | null } | null;
   section_name?: string | null;
   dependencies?: TaskDependencySummary[];
@@ -507,6 +507,7 @@ export interface ProjectUpdatePayload {
   target_date?: string | null;
   servicenow_spm_id?: string | null;
   status_summary?: string;
+  tags?: string[];
   portfolio_rank?: number;
 }
 

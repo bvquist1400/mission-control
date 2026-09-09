@@ -2,6 +2,8 @@
 
 import { useRef, useState, type KeyboardEvent } from "react";
 import type { TaskChecklistItem } from "@/types/database";
+import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Field";
 
 interface ChecklistSectionProps {
   checklist: TaskChecklistItem[];
@@ -38,7 +40,7 @@ function ChecklistAddForm({ onAdd }: { onAdd: (text: string) => void }) {
       <button
         type="button"
         onClick={() => setIsAdding(true)}
-        className="text-xs font-semibold text-accent hover:underline"
+        className="text-xs font-semibold text-accent-text hover:underline"
       >
         + Add item
       </button>
@@ -47,48 +49,26 @@ function ChecklistAddForm({ onAdd }: { onAdd: (text: string) => void }) {
 
   return (
     <div className="flex gap-2">
-      <input
+      <Input
+        size="sm"
+        className="flex-1"
         type="text"
         value={text}
         onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && text.trim()) {
-            onAdd(text);
-            setText("");
-            setIsAdding(false);
-          }
-          if (e.key === "Escape") {
-            setText("");
-            setIsAdding(false);
-          }
-        }}
+        onKeyDown={(e) => { if (e.key === "Enter" && text.trim()) { onAdd(text); setText(""); setIsAdding(false); } if (e.key === "Escape") { setText(""); setIsAdding(false); } }}
         placeholder="New checklist item..."
         autoFocus
-        className="flex-1 rounded-lg border border-stroke bg-panel px-2 py-1.5 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
       />
-      <button
-        type="button"
-        onClick={() => {
-          if (text.trim()) {
-            onAdd(text);
-            setText("");
-            setIsAdding(false);
-          }
-        }}
-        className="rounded-lg bg-accent px-2 py-1.5 text-xs font-semibold text-white transition hover:opacity-90"
+      <Button
+        variant="primary"
+        size="sm"
+        onClick={() => { if (text.trim()) { onAdd(text); setText(""); setIsAdding(false); } }}
       >
         Add
-      </button>
-      <button
-        type="button"
-        onClick={() => {
-          setText("");
-          setIsAdding(false);
-        }}
-        className="rounded-lg px-2 py-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground"
-      >
+      </Button>
+      <Button variant="ghost" size="sm" onClick={() => { setText(""); setIsAdding(false); }}>
         Cancel
-      </button>
+      </Button>
     </div>
   );
 }
@@ -256,26 +236,20 @@ export function ChecklistSection({ checklist, onToggle, onAdd, onUpdate, onDelet
         />
 
         {isEditing ? (
-          <input
+          <Input
+            size="sm"
+            className="flex-1"
             type="text"
             value={editText}
             onChange={(event) => setEditText(event.target.value)}
             onKeyDown={(event) => handleEditKeyDown(event, item)}
-            onBlur={() => {
-              if (skipBlurSaveRef.current) {
-                skipBlurSaveRef.current = false;
-                return;
-              }
-
-              saveEdit(item);
-            }}
+            onBlur={() => { if (skipBlurSaveRef.current) { skipBlurSaveRef.current = false; return; } saveEdit(item); }}
             autoFocus
-            className="flex-1 rounded-md border border-stroke bg-panel px-2 py-1.5 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
           />
         ) : (
           <div className="flex min-w-0 flex-1 items-start gap-2">
             {parsed.badgeLabel ? (
-              <span className="mt-0.5 inline-flex rounded-full bg-panel px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <span className="mt-0.5 inline-flex rounded-full bg-panel px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 {parsed.badgeLabel}
               </span>
             ) : null}

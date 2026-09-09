@@ -4,6 +4,9 @@ import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { ErrorBanner } from "@/components/ui/ErrorBanner";
 import { StakeholderCard, type StakeholderCardData } from "@/components/stakeholders/StakeholderCard";
+import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Field";
+import { cardClasses } from "@/components/ui/Card";
 
 interface StakeholderDraft {
   name: string;
@@ -148,29 +151,25 @@ export default function StakeholdersPage() {
 
       {/* Search */}
       <div className="flex items-center gap-3">
-        <input
+        <Input
+          className="max-w-md"
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search by name, email, or organization..."
-          className="w-full max-w-md rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
         />
       </div>
 
       {/* Create Form */}
-      <section className="rounded-card border border-stroke bg-panel p-4 shadow-sm">
+      <section className={cardClasses({ padding: "sm" })}>
         <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="text-sm font-semibold text-foreground">Add Stakeholder</h2>
             <p className="text-xs text-muted-foreground">Track a person you work with.</p>
           </div>
-          <button
-            type="button"
-            onClick={() => setIsCreateOpen((open) => !open)}
-            className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white transition hover:opacity-90"
-          >
+          <Button variant="primary" size="sm" onClick={() => setIsCreateOpen((open) => !open)}>
             {isCreateOpen ? "Close" : "+ New"}
-          </button>
+          </Button>
         </div>
 
         {isCreateOpen && (
@@ -178,69 +177,57 @@ export default function StakeholdersPage() {
             <div className="grid gap-3 md:grid-cols-2">
               <label className="block space-y-1">
                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Name *</span>
-                <input
+                <Input
                   value={draft.name}
                   onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
                   placeholder="e.g., Jane Smith"
                   disabled={isCreating}
-                  className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                 />
               </label>
 
               <label className="block space-y-1">
                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Email</span>
-                <input
+                <Input
                   type="email"
                   value={draft.email}
                   onChange={(e) => setDraft((d) => ({ ...d, email: e.target.value }))}
                   placeholder="e.g., jane@acme.com"
                   disabled={isCreating}
-                  className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                 />
               </label>
 
               <label className="block space-y-1">
                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Role</span>
-                <input
+                <Input
                   value={draft.role}
                   onChange={(e) => setDraft((d) => ({ ...d, role: e.target.value }))}
                   placeholder="e.g., Product Owner, VP Engineering"
                   disabled={isCreating}
-                  className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                 />
               </label>
 
               <label className="block space-y-1">
                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Organization</span>
-                <input
+                <Input
                   value={draft.organization}
                   onChange={(e) => setDraft((d) => ({ ...d, organization: e.target.value }))}
                   placeholder="e.g., Acme Corp, Internal - Finance"
                   disabled={isCreating}
-                  className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                 />
               </label>
             </div>
 
             <div className="flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setDraft(INITIAL_DRAFT);
-                  setIsCreateOpen(false);
-                }}
+              <Button
+                variant="secondary"
+                onClick={() => { setDraft(INITIAL_DRAFT); setIsCreateOpen(false); }}
                 disabled={isCreating}
-                className="rounded-lg border border-stroke bg-panel px-3 py-2 text-sm font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={isCreating}
-                className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-              >
+              </Button>
+              <Button variant="primary" type="submit" disabled={isCreating}>
                 {isCreating ? "Creating..." : "Create"}
-              </button>
+              </Button>
             </div>
           </form>
         )}

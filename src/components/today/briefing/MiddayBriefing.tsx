@@ -57,7 +57,7 @@ export function MiddayBriefing({ calendar, tasks, progress }: MiddayBriefingProp
               ({tasks.remaining.length} tasks)
             </span>
             {sundownCount > 0 && (
-              <span className="ml-2 rounded bg-orange-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-orange-300">
+              <span className="ml-2 rounded bg-orange-500/15 px-1.5 py-0.5 text-xs font-semibold text-orange-300">
                 {sundownCount} Sundown
               </span>
             )}
@@ -72,12 +72,12 @@ export function MiddayBriefing({ calendar, tasks, progress }: MiddayBriefingProp
                   <span className="text-muted-foreground">&#9744;</span>
                   <Link
                     href={`/tasks/${task.id}`}
-                    className="flex-1 truncate text-sm text-foreground hover:text-accent"
+                    className="flex-1 truncate text-sm text-foreground hover:text-accent-text"
                   >
                     {task.title}
                   </Link>
                   {task.implementation_phase === "Sundown" && (
-                    <span className="rounded bg-orange-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-orange-300">
+                    <span className="rounded bg-orange-500/15 px-1.5 py-0.5 text-xs font-semibold text-orange-300">
                       Sundown
                     </span>
                   )}
@@ -114,7 +114,7 @@ export function MiddayBriefing({ calendar, tasks, progress }: MiddayBriefingProp
               <span className="text-xs text-muted-foreground">Next: </span>
               <Link
                 href={`/tasks/${nextTask.id}`}
-                className="text-sm font-medium text-accent hover:underline"
+                className="text-sm font-medium text-accent-text hover:underline"
               >
                 {nextTask.title}
               </Link>

@@ -5,6 +5,9 @@ import { useEffect, useState } from "react";
 import { formatDateOnly, localDateString } from "@/components/utils/dates";
 import { getSprintWeekRange, isDateOnlyAfter } from "@/lib/date-only";
 import type { ImplementationSummary, SprintWithImplementation } from "@/types/database";
+import { Button } from "@/components/ui/Button";
+import { Input, Select } from "@/components/ui/Field";
+import { cardClasses } from "@/components/ui/Card";
 
 interface SprintDraft {
   name: string;
@@ -176,68 +179,60 @@ export function SprintsList() {
   return (
     <div className="space-y-6">
       {error ? (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
+        <div className="rounded-lg border border-danger-border bg-danger-soft px-4 py-3 text-sm text-danger" role="alert">
           {error}
         </div>
       ) : null}
 
-      <section className="rounded-card border border-stroke bg-panel p-4 shadow-sm">
+      <section className={cardClasses({ padding: "sm" })}>
         <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="text-sm font-semibold text-foreground">Create Sprint</h2>
             <p className="text-xs text-muted-foreground">Define any sprint date range and optional focus app.</p>
           </div>
-          <button
-            type="button"
-            onClick={() => setIsCreateOpen((open) => !open)}
-            className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white transition hover:opacity-90"
-          >
+          <Button variant="primary" size="sm" onClick={() => setIsCreateOpen((open) => !open)}>
             {isCreateOpen ? "Close" : "+ New Sprint"}
-          </button>
+          </Button>
         </div>
 
         {isCreateOpen ? (
           <form onSubmit={handleCreate} className="mt-4 grid gap-3 border-t border-stroke pt-4 md:grid-cols-2 xl:grid-cols-5">
             <label className="space-y-1 xl:col-span-2">
               <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Name</span>
-              <input
+              <Input
                 value={draft.name}
                 onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
                 placeholder="Sprint 11: Stakeholder cleanup"
                 disabled={isCreating}
-                className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
               />
             </label>
 
             <label className="space-y-1">
               <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Start</span>
-              <input
+              <Input
                 type="date"
                 value={draft.startDate}
                 onChange={(event) => setDraft((current) => ({ ...current, startDate: event.target.value }))}
                 disabled={isCreating}
-                className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
               />
             </label>
 
             <label className="space-y-1">
               <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">End</span>
-              <input
+              <Input
                 type="date"
                 value={draft.endDate}
                 onChange={(event) => setDraft((current) => ({ ...current, endDate: event.target.value }))}
                 disabled={isCreating}
-                className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
               />
             </label>
 
             <label className="space-y-1">
               <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Focus App</span>
-              <select
+              <Select
                 value={draft.focusImplementationId}
                 onChange={(event) => setDraft((current) => ({ ...current, focusImplementationId: event.target.value }))}
                 disabled={isCreating}
-                className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <option value="">Optional</option>
                 {implementations.map((implementation) => (
@@ -245,17 +240,16 @@ export function SprintsList() {
                     {implementation.name}
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
 
             <label className="space-y-1 md:col-span-2 xl:col-span-4">
               <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Theme</span>
-              <input
+              <Input
                 value={draft.theme}
                 onChange={(event) => setDraft((current) => ({ ...current, theme: event.target.value }))}
                 placeholder="Optional sprint theme or rallying goal"
                 disabled={isCreating}
-                className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
               />
             </label>
 
@@ -264,13 +258,9 @@ export function SprintsList() {
             </p>
 
             <div className="flex items-end justify-end gap-2 xl:col-span-1">
-              <button
-                type="submit"
-                disabled={isCreating}
-                className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-              >
+              <Button variant="primary" type="submit" disabled={isCreating}>
                 {isCreating ? "Creating..." : "Create"}
-              </button>
+              </Button>
             </div>
           </form>
         ) : null}
@@ -296,7 +286,7 @@ export function SprintsList() {
             const state = getSprintState(sprint.start_date, sprint.end_date);
 
             return (
-              <article key={sprint.id} className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+              <article key={sprint.id} className={cardClasses()}>
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h2 className="text-lg font-semibold text-foreground">{sprint.name}</h2>
@@ -309,11 +299,11 @@ export function SprintsList() {
 
                 <dl className="mt-4 grid gap-3 sm:grid-cols-2">
                   <div className="rounded-lg bg-panel-muted p-3">
-                    <dt className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Theme</dt>
+                    <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Theme</dt>
                     <dd className="mt-1 text-sm text-foreground">{sprint.theme || "Not set"}</dd>
                   </div>
                   <div className="rounded-lg bg-panel-muted p-3">
-                    <dt className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Focus App</dt>
+                    <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Focus App</dt>
                     <dd className="mt-1 text-sm text-foreground">{sprint.focus_implementation?.name || "Not set"}</dd>
                   </div>
                 </dl>

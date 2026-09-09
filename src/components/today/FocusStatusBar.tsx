@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { badgeClasses } from "@/components/ui/Badge";
 
 interface FocusDirective {
   id: string;
@@ -45,7 +46,10 @@ export function FocusStatusBar({ onDirectiveChange }: FocusStatusBarProps) {
     loadFocus();
   }, []);
 
-  if (loading) {
+  // Render nothing unless a directive is actually set. Focus is driven by the
+  // MCP tools (set_focus / clear_focus) rather than day-to-day UI, so an
+  // always-present "No active focus" row is just a permanently empty shelf.
+  if (loading || !active) {
     return null;
   }
 
@@ -53,20 +57,14 @@ export function FocusStatusBar({ onDirectiveChange }: FocusStatusBarProps) {
     <div className="flex items-center justify-between rounded-lg border border-stroke bg-panel-muted px-4 py-2">
       <div className="flex items-center gap-3">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Focus</span>
-        {active ? (
-          <span className="text-sm font-medium text-foreground">{active.text}</span>
-        ) : (
-          <span className="text-sm text-muted-foreground">No active focus</span>
-        )}
-        {active && (
-          <span className="rounded-full bg-accent/20 px-2 py-0.5 text-xs font-medium text-accent">
-            {active.strength}
-          </span>
-        )}
+        <span className="text-sm font-medium text-foreground">{active.text}</span>
+        <span className={badgeClasses({ tone: "accent", size: "sm" })}>
+          {active.strength}
+        </span>
       </div>
       <Link
         href="/focus"
-        className="text-xs font-medium text-accent hover:underline"
+        className="text-xs font-medium text-accent-text hover:underline"
       >
         Manage
       </Link>

@@ -4,6 +4,8 @@ import { useEffect } from "react";
 import { useTodayModal } from "@/components/today/TodayModalProvider";
 import type { BlockedReason, TaskWithImplementation } from "@/types/database";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
+import { isPersonalTaskOrProject } from "@/lib/personal-exclusion";
+import { PersonalBadge } from "@/components/ui/PersonalBadge";
 
 const TIME_ZONE = DEFAULT_WORKDAY_CONFIG.timezone;
 
@@ -50,11 +52,12 @@ export function WaitingStrip({ tasks }: { tasks: TaskWithImplementation[] }) {
               className="group inline-flex max-w-full items-center gap-2 rounded-full border border-l-4 border-stroke border-l-amber-400 bg-panel px-3 py-1.5 text-left shadow-sm transition hover:border-foreground/20 hover:bg-panel-muted/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
             >
               <span className="truncate text-sm font-medium text-foreground">{task.title}</span>
-              <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 ring-1 ring-inset ring-amber-500/30">
+              {isPersonalTaskOrProject(task) ? <PersonalBadge className="shrink-0" /> : null}
+              <span className="shrink-0 rounded px-1.5 py-0.5 text-xs font-semibold text-amber-300 ring-1 ring-inset ring-amber-500/30">
                 {reasonLabel ?? "Waiting"}
               </span>
               {followUp ? (
-                <span className="shrink-0 text-[11px] text-muted-foreground">follow up {followUp}</span>
+                <span className="shrink-0 text-xs text-muted-foreground">follow up {followUp}</span>
               ) : null}
             </button>
           );

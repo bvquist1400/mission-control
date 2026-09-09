@@ -16,6 +16,8 @@ import {
 } from "@/components/notes/note-panel-utils";
 import { formatRelativeDate } from "@/components/utils/dates";
 import type { CreateNotePayload, NoteType, NoteWithDetails, UpdateNotePayload } from "@/types/database";
+import { Button } from "@/components/ui/Button";
+import { badgeClasses } from "@/components/ui/Badge";
 
 type NoteDialogMode = "create" | "edit" | "view";
 
@@ -132,15 +134,15 @@ export function NoteEditorDialog({
               </div>
 
               <div className="flex flex-wrap gap-2">
-                <span className="rounded-full border border-stroke bg-panel px-3 py-1 text-xs font-semibold text-muted-foreground">
+                <span className={badgeClasses()}>
                   {formatNoteTypeLabel(note.note_type)}
                 </span>
                 {note.pinned ? (
-                  <span className="rounded-full border border-accent/20 bg-accent/10 px-3 py-1 text-xs font-semibold text-accent">
+                  <span className={badgeClasses({ tone: "accent" })}>
                     Pinned
                   </span>
                 ) : null}
-                <span className="rounded-full border border-stroke bg-panel px-3 py-1 text-xs font-semibold text-muted-foreground">
+                <span className={badgeClasses()}>
                   {note.status === "archived" ? "Archived" : "Active"}
                 </span>
               </div>
@@ -194,7 +196,7 @@ export function NoteEditorDialog({
                       <div key={decision.id} className="rounded-xl border border-stroke bg-panel-muted px-3 py-3">
                         <div className="flex flex-wrap items-center gap-2">
                           <p className="text-sm font-medium text-foreground">{decision.title}</p>
-                          <span className="rounded-full bg-panel px-2 py-1 text-[11px] text-muted-foreground">
+                          <span className={badgeClasses({ size: "sm" })}>
                             {formatDecisionStatusLabel(decision.decision_status)}
                           </span>
                         </div>
@@ -208,21 +210,13 @@ export function NoteEditorDialog({
           </div>
 
           <div className="flex items-center justify-end gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-lg border border-stroke bg-panel px-3 py-2 text-sm font-medium text-muted-foreground transition hover:text-foreground"
-            >
+            <Button variant="secondary" onClick={onClose}>
               Close
-            </button>
+            </Button>
             {onEditRequest ? (
-              <button
-                type="button"
-                onClick={() => onEditRequest(note)}
-                className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:opacity-90"
-              >
+              <Button variant="primary" onClick={() => onEditRequest(note)}>
                 Edit Note
-              </button>
+              </Button>
             ) : null}
           </div>
         </div>
@@ -316,7 +310,7 @@ export function NoteEditorDialog({
                     checked={pinned}
                     onChange={(event) => setPinned(event.target.checked)}
                     disabled={isSaving}
-                    className="h-4 w-4 rounded border-stroke text-accent focus:ring-accent/30"
+                    className="h-4 w-4 rounded border-stroke text-accent-text focus:ring-accent/30"
                   />
                 </label>
               </div>
@@ -330,27 +324,18 @@ export function NoteEditorDialog({
         </div>
 
         {error && (
-          <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+          <p className="rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
             {error}
           </p>
         )}
 
         <div className="flex items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isSaving}
-            className="rounded-lg border border-stroke bg-panel px-3 py-2 text-sm font-medium text-muted-foreground transition hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
-          >
+          <Button variant="secondary" onClick={onClose} disabled={isSaving}>
             Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={isSaving || !title.trim()}
-            className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-          >
+          </Button>
+          <Button variant="primary" type="submit" disabled={isSaving || !title.trim()}>
             {isSaving ? "Saving..." : isEditing ? "Save changes" : "Create note"}
-          </button>
+          </Button>
         </div>
       </form>
     </Modal>

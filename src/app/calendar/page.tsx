@@ -7,6 +7,10 @@ import { PageHeader } from '@/components/layout/PageHeader';
 import { localDateString } from '@/components/utils/dates';
 import { encodeCalendarEventIdentity } from '@/lib/calendar-event-identity';
 import { addDateOnlyDays } from '@/lib/date-only';
+import { Button } from "@/components/ui/Button";
+import { Textarea } from "@/components/ui/Field";
+import { cardClasses } from "@/components/ui/Card";
+import { badgeClasses } from "@/components/ui/Badge";
 
 interface CalendarEvent {
   source: 'local' | 'ical' | 'graph';
@@ -376,13 +380,9 @@ export default function CalendarPage() {
         title="Calendar"
         description={subtitle}
         actions={
-          <button
-            type="button"
-            onClick={() => setDaysAhead((current) => (current === 7 ? 14 : 7))}
-            className="rounded-lg border border-stroke bg-panel px-3 py-1.5 text-sm font-medium text-muted-foreground transition hover:bg-panel-muted hover:text-foreground"
-          >
+          <Button variant="secondary" onClick={() => setDaysAhead((current) => (current === 7 ? 14 : 7))}>
             {daysAhead === 7 ? 'Show 14 Days' : 'Show 7 Days'}
-          </button>
+          </Button>
         }
       />
 
@@ -402,13 +402,13 @@ export default function CalendarPage() {
       ) : null}
 
       {error ? (
-        <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+        <p className="rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
           {error}
         </p>
       ) : null}
 
       {data?.warning ? (
-        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800" role="alert">
+        <p className="rounded-lg border border-warning-border bg-warning-soft px-3 py-2 text-sm text-warning" role="alert">
           {data.warning}
         </p>
       ) : null}
@@ -440,7 +440,7 @@ export default function CalendarPage() {
             </article>
           </section>
 
-          <section className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+          <section className={cardClasses()}>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">History</p>
@@ -451,23 +451,23 @@ export default function CalendarPage() {
               </div>
               {historyData ? (
                 <div className="flex items-center gap-2">
-                  <span className="rounded-full border border-stroke bg-panel-muted px-3 py-1 text-xs font-medium text-muted-foreground">
+                  <span className={badgeClasses()}>
                     {historyData.events.length} saved
                   </span>
-                  <button
-                    type="button"
+                  <Button
+                    variant="secondary"
+                    size="sm"
                     onClick={() => setShowHistory((current) => !current)}
                     disabled={historyData.events.length === 0}
-                    className="rounded-lg border border-stroke bg-panel px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-panel-muted disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {showHistory ? 'Hide history' : `Show history (${historyData.events.length})`}
-                  </button>
+                  </Button>
                 </div>
               ) : null}
             </div>
 
             {historyError ? (
-              <p className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+              <p className="mt-4 rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
                 {historyError}
               </p>
             ) : null}
@@ -495,7 +495,7 @@ export default function CalendarPage() {
                           <div className="min-w-0 flex-1">
                             <Link
                               href={getMeetingDetailHref(event)}
-                              className="text-base font-semibold text-foreground transition hover:text-accent hover:underline"
+                              className="text-base font-semibold text-foreground transition hover:text-accent-text hover:underline"
                             >
                               {event.title || 'Untitled meeting'}
                             </Link>
@@ -509,22 +509,22 @@ export default function CalendarPage() {
                           </div>
 
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className="rounded-full border border-stroke bg-panel px-3 py-1 text-xs font-medium text-foreground">
+                            <span className={badgeClasses()}>
                               {event.note_count} {event.note_count === 1 ? 'note' : 'notes'}
                             </span>
                             {event.has_meeting_context ? (
-                              <span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-300">
+                              <span className={badgeClasses({ tone: "success" })}>
                                 Saved context
                               </span>
                             ) : null}
                             {event.note_count > 0 ? (
-                              <button
-                                type="button"
+                              <Button
+                                variant="secondary"
+                                size="sm"
                                 onClick={() => setExpandedHistoryNotesKey((current) => (current === eventKey ? null : eventKey))}
-                                className="rounded-lg border border-stroke px-2.5 py-1 text-xs font-semibold text-foreground transition hover:bg-panel"
                               >
                                 {notesButtonLabel}
-                              </button>
+                              </Button>
                             ) : null}
                             <Link
                               href={getMeetingDetailHref(event)}
@@ -571,7 +571,7 @@ export default function CalendarPage() {
             </div>
           ) : (
             <section className="overflow-x-auto rounded-card border border-stroke bg-panel">
-              <p className="border-b border-stroke px-4 py-2 text-[11px] font-medium text-muted-foreground sm:hidden">
+              <p className="border-b border-stroke px-4 py-2 text-xs font-medium text-muted-foreground sm:hidden">
                 Scroll for more &rarr;
               </p>
               <div className="grid min-w-[1050px] grid-cols-[1.35fr_1fr_1fr_1.4fr_1.8fr] gap-3 border-b border-stroke px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -605,7 +605,7 @@ export default function CalendarPage() {
                       <div>
                         <Link
                           href={getMeetingDetailHref(event)}
-                          className="font-semibold text-foreground transition hover:text-accent hover:underline"
+                          className="font-semibold text-foreground transition hover:text-accent-text hover:underline"
                         >
                           {event.title}
                         </Link>
@@ -621,62 +621,44 @@ export default function CalendarPage() {
                       <span className="text-muted-foreground">{event.body_scrubbed_preview ?? '—'}</span>
 
                       <div className="space-y-2">
-                        <textarea
+                        <Textarea
                           value={draft}
                           onChange={(inputEvent) => {
                             const nextValue = inputEvent.target.value;
-                            setContextDrafts((current) => ({
-                              ...current,
-                              [eventKey]: nextValue,
-                            }));
-                            setContextErrors((current) => {
-                              if (!(eventKey in current)) {
-                                return current;
-                              }
-                              const next = { ...current };
-                              delete next[eventKey];
-                              return next;
-                            });
-                            setSavedContextAt((current) => {
-                              if (!(eventKey in current)) {
-                                return current;
-                              }
-                              const next = { ...current };
-                              delete next[eventKey];
-                              return next;
-                            });
+                            setContextDrafts((current) => ({ ...current, [eventKey]: nextValue, }));
+                            setContextErrors((current) => { if (!(eventKey in current)) { return current; } const next = { ...current }; delete next[eventKey]; return next; });
+                            setSavedContextAt((current) => { if (!(eventKey in current)) { return current; } const next = { ...current }; delete next[eventKey]; return next; });
                           }}
                           placeholder="Paste agenda details, goals, risks, or prep asks for planner ranking."
                           rows={3}
                           maxLength={MAX_MEETING_CONTEXT_CHARS}
-                          className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-xs text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
                         />
 
                         <div className="flex items-center justify-between gap-2">
-                          <span className="text-[11px] text-muted-foreground">
+                          <span className="text-xs text-muted-foreground">
                             {draft.length}/{MAX_MEETING_CONTEXT_CHARS}
                             {savedAt && !isDirty ? ` • Saved ${formatDateTime(savedAt)}` : ''}
                           </span>
                           <div className="flex items-center gap-2">
-                            <button
-                              type="button"
+                            <Button
+                              variant="secondary"
+                              size="sm"
                               onClick={() => setExpandedNotesKey((current) => (current === eventKey ? null : eventKey))}
-                              className="rounded-lg border border-stroke px-2.5 py-1 text-xs font-semibold text-foreground transition hover:bg-panel-muted"
                             >
                               {notesButtonLabel}
-                            </button>
-                            <button
-                              type="button"
+                            </Button>
+                            <Button
+                              variant="secondary"
+                              size="sm"
                               onClick={() => void saveMeetingContext(event)}
                               disabled={isSaving || !isDirty}
-                              className="rounded-lg border border-stroke px-2.5 py-1 text-xs font-semibold text-foreground transition hover:bg-panel-muted disabled:cursor-not-allowed disabled:opacity-60"
                             >
                               {isSaving ? 'Saving...' : 'Save'}
-                            </button>
+                            </Button>
                           </div>
                         </div>
 
-                        {errorMessage ? <p className="text-xs text-red-600">{errorMessage}</p> : null}
+                        {errorMessage ? <p className="text-xs text-danger">{errorMessage}</p> : null}
                       </div>
 
                       {notesOpen ? (

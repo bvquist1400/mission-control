@@ -12,6 +12,7 @@ import type {
   DailyBriefStatusUpdateRecommendation,
 } from "@/lib/briefing";
 import type { LlmModelCatalogRow, LlmRunMeta } from "@/lib/llm";
+import { Button } from "@/components/ui/Button";
 
 interface DailyBriefingProps {
   replanSignal?: number;
@@ -394,28 +395,16 @@ export function DailyBriefing({ replanSignal }: DailyBriefingProps) {
         <div className="flex flex-wrap items-center gap-3">
           {/* Mode selector */}
           <div className="flex items-center gap-1 rounded-lg border border-stroke bg-panel-muted p-1">
-            <button
-              onClick={() => handleModeChange("auto")}
-              className={`rounded px-3 py-1 text-xs font-medium transition ${
-                isAutoMode
-                  ? "bg-accent text-white"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
+            <Button variant="toggle" size="sm" active={isAutoMode}
+              onClick={() => handleModeChange("auto")}>
               Auto
-            </button>
+            </Button>
             {(["morning", "midday", "eod"] as BriefingMode[]).map((mode) => (
-              <button
+              <Button variant="toggle" size="sm" active={!isAutoMode && activeMode === mode}
                 key={mode}
-                onClick={() => handleModeChange(mode)}
-                className={`rounded px-3 py-1 text-xs font-medium transition ${
-                  !isAutoMode && activeMode === mode
-                    ? "bg-accent text-white"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
+                onClick={() => handleModeChange(mode)}>
                 {modeLabels[mode]}
-              </button>
+              </Button>
             ))}
           </div>
 
@@ -423,7 +412,7 @@ export function DailyBriefing({ replanSignal }: DailyBriefingProps) {
           <button
             onClick={handleRefresh}
             disabled={loading}
-            className="rounded-lg border border-stroke p-2 text-muted-foreground transition hover:border-accent hover:text-accent disabled:opacity-50"
+            className="rounded-lg border border-stroke p-2 text-muted-foreground transition hover:border-accent hover:text-accent-text disabled:opacity-50"
             title="Refresh"
           >
             <svg
@@ -444,7 +433,7 @@ export function DailyBriefing({ replanSignal }: DailyBriefingProps) {
           <button
             onClick={handleGenerateNarrative}
             disabled={!data || narrativeLoading}
-            className="rounded-lg border border-stroke px-3 py-2 text-xs font-medium text-muted-foreground transition hover:border-accent hover:text-accent disabled:opacity-50"
+            className="rounded-lg border border-stroke px-3 py-2 text-xs font-medium text-muted-foreground transition hover:border-accent hover:text-accent-text disabled:opacity-50"
             title="Generate narrative summary"
           >
             {narrativeLoading ? "Generating..." : "Generate Summary"}

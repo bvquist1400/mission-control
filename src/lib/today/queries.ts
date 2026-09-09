@@ -10,6 +10,10 @@ import {
 import { buildDayWindows, calculateBusyStats } from '@/lib/calendar';
 import { DEFAULT_WORKDAY_CONFIG } from '@/lib/workday';
 import { calculateSprintProgressMetrics } from '@/lib/today/sprint-progress';
+import {
+  filterTasksByScope,
+  type TaskScope,
+} from '@/lib/personal-exclusion';
 import type { TaskWithImplementation } from '@/types/database';
 
 /**
@@ -92,22 +96,28 @@ function getDateInTimeZone(date: Date, timeZone: string): string {
  */
 export async function queryTopThreeTasks(
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  scope: TaskScope = 'all'
 ): Promise<TaskWithImplementation[]> {
-  const { data, error } = await supabase
+  let query = supabase
     .from('tasks')
     .select(TASK_WITH_RELATIONS_SELECT)
     .eq('user_id', userId)
     .in('status', ['Planned', 'In Progress'])
     .order('priority_score', { ascending: false })
-    .order('id', { ascending: true })
-    .limit(3);
+    .order('id', { ascending: true });
+
+  query = query.limit(scope === 'all' ? 3 : 1000);
+  const { data, error } = await query;
 
   if (error) {
     throw error;
   }
 
-  return normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>);
+  return filterTasksByScope(
+    normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>),
+    scope
+  ).slice(0, 3);
 }
 
 /**
@@ -119,7 +129,8 @@ export async function queryWeeklyBoardTasks(
   userId: string,
   weekEnd: Date,
   limit = 200,
-  weekStart?: Date
+  weekStart?: Date,
+  scope: TaskScope = 'all'
 ): Promise<TaskWithImplementation[]> {
   let query = supabase
     .from('tasks')
@@ -138,13 +149,17 @@ export async function queryWeeklyBoardTasks(
     query = query.gte('due_at', weekStart.toISOString());
   }
 
-  const { data, error } = await query.limit(limit);
+  const fetchLimit = scope === 'all' ? limit : 1000;
+  const { data, error } = await query.limit(fetchLimit);
 
   if (error) {
     throw error;
   }
 
-  return normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>);
+  return filterTasksByScope(
+    normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>),
+    scope
+  ).slice(0, limit);
 }
 
 /**
@@ -154,7 +169,8 @@ export async function queryWeeklyBoardTasks(
 export async function queryWaitingSummary(
   supabase: SupabaseClient,
   userId: string,
-  limit = 30
+  limit = 30,
+  scope: TaskScope = 'all'
 ): Promise<WaitingSummaryTask[]> {
   const { data, error } = await supabase
     .from('tasks')
@@ -163,13 +179,16 @@ export async function queryWaitingSummary(
     .eq('status', 'Blocked/Waiting')
     .order('priority_score', { ascending: false })
     .order('id', { ascending: true })
-    .limit(limit);
+    .limit(scope === 'all' ? limit : 1000);
 
   if (error) {
     throw error;
   }
 
-  const tasks = normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>);
+  const tasks = filterTasksByScope(
+    normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>),
+    scope
+  ).slice(0, limit);
   const taskIds = tasks.map((task) => task.id);
   const dependencyMap = await fetchTaskDependencySummaries(supabase, userId, taskIds);
 
@@ -189,8 +208,30 @@ export async function queryWaitingSummary(
  */
 export async function queryNeedsReviewCount(
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  scope: TaskScope = 'all'
 ): Promise<number> {
+  if (scope !== 'all') {
+    const { data, error } = await supabase
+      .from('tasks')
+      .select('id, tags, project:projects(tags)')
+      .eq('user_id', userId)
+      .eq('needs_review', true)
+      .neq('status', 'Done')
+      .neq('status', 'Parked')
+      .neq('status', 'Missed')
+      .limit(1000);
+
+    if (error) {
+      throw error;
+    }
+
+    return filterTasksByScope(
+      (data || []) as Array<{ id: string; tags?: string[] | null; project?: unknown }>,
+      scope
+    ).length;
+  }
+
   const { count, error } = await supabase
     .from('tasks')
     .select('id', { count: 'exact', head: true })
@@ -258,7 +299,8 @@ export async function queryCurrentSprintChip(
   supabase: SupabaseClient,
   userId: string,
   timeZone: string = DEFAULT_WORKDAY_CONFIG.timezone,
-  holidaySet?: ReadonlySet<string>
+  holidaySet?: ReadonlySet<string>,
+  scope: TaskScope = 'all'
 ): Promise<CurrentSprintChip | null> {
   const todayDate = getDateInTimeZone(new Date(), timeZone);
 
@@ -285,7 +327,7 @@ export async function queryCurrentSprintChip(
 
   const { data: taskRows, error: tasksError } = await supabase
     .from('tasks')
-    .select('status')
+    .select('status, tags, project:projects(tags)')
     .eq('user_id', userId)
     .eq('sprint_id', sprint.id);
 
@@ -293,7 +335,10 @@ export async function queryCurrentSprintChip(
     throw tasksError;
   }
 
-  const rows = (taskRows || []) as Array<{ status: string }>;
+  const rows = filterTasksByScope(
+    (taskRows || []) as Array<{ status: string; tags?: string[] | null; project?: unknown }>,
+    scope
+  );
   const totalTasks = rows.length;
   const completedTasks = rows.filter((row) => row.status === 'Done').length;
 

@@ -11,6 +11,8 @@ import type {
   TaskType,
   TaskWithImplementation,
 } from "@/types/database";
+import { Button } from "@/components/ui/Button";
+import { fieldClasses } from "@/components/ui/Field";
 
 interface TaskCreateFormProps {
   implementations: ImplementationSummary[];
@@ -18,6 +20,7 @@ interface TaskCreateFormProps {
   onTaskCreated?: (task: TaskWithImplementation) => void;
   defaultNeedsReview?: boolean;
   defaultDueDate?: string;
+  defaultTags?: string[];
   initiallyOpen?: boolean;
   hideLauncher?: boolean;
   onRequestClose?: () => void;
@@ -83,12 +86,13 @@ function findAdminImplId(implementations: ImplementationSummary[]): string {
 function createInitialDraft(
   defaultNeedsReview: boolean,
   implementations: ImplementationSummary[],
-  defaultDueDate = ""
+  defaultDueDate = "",
+  personal = false
 ): TaskDraft {
   return {
     title: "",
     description: "",
-    implementationId: findAdminImplId(implementations),
+    implementationId: personal ? "" : findAdminImplId(implementations),
     sprintId: "",
     estimatedMinutes: 30,
     dueDate: defaultDueDate,
@@ -201,8 +205,8 @@ function extractBulletedTaskCandidates(rawText: string): string[] {
   return candidates.map(cleanText).filter(Boolean);
 }
 
-const inputClass = "w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60";
-const selectClass = "w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60";
+const inputClass = fieldClasses();
+const selectClass = fieldClasses({ size: "sm" });
 const labelClass = "text-xs font-semibold uppercase tracking-wide text-muted-foreground";
 
 export function TaskCreateForm({
@@ -211,6 +215,7 @@ export function TaskCreateForm({
   onTaskCreated,
   defaultNeedsReview = false,
   defaultDueDate = "",
+  defaultTags = [],
   initiallyOpen = false,
   hideLauncher = false,
   onRequestClose,
@@ -218,7 +223,10 @@ export function TaskCreateForm({
   const [isOpen, setIsOpen] = useState(initiallyOpen);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useState<TaskDraft>(() => createInitialDraft(defaultNeedsReview, implementations, defaultDueDate));
+  const personalByDefault = defaultTags.includes("personal");
+  const [draft, setDraft] = useState<TaskDraft>(() =>
+    createInitialDraft(defaultNeedsReview, implementations, defaultDueDate, personalByDefault)
+  );
 
   // Quick Capture state
   const [activeTab, setActiveTab] = useState<ActiveTab>("manual");
@@ -258,6 +266,7 @@ export function TaskCreateForm({
           needs_review: draft.sendToTriage,
           task_type: draft.taskType,
           waiting_on: draft.status === "Blocked/Waiting" ? draft.waitingOn.trim() : null,
+          tags: defaultTags,
           source_type: "Manual",
         }),
       });
@@ -269,7 +278,7 @@ export function TaskCreateForm({
 
       const createdTask = (await response.json()) as TaskWithImplementation;
       onTaskCreated?.(createdTask);
-      setDraft(createInitialDraft(defaultNeedsReview, implementations, defaultDueDate));
+      setDraft(createInitialDraft(defaultNeedsReview, implementations, defaultDueDate, personalByDefault));
       setIsOpen(false);
       onRequestClose?.();
     } catch (createError) {
@@ -277,7 +286,7 @@ export function TaskCreateForm({
     } finally {
       setIsCreating(false);
     }
-  }, [draft, defaultDueDate, defaultNeedsReview, implementations, onRequestClose, onTaskCreated]);
+  }, [defaultDueDate, defaultNeedsReview, defaultTags, draft, implementations, onRequestClose, onTaskCreated, personalByDefault]);
 
   async function createTask(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -382,6 +391,7 @@ export function TaskCreateForm({
         waiting_on: qcDraft.status === "Blocked/Waiting" ? qcDraft.waitingOn.trim() : null,
         source_type: "Manual",
         pinned_excerpt: qcDraft.pinnedExcerpt || null,
+        tags: defaultTags,
       };
 
       if (qcDraft.createAsSeparateTasks) {
@@ -435,7 +445,7 @@ export function TaskCreateForm({
     } finally {
       setIsCreating(false);
     }
-  }, [defaultDueDate, onRequestClose, qcDraft, onTaskCreated]);
+  }, [defaultDueDate, defaultTags, onRequestClose, qcDraft, onTaskCreated]);
 
   // Keyboard shortcut: Cmd+Enter or Ctrl+Enter to submit
   useEffect(() => {
@@ -465,20 +475,18 @@ export function TaskCreateForm({
           <h2 className="text-sm font-semibold text-foreground">Add Task</h2>
           <p className="text-xs text-muted-foreground">Create a manual task or paste text for AI-assisted extraction.</p>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            setError(null);
-            setIsOpen((open) => !open);
-          }}
-          className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white transition hover:opacity-90"
-        >
+        <Button variant="primary" size="sm" onClick={() => { setError(null); setIsOpen((open) => !open); }}>
           {isOpen ? "Close" : "+ New Task"}
-        </button>
+        </Button>
       </div> : null}
 
       {isOpen ? (
         <div className={hideLauncher ? "" : "mt-4 border-t border-stroke pt-4"}>
+          {personalByDefault ? (
+            <p className="mb-4 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-sm font-medium text-violet-200">
+              This task will be created as personal.
+            </p>
+          ) : null}
           {/* Tab bar */}
           <div className="mb-4 flex gap-1 rounded-lg border border-stroke bg-panel-muted p-1">
             <button
@@ -659,7 +667,7 @@ export function TaskCreateForm({
               </div>
 
               {error && (
-                <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-400" role="alert">
+                <p className="rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
                   {error}
                 </p>
               )}
@@ -669,26 +677,21 @@ export function TaskCreateForm({
                   Press <kbd className="rounded border border-stroke bg-panel-muted px-1.5 py-0.5 font-mono text-xs">⌘</kbd>+<kbd className="rounded border border-stroke bg-panel-muted px-1.5 py-0.5 font-mono text-xs">Enter</kbd> to submit
                 </span>
                 <div className="flex items-center gap-2">
-                  <button
-                    type="button"
+                  <Button
+                    variant="secondary"
                     onClick={() => {
                       setError(null);
-                      setDraft(createInitialDraft(defaultNeedsReview, implementations, defaultDueDate));
+                      setDraft(createInitialDraft(defaultNeedsReview, implementations, defaultDueDate, personalByDefault));
                       setIsOpen(false);
                       onRequestClose?.();
                     }}
                     disabled={isCreating}
-                    className="rounded-lg border border-stroke bg-panel px-3 py-2 text-sm font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isCreating}
-                    className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
+                  </Button>
+                  <Button variant="primary" type="submit" disabled={isCreating}>
                     {isCreating ? "Creating..." : "Create Task"}
-                  </button>
+                  </Button>
                 </div>
               </div>
             </form>
@@ -703,24 +706,26 @@ export function TaskCreateForm({
                 <textarea
                   value={qcDraft.rawText}
                   onChange={(e) => setQcDraft((c) => ({ ...c, rawText: e.target.value }))}
-                  placeholder="Paste an IT ticket, email body, Slack message, or any work description..."
+                  placeholder={personalByDefault
+                    ? "Paste a note, message, or description of what you need to do..."
+                    : "Paste an IT ticket, email body, Slack message, or any work description..."}
                   rows={5}
                   disabled={parseState === "parsing" || isCreating}
                   className={`${inputClass} resize-y`}
                 />
               </label>
 
-              <button
-                type="button"
+              <Button
+                variant="primary"
+                size="lg"
                 onClick={handleParse}
                 disabled={!qcDraft.rawText.trim() || parseState === "parsing" || isCreating}
-                className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {parseState === "parsing" ? "Parsing..." : parseState === "parsed" ? "Re-parse" : "Parse"}
-              </button>
+              </Button>
 
               {parseError && (
-                <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-400" role="alert">
+                <p className="rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
                   {parseError}
                 </p>
               )}
@@ -970,7 +975,7 @@ export function TaskCreateForm({
                   </div>
 
                   {error && (
-                    <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-400" role="alert">
+                    <p className="rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
                       {error}
                     </p>
                   )}
@@ -980,8 +985,8 @@ export function TaskCreateForm({
                       Press <kbd className="rounded border border-stroke bg-panel-muted px-1.5 py-0.5 font-mono text-xs">⌘</kbd>+<kbd className="rounded border border-stroke bg-panel-muted px-1.5 py-0.5 font-mono text-xs">Enter</kbd> to submit
                     </span>
                     <div className="flex items-center gap-2">
-                      <button
-                        type="button"
+                      <Button
+                        variant="secondary"
                         onClick={() => {
                           setError(null);
                           setQcDraft(createInitialQcDraft(defaultDueDate));
@@ -990,22 +995,16 @@ export function TaskCreateForm({
                           onRequestClose?.();
                         }}
                         disabled={isCreating}
-                        className="rounded-lg border border-stroke bg-panel px-3 py-2 text-sm font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         Cancel
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleQcSubmit}
-                        disabled={isCreating}
-                        className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
+                      </Button>
+                      <Button variant="primary" onClick={handleQcSubmit} disabled={isCreating}>
                         {isCreating
                           ? "Creating..."
                           : qcDraft.createAsSeparateTasks
                             ? `Create ${splitTaskCount} Tasks`
                             : "Create Task"}
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 </>

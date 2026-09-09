@@ -12,6 +12,7 @@ import {
 import { useSprints } from "@/hooks/useSprints";
 import { RECURRENCE_FREQUENCIES } from "@/lib/recurrence";
 import { mergeTaskTags } from "@/lib/task-tags";
+import { hasPersonalTag, setPersonalTag } from "@/lib/personal-exclusion";
 import type {
   TaskRecurrenceFrequency,
   TaskType,
@@ -20,10 +21,13 @@ import type {
   ImplementationSummary,
   ProjectSection,
 } from "@/types/database";
+import { Button } from "@/components/ui/Button";
+import { Input, Select, Textarea } from "@/components/ui/Field";
 
 interface ProjectOption {
   id: string;
   name: string;
+  tags: string[];
 }
 
 export const TASK_TYPE_OPTIONS: Array<{ value: TaskType; label: string }> = [
@@ -137,6 +141,9 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
   const [projectSections, setProjectSections] = useState<ProjectSection[]>([]);
   const [loadingAssignments, setLoadingAssignments] = useState(true);
   const [loadingProjectSections, setLoadingProjectSections] = useState(false);
+  const selectedProject = projects.find((project) => project.id === projectIdDraft)
+    ?? (projectIdDraft === task.project_id ? task.project : null);
+  const inheritsPersonalFromProject = hasPersonalTag(selectedProject);
 
   useEffect(() => {
     const nextDueDateDraft = timestampToLocalDateInputValue(task.due_at);
@@ -161,6 +168,8 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
     setRecurrenceDayOfWeekDraft(String(nextRecurrence?.day_of_week ?? getDayOfWeekFromDate(nextDefaultRecurrenceDate)));
     setRecurrenceDayOfMonthDraft(String(nextRecurrence?.day_of_month ?? getDayOfMonthFromDate(nextDefaultRecurrenceDate)));
     setRecurrenceError(null);
+    // The persisted version is the intentional reset boundary for this draft.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task.id, task.updated_at]);
 
   useEffect(() => {
@@ -444,47 +453,37 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
     <section className="rounded-lg border border-stroke bg-panel p-3">
       <div className="flex items-center justify-between gap-3">
         <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Task Details</h4>
-        <button
-          type="button"
-          onClick={saveEdits}
-          disabled={!canSave}
-          className="rounded border border-stroke bg-panel px-2.5 py-1 text-xs font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-        >
+        <Button variant="secondary" size="sm" onClick={saveEdits} disabled={!canSave}>
           {isSaving ? "Saving..." : "Save edits"}
-        </button>
+        </Button>
       </div>
 
       <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-8">
         <label className="space-y-1">
           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Title</span>
-          <input
+          <Input
+            size="sm"
             value={titleDraft}
             onChange={(event) => setTitleDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                saveEdits();
-              }
-            }}
+            onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); saveEdits(); } }}
             disabled={isMutating}
-            className="w-full rounded border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
           />
         </label>
 
         <label className="space-y-1">
           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Task Type</span>
-          <select
+          <Select
+            size="sm"
             value={taskTypeDraft}
             onChange={(event) => setTaskTypeDraft(event.target.value as TaskType)}
             disabled={isMutating}
-            className="w-full rounded border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
           >
             {TASK_TYPE_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
 
         <label className="space-y-1">
@@ -510,11 +509,11 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
             aria-invalid={dueDateResolution.error ? "true" : "false"}
             className={`w-full rounded border bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition disabled:cursor-not-allowed disabled:opacity-60 ${
               dueDateResolution.error
-                ? "border-red-300 focus:border-red-400"
+                ? "border-danger-border focus:border-red-400"
                 : "border-stroke focus:border-accent"
             }`}
           />
-          <p className={`text-[11px] ${dueDateResolution.error ? "text-red-600" : "text-muted-foreground"}`}>
+          <p className={`text-xs ${dueDateResolution.error ? "text-danger" : "text-muted-foreground"}`}>
             {dueDateResolution.error
               ?? (dueDateResolution.dateOnly
                 ? `Resolves to ${formatDateOnly(dueDateResolution.dateOnly)}.`
@@ -524,28 +523,23 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
 
         <label className="space-y-1">
           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Waiting On</span>
-          <input
+          <Input
+            size="sm"
             value={waitingOnDraft}
             onChange={(event) => setWaitingOnDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                saveEdits();
-              }
-            }}
+            onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); saveEdits(); } }}
             disabled={isMutating}
             placeholder={task.status === "Blocked/Waiting" ? "Who or what is this waiting on?" : "Optional context"}
-            className="w-full rounded border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
           />
         </label>
 
         <label className="space-y-1">
           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Application</span>
-          <select
+          <Select
+            size="sm"
             value={implementationIdDraft}
             onChange={(event) => setImplementationIdDraft(event.target.value)}
             disabled={isMutating || loadingAssignments}
-            className="w-full rounded border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
           >
             <option value="">{loadingAssignments ? "Loading..." : "Unassigned"}</option>
             {implementations.map((implementation) => (
@@ -553,22 +547,19 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
                 {implementation.name}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
 
         <label className="space-y-1">
           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Project</span>
-          <select
+          <Select
+            size="sm"
             value={projectIdDraft}
             onChange={(event) => {
               const nextProjectIdValue = event.target.value;
-              if (nextProjectIdValue !== projectIdDraft) {
-                setSectionIdDraft("");
-              }
-              setProjectIdDraft(nextProjectIdValue);
+              if (nextProjectIdValue !== projectIdDraft) { setSectionIdDraft(""); } setProjectIdDraft(nextProjectIdValue);
             }}
             disabled={isMutating || loadingAssignments}
-            className="w-full rounded border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
           >
             <option value="">{loadingAssignments ? "Loading..." : "Unassigned"}</option>
             {projects.map((project) => (
@@ -576,16 +567,16 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
                 {project.name}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
 
         <label className="space-y-1">
           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Section</span>
-          <select
+          <Select
+            size="sm"
             value={sectionIdDraft}
             onChange={(event) => setSectionIdDraft(event.target.value)}
             disabled={isMutating || !projectIdDraft || loadingProjectSections}
-            className="w-full rounded border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
           >
             <option value="">
               {!projectIdDraft
@@ -601,16 +592,16 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
                 {section.name}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
 
         <label className="space-y-1">
           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Sprint</span>
-          <select
+          <Select
+            size="sm"
             value={sprintIdDraft}
             onChange={(event) => setSprintIdDraft(event.target.value)}
             disabled={isMutating}
-            className="w-full rounded border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
           >
             <option value="">{sprintsLoading ? "Loading..." : "Unassigned"}</option>
             {sprints.map((sprint) => (
@@ -618,13 +609,30 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
                 {sprint.name}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
       </div>
 
-      <label className="mt-3 block space-y-1">
+      <div className="mt-3 block space-y-1">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Tags</span>
         <div className="rounded border border-stroke bg-panel p-2">
+          <div className="mb-2 rounded-md border border-violet-500/20 bg-violet-500/5 px-2.5 py-2 text-sm text-foreground">
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={inheritsPersonalFromProject || hasPersonalTag({ tags: tagsDraft })}
+                onChange={(event) => setTagsDraft((current) => setPersonalTag(current, event.target.checked))}
+                disabled={isMutating || inheritsPersonalFromProject}
+                className="h-4 w-4 accent-violet-500"
+              />
+              <span className="font-medium">Personal task</span>
+            </label>
+            {inheritsPersonalFromProject ? (
+              <p className="ml-6 mt-0.5 text-xs text-muted-foreground">
+                Inherited from {selectedProject?.name}. Change the project to make this a work task.
+              </p>
+            ) : null}
+          </div>
           {tagsDraft.length > 0 ? (
             <TaskTagChips tags={tagsDraft} onRemove={removeTag} className="mb-2" />
           ) : null}
@@ -643,18 +651,19 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
             className="w-full border-0 bg-transparent px-0 py-0 text-sm text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
           />
         </div>
-        <p className="text-[11px] text-muted-foreground">Tags are stored in lowercase. Click Save edits to persist tag changes.</p>
-      </label>
+        <p className="text-xs text-muted-foreground">Tags are stored in lowercase. Click Save edits to persist tag changes.</p>
+      </div>
 
       <label className="mt-3 block space-y-1">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Description</span>
-        <textarea
+        <Textarea
+          size="sm"
+          className="resize-y"
           value={descriptionDraft}
           onChange={(event) => setDescriptionDraft(event.target.value)}
           disabled={isMutating}
           rows={4}
           placeholder="Add context, links, and detailed notes for this task..."
-          className="w-full resize-y rounded border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
         />
       </label>
 
@@ -662,24 +671,24 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recurrence</h5>
-            <p className="mt-1 text-[11px] text-muted-foreground">
+            <p className="mt-1 text-xs text-muted-foreground">
               Configure repeating tasks here. Templates are flagged separately from the parking lot and removed from sprint assignment.
             </p>
           </div>
           {!generatedInstance ? (
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => void saveRecurrence()}
               disabled={!canSaveRecurrence}
-              className="rounded border border-stroke bg-panel px-2.5 py-1 text-xs font-semibold text-muted-foreground transition hover:bg-panel hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isUpdatingRecurrence ? "Saving..." : "Save recurrence"}
-            </button>
+            </Button>
           ) : null}
         </div>
 
         {generatedInstance ? (
-          <p className="mt-3 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <p className="mt-3 rounded border border-warning-border bg-warning-soft px-3 py-2 text-xs text-warning">
             This task was generated from a recurring template. Open the template task to change its recurrence pattern.
           </p>
         ) : (
@@ -710,18 +719,18 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <label className="space-y-1">
                   <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Frequency</span>
-                  <select
+                  <Select
+                    size="sm"
                     value={recurrenceFrequencyDraft}
                     onChange={(event) => setRecurrenceFrequencyDraft(event.target.value as TaskRecurrenceFrequency)}
                     disabled={isMutating}
-                    className="w-full rounded border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {RECURRENCE_FREQUENCIES.map((frequency) => (
                       <option key={frequency} value={frequency}>
                         {RECURRENCE_LABELS[frequency]}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </label>
 
                 <label className="space-y-1">
@@ -733,10 +742,10 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
                     disabled={isMutating}
                     aria-invalid={!recurrenceNextDueValid ? "true" : "false"}
                     className={`w-full rounded border bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition disabled:cursor-not-allowed disabled:opacity-60 ${
-                      recurrenceNextDueValid ? "border-stroke focus:border-accent" : "border-red-300 focus:border-red-400"
+                      recurrenceNextDueValid ? "border-stroke focus:border-accent" : "border-danger-border focus:border-red-400"
                     }`}
                   />
-                  <p className={`text-[11px] ${recurrenceNextDueValid ? "text-muted-foreground" : "text-red-600"}`}>
+                  <p className={`text-xs ${recurrenceNextDueValid ? "text-muted-foreground" : "text-danger"}`}>
                     {normalizedRecurrenceNextDue.length > 0 && recurrenceNextDueValid
                       ? `Template schedules from ${formatDateOnly(normalizedRecurrenceNextDue)}.`
                       : "Leave blank to infer from the task due date or today."}
@@ -746,18 +755,18 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
                 {recurrenceNeedsDayOfWeek ? (
                   <label className="space-y-1">
                     <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Weekday</span>
-                    <select
+                    <Select
+                      size="sm"
                       value={recurrenceDayOfWeekDraft}
                       onChange={(event) => setRecurrenceDayOfWeekDraft(event.target.value)}
                       disabled={isMutating}
-                      className="w-full rounded border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {WEEKDAY_OPTIONS.map((option) => (
                         <option key={option.value} value={option.value}>
                           {option.label}
                         </option>
                       ))}
-                    </select>
+                    </Select>
                   </label>
                 ) : null}
 
@@ -773,7 +782,7 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
                       disabled={isMutating}
                       aria-invalid={!recurrenceDayOfMonthValid ? "true" : "false"}
                       className={`w-full rounded border bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition disabled:cursor-not-allowed disabled:opacity-60 ${
-                        recurrenceDayOfMonthValid ? "border-stroke focus:border-accent" : "border-red-300 focus:border-red-400"
+                        recurrenceDayOfMonthValid ? "border-stroke focus:border-accent" : "border-danger-border focus:border-red-400"
                       }`}
                     />
                   </label>
@@ -790,7 +799,7 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
                   />
                   <span>
                     <span className="block font-medium">Auto-mark prior occurrence missed</span>
-                    <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                    <span className="mt-0.5 block text-xs text-muted-foreground">
                       When the series advances, older unfinished occurrences become Missed instead of accumulating in the active backlog.
                     </span>
                   </span>
@@ -807,7 +816,7 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
         )}
 
         {recurrenceError ? (
-          <p className="mt-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700" role="alert">
+          <p className="mt-3 rounded border border-danger-border bg-danger-soft px-3 py-2 text-xs text-danger" role="alert">
             {recurrenceError}
           </p>
         ) : null}

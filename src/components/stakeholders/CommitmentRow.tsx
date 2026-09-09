@@ -43,7 +43,7 @@ export function CommitmentRow({ commitment, onStatusChange }: CommitmentRowProps
         isDone || isDropped
           ? "border-stroke/50 bg-panel-muted/50 opacity-60"
           : isOverdue
-            ? "border-red-200 bg-red-50/50"
+            ? "border-danger-border bg-danger-soft"
             : "border-stroke bg-panel"
       }`}
     >
@@ -73,16 +73,16 @@ export function CommitmentRow({ commitment, onStatusChange }: CommitmentRowProps
             {commitment.title}
           </span>
           <span
-            className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+            className={`shrink-0 rounded-full px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide ${
               commitment.direction === "ours"
-                ? "bg-blue-100 text-blue-700"
+                ? "bg-blue-500/15 text-blue-300"
                 : "bg-purple-100 text-purple-700"
             }`}
           >
             {commitment.direction === "ours" ? "We owe" : "They owe"}
           </span>
           {isDropped && (
-            <span className="shrink-0 rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-600">
+            <span className="shrink-0 rounded-full bg-panel-muted px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               Dropped
             </span>
           )}
@@ -90,7 +90,7 @@ export function CommitmentRow({ commitment, onStatusChange }: CommitmentRowProps
 
         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
           {commitment.due_at && (
-            <span className={isOverdue ? "font-semibold text-red-600" : ""}>
+            <span className={isOverdue ? "font-semibold text-danger" : ""}>
               Due {formatRelativeDate(commitment.due_at)}
             </span>
           )}

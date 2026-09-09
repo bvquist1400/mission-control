@@ -12,7 +12,7 @@ export function ErrorBanner({ message }: { message: string }) {
   const authRequired = isAuthRequiredError(message);
 
   return (
-    <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
+    <div className="rounded-lg border border-danger-border bg-danger-soft px-4 py-3 text-sm text-danger" role="alert">
       <p>{message}</p>
       {authRequired && (
         <Link

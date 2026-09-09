@@ -71,12 +71,37 @@ External task identities are stored as the nullable pair `external_source_system
 
 ### UI Conventions
 
+**Use the UI primitives — do not hand-style controls.**
+
+| Need | Use |
+|---|---|
+| Button | `<Button variant="primary\|secondary\|danger\|success\|ghost" size="icon\|xs\|sm\|md\|lg">` (`@/components/ui/Button`) |
+| Segmented control / tab strip | `<Button variant="toggle" active={isSelected}>` — sets `aria-pressed` for you |
+| Icon-only button | `<Button variant="ghost" size="icon" aria-label="…">` |
+| Button-styled `<Link>`/anchor | `buttonClasses({ variant, size })` |
+| Text field / textarea / select | `<Input>` / `<Textarea>` / `<Select>` with `tone="default\|muted"`, `size="xs\|sm\|md"` (`@/components/ui/Field`) |
+| Card surface | `className={cardClasses({ padding: "sm\|md\|lg" })}`, or `<Card as="section">` (`@/components/ui/Card`) |
+| Pill / badge | `className={badgeClasses({ tone, size })}`, or `<Badge>` (`@/components/ui/Badge`) |
+| Transient feedback | `useToast()` (`@/components/ui/Toast`) — never `window.confirm`/`alert` |
+| Task mutation | `useTaskMutation()` (`@/hooks/useTaskMutation`) — owns optimism, rollback, undo |
+
+Controls with behaviour (Button, Input) are components; pure-styling primitives (Card, Badge) expose class functions so the semantic element stays the author's choice.
+
+- A primitive's `className` prop is for **layout only** (margin, width, flex/grid placement). Every colour, padding, radius and font size is a `variant`/`size`/`tone` prop — there is no `tailwind-merge`, so a conflicting utility passed via `className` will not reliably win. Add a variant instead.
 - Theme tokens: `text-foreground`, `text-muted-foreground`, `bg-panel`, `bg-panel-muted`, `border-stroke`, `rounded-card`, `bg-accent`
-- Cards: `<article className="rounded-card border border-stroke bg-panel p-5 shadow-sm">`
+- Semantic tokens: `danger`, `warning`, `success` — each with `text-*`, `bg-*-soft`, `border-*-border` (danger also has `bg-danger-soft-hover`). Never reach for raw Tailwind palette shades (`bg-red-50`, `text-slate-700`, `bg-amber-50`): the app is dark-only, and those render as pale light-mode boxes. For accents on dark, the `bg-*-500/15` + `text-*-300` pattern is fine.
+- `bg-accent` is a **fill-only** token: white on it is 5.84:1, but as text it is 2.96:1 on `bg-panel`. For accent-coloured type, icons or rings use **`text-accent-text`** (6.2:1).
+- Focus: a global unlayered `:focus-visible` outline lives in `globals.css`. Do not add `outline-none` without a visible replacement, and do not add `focus:ring-*` — the outline covers it.
+- Type floor: `text-xs` is the smallest size in the app. Do not reintroduce `text-[10px]`/`text-[11px]`.
 - Page headers: `<PageHeader title="..." description="..." actions={...} />`
-- Primary buttons: `bg-accent text-white hover:opacity-90`
-- Secondary buttons: `border border-stroke bg-panel text-muted-foreground hover:bg-panel-muted`
 - Detail pages: server component wraps params, passes id to client component
+
+### Navigation & shortcuts
+
+- Nav lives in **one** place: `src/components/layout/nav-items.tsx` (`NAV_GROUPS`). The desktop rail, mobile drawer and tablet bar all render from it — never add a link to only one of them.
+- Adding a route means adding it to `NAV_GROUPS`, or deliberately leaving it unlinked (`/triage` and `/implementations` are intentional redirect shims).
+- Sidebar collapse state is a **cookie** (`baseline_sidebar`), read in `src/app/layout.tsx` so the rail renders at its final width server-side. Don't move it to localStorage — that reintroduces the expand-then-collapse flash.
+- Global shortcuts live in `Sidebar.tsx`: `⌘/Ctrl+K` search, `[` collapse, `?` help, `g` + key to navigate (`GO_TO_KEYS` in `ShortcutsDialog.tsx`). Any new shortcut must be added to the `?` dialog in the same change, and must no-op while the user is typing in a field.
 
 ### Today page architecture
 

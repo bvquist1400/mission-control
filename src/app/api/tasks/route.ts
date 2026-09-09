@@ -21,6 +21,7 @@ import {
 } from '@/lib/today/queries';
 import { addDateOnlyDays, getDateStartInTimeZone } from '@/lib/today/week-board';
 import { DEFAULT_WORKDAY_CONFIG } from '@/lib/workday';
+import { filterTasksByScope, normalizeTaskScope } from '@/lib/personal-exclusion';
 import { validateOptionalTimestamp } from '@/lib/validate';
 import {
   externalSourceConflictPayload,
@@ -95,18 +96,19 @@ export async function GET(request: NextRequest) {
     const includeParked = searchParams.get('include_parked') === 'true';
     const includeMissed = searchParams.get('include_missed') === 'true';
     const view = searchParams.get('view');
+    const scope = normalizeTaskScope(searchParams.get('scope'), 'all');
     const rawLimit = Number.parseInt(searchParams.get('limit') || '100', 10);
     const rawOffset = Number.parseInt(searchParams.get('offset') || '0', 10);
     const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 500) : 100;
     const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
 
     if (view === 'needs_review_count') {
-      const count = await queryNeedsReviewCount(supabase, userId);
+      const count = await queryNeedsReviewCount(supabase, userId, scope);
       return NextResponse.json({ count });
     }
 
     if (view === 'top3') {
-      const tasks = await queryTopThreeTasks(supabase, userId);
+      const tasks = await queryTopThreeTasks(supabase, userId, scope);
       return NextResponse.json(tasks);
     }
 
@@ -115,21 +117,11 @@ export async function GET(request: NextRequest) {
       const in48h = new Date(now.getTime() + 48 * 60 * 60 * 1000);
       const dueSoonLimit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 6;
 
-      const { data: topThreeIdsRows, error: topThreeIdsError } = await supabase
-        .from('tasks')
-        .select('id')
-        .eq('user_id', userId)
-        .in('status', ['Planned', 'In Progress'])
-        .order('priority_score', { ascending: false })
-        .order('id', { ascending: true })
-        .limit(3);
-
-      if (topThreeIdsError) {
-        throw topThreeIdsError;
-      }
-
-      const topThreeIds = new Set((topThreeIdsRows || []).map((row) => row.id));
-      const fetchLimit = Math.min(dueSoonLimit + topThreeIds.size, 100);
+      const topThreeTasks = await queryTopThreeTasks(supabase, userId, scope);
+      const topThreeIds = new Set(topThreeTasks.map((task) => task.id));
+      const fetchLimit = scope === 'all'
+        ? Math.min(dueSoonLimit + topThreeIds.size, 100)
+        : 1000;
 
       const { data, error } = await supabase
         .from('tasks')
@@ -148,7 +140,10 @@ export async function GET(request: NextRequest) {
         throw error;
       }
 
-      const filtered = normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>)
+      const filtered = filterTasksByScope(
+        normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>),
+        scope
+      )
         .filter((task) => !topThreeIds.has(task.id))
         .slice(0, dueSoonLimit);
       return NextResponse.json(filtered);
@@ -177,13 +172,20 @@ export async function GET(request: NextRequest) {
           : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
       const weeklyLimit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 300) : 200;
 
-      const tasks = await queryWeeklyBoardTasks(supabase, userId, weekEnd, weeklyLimit, selectedWeekStart);
+      const tasks = await queryWeeklyBoardTasks(
+        supabase,
+        userId,
+        weekEnd,
+        weeklyLimit,
+        selectedWeekStart,
+        scope
+      );
       return NextResponse.json(tasks);
     }
 
     if (view === 'waiting_summary') {
       const waitingLimit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 30;
-      const enrichedTasks = await queryWaitingSummary(supabase, userId, waitingLimit);
+      const enrichedTasks = await queryWaitingSummary(supabase, userId, waitingLimit, scope);
       return NextResponse.json(enrichedTasks);
     }
 

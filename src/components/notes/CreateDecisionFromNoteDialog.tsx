@@ -11,6 +11,7 @@ import {
   noteTextareaClass,
 } from "@/components/notes/note-panel-utils";
 import type { CreateNoteDecisionPayload, NoteDecisionStatus, NoteWithDetails } from "@/types/database";
+import { Button } from "@/components/ui/Button";
 
 interface CreateDecisionFromNoteDialogProps {
   open: boolean;
@@ -134,27 +135,18 @@ export function CreateDecisionFromNoteDialog({
         </div>
 
         {error && (
-          <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+          <p className="rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
             {error}
           </p>
         )}
 
         <div className="flex items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isSaving}
-            className="rounded-lg border border-stroke bg-panel px-3 py-2 text-sm font-medium text-muted-foreground transition hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
-          >
+          <Button variant="secondary" onClick={onClose} disabled={isSaving}>
             Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={isSaving || !title.trim() || !summary.trim()}
-            className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-          >
+          </Button>
+          <Button variant="primary" type="submit" disabled={isSaving || !title.trim() || !summary.trim()}>
             {isSaving ? "Saving..." : "Add decision"}
-          </button>
+          </Button>
         </div>
       </form>
     </Modal>

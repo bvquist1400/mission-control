@@ -13,6 +13,9 @@ import type {
   TaskStatus,
   TaskWithImplementation,
 } from "@/types/database";
+import { Input, Select } from "@/components/ui/Field";
+import { cardClasses } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
 
 const TASKS_PAGE_SIZE = 200;
 
@@ -153,6 +156,23 @@ export function BacklogList() {
   const [sprintFilter, setSprintFilter] = useState<SprintFilter>(() => sprintFilterFromParam(sprintParam));
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>(() => reviewFilterFromParam(reviewParam));
   const isArtifactInboxView = reviewParam === "intelligence";
+
+  const hasActiveFilters =
+    searchQuery.trim() !== "" ||
+    statusFilter !== "All" ||
+    implementationFilter !== "All" ||
+    projectFilter !== "All" ||
+    sprintFilter !== "All" ||
+    reviewFilter !== "All";
+
+  function clearFilters() {
+    setSearchQuery("");
+    setStatusFilter("All");
+    setImplementationFilter("All");
+    setProjectFilter("All");
+    setSprintFilter("All");
+    setReviewFilter("All");
+  }
 
   const backlogHref = useMemo(() => {
     const params = new URLSearchParams(searchParams.toString());
@@ -328,7 +348,7 @@ export function BacklogList() {
 
   return (
     <div className="space-y-4">
-      <section className="rounded-card border border-stroke bg-panel p-4 shadow-sm">
+      <section className={cardClasses({ padding: "sm" })}>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <h2 className="text-lg font-semibold text-foreground">Review Surface</h2>
@@ -372,39 +392,36 @@ export function BacklogList() {
             defaultNeedsReview={false}
           />
 
-          <section className="rounded-card border border-stroke bg-panel p-4 shadow-sm">
+          <section className={cardClasses({ padding: "sm" })}>
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
               <label className="space-y-1 xl:col-span-2">
                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Search</span>
-                <input
+                <Input
                   value={searchQuery}
                   onChange={(event) => setSearchQuery(event.target.value)}
                   placeholder="Search title or description"
-                  className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
                 />
               </label>
 
               <label className="space-y-1">
                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</span>
-                <select
+                <Select
                   value={statusFilter}
                   onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
-                  className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
                 >
                   {STATUS_FILTER_OPTIONS.map((status) => (
                     <option key={status} value={status}>
                       {status}
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
 
               <label className="space-y-1">
                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Application</span>
-                <select
+                <Select
                   value={implementationFilter}
                   onChange={(event) => setImplementationFilter(event.target.value as ImplementationFilter)}
-                  className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
                 >
                   <option value="All">All</option>
                   <option value="Unassigned">Unassigned</option>
@@ -413,15 +430,14 @@ export function BacklogList() {
                       {implementation.name}
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
 
               <label className="space-y-1">
                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Project</span>
-                <select
+                <Select
                   value={projectFilter}
                   onChange={(event) => setProjectFilter(event.target.value as ProjectFilter)}
-                  className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
                 >
                   <option value="All">All</option>
                   <option value="Unassigned">Unassigned</option>
@@ -430,15 +446,14 @@ export function BacklogList() {
                       {project.name}
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
 
               <label className="space-y-1">
                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Sprint</span>
-                <select
+                <Select
                   value={sprintFilter}
                   onChange={(event) => setSprintFilter(event.target.value as SprintFilter)}
-                  className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
                 >
                   <option value="All">All</option>
                   <option value="Unassigned">Unassigned</option>
@@ -448,22 +463,21 @@ export function BacklogList() {
                       {sprint.name}
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
 
               <label className="space-y-1">
                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Review</span>
-                <select
+                <Select
                   value={reviewFilter}
                   onChange={(event) => setReviewFilter(event.target.value as ReviewFilter)}
-                  className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
                 >
                   {REVIEW_FILTER_OPTIONS.map((option) => (
                     <option key={option} value={option}>
                       {option}
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
             </div>
 
@@ -481,7 +495,7 @@ export function BacklogList() {
       )}
 
       {error ? (
-        <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+        <p className="rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
           {error}
         </p>
       ) : null}
@@ -497,8 +511,19 @@ export function BacklogList() {
             implementations={implementations}
             commitments={commitments}
             scopeMode="global"
-            emptyStateTitle="No matching tasks"
-            emptyStateBody="Adjust your filters or add a new task above."
+            emptyStateTitle={hasActiveFilters ? "No tasks match these filters" : "No tasks yet"}
+            emptyStateBody={
+              hasActiveFilters
+                ? "Nothing in the backlog matches the current filter set."
+                : "Add your first task with the New Task button above."
+            }
+            emptyStateAction={
+              hasActiveFilters ? (
+                <Button variant="secondary" size="sm" onClick={clearFilters}>
+                  Clear filters
+                </Button>
+              ) : undefined
+            }
             initialExpandedTaskId={expandParam}
           />
         )

@@ -8,6 +8,8 @@ import type {
   TaskStatus,
   TaskWithImplementation,
 } from "@/types/database";
+import { Button } from "@/components/ui/Button";
+import { Input, Select } from "@/components/ui/Field";
 
 interface TaskDependenciesProps {
   taskId: string;
@@ -19,19 +21,19 @@ interface TaskDependenciesProps {
 }
 
 const taskStatusColors: Record<TaskStatus, string> = {
-  Backlog: "bg-slate-100 text-slate-700 dark:bg-slate-900/30 dark:text-slate-300",
-  Planned: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
-  "In Progress": "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400",
-  "Blocked/Waiting": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
-  Parked: "bg-stone-100 text-stone-700 dark:bg-stone-900/30 dark:text-stone-300",
-  Missed: "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400",
-  Done: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
+  Backlog: "bg-panel-muted text-muted-foreground",
+  Planned: "bg-blue-500/15 text-blue-300",
+  "In Progress": "bg-indigo-500/15 text-indigo-300",
+  "Blocked/Waiting": "bg-amber-500/15 text-amber-300",
+  Parked: "bg-stone-500/15 text-stone-300",
+  Missed: "bg-rose-500/15 text-rose-300",
+  Done: "bg-success-soft text-success",
 };
 
 const commitmentStatusColors: Record<CommitmentStatus, string> = {
-  Open: "bg-slate-100 text-slate-700 dark:bg-slate-900/30 dark:text-slate-300",
-  Done: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
-  Dropped: "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400",
+  Open: "bg-panel-muted text-muted-foreground",
+  Done: "bg-success-soft text-success",
+  Dropped: "bg-rose-500/15 text-rose-300",
 };
 
 function statusPillClass(dependency: TaskDependencySummary): string {
@@ -209,7 +211,7 @@ export function TaskDependencies({
               setSearchQuery("");
               setIsAdding(true);
             }}
-            className="rounded-lg px-2 py-1 text-xs font-semibold text-accent transition hover:bg-accent/10"
+            className="rounded-lg px-2 py-1 text-xs font-semibold text-accent-text transition hover:bg-accent/10"
           >
             + Add dependency
           </button>
@@ -224,14 +226,14 @@ export function TaskDependencies({
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-foreground">{dependency.title}</p>
                   <div className="mt-1 flex flex-wrap items-center gap-2">
-                    <span className="rounded bg-panel-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                    <span className="rounded bg-panel-muted px-1.5 py-0.5 text-xs font-semibold text-muted-foreground">
                       {dependency.type === "task" ? "Task" : "Commitment"}
                     </span>
-                    <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${statusPillClass(dependency)}`}>
+                    <span className={`rounded px-1.5 py-0.5 text-xs font-semibold ${statusPillClass(dependency)}`}>
                       {dependency.status}
                     </span>
                     {!dependency.unresolved && (
-                      <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-400">
+                      <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-xs font-semibold text-emerald-400">
                         Resolved
                       </span>
                     )}
@@ -240,7 +242,7 @@ export function TaskDependencies({
                 <button
                   type="button"
                   onClick={() => void handleRemove(dependency.id)}
-                  className="shrink-0 rounded p-1.5 text-muted-foreground transition hover:bg-red-50 hover:text-red-600"
+                  className="shrink-0 rounded p-1.5 text-muted-foreground transition hover:bg-danger-soft hover:text-danger"
                   title="Remove dependency"
                 >
                   <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -264,52 +266,34 @@ export function TaskDependencies({
       {isAdding && (
         <div className="space-y-2 rounded-lg border border-accent/30 bg-accent/5 p-3">
           <div className="flex gap-2">
-            <button
-              type="button"
+            <Button variant="toggle" size="xs" active={dependencyType === "task"}
               onClick={() => {
                 setDependencyType("task");
                 setSelectedId("");
-              }}
-              className={`rounded px-2 py-1 text-xs font-semibold transition ${
-                dependencyType === "task"
-                  ? "bg-accent text-white"
-                  : "bg-panel text-muted-foreground hover:text-foreground"
-              }`}
-            >
+              }}>
               Task
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button variant="toggle" size="xs" active={dependencyType === "commitment"}
               onClick={() => {
                 setDependencyType("commitment");
                 setSelectedId("");
-              }}
-              className={`rounded px-2 py-1 text-xs font-semibold transition ${
-                dependencyType === "commitment"
-                  ? "bg-accent text-white"
-                  : "bg-panel text-muted-foreground hover:text-foreground"
-              }`}
-            >
+              }}>
               Commitment
-            </button>
+            </Button>
           </div>
 
-          <input
+          <Input
             type="text"
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder={
-              dependencyType === "task" ? "Search tasks by title..." : "Search commitments by title..."
-            }
+            placeholder={ dependencyType === "task" ? "Search tasks by title..." : "Search commitments by title..." }
             disabled={isSubmitting}
-            className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
           />
 
-          <select
+          <Select
             value={selectedId}
             onChange={(event) => setSelectedId(event.target.value)}
             disabled={isSubmitting}
-            className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <option value="">
               {dependencyType === "task"
@@ -321,40 +305,36 @@ export function TaskDependencies({
                 {getDependencyOptionLabel(dependencyType, item)}
               </option>
             ))}
-          </select>
+          </Select>
 
           {selectableItems.length === 0 && (
             <p className="text-xs text-muted-foreground">No matching {dependencyType}s available.</p>
           )}
 
           <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                setIsAdding(false);
-                setSelectedId("");
-                setSearchQuery("");
-              }}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => { setIsAdding(false); setSelectedId(""); setSearchQuery(""); }}
               disabled={isSubmitting}
-              className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-muted-foreground transition hover:text-foreground disabled:opacity-60"
             >
               Cancel
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
               onClick={() => void handleAdd()}
               disabled={isSubmitting || !selectedId}
-              className="rounded-lg bg-accent px-2.5 py-1.5 text-xs font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isSubmitting ? "Adding..." : "Add"}
-            </button>
+            </Button>
           </div>
         </div>
       )}
 
       {error && (
         <p
-          className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-400"
+          className="rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger"
           role="alert"
         >
           {error}

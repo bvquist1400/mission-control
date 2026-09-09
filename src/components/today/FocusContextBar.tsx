@@ -1,6 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "@/components/ui/Button";
+import { Input, Select } from "@/components/ui/Field";
+import { cardClasses } from "@/components/ui/Card";
 
 type DirectiveScopeType = "implementation" | "project" | "stakeholder" | "task_type" | "query";
 type DirectiveStrength = "nudge" | "strong" | "hard";
@@ -537,7 +540,7 @@ export function FocusContextBar({ onDirectiveChange }: FocusContextBarProps) {
   const idScopeOptions = draft.scopeType === "project" ? projects : implementations;
 
   return (
-    <section className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+    <section className={cardClasses()}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold text-foreground">Focus Directives</h2>
@@ -546,14 +549,13 @@ export function FocusContextBar({ onDirectiveChange }: FocusContextBarProps) {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            type="button"
+          <Button
+            variant="secondary"
             onClick={() => void handleRefresh()}
             disabled={loading || refreshing || creating || clearing || Boolean(mutatingDirectiveId)}
-            className="rounded-lg border border-stroke px-3 py-2 text-sm font-semibold text-foreground transition hover:bg-panel-muted disabled:cursor-not-allowed disabled:opacity-60"
           >
             {refreshing ? "Refreshing..." : "Refresh"}
-          </button>
+          </Button>
           <button
             type="button"
             onClick={() => void handleClear()}
@@ -566,7 +568,7 @@ export function FocusContextBar({ onDirectiveChange }: FocusContextBarProps) {
       </div>
 
       {error && (
-        <p className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+        <p className="mt-3 rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
           {error}
         </p>
       )}
@@ -601,14 +603,14 @@ export function FocusContextBar({ onDirectiveChange }: FocusContextBarProps) {
                 )}
               </div>
               {active ? (
-                <button
-                  type="button"
+                <Button
+                  variant="secondary"
+                  size="sm"
                   onClick={() => void handleToggleDirective(active, false)}
                   disabled={Boolean(mutatingDirectiveId)}
-                  className="rounded-lg border border-stroke px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-panel-muted disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {mutatingDirectiveId === active.id ? "Updating..." : "Deactivate"}
-                </button>
+                </Button>
               ) : null}
             </div>
           </article>
@@ -633,54 +635,44 @@ export function FocusContextBar({ onDirectiveChange }: FocusContextBarProps) {
               <div className="mt-3 space-y-3">
                 <label className="block space-y-1">
                   <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Directive text</span>
-                  <input
+                  <Input
                     value={draft.text}
                     onChange={(event) => setDraft((current) => ({ ...current, text: event.target.value }))}
                     placeholder="Focus Acme migration today"
                     disabled={creating}
-                    className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                   />
                 </label>
 
                 <div className="grid gap-3 sm:grid-cols-2">
                   <label className="space-y-1">
                     <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Scope</span>
-                    <select
+                    <Select
                       value={draft.scopeType}
-                      onChange={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          scopeType: event.target.value as DirectiveScopeType,
-                          scopeId: "",
-                          scopeValue: "",
-                        }))
-                      }
+                      onChange={(event) => setDraft((current) => ({ ...current, scopeType: event.target.value as DirectiveScopeType, scopeId: "", scopeValue: "", })) }
                       disabled={creating}
-                      className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {SCOPE_OPTIONS.map((scope) => (
                         <option key={scope.value} value={scope.value}>
                           {scope.label}
                         </option>
                       ))}
-                    </select>
+                    </Select>
                   </label>
 
                   <label className="space-y-1">
                     <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Strength</span>
-                    <select
+                    <Select
                       value={draft.strength}
                       onChange={(event) => setDraft((current) => ({ ...current, strength: event.target.value as DirectiveStrength }))}
                       disabled={creating}
-                      className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {STRENGTH_OPTIONS.map((strengthOption) => (
                         <option key={strengthOption.value} value={strengthOption.value}>
                           {strengthOption.label}
                         </option>
                       ))}
-                    </select>
-                    <p className="text-[11px] text-muted-foreground">
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
                       {STRENGTH_OPTIONS.find((option) => option.value === draft.strength)?.hint}
                     </p>
                   </label>
@@ -689,11 +681,10 @@ export function FocusContextBar({ onDirectiveChange }: FocusContextBarProps) {
                 {isIdBasedScope(draft.scopeType) ? (
                   <label className="block space-y-1">
                     <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{idScopeLabel}</span>
-                    <select
+                    <Select
                       value={draft.scopeId}
                       onChange={(event) => setDraft((current) => ({ ...current, scopeId: event.target.value }))}
                       disabled={creating}
-                      className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       <option value="">{`Select ${idScopeLabel.toLowerCase()}`}</option>
                       {idScopeOptions.map((option) => (
@@ -701,51 +692,47 @@ export function FocusContextBar({ onDirectiveChange }: FocusContextBarProps) {
                           {option.name}
                         </option>
                       ))}
-                    </select>
+                    </Select>
                   </label>
                 ) : (
                   <label className="block space-y-1">
                     <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{scopeLabel}</span>
-                    <input
+                    <Input
                       value={draft.scopeValue}
                       onChange={(event) => setDraft((current) => ({ ...current, scopeValue: event.target.value }))}
                       placeholder={draft.scopeType === "stakeholder" ? "Nancy" : draft.scopeType === "task_type" ? "FollowUp" : "Contains keyword..."}
                       disabled={creating}
-                      className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                     />
                   </label>
                 )}
 
                 <label className="block space-y-1">
                   <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Reason (optional)</span>
-                  <input
+                  <Input
                     value={draft.reason}
                     onChange={(event) => setDraft((current) => ({ ...current, reason: event.target.value }))}
                     placeholder="Board prep this afternoon"
                     disabled={creating}
-                    className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                   />
                 </label>
 
                 <div className="grid gap-3 sm:grid-cols-2">
                   <label className="space-y-1">
                     <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Starts at (optional)</span>
-                    <input
+                    <Input
                       type="datetime-local"
                       value={draft.startsAt}
                       onChange={(event) => setDraft((current) => ({ ...current, startsAt: event.target.value }))}
                       disabled={creating}
-                      className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                     />
                   </label>
                   <label className="space-y-1">
                     <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Ends at (optional)</span>
-                    <input
+                    <Input
                       type="datetime-local"
                       value={draft.endsAt}
                       onChange={(event) => setDraft((current) => ({ ...current, endsAt: event.target.value }))}
                       disabled={creating}
-                      className="w-full rounded-lg border border-stroke bg-panel px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                     />
                   </label>
                 </div>
@@ -763,13 +750,9 @@ export function FocusContextBar({ onDirectiveChange }: FocusContextBarProps) {
               </div>
 
               <div className="mt-4 flex justify-end">
-                <button
-                  type="submit"
-                  disabled={creating || loading || clearing}
-                  className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-                >
+                <Button variant="primary" type="submit" disabled={creating || loading || clearing}>
                   {creating ? "Saving..." : "Create Directive"}
-                </button>
+                </Button>
               </div>
             </form>
 
@@ -799,7 +782,7 @@ export function FocusContextBar({ onDirectiveChange }: FocusContextBarProps) {
                             {directive.reason ? <p className="mt-1 text-xs text-muted-foreground">Reason: {directive.reason}</p> : null}
                           </div>
                           <span
-                            className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                            className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
                               isActiveDirective ? "bg-accent text-white" : "bg-panel-muted text-muted-foreground"
                             }`}
                           >
@@ -807,23 +790,23 @@ export function FocusContextBar({ onDirectiveChange }: FocusContextBarProps) {
                           </span>
                         </div>
                         <div className="mt-3 flex flex-wrap items-center gap-2">
-                          <button
-                            type="button"
+                          <Button
+                            variant="secondary"
+                            size="sm"
                             onClick={() => void handleToggleDirective(directive, !isActiveDirective)}
                             disabled={Boolean(mutatingDirectiveId)}
-                            className="rounded-lg border border-stroke px-2.5 py-1 text-xs font-semibold text-foreground transition hover:bg-panel-muted disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             {isUpdating ? "Updating..." : isActiveDirective ? "Deactivate" : "Activate"}
-                          </button>
-                          <button
-                            type="button"
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            size="sm"
                             onClick={() => handleUseAsTemplate(directive)}
                             disabled={creating}
-                            className="rounded-lg border border-stroke px-2.5 py-1 text-xs font-semibold text-foreground transition hover:bg-panel-muted disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             Use as template
-                          </button>
-                          <span className="text-[11px] text-muted-foreground">
+                          </Button>
+                          <span className="text-xs text-muted-foreground">
                             Created {formatTimestamp(directive.created_at) ?? "unknown"}
                           </span>
                         </div>

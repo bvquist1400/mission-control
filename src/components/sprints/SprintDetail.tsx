@@ -6,6 +6,10 @@ import { useEffect, useMemo, useState } from "react";
 import { formatDateOnly, formatRelativeDate } from "@/components/utils/dates";
 import { isDateOnlyAfter } from "@/lib/date-only";
 import type { ImplementationSummary, SprintDetail as SprintDetailType, SprintWithImplementation, TaskStatus } from "@/types/database";
+import { Button } from "@/components/ui/Button";
+import { Input, Select } from "@/components/ui/Field";
+import { cardClasses } from "@/components/ui/Card";
+import { badgeClasses } from "@/components/ui/Badge";
 
 interface SprintDetailProps {
   id: string;
@@ -235,8 +239,8 @@ export function SprintDetail({ id }: SprintDetailProps) {
 
   if (!sprint) {
     return (
-      <div className="rounded-card border border-red-200 bg-red-50 p-5 text-center">
-        <p className="text-sm text-red-700">{error || "Sprint not found"}</p>
+      <div className="rounded-card border border-danger-border bg-danger-soft p-5 text-center">
+        <p className="text-sm text-danger">{error || "Sprint not found"}</p>
       </div>
     );
   }
@@ -244,12 +248,12 @@ export function SprintDetail({ id }: SprintDetailProps) {
   return (
     <div className="space-y-6">
       {error ? (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
+        <div className="rounded-lg border border-danger-border bg-danger-soft px-4 py-3 text-sm text-danger" role="alert">
           {error}
         </div>
       ) : null}
 
-      <section className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+      <section className={cardClasses()}>
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             {isEditing ? (
@@ -258,27 +262,25 @@ export function SprintDetail({ id }: SprintDetailProps) {
                   value={draft.name}
                   onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
                   disabled={isSaving}
-                  className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-base font-semibold text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-base font-semibold text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
                 />
                 <div className="grid gap-3 sm:grid-cols-2">
                   <label className="space-y-1">
                     <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">Start</span>
-                    <input
+                    <Input
                       type="date"
                       value={draft.startDate}
                       onChange={(event) => setDraft((current) => ({ ...current, startDate: event.target.value }))}
                       disabled={isSaving}
-                      className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                     />
                   </label>
                   <label className="space-y-1">
                     <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">End</span>
-                    <input
+                    <Input
                       type="date"
                       value={draft.endDate}
                       onChange={(event) => setDraft((current) => ({ ...current, endDate: event.target.value }))}
                       disabled={isSaving}
-                      className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                     />
                   </label>
                 </div>
@@ -296,39 +298,24 @@ export function SprintDetail({ id }: SprintDetailProps) {
           <div className="flex flex-wrap gap-2">
             {isEditing ? (
               <>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDraft(toDraft(sprint));
-                    setIsEditing(false);
-                    setError(null);
-                  }}
+                <Button
+                  variant="secondary"
+                  onClick={() => { setDraft(toDraft(sprint)); setIsEditing(false); setError(null); }}
                   disabled={isSaving}
-                  className="inline-flex rounded-lg border border-stroke bg-panel px-3 py-2 text-sm font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleSave()}
-                  disabled={isSaving}
-                  className="inline-flex rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-                >
+                </Button>
+                <Button variant="primary" onClick={() => void handleSave()} disabled={isSaving}>
                   {isSaving ? "Saving..." : "Save Sprint"}
-                </button>
+                </Button>
               </>
             ) : (
-              <button
-                type="button"
-                onClick={() => {
-                  setDraft(toDraft(sprint));
-                  setIsEditing(true);
-                  setError(null);
-                }}
-                className="inline-flex rounded-lg border border-stroke bg-panel px-3 py-2 text-sm font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground"
+              <Button
+                variant="secondary"
+                onClick={() => { setDraft(toDraft(sprint)); setIsEditing(true); setError(null); }}
               >
                 Edit
-              </button>
+              </Button>
             )}
             <Link
               href={`/backlog?sprint=${sprint.id}`}
@@ -342,40 +329,35 @@ export function SprintDetail({ id }: SprintDetailProps) {
             >
               All sprints
             </Link>
-            <button
-              type="button"
-              onClick={() => void handleDelete()}
-              disabled={isDeleting || isSaving}
-              className="inline-flex rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
-            >
+            <Button variant="danger" onClick={() => void handleDelete()} disabled={isDeleting || isSaving}>
               {isDeleting ? "Deleting..." : "Delete"}
-            </button>
+            </Button>
           </div>
         </div>
 
         <div className="mt-5 grid gap-3 sm:grid-cols-3">
           <div className="rounded-lg bg-panel-muted p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Theme</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Theme</p>
             {isEditing ? (
-              <input
+              <Input
+                className="mt-2"
                 value={draft.theme}
                 onChange={(event) => setDraft((current) => ({ ...current, theme: event.target.value }))}
                 disabled={isSaving}
                 placeholder="Optional sprint theme"
-                className="mt-2 w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
               />
             ) : (
               <p className="mt-1 text-sm text-foreground">{sprint.theme || "Not set"}</p>
             )}
           </div>
           <div className="rounded-lg bg-panel-muted p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Focus App</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Focus App</p>
             {isEditing ? (
-              <select
+              <Select
+                className="mt-2"
                 value={draft.focusImplementationId}
                 onChange={(event) => setDraft((current) => ({ ...current, focusImplementationId: event.target.value }))}
                 disabled={isSaving}
-                className="mt-2 w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <option value="">Not set</option>
                 {implementations.map((implementation) => (
@@ -383,13 +365,13 @@ export function SprintDetail({ id }: SprintDetailProps) {
                     {implementation.name}
                   </option>
                 ))}
-              </select>
+              </Select>
             ) : (
               <p className="mt-1 text-sm text-foreground">{sprint.focus_implementation?.name || "Not set"}</p>
             )}
           </div>
           <div className="rounded-lg bg-panel-muted p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Tasks</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Tasks</p>
             <p className="mt-1 text-sm text-foreground">
               {sprint.completed_tasks} of {sprint.total_tasks} done
             </p>
@@ -410,13 +392,13 @@ export function SprintDetail({ id }: SprintDetailProps) {
         </div>
       </section>
 
-      <section className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+      <section className={cardClasses()}>
         <div className="flex flex-wrap gap-2">
           {STATUS_ORDER.map((status) => {
             const count = sprint.tasks_by_status[status]?.length || 0;
 
             return (
-              <div key={status} className="rounded-full bg-panel-muted px-3 py-1 text-xs font-semibold text-muted-foreground">
+              <div key={status} className={badgeClasses()}>
                 {status}: {count}
               </div>
             );
@@ -451,7 +433,7 @@ export function SprintDetail({ id }: SprintDetailProps) {
                           ) : (
                             <Link
                               href={`/backlog?sprint=${sprint.id}&expand=${task.id}`}
-                              className="text-sm font-medium text-foreground hover:text-accent hover:underline"
+                              className="text-sm font-medium text-foreground hover:text-accent-text hover:underline"
                             >
                               {task.title}
                             </Link>
@@ -463,7 +445,7 @@ export function SprintDetail({ id }: SprintDetailProps) {
                           </p>
                         </div>
                         {task.blocker ? (
-                          <span className="rounded bg-red-500/15 px-2 py-1 text-[11px] font-semibold text-red-300">Blocker</span>
+                          <span className="rounded bg-red-500/15 px-2 py-1 text-xs font-semibold text-red-300">Blocker</span>
                         ) : null}
                       </div>
                     </div>

@@ -7,6 +7,8 @@ import {
   formatNoteTypeLabel,
 } from "@/components/notes/note-panel-utils";
 import type { NoteWithDetails } from "@/types/database";
+import { badgeClasses } from "@/components/ui/Badge";
+import { buttonClasses } from "@/components/ui/Button";
 
 interface ImplementationNoteCardProps {
   note: NoteWithDetails;
@@ -47,12 +49,7 @@ function formatTimestamp(timestamp: string | null): string | null {
 }
 
 function actionButtonClass(emphasis = false): string {
-  return [
-    "rounded-lg px-2.5 py-1 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50",
-    emphasis
-      ? "bg-accent text-white hover:opacity-90"
-      : "border border-stroke bg-panel text-muted-foreground hover:text-foreground",
-  ].join(" ");
+  return buttonClasses({ variant: emphasis ? "primary" : "secondary", size: "sm" });
 }
 
 export function ImplementationNoteCard({
@@ -91,20 +88,20 @@ export function ImplementationNoteCard({
           </div>
 
           <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-            <span className="rounded-full border border-stroke bg-panel-muted px-2.5 py-1">
+            <span className={badgeClasses()}>
               {formatNoteTypeLabel(note.note_type)}
             </span>
-            {note.pinned && <span className="rounded-full border border-accent/20 bg-accent/10 px-2.5 py-1 text-accent">Pinned</span>}
+            {note.pinned && <span className={badgeClasses({ tone: "accent" })}>Pinned</span>}
             {note.status === "archived" && (
-              <span className="rounded-full border border-stroke bg-slate-200 px-2.5 py-1 text-slate-700">Archived</span>
+              <span className={badgeClasses()}>Archived</span>
             )}
             {taskCount > 0 && (
-              <span className="rounded-full border border-stroke bg-panel-muted px-2.5 py-1">
+              <span className={badgeClasses()}>
                 {taskCount} {taskCount === 1 ? "task" : "tasks"}
               </span>
             )}
             {decisionCount > 0 && (
-              <span className="rounded-full border border-stroke bg-panel-muted px-2.5 py-1">
+              <span className={badgeClasses()}>
                 {decisionCount} {decisionCount === 1 ? "decision" : "decisions"}
               </span>
             )}
@@ -145,11 +142,11 @@ export function ImplementationNoteCard({
                     <div key={decision.id} className="rounded-xl border border-stroke bg-panel-muted px-3 py-3">
                       <div className="flex flex-wrap items-center gap-2">
                         <h5 className="text-sm font-medium text-foreground">{decision.title}</h5>
-                        <span className="rounded-full bg-panel px-2 py-1 text-[11px] text-muted-foreground">
+                        <span className={badgeClasses({ size: "sm" })}>
                           {formatDecisionStatusLabel(decision.decision_status)}
                         </span>
                         {decision.decided_at && (
-                          <span className="text-[11px] text-muted-foreground">{formatTimestamp(decision.decided_at)}</span>
+                          <span className="text-xs text-muted-foreground">{formatTimestamp(decision.decided_at)}</span>
                         )}
                       </div>
                       <p className="mt-2 line-clamp-3 text-sm leading-6 text-muted-foreground">{decision.summary}</p>

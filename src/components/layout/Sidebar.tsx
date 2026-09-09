@@ -4,19 +4,22 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { UniversalSearchPalette } from "@/components/layout/UniversalSearchPalette";
+import { AccountMenu } from "@/components/layout/AccountMenu";
+import { NAV_GROUPS, isActive, type NavItem } from "@/components/layout/nav-items";
+import { ShortcutsDialog, GO_TO_KEYS } from "@/components/layout/ShortcutsDialog";
 import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
 import { Modal } from "@/components/ui/Modal";
+import { Button } from "@/components/ui/Button";
 import type { CommitmentSummary, TaskUpdatePayload, TaskWithImplementation } from "@/types/database";
 
 const TASK_MODAL_PAGE_SIZE = 200;
+const COLLAPSE_COOKIE = "baseline_sidebar";
 
 async function fetchTaskById(taskId: string): Promise<TaskWithImplementation> {
   const response = await fetch(`/api/tasks/${taskId}`, { cache: "no-store" });
-
   if (!response.ok) {
     throw new Error("Failed to fetch task");
   }
-
   return response.json();
 }
 
@@ -28,98 +31,176 @@ async function fetchTaskModalPage(offset: number): Promise<TaskWithImplementatio
     offset: String(offset),
   });
   const response = await fetch(`/api/tasks?${searchParams.toString()}`, { cache: "no-store" });
-
   if (!response.ok) {
     throw new Error("Failed to fetch tasks");
   }
-
   return response.json();
 }
 
 async function fetchAllTaskModalTasks(): Promise<TaskWithImplementation[]> {
   const tasks: TaskWithImplementation[] = [];
   let offset = 0;
-
   while (true) {
     const page = await fetchTaskModalPage(offset);
     tasks.push(...page);
-
     if (page.length < TASK_MODAL_PAGE_SIZE) {
       return tasks;
     }
-
     offset += TASK_MODAL_PAGE_SIZE;
   }
 }
 
 async function fetchTaskModalCommitments(): Promise<CommitmentSummary[]> {
   const response = await fetch("/api/commitments?include_done=true", { cache: "no-store" });
-
   if (!response.ok) {
     throw new Error("Failed to fetch commitments");
   }
-
   return response.json();
-}
-
-const navItems = [
-  { href: "/", label: "Today", hint: "Daily operating view" },
-  { href: "/llm", label: "AI Playbooks", hint: "Prompt patterns and workflow tips" },
-  { href: "/backlog", label: "Backlog", hint: "All tasks with filters and edits" },
-  { href: "/sprints", label: "Sprints", hint: "Week-level planning and sprint snapshots" },
-  { href: "/applications", label: "Applications", hint: "Portfolio health and updates" },
-  { href: "/projects", label: "Projects", hint: "Track work within applications" },
-  { href: "/stakeholders", label: "Stakeholders", hint: "People and commitments" },
-  { href: "/focus", label: "Focus", hint: "Planner directives" },
-  { href: "/calendar", label: "Calendar", hint: "Imported schedule metadata" },
-];
-
-function isActive(pathname: string, href: string): boolean {
-  if (href === "/") {
-    return pathname === href;
-  }
-
-  return pathname === href || pathname.startsWith(`${href}/`);
 }
 
 function SearchLauncherButton({
   onClick,
   className,
-  compact = false,
+  variant = "full",
 }: {
   onClick: () => void;
   className?: string;
-  compact?: boolean;
+  variant?: "full" | "compact" | "icon";
 }) {
+  const icon = (
+    <svg aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-4.35-4.35" />
+      <circle cx="11" cy="11" r="6.5" />
+    </svg>
+  );
+
+  if (variant === "icon") {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        aria-label="Open universal search"
+        title="Search everything (Cmd/Ctrl K)"
+        className={`flex h-9 w-9 items-center justify-center rounded-xl border border-stroke bg-panel text-foreground shadow-sm transition hover:border-accent/40 hover:bg-panel-muted ${className ?? ""}`}
+      >
+        {icon}
+      </button>
+    );
+  }
+
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`flex items-center gap-3 rounded-xl border border-stroke bg-panel px-3 py-2 text-left text-sm text-foreground shadow-sm transition hover:border-accent/40 hover:bg-panel-muted ${className ?? ""}`}
       aria-label="Open universal search"
+      // Single line: the old two-line version clipped its own title to
+      // "Search ever…" and wrapped the subtitle to three lines in a 288px rail.
+      className={`flex items-center gap-2.5 rounded-xl border border-stroke bg-panel px-3 py-2 text-left text-sm text-foreground shadow-sm transition hover:border-accent/40 hover:bg-panel-muted ${className ?? ""}`}
     >
-      <svg className="h-4 w-4 shrink-0 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-4.35-4.35" />
-        <circle cx="11" cy="11" r="6.5" />
-      </svg>
-      <div className="min-w-0 flex-1">
-        <p className="truncate font-medium">{compact ? "Search" : "Search everything"}</p>
-        {!compact ? <p className="text-xs text-muted-foreground">Tasks, projects, stakeholders, meetings, email</p> : null}
-      </div>
-      {!compact ? (
-        <span className="rounded-md border border-stroke bg-panel-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-          Cmd/Ctrl K
-        </span>
+      {icon}
+      <span className="min-w-0 flex-1 truncate text-muted-foreground">Search</span>
+      {variant === "full" ? (
+        <kbd className="shrink-0 rounded border border-stroke bg-panel-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">
+          ⌘K
+        </kbd>
       ) : null}
     </button>
   );
 }
 
-export function Sidebar() {
+function NavLink({
+  item,
+  active,
+  collapsed,
+  showHint,
+  onNavigate,
+}: {
+  item: NavItem;
+  active: boolean;
+  collapsed: boolean;
+  showHint: boolean;
+  onNavigate?: () => void;
+}) {
+  return (
+    <Link
+      href={item.href}
+      onClick={onNavigate}
+      title={collapsed ? `${item.label} — ${item.hint}` : item.hint}
+      aria-current={active ? "page" : undefined}
+      className={`flex items-center rounded-lg border transition ${
+        collapsed ? "justify-center px-2 py-2.5" : "gap-2.5 px-3 py-2"
+      } ${
+        active
+          ? "border-accent/30 bg-accent-soft text-accent-text"
+          : "border-transparent text-muted-foreground hover:bg-panel-muted hover:text-foreground"
+      }`}
+    >
+      {item.icon}
+      {collapsed ? (
+        <span className="sr-only">{item.label}</span>
+      ) : (
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-medium">{item.label}</span>
+          {showHint ? (
+            <span className="mt-0.5 block text-xs leading-snug opacity-80">{item.hint}</span>
+          ) : null}
+        </span>
+      )}
+    </Link>
+  );
+}
+
+function NavList({
+  pathname,
+  collapsed,
+  showHints = false,
+  onNavigate,
+}: {
+  pathname: string;
+  collapsed: boolean;
+  showHints?: boolean;
+  onNavigate?: () => void;
+}) {
+  return (
+    <nav className="flex flex-col gap-4">
+      {NAV_GROUPS.map((group) => (
+        <div key={group.label} className="flex flex-col gap-1">
+          {collapsed ? (
+            <span aria-hidden="true" className="mx-auto my-1 h-px w-6 bg-stroke first:hidden" />
+          ) : (
+            <p className="px-3 pb-0.5 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground/70">
+              {group.label}
+            </p>
+          )}
+          {group.items.map((item) => (
+            <NavLink
+              key={item.href}
+              item={item}
+              active={isActive(pathname, item.href)}
+              collapsed={collapsed}
+              showHint={showHints}
+              onNavigate={onNavigate}
+            />
+          ))}
+        </div>
+      ))}
+    </nav>
+  );
+}
+
+export function Sidebar({
+  userEmail = null,
+  defaultCollapsed = false,
+}: {
+  userEmail?: string | null;
+  defaultCollapsed?: boolean;
+}) {
   const pathname = usePathname();
   const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [taskModalTask, setTaskModalTask] = useState<TaskWithImplementation | null>(null);
   const [taskModalAllTasks, setTaskModalAllTasks] = useState<TaskWithImplementation[] | null>(null);
   const [taskModalCommitments, setTaskModalCommitments] = useState<CommitmentSummary[] | null>(null);
@@ -132,8 +213,16 @@ export function Sidebar() {
     setSearchOpen(true);
   }, []);
 
-  const closeSearch = useCallback(() => {
-    setSearchOpen(false);
+  const closeSearch = useCallback(() => setSearchOpen(false), []);
+
+  // Persisted in a cookie rather than localStorage so the server layout can read
+  // it and render the correct width on the first paint — no collapse flicker.
+  const toggleCollapsed = useCallback(() => {
+    setCollapsed((current) => {
+      const next = !current;
+      document.cookie = `${COLLAPSE_COOKIE}=${next ? "collapsed" : "expanded"};path=/;max-age=31536000;samesite=lax`;
+      return next;
+    });
   }, []);
 
   const closeTaskModal = useCallback(() => {
@@ -150,11 +239,7 @@ export function Sidebar() {
     if (!taskModalAllTasks) {
       void fetchAllTaskModalTasks()
         .then((allTasks) => {
-          if (!isMountedRef.current) {
-            return;
-          }
-
-          setTaskModalAllTasks(allTasks);
+          if (isMountedRef.current) setTaskModalAllTasks(allTasks);
         })
         .catch(() => {
           // Non-blocking cache warmup.
@@ -164,11 +249,7 @@ export function Sidebar() {
     if (!taskModalCommitments) {
       void fetchTaskModalCommitments()
         .then((commitments) => {
-          if (!isMountedRef.current) {
-            return;
-          }
-
-          setTaskModalCommitments(commitments);
+          if (isMountedRef.current) setTaskModalCommitments(commitments);
         })
         .catch(() => {
           // Non-blocking cache warmup.
@@ -177,35 +258,24 @@ export function Sidebar() {
 
     void fetchTaskById(taskId)
       .then((task) => {
-        if (!isMountedRef.current || taskModalRequestRef.current !== requestId) {
-          return;
-        }
-
+        if (!isMountedRef.current || taskModalRequestRef.current !== requestId) return;
         setTaskModalTask(task);
       })
       .catch(() => {
-        if (!isMountedRef.current || taskModalRequestRef.current !== requestId) {
-          return;
-        }
-
+        if (!isMountedRef.current || taskModalRequestRef.current !== requestId) return;
         router.push(`/backlog?expand=${taskId}`);
       })
       .finally(() => {
-        if (!isMountedRef.current || taskModalRequestRef.current !== requestId) {
-          return;
-        }
-
+        if (!isMountedRef.current || taskModalRequestRef.current !== requestId) return;
         setTaskModalLoading(false);
       });
   }, [router, taskModalAllTasks, taskModalCommitments]);
 
   const handleTaskModalUpdated = useCallback((taskId: string, updates: TaskUpdatePayload) => {
     setTaskModalTask((current) => (current?.id === taskId ? { ...current, ...updates } : current));
-    setTaskModalAllTasks((current) => (
-      current
-        ? current.map((task) => (task.id === taskId ? { ...task, ...updates } : task))
-        : current
-    ));
+    setTaskModalAllTasks((current) =>
+      current ? current.map((task) => (task.id === taskId ? { ...task, ...updates } : task)) : current
+    );
   }, []);
 
   const handleTaskModalDeleted = useCallback((taskId: string) => {
@@ -215,24 +285,75 @@ export function Sidebar() {
 
   useEffect(() => {
     isMountedRef.current = true;
+    // `g` starts a two-key "go to" chord, the convention in GitHub/Linear/Gmail.
+    let goToArmed = false;
+    let goToTimer = 0;
+
+    function isTypingTarget(target: EventTarget | null): boolean {
+      if (!(target instanceof HTMLElement)) return false;
+      return (
+        target.isContentEditable ||
+        ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)
+      );
+    }
+
+    function disarm() {
+      goToArmed = false;
+      window.clearTimeout(goToTimer);
+    }
 
     function handleKeyDown(event: KeyboardEvent) {
+      // Search is reachable even mid-typing; everything else is not.
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         setMobileOpen(false);
         setSearchOpen((current) => !current);
+        return;
+      }
+
+      if (event.metaKey || event.ctrlKey || event.altKey || isTypingTarget(event.target)) {
+        return;
+      }
+
+      if (goToArmed) {
+        const href = GO_TO_KEYS[event.key.toLowerCase()];
+        disarm();
+        if (href) {
+          event.preventDefault();
+          router.push(href);
+        }
+        return;
+      }
+
+      if (event.key === "?") {
+        event.preventDefault();
+        setShortcutsOpen(true);
+        return;
+      }
+
+      if (event.key === "[") {
+        event.preventDefault();
+        toggleCollapsed();
+        return;
+      }
+
+      if (event.key.toLowerCase() === "g") {
+        goToArmed = true;
+        goToTimer = window.setTimeout(disarm, 1500);
       }
     }
 
     document.addEventListener("keydown", handleKeyDown);
     return () => {
       isMountedRef.current = false;
+      disarm();
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, []);
+  }, [router, toggleCollapsed]);
 
   return (
     <>
+      {/* Mobile chrome */}
       <button
         type="button"
         onClick={() => setMobileOpen((open) => !open)}
@@ -241,22 +362,12 @@ export function Sidebar() {
         aria-label={mobileOpen ? "Close navigation menu" : "Open navigation menu"}
         className="fixed left-4 top-4 z-40 rounded-lg border border-stroke bg-panel/95 p-2 text-foreground shadow-sm backdrop-blur md:hidden"
       >
-        {mobileOpen ? (
-          <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6 6l12 12M6 18L18 6" />
-          </svg>
-        ) : (
-          <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
-          </svg>
-        )}
+        <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d={mobileOpen ? "M6 6l12 12M6 18L18 6" : "M4 6h16M4 12h16M4 18h16"} />
+        </svg>
       </button>
 
-      <SearchLauncherButton
-        onClick={openSearch}
-        compact
-        className="fixed right-4 top-4 z-40 lg:hidden"
-      />
+      <SearchLauncherButton onClick={openSearch} variant="icon" className="fixed right-4 top-4 z-40 lg:hidden" />
 
       {mobileOpen ? (
         <>
@@ -268,54 +379,38 @@ export function Sidebar() {
           />
           <aside
             id="mobile-sidebar"
-            className="fixed inset-y-0 left-0 z-40 w-72 border-r border-stroke bg-panel p-5 shadow-lg md:hidden"
+            className="fixed inset-y-0 left-0 z-40 flex w-72 flex-col overflow-y-auto border-r border-stroke bg-panel p-5 shadow-lg md:hidden"
           >
-            <div className="border-b border-stroke pb-5">
+            <div className="border-b border-stroke pb-4">
               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Brent&apos;s Hub</p>
-              <h1 className="mt-2 text-2xl font-semibold tracking-tight text-foreground">Baseline</h1>
+              <h1 className="mt-1.5 text-2xl font-semibold tracking-tight text-foreground">Baseline</h1>
             </div>
-
-            <SearchLauncherButton onClick={openSearch} className="mt-4 w-full" />
-
-            <nav className="mt-4 space-y-2">
-              {navItems.map((item) => {
-                const active = isActive(pathname, item.href);
-
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    onClick={() => setMobileOpen(false)}
-                    className={`block rounded-xl border px-4 py-3 transition ${
-                      active
-                        ? "border-accent/30 bg-accent-soft text-accent"
-                        : "border-transparent bg-transparent text-muted-foreground hover:border-stroke hover:bg-panel-muted hover:text-foreground"
-                    }`}
-                  >
-                    <p className="text-sm font-semibold">{item.label}</p>
-                    <p className="mt-1 text-xs leading-relaxed">{item.hint}</p>
-                  </Link>
-                );
-              })}
-            </nav>
+            <SearchLauncherButton onClick={openSearch} className="mt-4 w-full" variant="compact" />
+            <div className="mt-4">
+              <NavList pathname={pathname} collapsed={false} showHints onNavigate={() => setMobileOpen(false)} />
+            </div>
+            <AccountMenu email={userEmail} collapsed={false} />
           </aside>
         </>
       ) : null}
 
-      <nav className="fixed inset-x-4 bottom-4 z-20 hidden rounded-xl border border-stroke bg-panel/95 p-2 shadow-lg backdrop-blur md:block lg:hidden">
-        <ul className="grid gap-2" style={{ gridTemplateColumns: `repeat(${navItems.length}, minmax(0, 1fr))` }}>
-          {navItems.map((item) => {
+      {/* Tablet: a single scrollable row, so labels never crush to ~78px each */}
+      <nav className="fixed inset-x-4 bottom-4 z-20 hidden rounded-xl border border-stroke bg-panel/95 p-1.5 shadow-lg backdrop-blur md:block lg:hidden">
+        <ul className="flex items-center gap-1 overflow-x-auto">
+          {NAV_GROUPS.flatMap((group) => group.items).map((item) => {
             const active = isActive(pathname, item.href);
-
             return (
-              <li key={item.href}>
+              <li key={item.href} className="shrink-0">
                 <Link
                   href={item.href}
-                  className={`block rounded-lg px-2 py-2 text-center text-xs font-semibold transition ${
+                  title={item.hint}
+                  aria-current={active ? "page" : undefined}
+                  className={`flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-semibold transition ${
                     active ? "bg-accent text-white" : "text-muted-foreground hover:bg-panel-muted hover:text-foreground"
                   }`}
                 >
-                  {item.label}
+                  {item.icon}
+                  <span className="whitespace-nowrap">{item.label}</span>
                 </Link>
               </li>
             );
@@ -323,37 +418,50 @@ export function Sidebar() {
         </ul>
       </nav>
 
-      <aside className="hidden min-h-[calc(100vh-2rem)] w-72 shrink-0 rounded-2xl border border-stroke bg-panel p-5 shadow-sm lg:block">
-        <div className="border-b border-stroke pb-5">
-          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Brent&apos;s Hub</p>
-          <h1 className="mt-2 text-2xl font-semibold tracking-tight text-foreground">Baseline</h1>
+      {/* Desktop rail */}
+      <aside
+        className={`hidden min-h-[calc(100vh-2rem)] shrink-0 flex-col rounded-2xl border border-stroke bg-panel p-3 shadow-sm transition-[width] lg:flex ${
+          collapsed ? "w-[4.5rem]" : "w-72 p-5"
+        }`}
+      >
+        <div className={`flex items-center gap-2 border-b border-stroke pb-4 ${collapsed ? "justify-center" : ""}`}>
+          {collapsed ? null : (
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Brent&apos;s Hub</p>
+              <h1 className="mt-1.5 truncate text-2xl font-semibold tracking-tight text-foreground">Baseline</h1>
+            </div>
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleCollapsed}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-expanded={!collapsed}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            <svg aria-hidden="true" className="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <path d="M9 4v16" />
+              {collapsed ? <path d="m13 9 3 3-3 3" /> : <path d="m16 9-3 3 3 3" />}
+            </svg>
+          </Button>
         </div>
 
-        <SearchLauncherButton onClick={openSearch} className="mt-4 w-full" />
+        <SearchLauncherButton
+          onClick={openSearch}
+          className={collapsed ? "mx-auto mt-4" : "mt-4 w-full"}
+          variant={collapsed ? "icon" : "full"}
+        />
 
-        <nav className="mt-4 space-y-2">
-          {navItems.map((item) => {
-            const active = isActive(pathname, item.href);
+        <div className="mt-4 flex-1">
+          <NavList pathname={pathname} collapsed={collapsed} />
+        </div>
 
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={`block rounded-xl border px-4 py-3 transition ${
-                  active
-                    ? "border-accent/30 bg-accent-soft text-accent"
-                    : "border-transparent bg-transparent text-muted-foreground hover:border-stroke hover:bg-panel-muted hover:text-foreground"
-                }`}
-              >
-                <p className="text-sm font-semibold">{item.label}</p>
-                <p className="mt-1 text-xs leading-relaxed">{item.hint}</p>
-              </Link>
-            );
-          })}
-        </nav>
+        <AccountMenu email={userEmail} collapsed={collapsed} />
       </aside>
 
       {searchOpen ? <UniversalSearchPalette onClose={closeSearch} onOpenTask={openTaskFromSearch} /> : null}
+      <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       {taskModalLoading ? (
         <Modal open={taskModalLoading} onClose={closeTaskModal} title="Loading task" size="wide">
           <div className="flex min-h-40 flex-col items-center justify-center gap-3 py-8 text-sm text-muted-foreground">

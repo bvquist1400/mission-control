@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
   type Dispatch,
+  type ReactNode,
   type SetStateAction,
 } from "react";
 import { useSprints } from "@/hooks/useSprints";
@@ -33,6 +34,10 @@ import type {
   TaskUpdatePayload,
   TaskWithImplementation,
 } from "@/types/database";
+import { Button } from "@/components/ui/Button";
+import { Input, Select } from "@/components/ui/Field";
+import { cardClasses } from "@/components/ui/Card";
+import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
 
 export type TaskGridScopeMode = "global" | "implementation" | "project";
 
@@ -60,6 +65,7 @@ interface TaskGridProps {
   scopeMode: TaskGridScopeMode;
   emptyStateTitle: string;
   emptyStateBody: string;
+  emptyStateAction?: ReactNode;
   initialExpandedTaskId?: string | null;
 }
 
@@ -80,11 +86,21 @@ export function TaskGridLoadingSkeleton() {
   );
 }
 
-function EmptyState({ title, body }: { title: string; body: string }) {
+function EmptyState({
+  title,
+  body,
+  action,
+}: {
+  title: string;
+  body: string;
+  /** A way out of the empty state — clearing filters, creating the first item. */
+  action?: ReactNode;
+}) {
   return (
     <div className="flex flex-col items-center justify-center rounded-card border border-dashed border-stroke bg-panel py-16 text-center">
       <p className="text-lg font-medium text-foreground">{title}</p>
       <p className="mt-1 text-sm text-muted-foreground">{body}</p>
+      {action ? <div className="mt-4">{action}</div> : null}
     </div>
   );
 }
@@ -133,6 +149,7 @@ export function TaskGrid({
   scopeMode,
   emptyStateTitle,
   emptyStateBody,
+  emptyStateAction,
   initialExpandedTaskId = null,
 }: TaskGridProps) {
   const [error, setError] = useState<string | null>(null);
@@ -146,6 +163,9 @@ export function TaskGrid({
   const [bulkDueDate, setBulkDueDate] = useState<string>("");
   const [bulkActionBusy, setBulkActionBusy] = useState(false);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(initialExpandedTaskId);
+  // Clicking a title opens the same modal as the Today page; the caret still
+  // expands inline for fast editing across many rows.
+  const [modalTaskId, setModalTaskId] = useState<string | null>(null);
   const [taskDetailsById, setTaskDetailsById] = useState<Record<string, TaskDetailData>>({});
   const [loadingDetailIds, setLoadingDetailIds] = useState<Record<string, boolean>>({});
   const { sprints } = useSprints();
@@ -158,7 +178,17 @@ export function TaskGrid({
   const showImplementationColumn = scopeMode === "global";
   const showSprintColumn = true;
   const columnCount = showImplementationColumn ? 12 : 11;
-  const tableMinWidthClass = showImplementationColumn ? "min-w-[1220px]" : "min-w-[1080px]";
+  // Columns fall away as the *table's own container* narrows. Container queries
+  // rather than viewport ones, because collapsing the sidebar changes the
+  // available width by 216px without changing the viewport at all.
+  const colApplication = "hidden @min-[960px]:table-cell";
+  const colSprint = "hidden @min-[1080px]:table-cell";
+  const colEstimate = "hidden @min-[1180px]:table-cell";
+  const colType = "hidden @min-[1180px]:table-cell";
+  const colPriority = "hidden @min-[820px]:table-cell";
+  const colFlags = "hidden @min-[1280px]:table-cell";
+  // Task / Status / Due / Actions always show; that core is ~700px wide.
+  const tableMinWidthClass = "min-w-[700px]";
   const taskColumnWidthClass = showImplementationColumn ? "w-[280px]" : "w-[320px]";
   const taskCellWidthClass = showImplementationColumn ? "w-[280px] max-w-[280px]" : "w-[320px] max-w-[320px]";
   const implementationColumnWidthClass = "w-[145px]";
@@ -1002,11 +1032,11 @@ export function TaskGrid({
     return (
       <div className="space-y-4">
         {error ? (
-          <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+          <p className="rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
             {error}
           </p>
         ) : null}
-        <EmptyState title={emptyStateTitle} body={emptyStateBody} />
+        <EmptyState title={emptyStateTitle} body={emptyStateBody} action={emptyStateAction} />
       </div>
     );
   }
@@ -1014,7 +1044,7 @@ export function TaskGrid({
   return (
     <div className="min-w-0 space-y-4">
       {error ? (
-        <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+        <p className="rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
           {error}
         </p>
       ) : null}
@@ -1036,11 +1066,11 @@ export function TaskGrid({
 
           <label className="flex min-w-[150px] flex-col gap-1 text-xs font-medium text-muted-foreground">
             Status
-            <select
+            <Select
+              size="sm"
               value={bulkStatus}
               onChange={(event) => setBulkStatus(event.target.value as TaskStatus | "")}
               disabled={bulkActionBusy}
-              className="rounded border border-stroke bg-panel px-2 py-1.5 text-xs text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
             >
               <option value="">Choose status</option>
               <option value="Backlog">Backlog</option>
@@ -1049,24 +1079,21 @@ export function TaskGrid({
               <option value="Blocked/Waiting">Blocked/Waiting</option>
               <option value="Parked">Parked</option>
               <option value="Done">Done</option>
-            </select>
+            </Select>
           </label>
-          <button
-            type="button"
+          <Button variant="secondary" size="sm"
             onClick={() => void applyBulkUpdate({ status: bulkStatus as TaskStatus })}
-            disabled={bulkActionBusy || !bulkStatus}
-            className="rounded border border-stroke bg-panel-muted px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-accent hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
-          >
+            disabled={bulkActionBusy || !bulkStatus}>
             Apply Status
-          </button>
+          </Button>
 
           <label className="flex min-w-[170px] flex-col gap-1 text-xs font-medium text-muted-foreground">
             Sprint
-            <select
+            <Select
+              size="sm"
               value={bulkSprintId}
               onChange={(event) => setBulkSprintId(event.target.value)}
               disabled={bulkActionBusy}
-              className="rounded border border-stroke bg-panel px-2 py-1.5 text-xs text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
             >
               <option value="">Choose sprint</option>
               {sprints.map((sprint) => (
@@ -1074,78 +1101,72 @@ export function TaskGrid({
                   {sprint.name}
                 </option>
               ))}
-            </select>
+            </Select>
           </label>
-          <button
-            type="button"
+          <Button variant="secondary" size="sm"
             onClick={() => void applyBulkUpdate({ sprint_id: bulkSprintId })}
-            disabled={bulkActionBusy || !bulkSprintId}
-            className="rounded border border-stroke bg-panel-muted px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-accent hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
-          >
+            disabled={bulkActionBusy || !bulkSprintId}>
             Apply Sprint
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={() => void applyBulkUpdate({ sprint_id: null }, { clearSprint: true })}
             disabled={bulkActionBusy}
-            className="rounded border border-stroke bg-panel px-3 py-1.5 text-xs font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
           >
             Clear Sprint
-          </button>
+          </Button>
 
           <label className="flex min-w-[145px] flex-col gap-1 text-xs font-medium text-muted-foreground">
             Due date
-            <input
+            <Input
+              size="sm"
               type="date"
               value={bulkDueDate}
               onChange={(event) => setBulkDueDate(event.target.value)}
               disabled={bulkActionBusy}
-              className="rounded border border-stroke bg-panel px-2 py-1.5 text-xs text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
             />
           </label>
-          <button
-            type="button"
+          <Button variant="secondary" size="sm"
             onClick={() => void applyBulkUpdate({ due_at: localDateInputToEndOfDayIso(bulkDueDate) })}
-            disabled={bulkActionBusy || !bulkDueDate}
-            className="rounded border border-stroke bg-panel-muted px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-accent hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
-          >
+            disabled={bulkActionBusy || !bulkDueDate}>
             Apply Due
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={() => void applyBulkUpdate({ due_at: null }, { clearDueDate: true })}
             disabled={bulkActionBusy}
-            className="rounded border border-stroke bg-panel px-3 py-1.5 text-xs font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
           >
             Clear Due
-          </button>
+          </Button>
 
-          <button
-            type="button"
+          <Button
+            variant="danger"
+            size="sm"
             onClick={() => void deleteSelectedTasks()}
             disabled={bulkActionBusy}
-            className="rounded border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
           >
             Delete Selected
-          </button>
+          </Button>
         </section>
       ) : null}
 
-      <section className="max-w-full overflow-hidden rounded-card border border-stroke bg-panel shadow-sm">
-        <p className="border-b border-stroke px-4 py-2 text-[11px] font-medium text-muted-foreground sm:hidden">
+      <section className={cardClasses({ padding: "none", className: "@container max-w-full overflow-hidden" })}>
+        <p className="border-b border-stroke px-4 py-2 text-xs font-medium text-muted-foreground sm:hidden">
           Scroll for more &rarr;
         </p>
         <div className="max-w-full overflow-x-auto">
           <table className={`w-full ${tableMinWidthClass}`}>
-            <thead className="border-b-2 border-stroke bg-panel-muted">
-              <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground [&>th]:border-r [&>th]:border-solid [&>th]:border-stroke [&>th:last-child]:border-r-0">
+            <thead className="border-b border-stroke bg-panel-muted">
+              <tr className="text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 <th className="w-10 px-2 py-3 text-center">
                   <input
                     type="checkbox"
                     checked={allVisibleSelected}
                     onChange={toggleAllVisibleTasks}
                     aria-label={allVisibleSelected ? "Clear all visible task selections" : "Select all visible tasks"}
-                    className="h-4 w-4 rounded border-stroke bg-panel text-accent focus:ring-accent"
+                    className="h-4 w-4 rounded border-stroke bg-panel text-accent-text focus:ring-accent"
                   />
                 </th>
                 <th className="w-10 px-2 py-3" />
@@ -1157,7 +1178,7 @@ export function TaskGrid({
                     title="Sort by task name"
                   >
                     <span>Task</span>
-                    <span aria-hidden="true" className="text-[10px] leading-none">
+                    <span aria-hidden="true" className="text-xs leading-none">
                       {getSortDirection("task") === "asc" ? "↑" : getSortDirection("task") === "desc" ? "↓" : "↕"}
                     </span>
                     <span className="sr-only">
@@ -1170,21 +1191,21 @@ export function TaskGrid({
                   </button>
                 </th>
                 {showImplementationColumn ? (
-                  <th className={`${implementationColumnWidthClass} px-3 py-3`}>Application</th>
+                  <th className={`${implementationColumnWidthClass} ${colApplication} px-3 py-3`}>Application</th>
                 ) : null}
                 {showSprintColumn ? (
-                  <th className={`${sprintColumnWidthClass} px-3 py-3`}>Sprint</th>
+                  <th className={`${sprintColumnWidthClass} ${colSprint} px-3 py-3`}>Sprint</th>
                 ) : null}
                 <th className={`${statusColumnWidthClass} px-3 py-3`}>Status</th>
-                <th className="w-[80px] px-3 py-3 text-center">
+                <th className={`w-[80px] ${colEstimate} px-3 py-3 text-center`}>
                   <button
                     type="button"
                     onClick={() => toggleSort("estimate")}
                     className="mx-auto inline-flex items-center gap-1 hover:text-foreground"
-                    title="Sort by estimate"
+                    title="Sort by estimate in minutes"
                   >
-                    <span>Est (min)</span>
-                    <span aria-hidden="true" className="text-[10px] leading-none">
+                    <span>Estimate</span>
+                    <span aria-hidden="true" className="text-xs leading-none">
                       {getSortDirection("estimate") === "asc" ? "↑" : getSortDirection("estimate") === "desc" ? "↓" : "↕"}
                     </span>
                     <span className="sr-only">
@@ -1204,7 +1225,7 @@ export function TaskGrid({
                     title="Sort by due date"
                   >
                     <span>Due</span>
-                    <span aria-hidden="true" className="text-[10px] leading-none">
+                    <span aria-hidden="true" className="text-xs leading-none">
                       {getSortDirection("due") === "asc" ? "↑" : getSortDirection("due") === "desc" ? "↓" : "↕"}
                     </span>
                     <span className="sr-only">
@@ -1216,8 +1237,8 @@ export function TaskGrid({
                     </span>
                   </button>
                 </th>
-                <th className="w-[80px] px-3 py-3 text-center">Type</th>
-                <th className="w-[70px] px-3 py-3 text-center">
+                <th className={`w-[80px] ${colType} px-3 py-3 text-center`}>Type</th>
+                <th className={`w-[70px] ${colPriority} px-3 py-3 text-center`}>
                   <button
                     type="button"
                     onClick={() => toggleSort("priority")}
@@ -1225,7 +1246,7 @@ export function TaskGrid({
                     title="Sort by priority"
                   >
                     <span>Priority</span>
-                    <span aria-hidden="true" className="text-[10px] leading-none">
+                    <span aria-hidden="true" className="text-xs leading-none">
                       {getSortDirection("priority") === "asc" ? "↑" : getSortDirection("priority") === "desc" ? "↓" : "↕"}
                     </span>
                     <span className="sr-only">
@@ -1237,7 +1258,7 @@ export function TaskGrid({
                     </span>
                   </button>
                 </th>
-                <th className="w-[60px] px-3 py-3 text-center">Flags</th>
+                <th className={`w-[60px] ${colFlags} px-3 py-3 text-center`}>Flags</th>
                 <th className={`${actionsColumnWidthClass} px-3 py-3`}>Actions</th>
               </tr>
             </thead>
@@ -1261,7 +1282,7 @@ export function TaskGrid({
                   <Fragment key={task.id}>
                     <tr
                       id={`task-${task.id}`}
-                      className={`border-b border-solid border-stroke [&>td]:border-r [&>td]:border-solid [&>td]:border-stroke [&>td:last-child]:border-r-0 ${isBusy ? "opacity-70" : visualState?.rowClass ?? ""} ${isExpanded ? "bg-accent/10" : "hover:bg-panel-muted/40"}`}
+                      className={`border-b border-solid border-stroke ${isBusy ? "opacity-70" : visualState?.rowClass ?? ""} ${isExpanded ? "bg-accent/10" : "hover:bg-panel-muted/40"}`}
                     >
                       <td className="w-10 px-2 py-2.5 align-middle text-center">
                         <input
@@ -1270,7 +1291,7 @@ export function TaskGrid({
                           onChange={() => toggleTaskSelected(task.id)}
                           disabled={isBusy}
                           aria-label={`Select task ${task.title}`}
-                          className="h-4 w-4 rounded border-stroke bg-panel text-accent focus:ring-accent disabled:cursor-not-allowed disabled:opacity-60"
+                          className="h-4 w-4 rounded border-stroke bg-panel text-accent-text focus:ring-accent disabled:cursor-not-allowed disabled:opacity-60"
                         />
                       </td>
                       <td className="w-10 px-2 py-2.5 align-middle text-center">
@@ -1294,12 +1315,18 @@ export function TaskGrid({
                       </td>
 
                       <td className={`${taskCellWidthClass} px-3 py-2.5 align-middle`}>
-                        <p className="break-words text-sm font-medium leading-tight text-foreground">{task.title}</p>
+                        <button
+                          type="button"
+                          onClick={() => setModalTaskId(task.id)}
+                          className="block w-full break-words text-left text-sm font-medium leading-tight text-foreground transition hover:text-accent-text"
+                        >
+                          {task.title}
+                        </button>
                         {visualState ? (
                           <TaskStateBadge state={visualState} className="mt-1" />
                         ) : null}
                         {task.implementation?.phase === "Sundown" ? (
-                          <p className="mt-1 inline-flex rounded bg-orange-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-orange-300">
+                          <p className="mt-1 inline-flex rounded bg-orange-500/15 px-1.5 py-0.5 text-xs font-semibold text-orange-300">
                             Sundown implementation
                           </p>
                         ) : null}
@@ -1336,7 +1363,7 @@ export function TaskGrid({
                       </td>
 
                       {showImplementationColumn ? (
-                        <td className={`${implementationColumnWidthClass} px-3 py-2.5 align-middle`}>
+                        <td className={`${implementationColumnWidthClass} ${colApplication} px-3 py-2.5 align-middle`}>
                           <select
                             value={task.implementation_id ?? ""}
                             onChange={(event) =>
@@ -1356,7 +1383,7 @@ export function TaskGrid({
                       ) : null}
 
                       {showSprintColumn ? (
-                        <td className={`${sprintColumnWidthClass} px-3 py-2.5 align-middle`}>
+                        <td className={`${sprintColumnWidthClass} ${colSprint} px-3 py-2.5 align-middle`}>
                           <select
                             value={task.sprint_id ?? ""}
                             onChange={(event) =>
@@ -1387,7 +1414,7 @@ export function TaskGrid({
                         />
                       </td>
 
-                      <td className="w-[80px] px-2 py-2.5 align-middle text-center">
+                      <td className={`w-[80px] ${colEstimate} px-2 py-2.5 align-middle text-center`}>
                         <input
                           type="number"
                           min={1}
@@ -1433,21 +1460,21 @@ export function TaskGrid({
                         />
                       </td>
 
-                      <td className="w-[80px] px-2 py-2.5 align-middle text-center">
+                      <td className={`w-[80px] ${colType} px-2 py-2.5 align-middle text-center`}>
                         <span className="text-xs text-muted-foreground">{task.task_type}</span>
                       </td>
 
-                      <td className="w-[70px] px-2 py-2.5 align-middle text-center">
+                      <td className={`w-[70px] ${colPriority} px-2 py-2.5 align-middle text-center`}>
                         <span className="text-xs font-medium text-foreground">{task.priority_score}</span>
                       </td>
 
-                      <td className="w-[60px] px-2 py-2.5 align-middle">
+                      <td className={`w-[60px] ${colFlags} px-2 py-2.5 align-middle`}>
                         <div className="flex items-center justify-center gap-1">
                           {task.blocker ? (
-                            <span className="rounded bg-red-500/20 px-1.5 py-0.5 text-[10px] font-bold text-red-400" title="Blocker">B</span>
+                            <span className="rounded bg-red-500/20 px-1.5 py-0.5 text-xs font-bold text-red-400" title="Blocker">B</span>
                           ) : null}
                           {task.needs_review ? (
-                            <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-400" title="Needs review">R</span>
+                            <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-xs font-bold text-amber-400" title="Needs review">R</span>
                           ) : null}
                           {!task.blocker && !task.needs_review ? (
                             <span className="text-xs text-muted-foreground">—</span>
@@ -1457,14 +1484,14 @@ export function TaskGrid({
 
                       <td className={`${actionsColumnWidthClass} px-2 py-2.5 align-middle`}>
                         <div className="flex items-center gap-1.5">
-                          <button
-                            type="button"
+                          <Button
+                            variant="secondary"
+                            size="sm"
                             onClick={() => handleToggleDone(task)}
                             disabled={isBusy}
-                            className="rounded border border-stroke bg-panel px-2.5 py-1 text-xs font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             {task.status === "Done" ? "Reopen" : "Done"}
-                          </button>
+                          </Button>
                           <button
                             type="button"
                             onClick={() => void updateTask(task.id, { blocker: !task.blocker })}
@@ -1493,14 +1520,14 @@ export function TaskGrid({
                             <div className="space-y-4">
                               <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-stroke bg-panel-muted px-3 py-2">
                                 <p className="text-xs text-muted-foreground">Manage task details, checklist, dependencies, and comments.</p>
-                                <button
-                                  type="button"
+                                <Button
+                                  variant="danger"
+                                  size="sm"
                                   onClick={() => void deleteTask(task.id)}
                                   disabled={isBusy}
-                                  className="rounded border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
                                   {isDeleting ? "Deleting..." : "Delete Task"}
-                                </button>
+                                </Button>
                               </div>
 
                               <TaskMetaEditor
@@ -1549,6 +1576,22 @@ export function TaskGrid({
           </table>
         </div>
       </section>
+
+      <TaskDetailModal
+        task={tasks.find((item) => item.id === modalTaskId) ?? null}
+        allTasks={tasks}
+        commitments={commitments}
+        onClose={() => setModalTaskId(null)}
+        onTaskUpdated={(taskId, updates) =>
+          setTasks((current) =>
+            current.map((item) => (item.id === taskId ? { ...item, ...updates } : item))
+          )
+        }
+        onTaskDeleted={(taskId) => {
+          setModalTaskId(null);
+          setTasks((current) => current.filter((item) => item.id !== taskId));
+        }}
+      />
     </div>
   );
 }

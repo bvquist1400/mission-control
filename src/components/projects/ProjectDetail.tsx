@@ -9,10 +9,15 @@ import { ProjectStageBadge } from "@/components/ui/ProjectStageBadge";
 import { ProjectStageSelector } from "@/components/ui/ProjectStageSelector";
 import { RagBadge } from "@/components/ui/RagBadge";
 import { RagSelector } from "@/components/ui/RagSelector";
+import { PersonalBadge } from "@/components/ui/PersonalBadge";
+import { hasPersonalTag, setPersonalTag } from "@/lib/personal-exclusion";
 import type {
   ProjectDetail as ProjectDetailType,
   ProjectUpdatePayload,
 } from "@/types/database";
+import { Button } from "@/components/ui/Button";
+import { Input, Textarea } from "@/components/ui/Field";
+import { cardClasses } from "@/components/ui/Card";
 
 interface ProjectDetailProps {
   id: string;
@@ -150,9 +155,9 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
 
   if (error && !project) {
     return (
-      <div className="rounded-card border border-red-200 bg-red-50 p-5 text-center">
-        <p className="text-sm text-red-700">{error}</p>
-        <Link href="/projects" className="mt-3 inline-block text-sm font-medium text-accent hover:underline">
+      <div className="rounded-card border border-danger-border bg-danger-soft p-5 text-center">
+        <p className="text-sm text-danger">{error}</p>
+        <Link href="/projects" className="mt-3 inline-block text-sm font-medium text-accent-text hover:underline">
           Back to Projects
         </Link>
       </div>
@@ -161,16 +166,18 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
 
   if (!project) return null;
 
+  const isPersonal = hasPersonalTag(project);
+
   return (
     <div className="space-y-6">
       {error && (
-        <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+        <p className="rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
           {error}
         </p>
       )}
 
       {/* ── Header Section ── */}
-      <section className="min-w-0 rounded-card border border-stroke bg-panel p-5 shadow-sm">
+      <section className={cardClasses({ className: "min-w-0" })}>
         {isEditing ? (
           <input
             value={nameDraft}
@@ -193,7 +200,10 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
             className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-lg font-semibold text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
           />
         ) : (
-          <h2 className="text-lg font-semibold text-foreground">{project.name}</h2>
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-semibold text-foreground">{project.name}</h2>
+            {isPersonal ? <PersonalBadge /> : null}
+          </div>
         )}
 
         <div className="mt-4 flex flex-wrap items-start justify-between gap-4">
@@ -214,21 +224,25 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
               </>
             )}
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              setIsEditing((current) => {
-                const next = !current;
-                if (next && project) {
-                  loadDrafts(project);
-                }
-                return next;
-              });
-            }}
-            className="rounded-lg border border-stroke bg-panel px-3 py-1.5 text-xs font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground"
+          {isEditing ? (
+            <label className="flex items-center gap-2 rounded-lg border border-stroke bg-panel-muted px-3 py-1.5 text-sm font-medium text-foreground">
+              <input
+                type="checkbox"
+                checked={isPersonal}
+                onChange={(event) => void updateField({ tags: setPersonalTag(project.tags, event.target.checked) })}
+                disabled={saving}
+                className="h-4 w-4 accent-violet-500"
+              />
+              Personal project
+            </label>
+          ) : null}
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => { setIsEditing((current) => { const next = !current; if (next && project) { loadDrafts(project); } return next; }); }}
           >
             {isEditing ? "Done Editing" : "Edit"}
-          </button>
+          </Button>
         </div>
 
         {/* Detail grid */}
@@ -238,7 +252,7 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
             {project.implementation ? (
               <Link
                 href={`/applications/${project.implementation.id}`}
-                className="mt-1 block text-sm font-medium text-accent hover:underline"
+                className="mt-1 block text-sm font-medium text-accent-text hover:underline"
               >
                 {project.implementation.name}
               </Link>
@@ -250,22 +264,17 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
           <article className="rounded-lg bg-panel-muted p-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Target Date</p>
             {isEditing ? (
-              <input
+              <Input
+                size="xs"
+                className="mt-1"
                 type="date"
                 value={targetDateDraft}
                 onChange={(e) => setTargetDateDraft(e.target.value)}
                 onBlur={() => {
-                  if (!project) {
-                    return;
-                  }
-
-                  const currentTargetDate = dateOnlyToInputValue(project.target_date);
-                  if (targetDateDraft !== currentTargetDate) {
-                    void updateField({ target_date: targetDateDraft || null });
-                  }
+                  if (!project) { return; } const currentTargetDate = dateOnlyToInputValue(project.target_date);
+                  if (targetDateDraft !== currentTargetDate) { void updateField({ target_date: targetDateDraft || null }); };
                 }}
                 disabled={saving}
-                className="mt-1 w-full rounded border border-stroke bg-panel px-2 py-1 text-sm text-foreground outline-none focus:border-accent"
               />
             ) : (
               <p className="mt-1 text-sm font-medium text-foreground">{formatDateOnly(project.target_date)}</p>
@@ -275,23 +284,18 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
           <article className="rounded-lg bg-panel-muted p-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">SPM ID</p>
             {isEditing ? (
-              <input
+              <Input
+                size="xs"
+                className="mt-1"
                 type="text"
                 value={spmIdDraft}
                 onChange={(e) => setSpmIdDraft(e.target.value)}
                 onBlur={() => {
-                  if (!project) {
-                    return;
-                  }
-
-                  const currentSpmId = project.servicenow_spm_id ?? "";
-                  if (spmIdDraft !== currentSpmId) {
-                    void updateField({ servicenow_spm_id: spmIdDraft || null });
-                  }
+                  if (!project) { return; } const currentSpmId = project.servicenow_spm_id ?? "";
+                  if (spmIdDraft !== currentSpmId) { void updateField({ servicenow_spm_id: spmIdDraft || null }); };
                 }}
                 disabled={saving}
                 placeholder="e.g. SPM-1234"
-                className="mt-1 w-full rounded border border-stroke bg-panel px-2 py-1 text-sm text-foreground outline-none focus:border-accent"
               />
             ) : (
               <p className="mt-1 text-sm font-medium text-foreground">
@@ -316,23 +320,18 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
         <div className="mt-5">
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Description</p>
           {isEditing ? (
-            <textarea
+            <Textarea
+              size="xs"
+              className="mt-1"
               value={descriptionDraft}
               onChange={(e) => setDescriptionDraft(e.target.value)}
               onBlur={() => {
-                if (!project) {
-                  return;
-                }
-
-                const currentDescription = project.description ?? "";
-                if (descriptionDraft !== currentDescription) {
-                  void updateField({ description: descriptionDraft || null });
-                }
+                if (!project) { return; } const currentDescription = project.description ?? "";
+                if (descriptionDraft !== currentDescription) { void updateField({ description: descriptionDraft || null }); };
               }}
               disabled={saving}
               rows={2}
               placeholder="What is this project about?"
-              className="mt-1 w-full rounded border border-stroke bg-panel px-2 py-1 text-sm text-foreground outline-none focus:border-accent"
             />
           ) : (
             <p className="mt-1 text-sm text-muted-foreground">{project.description || "No description set."}</p>
@@ -343,23 +342,18 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
         <div className="mt-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status Summary</p>
           {isEditing ? (
-            <textarea
+            <Textarea
+              size="xs"
+              className="mt-1"
               value={statusSummaryDraft}
               onChange={(e) => setStatusSummaryDraft(e.target.value)}
               onBlur={() => {
-                if (!project) {
-                  return;
-                }
-
-                const currentStatusSummary = project.status_summary ?? "";
-                if (statusSummaryDraft !== currentStatusSummary) {
-                  void updateField({ status_summary: statusSummaryDraft });
-                }
+                if (!project) { return; } const currentStatusSummary = project.status_summary ?? "";
+                if (statusSummaryDraft !== currentStatusSummary) { void updateField({ status_summary: statusSummaryDraft }); };
               }}
               disabled={saving}
               rows={2}
               placeholder="Current status in 1-2 sentences"
-              className="mt-1 w-full rounded border border-stroke bg-panel px-2 py-1 text-sm text-foreground outline-none focus:border-accent"
             />
           ) : (
             <p className="mt-1 text-sm text-muted-foreground">{project.status_summary || "No status summary set."}</p>
@@ -368,7 +362,7 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
       </section>
 
       {/* ── Tasks Section ── */}
-      <section className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+      <section className={cardClasses()}>
         <h2 className="text-sm font-semibold text-foreground">Tasks</h2>
 
         <div className="mt-4">

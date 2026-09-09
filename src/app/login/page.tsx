@@ -4,6 +4,8 @@ import { FormEvent, Suspense, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { createSupabaseBrowserClient } from '@/lib/supabase';
+import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Field";
 
 type LoginMethod = 'magic-link' | 'password';
 
@@ -152,28 +154,14 @@ function LoginContent() {
       <section className="max-w-md rounded-card border border-stroke bg-panel p-6">
         {/* Method toggle */}
         <div className="mb-6 flex rounded-lg border border-stroke p-1">
-          <button
-            type="button"
-            onClick={() => { setMethod('password'); setError(null); setMessage(null); }}
-            className={`flex-1 rounded-md px-3 py-2 text-sm font-medium transition ${
-              method === 'password'
-                ? 'bg-accent text-white'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
+          <Button variant="toggle" active={method === 'password'} className="flex-1"
+            onClick={() => { setMethod('password'); setError(null); setMessage(null); }}>
             Password
-          </button>
-          <button
-            type="button"
-            onClick={() => { setMethod('magic-link'); setError(null); setMessage(null); }}
-            className={`flex-1 rounded-md px-3 py-2 text-sm font-medium transition ${
-              method === 'magic-link'
-                ? 'bg-accent text-white'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
+          </Button>
+          <Button variant="toggle" active={method === 'magic-link'} className="flex-1"
+            onClick={() => { setMethod('magic-link'); setError(null); setMessage(null); }}>
             Magic Link
-          </button>
+          </Button>
         </div>
 
         {method === 'password' ? (
@@ -182,13 +170,14 @@ function LoginContent() {
               <label htmlFor="email" className="block text-sm font-medium text-foreground">
                 Email
               </label>
-              <input
+              <Input
+                tone="muted"
+                className="mt-1"
                 id="email"
                 type="email"
                 required
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
-                className="mt-1 w-full rounded-lg border border-stroke bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-accent"
                 placeholder="you@example.com"
                 autoComplete="email"
               />
@@ -197,24 +186,21 @@ function LoginContent() {
               <label htmlFor="password" className="block text-sm font-medium text-foreground">
                 Password
               </label>
-              <input
+              <Input
+                tone="muted"
+                className="mt-1"
                 id="password"
                 type="password"
                 required
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
-                className="mt-1 w-full rounded-lg border border-stroke bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-accent"
                 placeholder="Your password"
                 autoComplete="current-password"
               />
             </div>
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-            >
+            <Button variant="primary" size="lg" className="w-full" type="submit" disabled={loading}>
               {loading ? 'Signing in...' : 'Sign in'}
-            </button>
+            </Button>
           </form>
         ) : (
           <form className="space-y-4" onSubmit={handleMagicLink}>
@@ -222,32 +208,29 @@ function LoginContent() {
               <label htmlFor="magic-email" className="block text-sm font-medium text-foreground">
                 Email
               </label>
-              <input
+              <Input
+                tone="muted"
+                className="mt-1"
                 id="magic-email"
                 type="email"
                 required
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
-                className="mt-1 w-full rounded-lg border border-stroke bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-accent"
                 placeholder="you@example.com"
                 autoComplete="email"
               />
             </div>
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-            >
+            <Button variant="primary" size="lg" className="w-full" type="submit" disabled={loading}>
               {loading ? 'Sending link...' : 'Send magic link'}
-            </button>
+            </Button>
           </form>
         )}
 
         {message ? (
-          <p className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{message}</p>
+          <p className="mt-4 rounded-lg border border-success-border bg-success-soft px-3 py-2 text-sm text-success">{message}</p>
         ) : null}
         {error || authError ? (
-          <p className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error ?? authError}</p>
+          <p className="mt-4 rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger">{error ?? authError}</p>
         ) : null}
 
         <p className="mt-4 text-xs text-muted-foreground">

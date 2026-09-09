@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { Button } from "@/components/ui/Button";
+import { cardClasses } from "@/components/ui/Card";
 
 type Surface = "MCP" | "Legacy Actions";
 
@@ -303,8 +305,8 @@ export default function LlmPage() {
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {QUICK_TIPS.map((tip) => (
-          <article key={tip.title} className="rounded-card border border-stroke bg-panel p-4 shadow-sm">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{tip.title}</p>
+          <article key={tip.title} className={cardClasses({ padding: "sm" })}>
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{tip.title}</p>
             <p className="mt-2 text-sm text-foreground">{tip.body}</p>
           </article>
         ))}
@@ -319,7 +321,7 @@ export default function LlmPage() {
 
           <div className="grid gap-4 xl:grid-cols-2">
             {section.playbooks.map((playbook) => (
-              <article key={playbook.id} className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+              <article key={playbook.id} className={cardClasses()}>
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h3 className="text-base font-semibold text-foreground">{playbook.title}</h3>
@@ -329,7 +331,7 @@ export default function LlmPage() {
                     {playbook.surfaces.map((surface) => (
                       <span
                         key={`${playbook.id}-${surface}`}
-                        className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${surfaceClass(surface)}`}
+                        className={`rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${surfaceClass(surface)}`}
                       >
                         {surface}
                       </span>
@@ -340,13 +342,13 @@ export default function LlmPage() {
                 <div className="mt-4 rounded-xl border border-stroke bg-panel-muted/50 p-4">
                   <div className="flex items-center justify-between gap-3">
                     <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Best Prompt</p>
-                    <button
-                      type="button"
+                    <Button
+                      variant="secondary"
+                      size="sm"
                       onClick={() => void handleCopy(playbook.id, playbook.prompt)}
-                      className="rounded-lg border border-stroke bg-panel px-3 py-1.5 text-xs font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground"
                     >
                       {copiedId === playbook.id ? "Copied" : "Copy Prompt"}
-                    </button>
+                    </Button>
                   </div>
                   <pre className="mt-3 whitespace-pre-wrap text-sm leading-6 text-foreground">{playbook.prompt}</pre>
                 </div>
@@ -405,7 +407,7 @@ export default function LlmPage() {
 
         <div className="grid gap-4 xl:grid-cols-2">
           {FAQ_ITEMS.map((item) => (
-            <article key={item.question} className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+            <article key={item.question} className={cardClasses()}>
               <h3 className="text-sm font-semibold text-foreground">{item.question}</h3>
               <p className="mt-2 text-sm text-muted-foreground">{item.answer}</p>
             </article>

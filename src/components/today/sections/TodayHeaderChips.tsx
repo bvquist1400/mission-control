@@ -4,6 +4,7 @@ import { readIntelligenceArtifactInbox } from "@/lib/intelligence-layer/inbox";
 import { queryCurrentSprintChip, type CurrentSprintChip } from "@/lib/today/queries";
 import { parseSprintHolidaySet } from "@/lib/today/sprint-progress";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
+import type { TaskScope } from "@/lib/personal-exclusion";
 
 const TIME_ZONE = DEFAULT_WORKDAY_CONFIG.timezone;
 const SPRINT_HOLIDAY_SET = parseSprintHolidaySet(process.env.NEXT_PUBLIC_SPRINT_HOLIDAYS);
@@ -38,27 +39,31 @@ function SprintChip({ sprint }: { sprint: CurrentSprintChip }) {
   );
 }
 
-export async function TodayHeaderChips({ userId }: { userId: string }) {
+export async function TodayHeaderChips({ userId, mode }: { userId: string; mode: TaskScope }) {
   const supabase = await createSupabaseServerClient();
 
   let openArtifactCount = 0;
-  try {
-    const inbox = await readIntelligenceArtifactInbox(supabase, userId);
-    openArtifactCount = inbox.counts?.open ?? 0;
-  } catch (error) {
-    console.error("Failed to load artifact inbox count:", error);
+  if (mode !== "personal") {
+    try {
+      const inbox = await readIntelligenceArtifactInbox(supabase, userId);
+      openArtifactCount = inbox.counts?.open ?? 0;
+    } catch (error) {
+      console.error("Failed to load artifact inbox count:", error);
+    }
   }
 
   let sprint: CurrentSprintChip | null = null;
-  try {
-    sprint = await queryCurrentSprintChip(supabase, userId, TIME_ZONE, SPRINT_HOLIDAY_SET);
-  } catch (error) {
-    console.error("Failed to load current sprint chip:", error);
+  if (mode !== "personal") {
+    try {
+      sprint = await queryCurrentSprintChip(supabase, userId, TIME_ZONE, SPRINT_HOLIDAY_SET, mode);
+    } catch (error) {
+      console.error("Failed to load current sprint chip:", error);
+    }
   }
 
   return (
     <>
-      <ArtifactInboxChip count={openArtifactCount} />
+      {mode !== "personal" ? <ArtifactInboxChip count={openArtifactCount} /> : null}
       {sprint ? <SprintChip sprint={sprint} /> : null}
     </>
   );

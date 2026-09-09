@@ -14,6 +14,7 @@ import type {
   TaskUpdatePayload,
   TaskWithImplementation,
 } from "@/types/database";
+import { Button } from "@/components/ui/Button";
 
 interface TaskDetailModalProps {
   task: TaskWithImplementation | null;
@@ -120,33 +121,31 @@ export function TaskDetailModal({
             )}
             <div className="ml-auto flex items-center gap-2">
               {task.blocker && (
-                <span className="rounded bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">
+                <span className="rounded bg-danger-soft-hover px-2 py-0.5 text-xs font-semibold text-danger">
                   Blocker
                 </span>
               )}
-              <button
-                type="button"
-                onClick={() =>
-                  void updateTask({ status: "Done" }).then(() => onClose())
-                }
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => void updateTask({ status: "Done" }).then(() => onClose()) }
                 disabled={task.status === "Done" || isSaving || isDeleting}
-                className="rounded bg-accent px-3 py-1 text-xs font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Mark Done
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
                 onClick={() => void handleDelete()}
                 disabled={isSaving || isDeleting}
-                className="rounded border border-red-300 bg-red-50 px-3 py-1 text-xs font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isDeleting ? "Deleting..." : "Delete Task"}
-              </button>
+              </Button>
             </div>
           </div>
 
           {(error || deleteError) && (
-            <p className="rounded bg-red-50 px-3 py-2 text-xs text-red-600">{error || deleteError}</p>
+            <p className="rounded bg-danger-soft px-3 py-2 text-xs text-danger">{error || deleteError}</p>
           )}
 
           {/* Meta editor */}

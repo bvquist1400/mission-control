@@ -6,6 +6,8 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { ErrorBanner } from "@/components/ui/ErrorBanner";
 import { formatDateOnly, formatRelativeDate, localDateString } from "@/components/utils/dates";
 import type { ImplementationHealthScore, TaskWithImplementation } from "@/types/database";
+import { Input } from "@/components/ui/Field";
+import { cardClasses } from "@/components/ui/Card";
 
 interface WeeklyReviewData {
   week: {
@@ -116,12 +118,7 @@ export default function WeeklyReviewPage() {
         actions={
           <label className="space-y-1">
             <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">Anchor Date</span>
-            <input
-              type="date"
-              value={anchorDate}
-              onChange={(event) => setAnchorDate(event.target.value)}
-              className="rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
-            />
+            <Input type="date" value={anchorDate} onChange={(event) => setAnchorDate(event.target.value)} />
           </label>
         }
       />
@@ -140,27 +137,27 @@ export default function WeeklyReviewPage() {
       ) : data ? (
         <>
           <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-card border border-stroke bg-panel p-4 shadow-sm">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Week Window</p>
+            <div className={cardClasses({ padding: "sm" })}>
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Week Window</p>
               <p className="mt-1 text-sm font-medium text-foreground">
                 {formatDateOnly(data.week.start_date)} to {formatDateOnly(data.week.end_date)}
               </p>
             </div>
-            <div className="rounded-card border border-stroke bg-panel p-4 shadow-sm">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Shipped</p>
+            <div className={cardClasses({ padding: "sm" })}>
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Shipped</p>
               <p className="mt-1 text-2xl font-semibold text-foreground">{data.shipped.length}</p>
             </div>
-            <div className="rounded-card border border-stroke bg-panel p-4 shadow-sm">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Stalled</p>
+            <div className={cardClasses({ padding: "sm" })}>
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Stalled</p>
               <p className="mt-1 text-2xl font-semibold text-foreground">{data.stalled.length}</p>
             </div>
-            <div className="rounded-card border border-stroke bg-panel p-4 shadow-sm">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Pending Decisions</p>
+            <div className={cardClasses({ padding: "sm" })}>
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Pending Decisions</p>
               <p className="mt-1 text-2xl font-semibold text-foreground">{data.pending_decisions.length}</p>
             </div>
           </section>
 
-          <section className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+          <section className={cardClasses()}>
             <h2 className="text-sm font-semibold text-foreground">Next Week Suggestions</h2>
             {data.next_week_suggestions.length === 0 ? (
               <p className="mt-3 text-sm text-muted-foreground">No explicit guidance generated for this review window.</p>
@@ -176,7 +173,7 @@ export default function WeeklyReviewPage() {
           </section>
 
           <div className="grid gap-4 xl:grid-cols-2">
-            <section className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+            <section className={cardClasses()}>
               <h2 className="text-sm font-semibold text-foreground">Shipped This Week</h2>
               {data.shipped.length === 0 ? (
                 <p className="mt-3 text-sm text-muted-foreground">No tasks were completed in this review window.</p>
@@ -194,7 +191,7 @@ export default function WeeklyReviewPage() {
               )}
             </section>
 
-            <section className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+            <section className={cardClasses()}>
               <h2 className="text-sm font-semibold text-foreground">Pending Decisions</h2>
               {data.pending_decisions.length === 0 ? (
                 <p className="mt-3 text-sm text-muted-foreground">No review-blocked work right now.</p>
@@ -202,7 +199,7 @@ export default function WeeklyReviewPage() {
                 <div className="mt-3 space-y-2">
                   {data.pending_decisions.slice(0, 8).map((task) => (
                     <div key={task.id} className="rounded-lg bg-panel-muted px-3 py-2">
-                      <Link href={`/backlog?expand=${task.id}`} className="text-sm font-medium text-foreground hover:text-accent hover:underline">
+                      <Link href={`/backlog?expand=${task.id}`} className="text-sm font-medium text-foreground hover:text-accent-text hover:underline">
                         {task.title}
                       </Link>
                       <p className="mt-1 text-xs text-muted-foreground">
@@ -214,7 +211,7 @@ export default function WeeklyReviewPage() {
               )}
             </section>
 
-            <section className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+            <section className={cardClasses()}>
               <h2 className="text-sm font-semibold text-foreground">Stalled Work</h2>
               {data.stalled.length === 0 ? (
                 <p className="mt-3 text-sm text-muted-foreground">No stale active work crossed the stall threshold.</p>
@@ -222,7 +219,7 @@ export default function WeeklyReviewPage() {
                 <div className="mt-3 space-y-2">
                   {data.stalled.slice(0, 8).map((task) => (
                     <div key={task.id} className="rounded-lg bg-panel-muted px-3 py-2">
-                      <Link href={`/backlog?expand=${task.id}`} className="text-sm font-medium text-foreground hover:text-accent hover:underline">
+                      <Link href={`/backlog?expand=${task.id}`} className="text-sm font-medium text-foreground hover:text-accent-text hover:underline">
                         {task.title}
                       </Link>
                       <p className="mt-1 text-xs text-muted-foreground">
@@ -234,7 +231,7 @@ export default function WeeklyReviewPage() {
               )}
             </section>
 
-            <section className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+            <section className={cardClasses()}>
               <h2 className="text-sm font-semibold text-foreground">Cold Incoming Commitments</h2>
               {data.cold_commitments.length === 0 ? (
                 <p className="mt-3 text-sm text-muted-foreground">No cold incoming commitments are aging out.</p>
@@ -253,7 +250,7 @@ export default function WeeklyReviewPage() {
             </section>
           </div>
 
-          <section className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+          <section className={cardClasses()}>
             <h2 className="text-sm font-semibold text-foreground">Application Health</h2>
             {data.health_scores.length === 0 ? (
               <p className="mt-3 text-sm text-muted-foreground">No application health data is available yet.</p>

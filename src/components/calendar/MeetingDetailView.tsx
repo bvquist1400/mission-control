@@ -6,6 +6,9 @@ import { MeetingNotesPanel } from "@/components/calendar/MeetingNotesPanel";
 import { PageHeader } from "@/components/layout/PageHeader";
 import type { CalendarTemporalStatus } from "@/lib/calendar";
 import type { CalendarEventSource } from "@/lib/calendar-event-identity";
+import { Button } from "@/components/ui/Button";
+import { cardClasses } from "@/components/ui/Card";
+import { badgeClasses } from "@/components/ui/Badge";
 
 const MAX_MEETING_CONTEXT_CHARS = 8000;
 
@@ -151,19 +154,19 @@ export function MeetingDetailView({ event }: MeetingDetailViewProps) {
         }
       />
 
-      <section className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+      <section className={cardClasses()}>
         <div className="flex flex-wrap items-center gap-2">
           <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] ${statusBadgeClass(event.temporal_status)}`}>
             {formatStatusLabel(event.temporal_status)}
           </span>
-          <span className="rounded-full border border-stroke bg-panel-muted px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+          <span className={badgeClasses({ className: "tracking-[0.14em] uppercase" })}>
             {formatSourceLabel(event.source)}
           </span>
-          <span className="rounded-full border border-stroke bg-panel-muted px-3 py-1 text-xs font-semibold text-foreground">
+          <span className={badgeClasses()}>
             {event.note_count} {event.note_count === 1 ? "note" : "notes"}
           </span>
           {event.is_all_day ? (
-            <span className="rounded-full border border-stroke bg-panel-muted px-3 py-1 text-xs font-semibold text-foreground">
+            <span className={badgeClasses()}>
               All day
             </span>
           ) : null}
@@ -183,7 +186,7 @@ export function MeetingDetailView({ event }: MeetingDetailViewProps) {
             {event.with_display.length > 0 ? (
               <div className="mt-2 flex flex-wrap gap-2">
                 {event.with_display.map((person) => (
-                  <span key={person} className="rounded-full border border-stroke bg-panel px-3 py-1 text-xs text-foreground">
+                  <span key={person} className={badgeClasses()}>
                     {person}
                   </span>
                 ))}
@@ -203,13 +206,13 @@ export function MeetingDetailView({ event }: MeetingDetailViewProps) {
 
       <section className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(22rem,0.9fr)]">
         <div className="space-y-6">
-          <article className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+          <article className={cardClasses()}>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Meeting Context</p>
                 <h2 className="mt-2 text-lg font-semibold text-foreground">Prep, goals, and why this meeting matters</h2>
               </div>
-              <span className="rounded-full border border-stroke bg-panel-muted px-3 py-1 text-xs font-medium text-muted-foreground">
+              <span className={badgeClasses()}>
                 {trimmedDraft.length}/{MAX_MEETING_CONTEXT_CHARS}
               </span>
             </div>
@@ -224,21 +227,20 @@ export function MeetingDetailView({ event }: MeetingDetailViewProps) {
               placeholder="Capture goals, risks, decision points, prep asks, or the thread you want preserved."
               rows={7}
               maxLength={MAX_MEETING_CONTEXT_CHARS}
-              className="mt-4 w-full rounded-xl border border-stroke bg-panel-muted px-3 py-3 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
+              className="mt-4 w-full rounded-xl border border-stroke bg-panel-muted px-3 py-3 text-sm text-foreground outline-none transition focus:border-accent"
             />
 
             <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
               <p className="text-xs text-muted-foreground">
                 {savedAt && !isDirty ? `Saved ${formatTimestamp(savedAt)}` : isDirty ? "Unsaved changes" : "No saved meeting context yet"}
               </p>
-              <button
-                type="button"
+              <Button
+                variant="primary"
                 onClick={() => void saveMeetingContext()}
                 disabled={isSaving || !isDirty}
-                className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isSaving ? "Saving..." : "Save Context"}
-              </button>
+              </Button>
             </div>
 
             {error ? (
@@ -248,7 +250,7 @@ export function MeetingDetailView({ event }: MeetingDetailViewProps) {
             ) : null}
           </article>
 
-          <article className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+          <article className={cardClasses()}>
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Sanitized Invite Details</p>
             <h2 className="mt-2 text-lg font-semibold text-foreground">Meeting body preview</h2>
             {event.body_scrubbed_preview ? (

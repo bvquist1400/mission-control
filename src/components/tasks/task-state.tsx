@@ -96,7 +96,7 @@ export function getTaskVisualState(input: TaskVisualStateInput): TaskVisualState
 export function TaskStateBadge({ state, className = "" }: { state: TaskVisualState; className?: string }) {
   return (
     <span
-      className={`inline-flex rounded px-1.5 py-0.5 text-[10px] font-semibold ${state.badgeClass} ${className}`}
+      className={`inline-flex rounded px-1.5 py-0.5 text-xs font-semibold ${state.badgeClass} ${className}`}
     >
       {state.label}
     </span>

@@ -11,6 +11,9 @@ import type {
   PrepTask,
   TaskSummary,
 } from "@/lib/briefing";
+import { Button } from "@/components/ui/Button";
+import { Textarea } from "@/components/ui/Field";
+import { badgeClasses } from "@/components/ui/Badge";
 
 interface EODBriefingProps {
   requestedDate: string;
@@ -167,10 +170,10 @@ function StatusUpdateReminderCard({
   return (
     <div className="rounded-lg border border-stroke bg-panel p-4">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="rounded-full border border-stroke bg-panel-muted px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <span className={badgeClasses({ size: "sm", className: "tracking-wide uppercase" })}>
           {entityLabel}
         </span>
-        <Link href={entityHref} className="text-sm font-semibold text-foreground hover:text-accent">
+        <Link href={entityHref} className="text-sm font-semibold text-foreground hover:text-accent-text">
           {recommendation.entity_name}
         </Link>
       </div>
@@ -200,32 +203,27 @@ function StatusUpdateReminderCard({
       <label className="mt-4 block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
         Status Update Draft
       </label>
-      <textarea
+      <Textarea
+        className="mt-1"
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
         rows={3}
         disabled={saving}
-        className="mt-1 w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none focus:border-accent"
       />
       <p className="mt-2 text-xs text-muted-foreground">
         Saving will write history and sync the current status summary.
       </p>
 
       {error && (
-        <p className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+        <p className="mt-3 rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
           {error}
         </p>
       )}
 
       <div className="mt-3 flex items-center justify-end gap-3">
-        <button
-          type="button"
-          onClick={handleApprove}
-          disabled={saving || !draft.trim()}
-          className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-        >
+        <Button variant="primary" onClick={handleApprove} disabled={saving || !draft.trim()}>
           {saving ? "Saving..." : "Approve And Save"}
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -327,7 +325,7 @@ export function EODBriefing({
       {tomorrow.prepTasks.length > 0 && (
         <div className="rounded-lg border border-accent/30 bg-accent/5 p-4">
           <p className="text-sm">
-            <span className="font-medium text-accent">Suggestion:</span>{" "}
+            <span className="font-medium text-accent-text">Suggestion:</span>{" "}
             <span className="text-foreground">
               Start with &ldquo;{tomorrow.prepTasks[0].task.title}&rdquo;
               {tomorrow.prepTasks[0].targetMeetingTime && (

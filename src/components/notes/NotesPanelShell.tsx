@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { Button, buttonClasses } from "@/components/ui/Button";
 
 interface NotesPanelShellProps {
   title: string;
@@ -31,12 +32,7 @@ interface NotesPanelShellProps {
 }
 
 function panelButtonClass(emphasis = false): string {
-  return [
-    "rounded-lg px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60",
-    emphasis
-      ? "bg-accent text-white hover:opacity-90"
-      : "border border-stroke bg-panel text-muted-foreground hover:text-foreground",
-  ].join(" ");
+  return buttonClasses({ variant: emphasis ? "primary" : "secondary", size: "sm" });
 }
 
 function joinClassNames(...values: Array<string | undefined>): string {
@@ -104,7 +100,7 @@ export function NotesPanelShell({
         <p
           className={joinClassNames(
             contentSpacingClassName,
-            "rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+            "rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger"
           )}
           role="alert"
         >
@@ -119,25 +115,17 @@ export function NotesPanelShell({
       ) : totalNoteCount > 0 ? (
         <div className={joinClassNames(contentSpacingClassName, stateClassName)}>
           <p className="text-sm text-foreground">{archivedOnlyMessage}</p>
-          <button
-            type="button"
-            onClick={onToggleArchived}
-            className="mt-3 rounded-lg border border-stroke bg-panel px-3 py-2 text-sm font-medium text-muted-foreground transition hover:text-foreground"
-          >
+          <Button variant="secondary" className="mt-3" onClick={onToggleArchived}>
             {archivedOnlyActionLabel}
-          </button>
+          </Button>
         </div>
       ) : (
         <div className={joinClassNames(contentSpacingClassName, stateClassName)}>
           <p className="text-sm font-medium text-foreground">{emptyTitle}</p>
           <p className="mt-1 text-sm text-muted-foreground">{emptyDescription}</p>
-          <button
-            type="button"
-            onClick={onCreateNote}
-            className="mt-3 rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:opacity-90"
-          >
+          <Button variant="primary" className="mt-3" onClick={onCreateNote}>
             {emptyActionLabel}
-          </button>
+          </Button>
         </div>
       )}
     </section>

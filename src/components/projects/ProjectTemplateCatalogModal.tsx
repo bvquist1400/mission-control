@@ -12,6 +12,9 @@ import {
   TASK_TYPE_VALUES,
 } from "@/lib/project-template-write";
 import type { ProjectStage, RagStatus, TaskStatus, TaskType } from "@/types/database";
+import { Button } from "@/components/ui/Button";
+import { Input, Select, Textarea } from "@/components/ui/Field";
+import { badgeClasses } from "@/components/ui/Badge";
 
 interface TemplateSummary {
   id: string;
@@ -823,21 +826,17 @@ export function ProjectTemplateCatalogModal({
               <div className="flex items-center justify-between gap-2">
                 <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Catalog</h3>
                 <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => navigateToAuthoringPage("create")}
-                    className="rounded border border-stroke bg-panel px-2 py-1 text-[11px] font-semibold text-foreground hover:bg-panel-muted"
-                  >
+                  <Button variant="secondary" size="xs" onClick={() => navigateToAuthoringPage("create")}>
                     New Template
-                  </button>
-                  <button
-                    type="button"
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="xs"
                     onClick={() => navigateToAuthoringPage("edit")}
                     disabled={!selectedTemplateId || detailLoading || Boolean(detailError)}
-                    className="rounded border border-stroke bg-panel px-2 py-1 text-[11px] font-semibold text-foreground hover:bg-panel-muted disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Edit Template
-                  </button>
+                  </Button>
                 </div>
               </div>
             </div>
@@ -870,7 +869,7 @@ export function ProjectTemplateCatalogModal({
                         <div className="flex items-start justify-between gap-2">
                           <p className="line-clamp-2 text-sm font-semibold text-foreground">{template.name}</p>
                           {!template.is_active ? (
-                            <span className="rounded border border-stroke px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            <span className="rounded border border-stroke px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                               Inactive
                             </span>
                           ) : null}
@@ -907,58 +906,58 @@ export function ProjectTemplateCatalogModal({
                 <div className="grid gap-3 md:grid-cols-2">
                   <label className="space-y-1 md:col-span-2">
                     <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Template name</span>
-                    <input
+                    <Input
+                      tone="muted"
                       type="text"
                       value={editorDraft.name}
                       onChange={(event) => updateDraftField("name", event.target.value)}
-                      className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
                       placeholder="Template name"
                     />
                   </label>
 
                   <label className="space-y-1 md:col-span-2">
                     <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Description</span>
-                    <textarea
+                    <Textarea
+                      tone="muted"
                       value={editorDraft.description}
                       onChange={(event) => updateDraftField("description", event.target.value)}
                       rows={2}
-                      className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
                     />
                   </label>
 
                   <label className="space-y-1">
                     <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Default stage</span>
-                    <select
+                    <Select
+                      tone="muted"
                       value={editorDraft.default_stage}
                       onChange={(event) => updateDraftField("default_stage", event.target.value as ProjectStage)}
-                      className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
                     >
                       {PROJECT_STAGE_VALUES.map((value) => (
                         <option key={value} value={value}>{value}</option>
                       ))}
-                    </select>
+                    </Select>
                   </label>
 
                   <label className="space-y-1">
                     <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Default RAG</span>
-                    <select
+                    <Select
+                      tone="muted"
                       value={editorDraft.default_rag}
                       onChange={(event) => updateDraftField("default_rag", event.target.value as RagStatus)}
-                      className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
                     >
                       {RAG_VALUES.map((value) => (
                         <option key={value} value={value}>{value}</option>
                       ))}
-                    </select>
+                    </Select>
                   </label>
 
                   <label className="space-y-1 md:col-span-2">
                     <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Default status summary</span>
-                    <textarea
+                    <Textarea
+                      tone="muted"
                       value={editorDraft.default_status_summary}
                       onChange={(event) => updateDraftField("default_status_summary", event.target.value)}
                       rows={2}
-                      className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
                     />
                   </label>
                 </div>
@@ -966,13 +965,9 @@ export function ProjectTemplateCatalogModal({
                 <div className="space-y-2 rounded-md border border-stroke bg-panel-muted/20 p-3">
                   <div className="flex items-center justify-between">
                     <h4 className="text-sm font-semibold text-foreground">Sections</h4>
-                    <button
-                      type="button"
-                      onClick={addSection}
-                      className="rounded border border-stroke bg-panel px-2 py-1 text-xs font-semibold text-foreground hover:bg-panel-muted"
-                    >
+                    <Button variant="secondary" size="xs" onClick={addSection}>
                       Add section
-                    </button>
+                    </Button>
                   </div>
 
                   {editorDraft.sections.length === 0 ? (
@@ -981,36 +976,33 @@ export function ProjectTemplateCatalogModal({
                     <div className="space-y-2">
                       {editorDraft.sections.map((section, index) => (
                         <div key={section.client_key} className="flex items-center gap-2">
-                          <input
+                          <Input
+                            className="flex-1"
                             type="text"
                             value={section.name}
                             onChange={(event) => updateSection(index, event.target.value)}
                             placeholder="Section name"
-                            className="flex-1 rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
                           />
-                          <button
-                            type="button"
+                          <Button
+                            variant="secondary"
+                            size="xs"
                             onClick={() => moveSection(index, -1)}
                             disabled={index === 0}
-                            className="rounded border border-stroke px-2 py-1 text-xs text-foreground disabled:opacity-40"
                           >
                             Up
-                          </button>
-                          <button
-                            type="button"
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            size="xs"
                             onClick={() => moveSection(index, 1)}
                             disabled={index === editorDraft.sections.length - 1}
-                            className="rounded border border-stroke px-2 py-1 text-xs text-foreground disabled:opacity-40"
                           >
                             Down
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => removeSection(index)}
-                            className="rounded border border-red-500/40 px-2 py-1 text-xs text-red-300"
-                          >
+                          </Button>
+                          <Button variant="danger" size="xs"
+                            onClick={() => removeSection(index)}>
                             Remove
-                          </button>
+                          </Button>
                         </div>
                       ))}
                     </div>
@@ -1020,13 +1012,9 @@ export function ProjectTemplateCatalogModal({
                 <div className="space-y-2 rounded-md border border-stroke bg-panel-muted/20 p-3">
                   <div className="flex items-center justify-between">
                     <h4 className="text-sm font-semibold text-foreground">Tasks</h4>
-                    <button
-                      type="button"
-                      onClick={addTask}
-                      className="rounded border border-stroke bg-panel px-2 py-1 text-xs font-semibold text-foreground hover:bg-panel-muted"
-                    >
+                    <Button variant="secondary" size="xs" onClick={addTask}>
                       Add task
-                    </button>
+                    </Button>
                   </div>
 
                   {editorDraft.tasks.length === 0 ? (
@@ -1058,43 +1046,44 @@ export function ProjectTemplateCatalogModal({
                                   : ""}
                               </p>
                             </div>
-                            <button
-                              type="button"
+                            <Button
+                              variant="secondary"
+                              size="xs"
+                              className="shrink-0"
                               onClick={() => setExpandedTaskIndex((current) => (current === index ? null : index))}
-                              className="shrink-0 rounded border border-stroke px-2 py-1 text-xs text-foreground hover:bg-panel-muted"
                             >
                               {expandedTaskIndex === index ? "Collapse" : "Edit"}
-                            </button>
+                            </Button>
                           </div>
 
                           {expandedTaskIndex === index ? (
                             <div className="mt-3 grid gap-3 md:grid-cols-2">
                               <label className="space-y-1 md:col-span-2">
                                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Title</span>
-                                <input
+                                <Input
+                                  tone="muted"
                                   type="text"
                                   value={task.title}
                                   onChange={(event) => updateTask(index, { title: event.target.value })}
-                                  className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
                                 />
                               </label>
 
                               <label className="space-y-1 md:col-span-2">
                                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Description</span>
-                                <textarea
+                                <Textarea
+                                  tone="muted"
                                   value={task.description}
                                   onChange={(event) => updateTask(index, { description: event.target.value })}
                                   rows={2}
-                                  className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
                                 />
                               </label>
 
                               <label className="space-y-1">
                                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Section</span>
-                                <select
+                                <Select
+                                  tone="muted"
                                   value={task.section_key}
                                   onChange={(event) => updateTask(index, { section_key: event.target.value })}
-                                  className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
                                 >
                                   <option value="">Unsectioned</option>
                                   {editorDraft.sections.map((section) => (
@@ -1102,38 +1091,39 @@ export function ProjectTemplateCatalogModal({
                                       {section.name || "(Untitled section)"}
                                     </option>
                                   ))}
-                                </select>
+                                </Select>
                               </label>
 
                               <label className="space-y-1">
                                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Task type</span>
-                                <select
+                                <Select
+                                  tone="muted"
                                   value={task.task_type}
                                   onChange={(event) => updateTask(index, { task_type: event.target.value as TaskType })}
-                                  className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
                                 >
                                   {TASK_TYPE_VALUES.map((value) => (
                                     <option key={value} value={value}>{value}</option>
                                   ))}
-                                </select>
+                                </Select>
                               </label>
 
                               <label className="space-y-1">
                                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</span>
-                                <select
+                                <Select
+                                  tone="muted"
                                   value={task.status}
                                   onChange={(event) => updateTask(index, { status: event.target.value as TaskStatus })}
-                                  className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
                                 >
                                   {TASK_STATUS_VALUES.map((value) => (
                                     <option key={value} value={value}>{value}</option>
                                   ))}
-                                </select>
+                                </Select>
                               </label>
 
                               <label className="space-y-1">
                                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Priority score</span>
-                                <input
+                                <Input
+                                  tone="muted"
                                   type="number"
                                   min={0}
                                   max={100}
@@ -1143,38 +1133,37 @@ export function ProjectTemplateCatalogModal({
                                     const safe = Number.isFinite(parsed) ? Math.max(0, Math.min(100, Math.round(parsed))) : 50;
                                     updateTask(index, { priority_score: safe });
                                   }}
-                                  className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
                                 />
                               </label>
 
                               <label className="space-y-1">
                                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Relative due days</span>
-                                <input
+                                <Input
+                                  tone="muted"
                                   type="number"
                                   value={task.relative_due_days}
                                   onChange={(event) => updateTask(index, { relative_due_days: event.target.value })}
                                   placeholder="e.g. 7"
-                                  className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
                                 />
                               </label>
 
                               <label className="space-y-1 md:col-span-2">
                                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Waiting on</span>
-                                <input
+                                <Input
+                                  tone="muted"
                                   type="text"
                                   value={task.waiting_on}
                                   onChange={(event) => updateTask(index, { waiting_on: event.target.value })}
-                                  className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
                                 />
                               </label>
 
                               <label className="space-y-1 md:col-span-2">
                                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Checklist items (one per line)</span>
-                                <textarea
+                                <Textarea
+                                  tone="muted"
                                   value={task.checklist_items_text}
                                   onChange={(event) => updateTask(index, { checklist_items_text: event.target.value })}
                                   rows={3}
-                                  className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
                                 />
                               </label>
 
@@ -1201,29 +1190,26 @@ export function ProjectTemplateCatalogModal({
                           ) : null}
 
                           <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
-                            <button
-                              type="button"
+                            <Button
+                              variant="secondary"
+                              size="xs"
                               onClick={() => moveTask(index, -1)}
                               disabled={index === 0}
-                              className="rounded border border-stroke px-2 py-1 text-xs text-foreground disabled:opacity-40"
                             >
                               Move up
-                            </button>
-                            <button
-                              type="button"
+                            </Button>
+                            <Button
+                              variant="secondary"
+                              size="xs"
                               onClick={() => moveTask(index, 1)}
                               disabled={index === editorDraft.tasks.length - 1}
-                              className="rounded border border-stroke px-2 py-1 text-xs text-foreground disabled:opacity-40"
                             >
                               Move down
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => removeTask(index)}
-                              className="rounded border border-red-500/40 px-2 py-1 text-xs text-red-300"
-                            >
+                            </Button>
+                            <Button variant="danger" size="xs"
+                              onClick={() => removeTask(index)}>
                               Remove task
-                            </button>
+                            </Button>
                           </div>
                         </div>
                       ))}
@@ -1246,21 +1232,16 @@ export function ProjectTemplateCatalogModal({
                 {templateSaveError ? <p className="text-sm text-red-400">{templateSaveError}</p> : null}
 
                 <div className="flex items-center justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={cancelEditor}
-                    className="rounded-lg border border-stroke bg-panel px-3 py-2 text-sm font-semibold text-foreground hover:bg-panel-muted"
-                  >
+                  <Button variant="secondary" onClick={cancelEditor}>
                     Cancel
-                  </button>
-                  <button
-                    type="button"
+                  </Button>
+                  <Button
+                    variant="primary"
                     onClick={() => void handleSaveTemplate()}
                     disabled={templateSaving || !editorDraft.name.trim()}
-                    className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {templateSaving ? "Saving..." : "Save template"}
-                  </button>
+                  </Button>
                 </div>
               </div>
             ) : (
@@ -1291,20 +1272,18 @@ export function ProjectTemplateCatalogModal({
                     <div className="grid gap-3 rounded-md border border-stroke bg-panel-muted/20 p-3 md:grid-cols-2">
                       <label className="space-y-1">
                         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Kickoff date</span>
-                        <input
+                        <Input
                           type="date"
                           value={kickoffDate}
                           onChange={(event) => handleKickoffDateChange(event.target.value)}
-                          className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
                         />
                       </label>
 
                       <label className="space-y-1">
                         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Application</span>
-                        <select
+                        <Select
                           value={implementationId}
                           onChange={(event) => handleImplementationChange(event.target.value)}
-                          className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
                         >
                           <option value="">No application</option>
                           {implementations.map((implementation) => (
@@ -1312,40 +1291,37 @@ export function ProjectTemplateCatalogModal({
                               {implementation.name}
                             </option>
                           ))}
-                        </select>
+                        </Select>
                       </label>
 
                       <label className="space-y-1 md:col-span-2">
                         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                           Project name override (optional)
                         </span>
-                        <input
+                        <Input
                           type="text"
                           value={projectNameOverride}
                           onChange={(event) => handleProjectNameChange(event.target.value)}
                           placeholder={detail.name}
-                          className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
                         />
                       </label>
 
                       <div className="md:col-span-2 flex flex-wrap items-center gap-2">
-                        <button
-                          type="button"
+                        <Button
+                          variant="secondary"
                           onClick={() => void handlePreview()}
                           disabled={previewLoading || instantiateLoading || !kickoffDate}
-                          className="rounded-lg border border-stroke bg-panel px-3 py-2 text-sm font-semibold text-foreground hover:bg-panel-muted disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           {previewLoading ? "Previewing..." : "Preview project"}
-                        </button>
-                        <button
-                          type="button"
+                        </Button>
+                        <Button
+                          variant="primary"
                           onClick={() => void handleInstantiate()}
                           disabled={!canCreate}
-                          className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
                           title={!canCreate ? "Run preview first (or refresh preview after edits)." : undefined}
                         >
                           {instantiateLoading ? "Creating..." : "Create project"}
-                        </button>
+                        </Button>
                         <span className="text-xs text-muted-foreground">
                           Tasks are created in Backlog unless a template task status overrides it.
                         </span>
@@ -1384,13 +1360,13 @@ export function ProjectTemplateCatalogModal({
                               <div className="flex flex-wrap items-center justify-between gap-2">
                                 <p className="text-sm font-medium text-foreground">{task.title}</p>
                                 <div className="flex items-center gap-1.5">
-                                  <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${taskStatusStyles[task.status]}`}>
+                                  <span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${taskStatusStyles[task.status]}`}>
                                     {task.status}
                                   </span>
-                                  <span className="rounded-full border border-stroke px-2 py-0.5 text-[11px] text-muted-foreground">
+                                  <span className={badgeClasses({ size: "sm" })}>
                                     {formatDaysOffset(task.relative_due_days)}
                                   </span>
-                                  <span className="rounded-full border border-stroke px-2 py-0.5 text-[11px] text-muted-foreground">
+                                  <span className={badgeClasses({ size: "sm" })}>
                                     {formatResolvedDueDate(task.resolved_due_date)}
                                   </span>
                                 </div>

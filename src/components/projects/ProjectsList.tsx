@@ -9,6 +9,9 @@ import { DEFAULT_PROJECT_STAGE, normalizeProjectStage } from "@/lib/project-stag
 import { ProjectStageSelector } from "@/components/ui/ProjectStageSelector";
 import { RagSelector } from "@/components/ui/RagSelector";
 import type { ImplPhase, ProjectStage, RagStatus } from "@/types/database";
+import { hasPersonalTag, PERSONAL_TAG } from "@/lib/personal-exclusion";
+import { Button } from "@/components/ui/Button";
+import { Input, Select, Textarea } from "@/components/ui/Field";
 
 // ─── API response shape ───────────────────────────────────────────────────────
 
@@ -23,6 +26,7 @@ interface ApiProject {
   servicenow_spm_id: string | null;
   status_summary: string;
   portfolio_rank: number;
+  tags: string[];
   open_task_count: number;
   completed_task_count: number;
   total_task_count: number;
@@ -56,6 +60,7 @@ interface ProjectDraft {
   spmId: string;
   statusSummary: string;
   implementationId: string;
+  personal: boolean;
 }
 
 const INITIAL_DRAFT: ProjectDraft = {
@@ -67,6 +72,7 @@ const INITIAL_DRAFT: ProjectDraft = {
   spmId: "",
   statusSummary: "",
   implementationId: "",
+  personal: false,
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -91,6 +97,7 @@ function apiToCardData(project: ApiProject): ProjectCardData {
     blockersCount: project.blockers_count ?? 0,
     implementationName: project.implementation?.name ?? null,
     implementationId: project.implementation?.id ?? null,
+    isPersonal: hasPersonalTag(project),
   };
 }
 
@@ -195,6 +202,7 @@ export function ProjectsList({
       if (draft.spmId.trim()) body.servicenow_spm_id = draft.spmId.trim();
       if (draft.implementationId) body.implementation_id = draft.implementationId;
       else if (filterImplId) body.implementation_id = filterImplId;
+      if (draft.personal) body.tags = [PERSONAL_TAG];
 
       const res = await fetch("/api/projects", {
         method: "POST",
@@ -253,13 +261,13 @@ export function ProjectsList({
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
               <div className="xl:col-span-2">
                 <label className="mb-1 block text-xs font-medium text-muted-foreground">Name *</label>
-                <input
+                <Input
+                  tone="muted"
                   type="text"
                   required
                   value={draft.name}
                   onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
                   placeholder="Project name"
-                  className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
                 />
               </div>
 
@@ -275,79 +283,85 @@ export function ProjectsList({
 
               <div>
                 <label className="mb-1 block text-xs font-medium text-muted-foreground">Target Date</label>
-                <input
+                <Input
+                  tone="muted"
                   type="date"
                   value={draft.targetDate}
                   onChange={(e) => setDraft((d) => ({ ...d, targetDate: e.target.value }))}
-                  className="rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
                 />
               </div>
 
               <div>
                 <label className="mb-1 block text-xs font-medium text-muted-foreground">SPM ID</label>
-                <input
+                <Input
+                  tone="muted"
                   type="text"
                   value={draft.spmId}
                   onChange={(e) => setDraft((d) => ({ ...d, spmId: e.target.value }))}
                   placeholder="e.g. SPM-1234"
-                  className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
                 />
               </div>
 
               {!embedded && (
                 <div>
                   <label className="mb-1 block text-xs font-medium text-muted-foreground">Application</label>
-                  <select
+                  <Select
+                    tone="muted"
                     value={draft.implementationId}
                     onChange={(e) => setDraft((d) => ({ ...d, implementationId: e.target.value }))}
-                    className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
                   >
                     <option value="">— None —</option>
                     {implementations.map((impl) => (
                       <option key={impl.id} value={impl.id}>{impl.name}</option>
                     ))}
-                  </select>
+                  </Select>
                 </div>
               )}
+
+              <label className="flex items-center gap-2 self-end rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground">
+                <input
+                  type="checkbox"
+                  checked={draft.personal}
+                  onChange={(event) => setDraft((current) => ({ ...current, personal: event.target.checked }))}
+                  className="h-4 w-4 accent-violet-500"
+                />
+                Personal project
+              </label>
             </div>
 
             <div>
               <label className="mb-1 block text-xs font-medium text-muted-foreground">Description</label>
-              <textarea
+              <Textarea
+                tone="muted"
                 value={draft.description}
                 onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
                 rows={2}
                 placeholder="What is this project about?"
-                className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
               />
             </div>
 
             <div>
               <label className="mb-1 block text-xs font-medium text-muted-foreground">Status Summary</label>
-              <textarea
+              <Textarea
+                tone="muted"
                 value={draft.statusSummary}
                 onChange={(e) => setDraft((d) => ({ ...d, statusSummary: e.target.value }))}
                 rows={2}
                 placeholder="Current status in 1-2 sentences"
-                className="w-full rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
               />
             </div>
 
             <div className="flex justify-end gap-3">
-              <button
-                type="button"
+              <Button
+                variant="secondary"
+                size="lg"
                 onClick={() => { setIsCreateOpen(false); setDraft(INITIAL_DRAFT); }}
-                className="rounded-lg border border-stroke bg-panel px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-panel-muted"
               >
                 Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={saving || !draft.name.trim()}
-                className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-              >
+              </Button>
+              <Button variant="primary" size="lg" type="submit" disabled={saving || !draft.name.trim()}>
                 {saving ? "Creating..." : "Create Project"}
-              </button>
+              </Button>
             </div>
           </form>
         )}
@@ -359,42 +373,24 @@ export function ProjectsList({
           {!embedded && implementations.length > 0 ? (
             <>
               <label className="text-xs font-medium text-muted-foreground">Filter by Application:</label>
-              <select
-                value={filterImplId}
-                onChange={(e) => setFilterImplId(e.target.value)}
-                className="rounded-lg border border-stroke bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
-              >
+              <Select size="sm" value={filterImplId} onChange={(e) => setFilterImplId(e.target.value)}>
                 <option value="">All Applications</option>
                 {implementations.map((impl) => (
                   <option key={impl.id} value={impl.id}>{impl.name}</option>
                 ))}
-              </select>
+              </Select>
             </>
           ) : null}
 
           <div className="inline-flex rounded-lg border border-stroke bg-panel p-1">
-            <button
-              type="button"
-              onClick={() => setViewMode("table")}
-              className={`rounded-md px-2.5 py-1 text-xs font-semibold transition ${
-                viewMode === "table"
-                  ? "bg-accent text-white"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
+            <Button variant="toggle" size="sm" active={viewMode === "table"}
+              onClick={() => setViewMode("table")}>
               Table
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode("cards")}
-              className={`rounded-md px-2.5 py-1 text-xs font-semibold transition ${
-                viewMode === "cards"
-                  ? "bg-accent text-white"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
+            </Button>
+            <Button variant="toggle" size="sm" active={viewMode === "cards"}
+              onClick={() => setViewMode("cards")}>
               Cards
-            </button>
+            </Button>
           </div>
 
           <label className="inline-flex items-center gap-2 rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground">
@@ -422,7 +418,7 @@ export function ProjectsList({
           <button
             type="button"
             onClick={() => setIsCreateOpen(true)}
-            className="text-accent hover:underline"
+            className="text-accent-text hover:underline"
           >
             Create one
           </button>
@@ -461,20 +457,12 @@ export function ProjectsList({
         description="Track work items within applications. Each project has its own delivery stage, RAG status, and task list."
         actions={
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setIsTemplateCatalogOpen(true)}
-              className="rounded-lg border border-stroke bg-panel px-3 py-2 text-sm font-semibold text-foreground hover:bg-panel-muted"
-            >
+            <Button variant="secondary" onClick={() => setIsTemplateCatalogOpen(true)}>
               From Template
-            </button>
-            <button
-              type="button"
-              onClick={() => setIsCreateOpen(true)}
-              className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90"
-            >
+            </Button>
+            <Button variant="primary" size="lg" onClick={() => setIsCreateOpen(true)}>
               + New Project
-            </button>
+            </Button>
           </div>
         }
       />

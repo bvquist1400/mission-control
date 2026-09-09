@@ -5,6 +5,8 @@ import { formatDateOnly } from "@/components/utils/dates";
 import type { ProjectStage, RagStatus } from "@/types/database";
 import { ProjectStageBadge } from "@/components/ui/ProjectStageBadge";
 import { RagBadge } from "@/components/ui/RagBadge";
+import { PersonalBadge } from "@/components/ui/PersonalBadge";
+import { cardClasses } from "@/components/ui/Card";
 
 export interface ProjectCardData {
   id: string;
@@ -24,6 +26,7 @@ export interface ProjectCardData {
   blockersCount: number;
   implementationName: string | null;
   implementationId: string | null;
+  isPersonal: boolean;
 }
 
 interface ProjectCardProps {
@@ -39,10 +42,13 @@ export function ProjectCard({ project }: ProjectCardProps) {
   const hasPartialProgress = percentComplete > doneOnlyPercent;
 
   return (
-    <article className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+    <article className={cardClasses()}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 className="text-base font-semibold text-foreground">{project.name}</h3>
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-base font-semibold text-foreground">{project.name}</h3>
+            {project.isPersonal ? <PersonalBadge /> : null}
+          </div>
           <p className="mt-1 text-xs text-muted-foreground">Target: {formatDateOnly(project.targetDate)}</p>
         </div>
         <div className="flex items-center gap-2">
@@ -57,7 +63,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
             <span className="font-semibold text-foreground">Application:</span>{" "}
             <Link
               href={`/applications/${project.implementationId}`}
-              className="text-accent hover:underline"
+              className="text-accent-text hover:underline"
             >
               {project.implementationName}
             </Link>

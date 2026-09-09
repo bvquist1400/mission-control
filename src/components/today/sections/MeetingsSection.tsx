@@ -1,6 +1,9 @@
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { queryTodayCalendar, type TodayCalendarEvent } from "@/lib/today/queries";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
+import type { TaskScope } from "@/lib/personal-exclusion";
+import { cardClasses } from "@/components/ui/Card";
+import { badgeClasses } from "@/components/ui/Badge";
 
 const TIME_ZONE = DEFAULT_WORKDAY_CONFIG.timezone;
 
@@ -46,7 +49,7 @@ function formatMeetingTimeRange(start: string, end: string): string {
 function MeetingStatusBadge({ status }: { status: MeetingTemporalStatus }) {
   if (status === "Ended") {
     return (
-      <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-400">
+      <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-400">
         <svg aria-hidden="true" viewBox="0 0 20 20" className="h-3.5 w-3.5 fill-current">
           <path d="M7.7 13.3 4.4 10l1.2-1.2 2.1 2.1 6.7-6.7L15.6 5l-7.9 8.3Z" />
         </svg>
@@ -57,7 +60,7 @@ function MeetingStatusBadge({ status }: { status: MeetingTemporalStatus }) {
 
   if (status === "In progress") {
     return (
-      <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-300">
+      <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-xs font-semibold text-amber-300">
         <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
         In progress
       </span>
@@ -65,7 +68,7 @@ function MeetingStatusBadge({ status }: { status: MeetingTemporalStatus }) {
   }
 
   return (
-    <span className="inline-flex items-center rounded-full border border-stroke bg-panel px-2 py-0.5 text-[11px] font-semibold text-muted-foreground">
+    <span className={badgeClasses({ size: "sm" })}>
       Upcoming
     </span>
   );
@@ -74,11 +77,14 @@ function MeetingStatusBadge({ status }: { status: MeetingTemporalStatus }) {
 function MeetingsCard({
   events,
   failed,
+  mode,
+  nowMs,
 }: {
   events: TodayCalendarEvent[];
   failed: boolean;
+  mode: TaskScope;
+  nowMs: number;
 }) {
-  const nowMs = Date.now();
   const sorted = [...events]
     .filter((event) => typeof event.start === "string" && typeof event.end === "string")
     .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
@@ -86,9 +92,11 @@ function MeetingsCard({
   return (
     <div className="space-y-3">
       <div>
-        <h2 className="text-lg font-semibold text-foreground">Today&apos;s Meetings</h2>
+        <h2 className="text-lg font-semibold text-foreground">
+          Today&apos;s Meetings{mode === "personal" ? " (Work)" : ""}
+        </h2>
       </div>
-      <article className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+      <article className={cardClasses()}>
         {failed ? (
           <p className="mb-3 rounded-md border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
             Meeting feed refresh failed. Showing available data.
@@ -129,14 +137,19 @@ function MeetingsCard({
   );
 }
 
-export async function MeetingsSection({ userId }: { userId: string }) {
+export async function MeetingsSection({ userId, mode }: { userId: string; mode: TaskScope }) {
   const supabase = await createSupabaseServerClient();
+  const nowMs = new Date().getTime();
+  let events: TodayCalendarEvent[] = [];
+  let failed = false;
 
   try {
-    const { events } = await queryTodayCalendar(supabase, userId, TIME_ZONE);
-    return <MeetingsCard events={events} failed={false} />;
+    const result = await queryTodayCalendar(supabase, userId, TIME_ZONE);
+    events = result.events;
   } catch (error) {
     console.error("Failed to load today's meetings:", error);
-    return <MeetingsCard events={[]} failed />;
+    failed = true;
   }
+
+  return <MeetingsCard events={events} failed={failed} mode={mode} nowMs={nowMs} />;
 }

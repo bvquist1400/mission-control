@@ -4,6 +4,7 @@ import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, use
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import type { BrowserSearchResult } from "@/lib/search/browser";
+import { badgeClasses } from "@/components/ui/Badge";
 
 interface UniversalSearchPaletteProps {
   onClose: () => void;
@@ -169,7 +170,7 @@ export function UniversalSearchPalette({ onClose, onOpenTask }: UniversalSearchP
         >
           <div className="border-b border-stroke bg-[linear-gradient(180deg,rgba(196,30,58,0.12),rgba(196,30,58,0.02))] px-5 py-4">
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-stroke bg-panel-muted text-accent">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-stroke bg-panel-muted text-accent-text">
                 <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-4.35-4.35" />
                   <circle cx="11" cy="11" r="6.5" />
@@ -211,7 +212,7 @@ export function UniversalSearchPalette({ onClose, onOpenTask }: UniversalSearchP
                 </p>
               </div>
 
-              <div className="hidden rounded-lg border border-stroke bg-panel-muted px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground sm:block">
+              <div className="hidden rounded-lg border border-stroke bg-panel-muted px-2 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground sm:block">
                 Esc
               </div>
             </div>
@@ -270,12 +271,12 @@ export function UniversalSearchPalette({ onClose, onOpenTask }: UniversalSearchP
                           <div className="min-w-0 flex-1">
                             <div className="flex flex-wrap items-center gap-2">
                               <h3 className="text-sm font-semibold text-foreground">{result.title}</h3>
-                              <span className="rounded-full border border-stroke bg-panel-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                              <span className={badgeClasses({ size: "sm", className: "tracking-[0.14em] uppercase" })}>
                                 {result.entityLabel}
                               </span>
                             </div>
                             {result.context ? (
-                              <p className="mt-1 text-xs font-medium text-accent">{result.context}</p>
+                              <p className="mt-1 text-xs font-medium text-accent-text">{result.context}</p>
                             ) : null}
                             <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
                               {truncatePreview(result.text || "Open record")}
@@ -283,7 +284,7 @@ export function UniversalSearchPalette({ onClose, onOpenTask }: UniversalSearchP
                           </div>
 
                           <svg
-                            className={`mt-1 h-4 w-4 shrink-0 transition ${active ? "text-accent" : "text-muted-foreground"}`}
+                            className={`mt-1 h-4 w-4 shrink-0 transition ${active ? "text-accent-text" : "text-muted-foreground"}`}
                             viewBox="0 0 20 20"
                             fill="none"
                             stroke="currentColor"

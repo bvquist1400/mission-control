@@ -7,6 +7,9 @@ import type {
   IntelligenceArtifactInboxItem,
   IntelligenceArtifactInboxPayload,
 } from "@/lib/intelligence-layer/inbox";
+import { Button } from "@/components/ui/Button";
+import { cardClasses } from "@/components/ui/Card";
+import { badgeClasses } from "@/components/ui/Badge";
 
 const EMPTY_INBOX: IntelligenceArtifactInboxPayload = {
   open: [],
@@ -55,22 +58,22 @@ async function postArtifactAction(artifactId: string, action: "accept" | "dismis
 function severityClasses(severity: IntelligenceArtifactInboxItem["severity"]): string {
   switch (severity) {
     case "high":
-      return "border-red-200 bg-red-50 text-red-700";
+      return "border-danger-border bg-danger-soft text-danger";
     case "medium":
-      return "border-amber-200 bg-amber-50 text-amber-700";
+      return "border-warning-border bg-warning-soft text-warning";
     case "low":
-      return "border-emerald-200 bg-emerald-50 text-emerald-700";
+      return "border-success-border bg-success-soft text-success";
   }
 }
 
 function confidenceClasses(confidence: IntelligenceArtifactInboxItem["confidence"]): string {
   switch (confidence) {
     case "high":
-      return "border-slate-300 bg-slate-100 text-slate-800";
+      return "border-stroke bg-panel-muted text-foreground";
     case "medium":
-      return "border-slate-200 bg-slate-50 text-slate-700";
+      return "border-stroke bg-panel-muted/60 text-muted-foreground";
     case "low":
-      return "border-slate-200 bg-white text-slate-600";
+      return "border-stroke bg-panel text-muted-foreground";
   }
 }
 
@@ -102,7 +105,7 @@ function SectionHeader({
         <h2 className="text-lg font-semibold text-foreground">{title}</h2>
         <p className="text-sm text-muted-foreground">{description}</p>
       </div>
-      <span className="rounded-full border border-stroke bg-panel-muted px-3 py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+      <span className={badgeClasses({ className: "tracking-wide uppercase" })}>
         {count}
       </span>
     </div>
@@ -124,11 +127,11 @@ function ArtifactCard({
   const canApply = item.available_actions.includes("apply");
 
   return (
-    <article className="rounded-card border border-stroke bg-panel p-4 shadow-sm">
+    <article className={cardClasses({ padding: "sm" })}>
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-full border border-stroke bg-panel-muted px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-foreground">
+            <span className={badgeClasses({ className: "tracking-wide uppercase" })}>
               {item.artifact_type}
             </span>
             <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${severityClasses(item.severity)}`}>
@@ -137,7 +140,7 @@ function ArtifactCard({
             <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${confidenceClasses(item.confidence)}`}>
               {item.confidence} confidence
             </span>
-            <span className="rounded-full border border-stroke bg-white px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            <span className={badgeClasses({ className: "tracking-wide uppercase" })}>
               {item.status_label}
             </span>
           </div>
@@ -146,7 +149,7 @@ function ArtifactCard({
 
           <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
             {item.task_href ? (
-              <Link href={item.task_href} className="font-medium text-accent hover:underline">
+              <Link href={item.task_href} className="font-medium text-accent-text hover:underline">
                 {item.task_title}
               </Link>
             ) : (
@@ -160,34 +163,29 @@ function ArtifactCard({
         {onAction ? (
           <div className="flex shrink-0 gap-2">
             {canAccept ? (
-              <button
-                type="button"
+              <Button
+                variant="primary"
                 onClick={() => onAction(item.artifact_id, "accept")}
                 disabled={acting}
-                className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {acting ? "Saving..." : "Accept"}
-              </button>
+              </Button>
             ) : null}
             {canDismiss ? (
-              <button
-                type="button"
+              <Button
+                variant="secondary"
                 onClick={() => onAction(item.artifact_id, "dismiss")}
                 disabled={acting}
-                className="rounded-lg border border-stroke bg-panel px-3 py-2 text-sm font-semibold text-foreground transition hover:bg-panel-muted disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {acting ? "Saving..." : "Dismiss"}
-              </button>
+              </Button>
             ) : null}
             {canApply ? (
-              <button
-                type="button"
+              <Button variant="success"
                 onClick={() => onAction(item.artifact_id, "apply")}
-                disabled={acting}
-                className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
-              >
+                disabled={acting}>
                 {acting ? "Saving..." : "Mark handled"}
-              </button>
+              </Button>
             ) : null}
           </div>
         ) : null}
@@ -325,7 +323,7 @@ export function IntelligenceArtifactInbox() {
 
   return (
     <div className="space-y-4">
-      <section className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+      <section className={cardClasses()}>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <h1 className="text-xl font-semibold text-foreground">Artifact Inbox</h1>
@@ -334,16 +332,16 @@ export function IntelligenceArtifactInbox() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            <span className="rounded-full border border-stroke bg-panel-muted px-3 py-1">Open {payload.counts.open}</span>
-            <span className="rounded-full border border-stroke bg-panel-muted px-3 py-1">Accepted {payload.counts.accepted}</span>
-            <span className="rounded-full border border-stroke bg-panel-muted px-3 py-1">Applied {payload.counts.applied}</span>
-            <span className="rounded-full border border-stroke bg-panel-muted px-3 py-1">Dismissed {payload.counts.dismissed}</span>
+            <span className={badgeClasses()}>Open {payload.counts.open}</span>
+            <span className={badgeClasses()}>Accepted {payload.counts.accepted}</span>
+            <span className={badgeClasses()}>Applied {payload.counts.applied}</span>
+            <span className={badgeClasses()}>Dismissed {payload.counts.dismissed}</span>
           </div>
         </div>
       </section>
 
       {error ? (
-        <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+        <p className="rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
           {error}
         </p>
       ) : null}
@@ -386,14 +384,13 @@ export function IntelligenceArtifactInbox() {
                   Hidden by default to keep the inbox focused. Expand when you need recent handled-item context.
                 </p>
               </div>
-              <button
-                type="button"
+              <Button
+                variant="secondary"
                 onClick={() => setShowApplied((current) => !current)}
-                className="inline-flex items-center justify-center rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm font-semibold text-foreground transition hover:bg-panel"
                 aria-expanded={showApplied}
               >
                 {showApplied ? "Hide applied" : `Show applied (${payload.applied.length})`}
-              </button>
+              </Button>
             </div>
 
             {showApplied ? (
@@ -415,14 +412,13 @@ export function IntelligenceArtifactInbox() {
                   Hidden by default to keep the inbox focused. Expand when you need recent dismissal context.
                 </p>
               </div>
-              <button
-                type="button"
+              <Button
+                variant="secondary"
                 onClick={() => setShowDismissed((current) => !current)}
-                className="inline-flex items-center justify-center rounded-lg border border-stroke bg-panel-muted px-3 py-2 text-sm font-semibold text-foreground transition hover:bg-panel"
                 aria-expanded={showDismissed}
               >
                 {showDismissed ? "Hide dismissed" : `Show dismissed (${payload.dismissed.length})`}
-              </button>
+              </Button>
             </div>
 
             {showDismissed ? (

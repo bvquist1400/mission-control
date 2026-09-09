@@ -2,6 +2,8 @@
 
 import { useState, useCallback } from "react";
 import type { TaskComment } from "@/types/database";
+import { Button } from "@/components/ui/Button";
+import { Textarea } from "@/components/ui/Field";
 
 interface TaskCommentsProps {
   taskId: string;
@@ -149,30 +151,25 @@ export function TaskComments({
             <li key={comment.id} className="rounded-lg border border-stroke bg-panel-muted p-3">
               {editingId === comment.id ? (
                 <div className="space-y-2">
-                  <textarea
+                  <Textarea
+                    className="resize-none"
                     value={editContent}
                     onChange={(e) => setEditContent(e.target.value)}
                     disabled={isSubmitting}
-                    className="w-full resize-none rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
                     rows={2}
                   />
                   <div className="flex justify-end gap-2">
-                    <button
-                      type="button"
-                      onClick={cancelEditing}
-                      disabled={isSubmitting}
-                      className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-muted-foreground transition hover:text-foreground disabled:opacity-60"
-                    >
+                    <Button variant="ghost" size="sm" onClick={cancelEditing} disabled={isSubmitting}>
                       Cancel
-                    </button>
-                    <button
-                      type="button"
+                    </Button>
+                    <Button
+                      variant="primary"
+                      size="sm"
                       onClick={() => handleUpdate(comment.id)}
                       disabled={isSubmitting || !editContent.trim()}
-                      className="rounded-lg bg-accent px-2.5 py-1.5 text-xs font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       Save
-                    </button>
+                    </Button>
                   </div>
                 </div>
               ) : (
@@ -181,20 +178,18 @@ export function TaskComments({
                     <p className="text-sm text-foreground whitespace-pre-wrap">{comment.content}</p>
                     {comment.source !== "system" && (
                       <div className="flex shrink-0 gap-1">
-                        <button
-                          type="button"
+                        <Button variant="ghost" size="icon"
                           onClick={() => startEditing(comment)}
-                          className="rounded p-1 text-muted-foreground transition hover:bg-panel hover:text-foreground"
-                          title="Edit"
-                        >
+                         
+                          title="Edit">
                           <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                             <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
                           </svg>
-                        </button>
+                        </Button>
                         <button
                           type="button"
                           onClick={() => handleDelete(comment.id)}
-                          className="rounded p-1 text-muted-foreground transition hover:bg-red-50 hover:text-red-600"
+                          className="rounded p-1 text-muted-foreground transition hover:bg-danger-soft hover:text-danger"
                           title="Delete"
                         >
                           <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -207,7 +202,7 @@ export function TaskComments({
                   <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
                     <span>{formatRelativeTime(comment.created_at)}</span>
                     {sourceLabels[comment.source] && (
-                      <span className="rounded bg-panel px-1.5 py-0.5 text-[10px] font-semibold uppercase">
+                      <span className="rounded bg-panel px-1.5 py-0.5 text-xs font-semibold uppercase">
                         {sourceLabels[comment.source]}
                       </span>
                     )}
@@ -223,37 +218,32 @@ export function TaskComments({
       )}
 
       <div className="space-y-2">
-        <textarea
+        <Textarea
+          className="resize-none"
           value={newComment}
           onChange={(e) => setNewComment(e.target.value)}
-          onKeyDown={(e) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-              e.preventDefault();
-              handleSubmit();
-            }
-          }}
+          onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); handleSubmit(); } }}
           placeholder="Add a comment..."
           disabled={isSubmitting}
-          className="w-full resize-none rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
           rows={2}
         />
         <div className="flex items-center justify-between">
           <span className="text-xs text-muted-foreground">
-            <kbd className="rounded border border-stroke bg-panel-muted px-1 py-0.5 font-mono text-[10px]">⌘</kbd>+<kbd className="rounded border border-stroke bg-panel-muted px-1 py-0.5 font-mono text-[10px]">Enter</kbd> to submit
+            <kbd className="rounded border border-stroke bg-panel-muted px-1 py-0.5 font-mono text-xs">⌘</kbd>+<kbd className="rounded border border-stroke bg-panel-muted px-1 py-0.5 font-mono text-xs">Enter</kbd> to submit
           </span>
-          <button
-            type="button"
+          <Button
+            variant="primary"
+            size="sm"
             onClick={handleSubmit}
             disabled={isSubmitting || !newComment.trim()}
-            className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isSubmitting ? "Adding..." : "Add Comment"}
-          </button>
+          </Button>
         </div>
       </div>
 
       {error && (
-        <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-400" role="alert">
+        <p className="rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
           {error}
         </p>
       )}

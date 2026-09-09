@@ -17,6 +17,9 @@ import type {
   TaskStatus,
   TaskWithImplementation,
 } from "@/types/database";
+import { Button } from "@/components/ui/Button";
+import { Input, Select, Textarea } from "@/components/ui/Field";
+import { cardClasses } from "@/components/ui/Card";
 
 interface ImplementationDetailProps {
   id: string;
@@ -292,9 +295,9 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
 
   if (error && !impl) {
     return (
-      <div className="rounded-card border border-red-200 bg-red-50 p-5 text-center">
-        <p className="text-sm text-red-700">{error}</p>
-        <Link href="/applications" className="mt-3 inline-block text-sm font-medium text-accent hover:underline">
+      <div className="rounded-card border border-danger-border bg-danger-soft p-5 text-center">
+        <p className="text-sm text-danger">{error}</p>
+        <Link href="/applications" className="mt-3 inline-block text-sm font-medium text-accent-text hover:underline">
           Back to Applications
         </Link>
       </div>
@@ -306,13 +309,13 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
   return (
     <div className="space-y-6">
       {error && (
-        <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+        <p className="rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
           {error}
         </p>
       )}
 
       {/* Header Section */}
-      <section className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+      <section className={cardClasses()}>
         <h2 className="text-lg font-semibold text-foreground">{impl.name}</h2>
 
         <div className="mt-4 flex flex-wrap items-start justify-between gap-4">
@@ -338,8 +341,9 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
             )}
           </div>
           <div className="flex items-center gap-2">
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => {
                 setIsEditing((current) => {
                   const next = !current;
@@ -352,17 +356,12 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
                   return next;
                 });
               }}
-              className="rounded-lg border border-stroke bg-panel px-3 py-1.5 text-xs font-semibold text-muted-foreground transition hover:bg-panel-muted hover:text-foreground"
             >
               {isEditing ? "Done Editing" : "Edit"}
-            </button>
-            <button
-              type="button"
-              onClick={handleCopyUpdate}
-              className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white transition hover:opacity-90"
-            >
+            </Button>
+            <Button variant="primary" size="sm" onClick={handleCopyUpdate}>
               Copy Update
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -371,22 +370,17 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
           <article className="rounded-lg bg-panel-muted p-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Target Date</p>
             {isEditing ? (
-              <input
+              <Input
+                size="xs"
+                className="mt-1"
                 type="date"
                 value={targetDateDraft}
                 onChange={(e) => setTargetDateDraft(e.target.value)}
                 onBlur={() => {
-                  if (!impl) {
-                    return;
-                  }
-
-                  const currentTargetDate = dateOnlyToInputValue(impl.target_date);
-                  if (targetDateDraft !== currentTargetDate) {
-                    void updateField({ target_date: targetDateDraft || null });
-                  }
+                  if (!impl) { return; } const currentTargetDate = dateOnlyToInputValue(impl.target_date);
+                  if (targetDateDraft !== currentTargetDate) { void updateField({ target_date: targetDateDraft || null }); };
                 }}
                 disabled={saving}
-                className="mt-1 w-full rounded border border-stroke bg-panel px-2 py-1 text-sm text-foreground outline-none focus:border-accent"
               />
             ) : (
               <p className="mt-1 text-sm font-medium text-foreground">{formatDateOnly(impl.target_date)}</p>
@@ -396,22 +390,15 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
           <article className="rounded-lg bg-panel-muted p-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Next Milestone</p>
             {isEditing ? (
-              <input
+              <Input
+                size="xs"
+                className="mt-1"
                 type="text"
                 value={nextMilestoneDraft}
                 onChange={(e) => setNextMilestoneDraft(e.target.value)}
-                onBlur={() => {
-                  if (!impl) {
-                    return;
-                  }
-
-                  if (nextMilestoneDraft !== impl.next_milestone) {
-                    void updateField({ next_milestone: nextMilestoneDraft });
-                  }
-                }}
+                onBlur={() => { if (!impl) { return; } if (nextMilestoneDraft !== impl.next_milestone) { void updateField({ next_milestone: nextMilestoneDraft }); } }}
                 disabled={saving}
                 placeholder="Enter next milestone..."
-                className="mt-1 w-full rounded border border-stroke bg-panel px-2 py-1 text-sm text-foreground outline-none focus:border-accent"
               />
             ) : (
               <p className="mt-1 text-sm font-medium text-foreground">{impl.next_milestone || "Not set"}</p>
@@ -421,22 +408,17 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
           <article className="rounded-lg bg-panel-muted p-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Milestone Date</p>
             {isEditing ? (
-              <input
+              <Input
+                size="xs"
+                className="mt-1"
                 type="date"
                 value={nextMilestoneDateDraft}
                 onChange={(e) => setNextMilestoneDateDraft(e.target.value)}
                 onBlur={() => {
-                  if (!impl) {
-                    return;
-                  }
-
-                  const currentMilestoneDate = dateOnlyToInputValue(impl.next_milestone_date);
-                  if (nextMilestoneDateDraft !== currentMilestoneDate) {
-                    void updateField({ next_milestone_date: nextMilestoneDateDraft || null });
-                  }
+                  if (!impl) { return; } const currentMilestoneDate = dateOnlyToInputValue(impl.next_milestone_date);
+                  if (nextMilestoneDateDraft !== currentMilestoneDate) { void updateField({ next_milestone_date: nextMilestoneDateDraft || null }); };
                 }}
                 disabled={saving}
-                className="mt-1 w-full rounded border border-stroke bg-panel px-2 py-1 text-sm text-foreground outline-none focus:border-accent"
               />
             ) : (
               <p className="mt-1 text-sm font-medium text-foreground">{formatDateOnly(impl.next_milestone_date)}</p>
@@ -459,22 +441,15 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
         <div className="mt-5">
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status Summary</p>
           {isEditing ? (
-            <textarea
+            <Textarea
+              size="xs"
+              className="mt-1"
               value={statusSummaryDraft}
               onChange={(e) => setStatusSummaryDraft(e.target.value)}
-              onBlur={() => {
-                if (!impl) {
-                  return;
-                }
-
-                if (statusSummaryDraft !== impl.status_summary) {
-                  void updateField({ status_summary: statusSummaryDraft });
-                }
-              }}
+              onBlur={() => { if (!impl) { return; } if (statusSummaryDraft !== impl.status_summary) { void updateField({ status_summary: statusSummaryDraft }); } }}
               disabled={saving}
               rows={2}
               placeholder="Brief status update for stakeholders..."
-              className="mt-1 w-full rounded border border-stroke bg-panel px-2 py-1 text-sm text-foreground outline-none focus:border-accent"
             />
           ) : (
             <p className="mt-1 text-sm text-muted-foreground">{impl.status_summary || "No status summary set."}</p>
@@ -483,7 +458,7 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
       </section>
 
       {/* Tasks Section */}
-      <section className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+      <section className={cardClasses()}>
         <h2 className="text-sm font-semibold text-foreground">Tasks</h2>
 
         {/* Inline add row */}
@@ -499,69 +474,54 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
               className="min-w-0 flex-1 rounded border-0 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-60"
             />
 
-            <select
+            <Select
+              size="xs"
               value={inlineStatus}
               onChange={(e) => setInlineStatus(e.target.value as TaskStatus)}
               disabled={addingTask}
-              className="rounded border border-stroke bg-panel px-2 py-1 text-xs text-foreground outline-none focus:border-accent disabled:opacity-60"
             >
               {(["Backlog", "Planned", "In Progress", "Blocked/Waiting", "Parked"] as TaskStatus[]).map((s) => (
                 <option key={s} value={s}>{s}</option>
               ))}
-            </select>
+            </Select>
 
             <div className="flex gap-1">
               {[5, 15, 30, 60, 90].map((min) => (
-                <button
+                <Button variant="toggle" size="xs" active={inlineEstimate === min}
                   key={min}
-                  type="button"
                   onClick={() => setInlineEstimate(min)}
-                  disabled={addingTask}
-                  className={`rounded px-2 py-1 text-xs font-medium transition ${
-                    inlineEstimate === min
-                      ? "bg-accent text-white"
-                      : "border border-stroke bg-panel text-muted-foreground hover:text-foreground"
-                  }`}
-                >
+                  disabled={addingTask}>
                   {min}m
-                </button>
+                </Button>
               ))}
             </div>
 
-            <button
-              type="button"
+            <Button
+              variant="primary"
+              size="sm"
               onClick={handleInlineTaskAdd}
               disabled={addingTask || !inlineTitle.trim()}
-              className="rounded bg-accent px-3 py-1 text-xs font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {addingTask ? "Adding..." : "Add"}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setInlineRowActive(false);
-                setInlineTitle("");
-                setInlineError(null);
-              }}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => { setInlineRowActive(false); setInlineTitle(""); setInlineError(null); }}
               disabled={addingTask}
-              className="rounded border border-stroke bg-panel px-3 py-1 text-xs font-medium text-muted-foreground transition hover:text-foreground disabled:opacity-60"
             >
               Cancel
-            </button>
+            </Button>
           </div>
         ) : (
-          <button
-            type="button"
-            onClick={() => setInlineRowActive(true)}
-            className="mt-2 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground transition hover:bg-panel-muted hover:text-foreground"
-          >
+          <Button variant="ghost" className="flex mt-2 w-full" onClick={() => setInlineRowActive(true)}>
             <span className="text-base leading-none">+</span>
             <span>Add task</span>
-          </button>
+          </Button>
         )}
 
         {inlineError && (
-          <p className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-400" role="alert">
+          <p className="mt-2 rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
             {inlineError}
           </p>
         )}
@@ -572,12 +532,12 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
       </section>
 
       {/* Projects Section */}
-      <section className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+      <section className={cardClasses()}>
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-sm font-semibold text-foreground">Projects</h2>
           <Link
             href={`/projects?implementation_id=${id}`}
-            className="text-xs text-accent hover:underline"
+            className="text-xs text-accent-text hover:underline"
           >
             View all
           </Link>
@@ -588,27 +548,26 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
       <ImplementationNotesPanel implementationId={id} />
 
       {/* Status Updates Log */}
-      <section className="rounded-card border border-stroke bg-panel p-5 shadow-sm">
+      <section className={cardClasses()}>
         <h2 className="text-sm font-semibold text-foreground">Status Update Log</h2>
 
         {/* Add new status update */}
         <div className="mt-3 flex gap-2">
-          <input
+          <Input
+            className="flex-1"
             type="text"
             value={newStatusText}
             onChange={(e) => setNewStatusText(e.target.value)}
             placeholder="Add a quick status note..."
             disabled={addingStatus}
-            className="flex-1 rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
           />
-          <button
-            type="button"
+          <Button
+            variant="primary"
             onClick={addStatusUpdate}
             disabled={addingStatus || !newStatusText.trim()}
-            className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {addingStatus ? "Adding..." : "Add"}
-          </button>
+          </Button>
         </div>
 
         {/* Updates list */}

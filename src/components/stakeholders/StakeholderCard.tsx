@@ -35,7 +35,7 @@ export function StakeholderCard({ stakeholder }: StakeholderCardProps) {
           )}
         </div>
         {stakeholder.open_commitments_count > 0 && (
-          <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
+          <span className="shrink-0 rounded-full bg-warning-soft px-2 py-0.5 text-xs font-semibold text-warning">
             {stakeholder.open_commitments_count} open
           </span>
         )}

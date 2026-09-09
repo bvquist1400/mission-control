@@ -1,4 +1,5 @@
 "use client";
+import { Button } from "@/components/ui/Button";
 
 const DEFAULT_OPTIONS = [15, 30, 60, 90, 120] as const;
 
@@ -15,16 +16,11 @@ export function EstimateButtons({ value, onChange, options = DEFAULT_OPTIONS }: 
         const active = minutes === value;
 
         return (
-          <button
+          <Button variant="toggle" size="sm" active={active}
             key={minutes}
-            type="button"
-            onClick={() => onChange(minutes)}
-            className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
-              active ? "bg-accent text-white shadow-sm" : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
+            onClick={() => onChange(minutes)}>
             {minutes}
-          </button>
+          </Button>
         );
       })}
     </div>
