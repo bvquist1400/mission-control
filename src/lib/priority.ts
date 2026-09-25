@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { Task } from '@/types/database';
+import type { Task } from '@/types/database';
 
 // Priority scoring rules from spec Section 7
 

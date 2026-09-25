@@ -349,6 +349,104 @@ function createMcpServer(): McpServer {
     }
   );
 
+  // ── BRIEF PAGES (stored briefs with item buttons) ────────────────────
+  const BRIEF_MEETING_REF_SCHEMA = z.object({
+    id: z.string().describe('Granola meeting id'),
+    title: z.string().describe('Meeting title'),
+    start: z.string().optional().describe('Meeting start, ISO timestamp'),
+    url: z.string().optional().describe('Granola link for the meeting notes'),
+    lines: z.array(z.string()).optional().describe('The note line(s) this item came from'),
+  });
+
+  mcp.tool(
+    'save_eod_brief',
+    'Save the end-of-day brief as a stored page in Baseline and get its code (EOD-MMDD) and link. Proposals are NOT tasks: nothing is created until Brent accepts an item. Every proposed_task must cite at least one meeting in source.meetings. The first save of the day creates the brief; a later save the same day only appends proposed_task items from meetings the brief has not covered yet, and never changes existing items, their numbers or their states. All task_ids and maybe_tracked.task_id must be Brent\'s own tasks. Set claim_email=true only when you are about to email the link: the result then says email.send=true exactly once per brief, with the subject and plain-text body to send.',
+    {
+      date: z.string().optional().describe('Brief date YYYY-MM-DD (ET). Defaults to today ET.'),
+      content: z.record(z.string(), z.unknown()).describe('Read-only page content: heading, narrative, first_moves[], stats[{key,label,value}] (key "done" feeds the email subject), next{label, agenda[{time,title,choice_n?}]}, meetings[{id?,title,short?,start,end?,url?,has_notes}] for the day timeline, tiles[{key,type:"narrative"|"list",label,value?,suffix?,summary?,text?,list?,list_label?,groups[{label?,rows[{title,meta?,task_id?}]}],footnote?}], footnote.'),
+      covered_meeting_ids: z.array(z.string()).optional().describe('Granola ids of every meeting read for this brief, including ones that produced no items'),
+      items: z.array(z.object({
+        kind: z.enum(['proposed_task', 'carry_over', 'carry_group', 'choice']).describe('proposed_task = meeting action item (Accept/Dismiss); carry_over = one task that needs a call (Done/Tomorrow/Park); carry_group = several tasks decided together (Tomorrow/Park); choice = pick one option, e.g. a calendar clash'),
+        title: z.string().describe('What the item says, max 500 characters'),
+        detail: z.string().optional().describe('Extra context; becomes the task description on Accept'),
+        why: z.string().optional().describe('One line on why this needs a call'),
+        group: z.string().optional().describe('Optional grouping label for proposals, e.g. a workstream'),
+        label: z.string().optional().describe('Short eyebrow, e.g. "Due today" or "Tomorrow 10 AM"'),
+        task_ids: z.array(z.string()).optional().describe('carry_over: exactly one task UUID; carry_group: 2-50 task UUIDs'),
+        source: z.object({ meetings: z.array(BRIEF_MEETING_REF_SCHEMA) }).optional().describe('Meetings this item came from'),
+        maybe_tracked: z.object({
+          task_id: z.string().describe('UUID of an existing task that may already cover this'),
+          text: z.string().describe('Why it might already be tracked'),
+        }).optional(),
+        options: z.array(z.object({
+          key: z.string().describe('Stable lowercase key, e.g. bootcamp'),
+          label: z.string(),
+          recommended: z.boolean().optional(),
+        })).optional().describe('choice: 2-6 options'),
+      })).describe('Items to decide, in display order. Numbers (#n) are assigned by Baseline.'),
+      claim_email: z.boolean().optional().describe('True only when about to send the email; returns email.send once per brief'),
+    },
+    async (args) => {
+      const res = await fetch('https://mission-control-orpin-chi.vercel.app/api/briefs', {
+        method: 'POST',
+        headers: {
+          'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY!,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ edition: 'eod', ...args }),
+      });
+      const data = await res.json();
+      return { ...toMcpResponse(data), ...(res.ok ? {} : { isError: true }) };
+    }
+  );
+
+  mcp.tool(
+    'get_brief',
+    'Get a stored brief page by code (e.g. "EOD-0924"): its content, every numbered item with its state (open, accepted, dismissed, done, deferred, parked, decided, expired), the tasks it references, counts and the page link. Use for "review EOD-0924".',
+    {
+      code: z.string().describe('Brief code, e.g. EOD-0924'),
+    },
+    async ({ code }) => {
+      const res = await fetch(
+        `https://mission-control-orpin-chi.vercel.app/api/briefs/${encodeURIComponent(code.trim())}`,
+        { headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! } }
+      );
+      const data = await res.json();
+      return { ...toMcpResponse(data), ...(res.ok ? {} : { isError: true }) };
+    }
+  );
+
+  mcp.tool(
+    'act_on_brief_items',
+    'Act on numbered items of a stored brief, exactly as the page buttons do. proposed_task: accept (creates the Baseline task once; repeating is safe), dismiss (needs a reason already_tracked | not_mine | not_worth_it, or a note of at most 500 characters), undo (reopens a dismissed item). carry_over: done | tomorrow (due the next ET weekday) | park. carry_group: tomorrow | park, applied to all its tasks. choice: pick with choice=<option key>, undo. Every action is validated before any runs; if one is invalid, nothing changes.',
+    {
+      code: z.string().describe('Brief code, e.g. EOD-0924'),
+      actions: z.array(z.object({
+        n: z.number().int().positive().describe('Item number (#n)'),
+        action: z.enum(['accept', 'dismiss', 'done', 'tomorrow', 'park', 'pick', 'undo']),
+        reason: z.enum(['already_tracked', 'not_mine', 'not_worth_it']).optional().describe('Dismiss reason'),
+        note: z.string().max(500).optional().describe('Dismiss note, at most 500 characters'),
+        choice: z.string().optional().describe('Option key for pick'),
+      })).min(1).describe('One entry per item'),
+    },
+    async ({ code, actions }) => {
+      const res = await fetch(
+        `https://mission-control-orpin-chi.vercel.app/api/briefs/${encodeURIComponent(code.trim())}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY!,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ actions }),
+        }
+      );
+      const data = await res.json();
+      const failed = !res.ok || res.status === 207;
+      return { ...toMcpResponse(data), ...(failed ? { isError: true } : {}) };
+    }
+  );
+
   // ── GET WEEKLY REVIEW ────────────────────────────────────────────────
   mcp.tool(
     'get_weekly_review',

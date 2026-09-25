@@ -18,6 +18,73 @@
     }
   },
   {
+    "name": "act_on_brief_items",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "Brief code, e.g. EOD-0924"
+        },
+        "actions": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "n": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "description": "Item number (#n)"
+              },
+              "action": {
+                "type": "string",
+                "enum": [
+                  "accept",
+                  "dismiss",
+                  "done",
+                  "tomorrow",
+                  "park",
+                  "pick",
+                  "undo"
+                ]
+              },
+              "reason": {
+                "description": "Dismiss reason",
+                "type": "string",
+                "enum": [
+                  "already_tracked",
+                  "not_mine",
+                  "not_worth_it"
+                ]
+              },
+              "note": {
+                "description": "Dismiss note, at most 500 characters",
+                "type": "string",
+                "maxLength": 500
+              },
+              "choice": {
+                "description": "Option key for pick",
+                "type": "string"
+              }
+            },
+            "required": [
+              "n",
+              "action"
+            ]
+          },
+          "description": "One entry per item"
+        }
+      },
+      "required": [
+        "code",
+        "actions"
+      ]
+    }
+  },
+  {
     "name": "add_task_comment",
     "inputSchema": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -1066,6 +1133,22 @@
     }
   },
   {
+    "name": "get_brief",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "Brief code, e.g. EOD-0924"
+        }
+      },
+      "required": [
+        "code"
+      ]
+    }
+  },
+  {
     "name": "get_brief_digest",
     "inputSchema": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -1806,6 +1889,176 @@
       },
       "required": [
         "task_id"
+      ]
+    }
+  },
+  {
+    "name": "save_eod_brief",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "date": {
+          "description": "Brief date YYYY-MM-DD (ET). Defaults to today ET.",
+          "type": "string"
+        },
+        "content": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {},
+          "description": "Read-only page content: heading, narrative, first_moves[], stats[{key,label,value}] (key \"done\" feeds the email subject), next{label, agenda[{time,title,choice_n?}]}, meetings[{id?,title,short?,start,end?,url?,has_notes}] for the day timeline, tiles[{key,type:\"narrative\"|\"list\",label,value?,suffix?,summary?,text?,list?,list_label?,groups[{label?,rows[{title,meta?,task_id?}]}],footnote?}], footnote."
+        },
+        "covered_meeting_ids": {
+          "description": "Granola ids of every meeting read for this brief, including ones that produced no items",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "proposed_task",
+                  "carry_over",
+                  "carry_group",
+                  "choice"
+                ],
+                "description": "proposed_task = meeting action item (Accept/Dismiss); carry_over = one task that needs a call (Done/Tomorrow/Park); carry_group = several tasks decided together (Tomorrow/Park); choice = pick one option, e.g. a calendar clash"
+              },
+              "title": {
+                "type": "string",
+                "description": "What the item says, max 500 characters"
+              },
+              "detail": {
+                "description": "Extra context; becomes the task description on Accept",
+                "type": "string"
+              },
+              "why": {
+                "description": "One line on why this needs a call",
+                "type": "string"
+              },
+              "group": {
+                "description": "Optional grouping label for proposals, e.g. a workstream",
+                "type": "string"
+              },
+              "label": {
+                "description": "Short eyebrow, e.g. \"Due today\" or \"Tomorrow 10 AM\"",
+                "type": "string"
+              },
+              "task_ids": {
+                "description": "carry_over: exactly one task UUID; carry_group: 2-50 task UUIDs",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "source": {
+                "description": "Meetings this item came from",
+                "type": "object",
+                "properties": {
+                  "meetings": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "description": "Granola meeting id"
+                        },
+                        "title": {
+                          "type": "string",
+                          "description": "Meeting title"
+                        },
+                        "start": {
+                          "description": "Meeting start, ISO timestamp",
+                          "type": "string"
+                        },
+                        "url": {
+                          "description": "Granola link for the meeting notes",
+                          "type": "string"
+                        },
+                        "lines": {
+                          "description": "The note line(s) this item came from",
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "title"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "meetings"
+                ]
+              },
+              "maybe_tracked": {
+                "type": "object",
+                "properties": {
+                  "task_id": {
+                    "type": "string",
+                    "description": "UUID of an existing task that may already cover this"
+                  },
+                  "text": {
+                    "type": "string",
+                    "description": "Why it might already be tracked"
+                  }
+                },
+                "required": [
+                  "task_id",
+                  "text"
+                ]
+              },
+              "options": {
+                "description": "choice: 2-6 options",
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string",
+                      "description": "Stable lowercase key, e.g. bootcamp"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "recommended": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "label"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "kind",
+              "title"
+            ]
+          },
+          "description": "Items to decide, in display order. Numbers (#n) are assigned by Baseline."
+        },
+        "claim_email": {
+          "description": "True only when about to send the email; returns email.send once per brief",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "content",
+        "items"
       ]
     }
   },

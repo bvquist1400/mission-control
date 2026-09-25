@@ -39,6 +39,81 @@ export type Database = {
   }
   public: {
     Tables: {
+      brief_items: {
+        Row: {
+          acted_at: string | null
+          brief_id: string
+          choice: string | null
+          created_at: string
+          created_task_id: string | null
+          dismissed_note: string | null
+          dismissed_reason: string | null
+          id: string
+          item_key: string
+          kind: string
+          n: number
+          payload: Json
+          source: Json
+          state: string
+          task_ids: string[]
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          acted_at?: string | null
+          brief_id: string
+          choice?: string | null
+          created_at?: string
+          created_task_id?: string | null
+          dismissed_note?: string | null
+          dismissed_reason?: string | null
+          id?: string
+          item_key: string
+          kind: string
+          n: number
+          payload?: Json
+          source?: Json
+          state?: string
+          task_ids?: string[]
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          acted_at?: string | null
+          brief_id?: string
+          choice?: string | null
+          created_at?: string
+          created_task_id?: string | null
+          dismissed_note?: string | null
+          dismissed_reason?: string | null
+          id?: string
+          item_key?: string
+          kind?: string
+          n?: number
+          payload?: Json
+          source?: Json
+          state?: string
+          task_ids?: string[]
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "brief_items_brief_user_fkey"
+            columns: ["brief_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "briefs"
+            referencedColumns: ["id", "user_id"]
+          },
+          {
+            foreignKeyName: "brief_items_created_task_id_fkey"
+            columns: ["created_task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       briefing_review_snapshots: {
         Row: {
           anchor_date: string
@@ -79,6 +154,45 @@ export type Database = {
           source?: string
           summary?: string
           title?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      briefs: {
+        Row: {
+          brief_date: string
+          code: string
+          content: Json
+          covered_meeting_ids: string[]
+          created_at: string
+          edition: string
+          emailed_at: string | null
+          id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          brief_date: string
+          code: string
+          content?: Json
+          covered_meeting_ids?: string[]
+          created_at?: string
+          edition: string
+          emailed_at?: string | null
+          id?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          brief_date?: string
+          code?: string
+          content?: Json
+          covered_meeting_ids?: string[]
+          created_at?: string
+          edition?: string
+          emailed_at?: string | null
+          id?: string
           updated_at?: string
           user_id?: string
         }

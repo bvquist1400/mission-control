@@ -32,6 +32,8 @@
     "test:work-intelligence": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-work-intelligence.mjs",
     "test:project-sections": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-project-sections.mjs",
     "test:task-external-source": "node --experimental-strip-types scripts/test-task-external-source.mjs",
+    "test:briefs": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-briefs.mjs",
+    "test:briefs-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-briefs-db.mjs",
     "backfill:project-sections:dry-run": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/backfill-project-sections.mjs",
     "backfill:project-sections:apply": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/backfill-project-sections.mjs --apply",
     "backfill:task-external-source:dry-run": "node --experimental-strip-types scripts/backfill-task-external-source-ids.mjs",

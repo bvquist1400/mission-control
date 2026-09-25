@@ -8,6 +8,8 @@ import * as briefingDigestRoute from '@/app/api/briefing/digest/route';
 import * as briefingRenderRoute from '@/app/api/briefing/render/route';
 import * as briefingNarrativeRoute from '@/app/api/briefing/narrative/route';
 import * as briefingWeeklyReviewRoute from '@/app/api/briefing/weekly-review/route';
+import * as briefsRoute from '@/app/api/briefs/route';
+import * as briefRoute from '@/app/api/briefs/[code]/route';
 import * as notesRoute from '@/app/api/notes/route';
 import * as noteMeetingRoute from '@/app/api/notes/meeting/route';
 import * as noteRoute from '@/app/api/notes/[id]/route';
@@ -191,6 +193,17 @@ async function handleRequest(
 
   if (segments[0] === 'briefing' && segments[1] === 'narrative' && segments.length === 2) {
     return invokeStatic(briefingNarrativeRoute.POST, requestWithContext);
+  }
+
+  if (segments[0] === 'briefs' && segments.length === 1) {
+    if (request.method === 'POST') return invokeStatic(briefsRoute.POST, requestWithContext);
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'briefs' && segments[1] && segments.length === 2) {
+    if (request.method === 'GET') return invokeDynamic(briefRoute.GET, requestWithContext, { code: segments[1] });
+    if (request.method === 'PATCH') return invokeDynamic(briefRoute.PATCH, requestWithContext, { code: segments[1] });
+    return methodNotAllowed();
   }
 
   if (segments[0] === 'notes' && segments.length === 1) {
