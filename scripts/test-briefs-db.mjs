@@ -129,6 +129,7 @@ try {
       heading: "Thu, Sep 24",
       narrative: "Today was a good day.",
       stats: [{ key: "done", label: "done", value: 19 }],
+      next: { label: "Tomorrow · Fri 9/25", agenda: [{ time: "8:00", title: "DMG" }, { time: "10:00", title: "Two meetings", choice_item: 6 }] },
       meetings: [MEETING.dep, MEETING.brenda, MEETING.saif].map((m) => ({ ...m, has_notes: true })),
     },
     covered_meeting_ids: [MEETING.dep.id, MEETING.brenda.id, MEETING.saif.id],
@@ -162,6 +163,8 @@ try {
     assert.deepEqual(saved.counts, { total: 7, open: 7, from_meetings: 4, calls: 3 });
     assert.equal(saved.url, "http://localhost:3000/briefs/EOD-0924");
     assert.equal(saved.email, null);
+    const { data: stored } = await admin.from("briefs").select("content").eq("id", saved.brief_id).single();
+    assert.deepEqual(stored.content.next.agenda[1], { time: "10:00", title: "Two meetings", choice_n: 7 });
   });
 
   await test("a foreign task_id is rejected at save (carry_over and maybe_tracked), and nothing is written", async () => {

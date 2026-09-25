@@ -1908,7 +1908,7 @@
             "type": "string"
           },
           "additionalProperties": {},
-          "description": "Read-only page content: heading, narrative, first_moves[], stats[{key,label,value}] (key \"done\" feeds the email subject), next{label, agenda[{time,title,choice_n?}]}, meetings[{id?,title,short?,start,end?,url?,has_notes}] for the day timeline, tiles[{key,type:\"narrative\"|\"list\",label,value?,suffix?,summary?,text?,list?,list_label?,groups[{label?,rows[{title,meta?,task_id?}]}],footnote?}], footnote."
+          "description": "Read-only page content: heading, narrative, first_moves[], stats[{key,label,value}] (key \"done\" feeds the email subject), next{label, agenda[{time,title,choice_item?}]} (choice_item = 0-based position of a choice item in items; Baseline links that agenda line to the choice), meetings[{id?,title,short?,start,end?,url?,has_notes}] for the day timeline, tiles[{key,type:\"narrative\"|\"list\",label,value?,suffix?,summary?,text?,list?,list_label?,groups[{label?,rows[{title,meta?,task_id?}]}],footnote?}], footnote."
         },
         "covered_meeting_ids": {
           "description": "Granola ids of every meeting read for this brief, including ones that produced no items",

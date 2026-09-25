@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
+import { AppShell } from "@/components/layout/AppShell";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { ToastProvider } from "@/components/ui/Toast";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
@@ -35,12 +36,7 @@ export default async function RootLayout({
     <html lang="en">
       <body className="antialiased">
         <ToastProvider>
-          <div className="mx-auto flex min-h-screen w-full max-w-[2000px] gap-6 px-4 py-4 sm:px-6 lg:px-8">
-            <Sidebar userEmail={userEmail} defaultCollapsed={collapsed} />
-            <main className="min-h-[calc(100vh-2rem)] min-w-0 flex-1 rounded-2xl border border-stroke bg-panel p-5 pb-24 shadow-sm sm:p-6 sm:pb-24 xl:p-7 xl:pb-8">
-              {children}
-            </main>
-          </div>
+          <AppShell sidebar={<Sidebar userEmail={userEmail} defaultCollapsed={collapsed} />}>{children}</AppShell>
         </ToastProvider>
       </body>
     </html>

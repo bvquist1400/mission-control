@@ -52,7 +52,8 @@ External task identities are stored as the nullable pair `external_source_system
 
 - RLS: 4-policy pattern (SELECT, INSERT, UPDATE, DELETE) on every table
 - `updated_at` triggers: reuse `set_updated_at()` function
-- Migrations: `supabase/migrations/` (latest: 054)
+- Migrations: `supabase/migrations/` (latest: 055)
+- New tables get explicit `GRANT ... TO authenticated, service_role` (see 055): newer Supabase stacks, including a fresh `supabase start`, no longer auto-grant public tables to the API roles
 
 ### Schema Types
 
@@ -124,6 +125,16 @@ Controls with behaviour (Button, Input) are components; pure-styling primitives 
   `registerTasks`. Mutations PATCH then call `router.refresh()` to re-stream the
   affected sections.
 
+### Brief pages
+
+- A brief (`briefs`, migration 055) is content-as-data plus numbered items (`brief_items`) with a stable `item_key` and a state. Codes look like `EOD-0924`.
+- `src/lib/briefs/service.ts` is the only write path: `/api/briefs` (POST save, GET/PATCH by code) and the MCP tools `save_eod_brief`, `get_brief`, `act_on_brief_items` all go through it. Validate every action before executing any.
+- Proposals are never tasks until accepted. Accept creates the task with external source (`eod_proposal`, `item_key`), idempotent via the 054 index. A same-day re-save only appends items from uncovered meetings; existing `n` and state never change.
+- "Tomorrow" is the next ET weekday (`resolveTomorrowDate` in `src/lib/briefs/keys.ts`), never UTC.
+- The page renders from registries, never from the edition: `CARD_REGISTRY` (item kind → card, `src/components/briefs/cards.tsx`) and `TILE_REGISTRY` (read-only tile type → tile, `tiles.tsx`). Adding a kind means the registry plus the migration's kind check.
+- `/briefs/*` renders full-bleed (no sidebar) via `AppShell`; its styles are scoped under `.brief-page` and follow the OS light/dark setting, unlike the rest of the app. Page-local keys (J/K/A/D/S) are listed on the page, not in the global `?` dialog.
+- Tests: `npm run test:briefs` (pure) and `npm run test:briefs-db` (needs a local Supabase stack; refuses non-local URLs).
+
 ## Key Files
 
 | Purpose | Path |
@@ -158,6 +169,9 @@ Controls with behaviour (Button, Input) are components; pure-styling primitives 
 | Review automation workflow export | `n8n/mission-control-project-reviews.json` |
 | Notes schema migration | `supabase/migrations/032_add_notes.sql` |
 | Upstream API router | `src/app/api/mcp-upstream/[...path]/route.ts` |
+| Brief pages service (save / get / act) | `src/lib/briefs/service.ts` |
+| Brief page (`/briefs/[code]`) | `src/app/briefs/[code]/page.tsx`, `src/components/briefs/` |
+| EOD routine prompt | `docs/routines/eod.md` |
 
 ## Briefing Model Note
 

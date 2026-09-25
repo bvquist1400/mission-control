@@ -19,6 +19,7 @@ import {
   EOD_PROPOSAL_SOURCE_SYSTEM,
   type BriefAction,
   type BriefActionInput,
+  type BriefAgendaLine,
   type BriefContent,
   type BriefCounts,
   type BriefItemKind,
@@ -141,6 +142,14 @@ function mergeMeetings(existing: BriefMeeting[] = [], incoming: BriefMeeting[] =
   for (const meeting of existing) merged.set(meetingKey(meeting), meeting);
   for (const meeting of incoming) if (!merged.has(meetingKey(meeting))) merged.set(meetingKey(meeting), meeting);
   return [...merged.values()].sort((a, b) => a.start.localeCompare(b.start));
+}
+
+/** Swap each agenda line's request-position choice_item for the saved item's n. */
+function resolveAgendaChoices(agenda: BriefAgendaLine[], nByIndex: Map<number, number>): BriefAgendaLine[] {
+  return agenda.map(({ choice_item, ...line }) => {
+    const n = choice_item === undefined ? undefined : nByIndex.get(choice_item);
+    return n ? { ...line, choice_n: n } : line;
+  });
 }
 
 export function buildBriefEmail(code: string, url: string, counts: BriefCounts, content: BriefContent) {
@@ -293,6 +302,7 @@ export async function saveBrief(
   skipped.sort((a, b) => a.index - b.index);
 
   const appended: SaveBriefResult["appended"] = [];
+  const nByIndex = new Map<number, number>();
   if (candidates.length) {
     const { data: maxRow, error: maxError } = await supabase
       .from("brief_items")
@@ -306,8 +316,9 @@ export async function saveBrief(
     let n = (maxRow as { n: number } | null)?.n ?? 0;
     const briefId = brief.id;
 
-    const rows = candidates.map(({ key, item }) => {
+    const rows = candidates.map(({ index, key, item }) => {
       n += 1;
+      nByIndex.set(index, n);
       appended.push({ n, kind: item.kind, item_key: key, title: item.payload.title });
       return {
         user_id: userId,
@@ -336,6 +347,12 @@ export async function saveBrief(
 
   const briefUpdates: Record<string, unknown> = {};
   if (nextCovered.size !== brief.covered_meeting_ids.length) briefUpdates.covered_meeting_ids = [...nextCovered];
+  if (created && brief.content.next?.agenda.some((line) => line.choice_item !== undefined)) {
+    briefUpdates.content = {
+      ...brief.content,
+      next: { ...brief.content.next, agenda: resolveAgendaChoices(brief.content.next.agenda, nByIndex) },
+    };
+  }
   if (!created && input.content.meetings?.length) {
     // Only the timeline grows on a rerun, so new items have their meeting on the page.
     briefUpdates.content = { ...brief.content, meetings: mergeMeetings(brief.content.meetings, input.content.meetings) };

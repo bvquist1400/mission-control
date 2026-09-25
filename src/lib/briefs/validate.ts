@@ -181,6 +181,7 @@ export function normalizeBriefContent(value: unknown): BriefContent {
             if (!time || !title) return null;
             const out: BriefAgendaLine = { time, title };
             if (Number.isInteger(line.choice_n) && (line.choice_n as number) > 0) out.choice_n = line.choice_n as number;
+            if (Number.isInteger(line.choice_item) && (line.choice_item as number) >= 0) out.choice_item = line.choice_item as number;
             return out;
           })
           .filter((line): line is BriefAgendaLine => line !== null)

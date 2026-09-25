@@ -85,6 +85,11 @@ export interface BriefAgendaLine {
   title: string;
   /** When set, this line shows the pick of the choice item with this n. */
   choice_n?: number;
+  /**
+   * Save input only: 0-based position of a choice item in the request's items.
+   * The server swaps it for that item's n, since callers can't know n up front.
+   */
+  choice_item?: number;
 }
 
 export interface BriefTileRow {
