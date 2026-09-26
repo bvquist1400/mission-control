@@ -165,6 +165,7 @@ export interface BriefRow {
   content: BriefContent;
   covered_meeting_ids: string[];
   notified_at: string | null;
+  notify_sent_at: string | null;
   notify_error: string | null;
   created_at: string;
   updated_at: string;

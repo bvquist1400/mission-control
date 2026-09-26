@@ -151,7 +151,8 @@ display order (meeting items first, grouped; then the calls).
   N to decide · N done" notice with the link and "Or in Claude: review
   EOD-MMDD" on the first save of the day, and never again for that brief. The
   result's `notify.status` says `sent`, `failed` (with the reason) or
-  `already_notified`.
+  `already_claimed` (an earlier save owns the one notice; `notify.sent_at` says
+  whether it was delivered).
 
 ### 4. Finish
 

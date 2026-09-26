@@ -52,7 +52,7 @@ export class BriefServiceError extends Error {
 }
 
 const BRIEF_SELECT =
-  "id, user_id, edition, brief_date, code, content, covered_meeting_ids, notified_at, notify_error, created_at, updated_at";
+  "id, user_id, edition, brief_date, code, content, covered_meeting_ids, notified_at, notify_sent_at, notify_error, created_at, updated_at";
 const ITEM_SELECT =
   "id, user_id, brief_id, n, item_key, kind, payload, task_ids, source, state, dismissed_reason, dismissed_note, choice, created_task_id, acted_at, created_at, updated_at";
 const TASK_ACTION_SELECT = "id, user_id, title, status, due_at, base_priority, priority_score, stakeholder_mentions";
@@ -177,9 +177,17 @@ export interface SaveBriefResult {
   counts: BriefCounts;
   /**
    * The ready-notice (Telegram). Only the first save of a brief tries to send;
-   * later saves report "already_notified". A failure never fails the save.
+   * later saves report "already_claimed" (another save owns the single attempt;
+   * sent_at says whether it has been delivered yet). A failure never fails the save.
    */
-  notify: { status: "sent" | "failed" | "already_notified"; error: string | null; notified_at: string | null };
+  notify: {
+    status: "sent" | "failed" | "already_claimed";
+    error: string | null;
+    /** When the single attempt was claimed. */
+    notified_at: string | null;
+    /** When Telegram accepted the message; null until (unless) it did. Never set before delivery. */
+    sent_at: string | null;
+  };
 }
 
 async function loadBriefByDate(supabase: AnySupabase, userId: string, edition: string, briefDate: string) {
@@ -229,7 +237,9 @@ async function createBrief(supabase: AnySupabase, userId: string, input: SaveBri
 /**
  * Claim-then-send, so a brief notifies at most once however many saves race:
  * only the save whose UPDATE flips notified_at from NULL sends. notified_at is
- * the time of that one attempt; notify_error records why it failed. Never throws.
+ * the claim; notify_sent_at is written only after Telegram accepted the
+ * message, and notify_error records why it didn't. A save that lost the claim
+ * reports "already_claimed" with whatever is durable, never "sent". Never throws.
  */
 async function notifyOnce(
   supabase: AnySupabase,
@@ -248,15 +258,22 @@ async function notifyOnce(
     .select("id");
   if (claimError) {
     console.error("[briefs] notify claim failed:", claimError);
-    return { status: "failed", error: "Couldn't record the notification claim", notified_at: brief.notified_at };
+    return { status: "failed", error: "Couldn't record the notification claim", notified_at: brief.notified_at, sent_at: brief.notify_sent_at };
   }
   if (!claimed?.length) {
-    return { status: "already_notified", error: brief.notify_error, notified_at: brief.notified_at };
+    // Re-read: the claim may have been made (and sent, or failed) after this save loaded the brief.
+    const { data: current } = await supabase
+      .from("briefs")
+      .select("notified_at, notify_sent_at, notify_error")
+      .eq("id", brief.id)
+      .eq("user_id", userId)
+      .maybeSingle();
+    const row = (current ?? brief) as Pick<BriefRow, "notified_at" | "notify_sent_at" | "notify_error">;
+    return { status: "already_claimed", error: row.notify_error, notified_at: row.notified_at, sent_at: row.notify_sent_at };
   }
 
   try {
     await notifier.send(text);
-    return { status: "sent", error: null, notified_at: attemptedAt };
   } catch (caught) {
     const message = (caught instanceof Error ? caught.message : String(caught)).slice(0, 1000);
     const { error: recordError } = await supabase
@@ -265,8 +282,18 @@ async function notifyOnce(
       .eq("id", brief.id)
       .eq("user_id", userId);
     if (recordError) console.error("[briefs] couldn't record notify_error:", recordError);
-    return { status: "failed", error: message, notified_at: attemptedAt };
+    return { status: "failed", error: message, notified_at: attemptedAt, sent_at: null };
   }
+
+  // Delivered. Only now is sent_at written, so nothing reports a send that didn't happen.
+  const sentAt = new Date().toISOString();
+  const { error: sentError } = await supabase
+    .from("briefs")
+    .update({ notify_sent_at: sentAt })
+    .eq("id", brief.id)
+    .eq("user_id", userId);
+  if (sentError) console.error("[briefs] couldn't record notify_sent_at:", sentError);
+  return { status: "sent", error: null, notified_at: attemptedAt, sent_at: sentAt };
 }
 
 export async function saveBrief(
@@ -582,7 +609,8 @@ async function transitionItem(
   expected: BriefItemState,
   next: BriefItemState,
   fields: Record<string, unknown>,
-  task: Record<string, unknown> | null = null
+  task: Record<string, unknown> | null = null,
+  taskUpdates: Array<Record<string, unknown>> | null = null
 ): Promise<TransitionOutcome> {
   const { data, error } = await supabase.rpc("brief_item_transition", {
     p_user_id: userId,
@@ -591,9 +619,17 @@ async function transitionItem(
     p_state: next,
     p_fields: fields,
     p_task: task,
+    p_task_updates: taskUpdates,
   });
   if (error) throw error;
   return data as TransitionOutcome;
+}
+
+/** PostgREST errors are plain objects, not Error instances. */
+function errorMessage(caught: unknown): string {
+  if (caught instanceof Error) return caught.message;
+  if (caught && typeof caught === "object" && "message" in caught) return String((caught as { message: unknown }).message);
+  return String(caught);
 }
 
 function conflictResult(item: BriefItemRow, action: BriefAction, outcome: TransitionOutcome): BriefActionResult {
@@ -611,45 +647,33 @@ function conflictResult(item: BriefItemRow, action: BriefAction, outcome: Transi
   };
 }
 
-async function applyCarryAction(
+/**
+ * The task changes a carry action makes, computed from the tasks as they are
+ * now. brief_item_transition applies them in the same transaction as the item's
+ * new state, so they land together or not at all.
+ */
+async function buildCarryUpdates(
   supabase: AnySupabase,
   userId: string,
   brief: BriefRow,
   item: BriefItemRow,
   action: "done" | "tomorrow" | "park",
   now: Date
-): Promise<{ due_at?: string }> {
+) {
   const tasks = await assertTasksOwned(supabase, userId, item.task_ids);
   const highPriorityNames = await getHighPriorityStakeholderNames(supabase, userId);
   const dueAt = action === "tomorrow" ? resolveTomorrowDueAt(brief.brief_date, now) : undefined;
 
-  for (const taskId of item.task_ids) {
+  const updates = item.task_ids.map((taskId) => {
     const task = tasks.get(taskId)!;
-    const updates: Partial<Task> = {};
-    if (action === "done") updates.status = "Done";
-    if (action === "park") updates.status = "Parked";
-    if (dueAt) updates.due_at = dueAt;
-    updates.priority_score = recalculateTaskPriority({ ...task, ...updates } as Task, highPriorityNames);
-
-    const { data, error } = await supabase
-      .from("tasks")
-      .update(updates)
-      .eq("id", taskId)
-      .eq("user_id", userId)
-      .select("id");
-    if (error) throw error;
-    if (!data || data.length !== 1) throw new BriefServiceError(404, `Task ${taskId} not found`);
-
-    if (updates.status && updates.status !== task.status) {
-      queueTaskStatusTransition(supabase, {
-        userId,
-        taskId,
-        fromStatus: task.status as TaskStatus,
-        toStatus: updates.status as TaskStatus,
-      });
-    }
-  }
-  return dueAt ? { due_at: dueAt } : {};
+    const change: Partial<Task> = {};
+    if (action === "done") change.status = "Done";
+    if (action === "park") change.status = "Parked";
+    if (dueAt) change.due_at = dueAt;
+    change.priority_score = recalculateTaskPriority({ ...task, ...change } as Task, highPriorityNames);
+    return { id: taskId, ...change, from_status: task.status as TaskStatus };
+  });
+  return { dueAt, updates };
 }
 
 export async function actOnBriefItems(
@@ -784,23 +808,43 @@ export async function actOnBriefItems(
         case "done":
         case "tomorrow":
         case "park": {
-          // Claim the item first, so two different carry actions can't both change the tasks.
-          const outcome = await transitionItem(supabase, userId, item, item.state, next, { acted_at: actedAt });
+          // One transaction: the item's new state and every task write commit together or not at all.
+          // So "already" below can only ever mean the tasks really were updated.
+          const { dueAt, updates } = await buildCarryUpdates(supabase, userId, brief, item, action.action, now);
+          const outcome = await transitionItem(
+            supabase,
+            userId,
+            item,
+            item.state,
+            next,
+            { acted_at: actedAt },
+            null,
+            updates.map((update) => ({
+              id: update.id,
+              ...(update.status ? { status: update.status } : {}),
+              ...(update.due_at ? { due_at: update.due_at } : {}),
+              priority_score: update.priority_score,
+            }))
+          );
           if (!outcome.ok) {
             results.push(
               outcome.state === next
-                ? { n: item.n, action: action.action, ok: true, already: true, state: next }
+                ? { n: item.n, action: action.action, ok: true, already: true, state: next, task_ids: item.task_ids }
                 : conflictResult(item, action.action, outcome)
             );
             continue;
           }
-          try {
-            Object.assign(result, await applyCarryAction(supabase, userId, brief, item, action.action, now));
-          } catch (taskError) {
-            // Give the item back so the call can be retried; the tasks it already changed stay changed.
-            await transitionItem(supabase, userId, item, next, "open", { acted_at: null }).catch(() => null);
-            throw taskError;
+          for (const update of updates) {
+            if (update.status && update.status !== update.from_status) {
+              queueTaskStatusTransition(supabase, {
+                userId,
+                taskId: update.id,
+                fromStatus: update.from_status,
+                toStatus: update.status as TaskStatus,
+              });
+            }
           }
+          if (dueAt) result.due_at = dueAt;
           result.task_ids = item.task_ids;
           break;
         }
@@ -808,8 +852,7 @@ export async function actOnBriefItems(
 
       results.push(result);
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : String(caught);
-      results.push({ n: item.n, action: action.action, ok: false, error: message });
+      results.push({ n: item.n, action: action.action, ok: false, error: errorMessage(caught) });
     }
   }
 

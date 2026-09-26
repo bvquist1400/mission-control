@@ -397,7 +397,8 @@ try {
   await test("notify fires once per brief across reruns and racing first saves", async () => {
     const before = quiet.sent.length;
     const rerun = await saveBrief(admin, alice.id, parsed(firstRun), { appUrl: APP_URL, notifier: quiet });
-    assert.equal(rerun.notify.status, "already_notified");
+    assert.equal(rerun.notify.status, "already_claimed");
+    assert.ok(rerun.notify.sent_at, "the first save delivered, so sent_at is set");
     assert.equal(quiet.sent.length, before, "a rerun must not notify again");
 
     const racer = fakeNotifier();
@@ -421,12 +422,14 @@ try {
     assert.equal(result.appended.length, 1);
     assert.equal(result.notify.status, "failed");
     assert.match(result.notify.error, /isn't configured/);
-    const { data } = await admin.from("briefs").select("notified_at, notify_error").eq("id", result.brief_id).single();
+    const { data } = await admin.from("briefs").select("notified_at, notify_sent_at, notify_error").eq("id", result.brief_id).single();
     assert.ok(data.notified_at);
+    assert.equal(data.notify_sent_at, null);
     assert.match(data.notify_error, /BASELINE_TELEGRAM_BOT_TOKEN/);
     // A rerun doesn't retry (and so can't double-send after an ambiguous failure).
     const again = await saveBrief(admin, alice.id, parsed({ date: "2026-09-30", items: [] }), { appUrl: APP_URL, notifier: quiet });
-    assert.equal(again.notify.status, "already_notified");
+    assert.equal(again.notify.status, "already_claimed");
+    assert.equal(again.notify.sent_at, null, "never delivered, so never reported as sent");
   });
 
   await test("button status: ET day, open → lit, all decided → done, no brief → nothing", async () => {

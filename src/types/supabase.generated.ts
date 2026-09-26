@@ -170,6 +170,7 @@ export type Database = {
           id: string
           notified_at: string | null
           notify_error: string | null
+          notify_sent_at: string | null
           updated_at: string
           user_id: string
         }
@@ -183,6 +184,7 @@ export type Database = {
           id?: string
           notified_at?: string | null
           notify_error?: string | null
+          notify_sent_at?: string | null
           updated_at?: string
           user_id: string
         }
@@ -196,6 +198,7 @@ export type Database = {
           id?: string
           notified_at?: string | null
           notify_error?: string | null
+          notify_sent_at?: string | null
           updated_at?: string
           user_id?: string
         }
@@ -2378,6 +2381,7 @@ export type Database = {
           p_item_id: string
           p_state: string
           p_task?: Json
+          p_task_updates?: Json
           p_user_id: string
         }
         Returns: Json
