@@ -4,6 +4,8 @@ import { AppShell } from "@/components/layout/AppShell";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { ToastProvider } from "@/components/ui/Toast";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getTodayBriefStatus } from "@/lib/briefs/service";
+import type { TodayBriefStatus } from "@/lib/briefs/button";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -22,12 +24,19 @@ export default async function RootLayout({
   const collapsed = cookieStore.get("baseline_sidebar")?.value === "collapsed";
 
   let userEmail: string | null = null;
+  let todayBrief: TodayBriefStatus | null = null;
   try {
     const supabase = await createSupabaseServerClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();
     userEmail = user?.email ?? null;
+    if (user) {
+      todayBrief = await getTodayBriefStatus(supabase, user.id).catch((error: unknown) => {
+        console.error("[layout] today's brief status failed:", error);
+        return null;
+      });
+    }
   } catch {
     // Signed out, or auth is unreachable — the sidebar just shows no account.
   }
@@ -36,7 +45,7 @@ export default async function RootLayout({
     <html lang="en">
       <body className="antialiased">
         <ToastProvider>
-          <AppShell sidebar={<Sidebar userEmail={userEmail} defaultCollapsed={collapsed} />}>{children}</AppShell>
+          <AppShell sidebar={<Sidebar userEmail={userEmail} defaultCollapsed={collapsed} todayBrief={todayBrief} />}>{children}</AppShell>
         </ToastProvider>
       </body>
     </html>

@@ -375,7 +375,6 @@ export function parseSaveBriefInput(raw: unknown, now: Date = new Date()): Parse
       content: normalizeBriefContent(raw.content),
       covered_meeting_ids: [...new Set(covered)],
       items,
-      claim_email: raw.claim_email === true,
     },
   };
 }

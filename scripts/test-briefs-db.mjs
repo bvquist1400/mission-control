@@ -27,11 +27,23 @@ if (!["127.0.0.1", "localhost", "[::1]"].includes(new URL(url).hostname)) {
   process.exit(2);
 }
 
-const { saveBrief, getBrief, actOnBriefItems, BriefServiceError } = await import("../src/lib/briefs/service.ts");
+// No real Telegram calls, ever: without these the default notifier fails fast before any network.
+delete process.env.BASELINE_TELEGRAM_BOT_TOKEN;
+delete process.env.BASELINE_TELEGRAM_CHAT_ID;
+
+const { saveBrief, getBrief, actOnBriefItems, getTodayBriefStatus, BriefServiceError } = await import("../src/lib/briefs/service.ts");
+const { briefButtonView } = await import("../src/lib/briefs/button.ts");
 const { parseSaveBriefInput, parseBriefActions } = await import("../src/lib/briefs/validate.ts");
 const { resolveTomorrowDueAt } = await import("../src/lib/briefs/keys.ts");
 
 const APP_URL = "http://localhost:3000";
+
+/** A mocked notifier that records what it would have sent. */
+function fakeNotifier() {
+  const sent = [];
+  return { sent, send: async (text) => { sent.push(text); } };
+}
+const quiet = fakeNotifier();
 const admin = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
 
 let passed = 0;
@@ -156,25 +168,27 @@ try {
 
   let saved;
   await test("save creates EOD-0924 with items numbered in order", async () => {
-    saved = await saveBrief(admin, alice.id, parsed(firstRun), { appUrl: APP_URL });
+    saved = await saveBrief(admin, alice.id, parsed(firstRun), { appUrl: APP_URL, notifier: quiet });
     assert.equal(saved.code, "EOD-0924");
     assert.equal(saved.created, true);
     assert.deepEqual(saved.appended.map((item) => item.n), [1, 2, 3, 4, 5, 6, 7]);
     assert.deepEqual(saved.counts, { total: 7, open: 7, from_meetings: 4, calls: 3 });
     assert.equal(saved.url, "http://localhost:3000/briefs/EOD-0924");
-    assert.equal(saved.email, null);
+    assert.equal(saved.notify.status, "sent");
+    assert.equal(quiet.sent.length, 1);
+    assert.match(quiet.sent[0], /^EOD-0924 is ready · 7 to decide · 19 done\nhttp:\/\/localhost:3000\/briefs\/EOD-0924\nOr in Claude: review EOD-0924$/);
     const { data: stored } = await admin.from("briefs").select("content").eq("id", saved.brief_id).single();
     assert.deepEqual(stored.content.next.agenda[1], { time: "10:00", title: "Two meetings", choice_n: 7 });
   });
 
   await test("a foreign task_id is rejected at save (carry_over and maybe_tracked), and nothing is written", async () => {
     const foreignCarry = parsed({ date: "2026-09-22", items: [{ kind: "carry_over", title: "Not yours", task_ids: [bobTask] }] });
-    await rejects(saveBrief(admin, alice.id, foreignCarry, { appUrl: APP_URL }), 400, /Unknown task id/);
+    await rejects(saveBrief(admin, alice.id, foreignCarry, { appUrl: APP_URL, notifier: quiet }), 400, /Unknown task id/);
     const foreignMaybe = parsed({
       date: "2026-09-22",
       items: [{ ...proposalItem(MEETING.dep, "x", "y"), maybe_tracked: { task_id: bobTask, text: "peek" } }],
     });
-    await rejects(saveBrief(admin, alice.id, foreignMaybe, { appUrl: APP_URL }), 400, /Unknown task id/);
+    await rejects(saveBrief(admin, alice.id, foreignMaybe, { appUrl: APP_URL, notifier: quiet }), 400, /Unknown task id/);
     const { data } = await admin.from("briefs").select("id").eq("user_id", alice.id).eq("brief_date", "2026-09-22");
     assert.equal(data.length, 0);
   });
@@ -335,7 +349,7 @@ try {
     assert.ok(brief.covered_meeting_ids.includes(MEETING.late.id));
 
     // Running the same rerun again appends nothing.
-    const third = await saveBrief(admin, alice.id, parsed({ ...firstRun, covered_meeting_ids: [], items: [proposalItem(MEETING.late, "x", "Send recap to Saif (Brent)")] }), { appUrl: APP_URL });
+    const third = await saveBrief(admin, alice.id, parsed({ ...firstRun, covered_meeting_ids: [], items: [proposalItem(MEETING.late, "x", "Send recap to Saif (Brent)")] }), { appUrl: APP_URL, notifier: quiet });
     assert.deepEqual(third.appended, []);
   });
 
@@ -350,17 +364,79 @@ try {
     assert.deepEqual(nextDay.skipped.map((skip) => skip.reason), ["already_in_a_brief"]);
   });
 
-  await test("claim_email says send exactly once per brief", async () => {
-    const one = await saveBrief(admin, alice.id, parsed({ ...firstRun, claim_email: true }), { appUrl: APP_URL });
-    const two = await saveBrief(admin, alice.id, parsed({ ...firstRun, claim_email: true }), { appUrl: APP_URL });
-    assert.equal(one.email.send, true);
-    assert.equal(one.email.subject, `EOD-0924 · ${one.counts.open} to decide · 19 done`);
-    assert.equal(two.email.send, false);
-    assert.ok(two.email.already_emailed_at);
+  await test("notify fires once per brief across reruns and racing first saves", async () => {
+    const before = quiet.sent.length;
+    const rerun = await saveBrief(admin, alice.id, parsed(firstRun), { appUrl: APP_URL, notifier: quiet });
+    assert.equal(rerun.notify.status, "already_notified");
+    assert.equal(quiet.sent.length, before, "a rerun must not notify again");
+
+    const racer = fakeNotifier();
+    const body = parsed({ date: "2026-09-29", items: [proposalItem(MEETING.dep, "Race item", "Race line (Brent)")] });
+    const results = await Promise.allSettled(
+      Array.from({ length: 4 }, () => saveBrief(admin, alice.id, body, { appUrl: APP_URL, notifier: racer }))
+    );
+    assert.equal(racer.sent.length, 1, `racing first saves sent ${racer.sent.length} notices`);
+    const statuses = results.filter((r) => r.status === "fulfilled").map((r) => r.value.notify.status);
+    assert.equal(statuses.filter((status) => status === "sent").length, 1);
+  });
+
+  await test("missing Telegram env: the save still succeeds and notify_error is recorded", async () => {
+    const result = await saveBrief(
+      admin,
+      alice.id,
+      parsed({ date: "2026-09-30", items: [proposalItem(MEETING.saif, "No env item", "No env line (Brent)")] }),
+      { appUrl: APP_URL } // no notifier: the real Telegram one, with its env vars unset
+    );
+    assert.equal(result.created, true);
+    assert.equal(result.appended.length, 1);
+    assert.equal(result.notify.status, "failed");
+    assert.match(result.notify.error, /isn't configured/);
+    const { data } = await admin.from("briefs").select("notified_at, notify_error").eq("id", result.brief_id).single();
+    assert.ok(data.notified_at);
+    assert.match(data.notify_error, /BASELINE_TELEGRAM_BOT_TOKEN/);
+    // A rerun doesn't retry (and so can't double-send after an ambiguous failure).
+    const again = await saveBrief(admin, alice.id, parsed({ date: "2026-09-30", items: [] }), { appUrl: APP_URL, notifier: quiet });
+    assert.equal(again.notify.status, "already_notified");
+  });
+
+  await test("button status: ET day, open → lit, all decided → done, no brief → nothing", async () => {
+    // 10/5 11:30 PM ET is already 10/6 in UTC: the button must still show 10/5's brief.
+    const lateEvening = new Date("2026-10-06T03:30:00Z");
+    assert.equal(await getTodayBriefStatus(admin, alice.id, { now: lateEvening }), null);
+
+    await saveBrief(
+      admin,
+      alice.id,
+      parsed({
+        date: "2026-10-05",
+        items: [
+          proposalItem(MEETING.brenda, "Button item", "Button line (Brent)"),
+          { kind: "choice", title: "Pick one", options: [{ key: "a", label: "A" }, { key: "b", label: "B" }] },
+        ],
+      }),
+      { appUrl: APP_URL, notifier: quiet }
+    );
+
+    const open = await getTodayBriefStatus(admin, alice.id, { now: lateEvening });
+    assert.deepEqual(open, { code: "EOD-1005", brief_date: "2026-10-05", open: 2, total: 2 });
+    assert.equal(briefButtonView(open).label, "EOD-1005 · 2 to decide");
+    assert.equal(briefButtonView(open).tone, "open");
+
+    await actOnBriefItems(admin, alice.id, "EOD-1005", actions([{ n: 1, action: "dismiss", reason: "not_worth_it" }, { n: 2, action: "pick", choice: "a" }]));
+    const done = await getTodayBriefStatus(alice.client, alice.id, { now: lateEvening });
+    assert.equal(done.open, 0);
+    assert.equal(briefButtonView(done).label, "EOD-1005 · done");
+    assert.equal(briefButtonView(done).tone, "done");
+
+    // 12:30 AM ET on 10/6: a new day with no brief yet.
+    assert.equal(await getTodayBriefStatus(admin, alice.id, { now: new Date("2026-10-06T04:30:00Z") }), null);
+    // Another user never sees it.
+    assert.equal(await getTodayBriefStatus(bob.client, bob.id, { now: lateEvening }), null);
+    assert.equal(await getTodayBriefStatus(bob.client, alice.id, { now: lateEvening }), null);
   });
 
   await test("a new year's brief on the same day gets a longer code", async () => {
-    const nextYear = await saveBrief(admin, alice.id, parsed({ date: "2027-09-24", items: [] }), { appUrl: APP_URL });
+    const nextYear = await saveBrief(admin, alice.id, parsed({ date: "2027-09-24", items: [] }), { appUrl: APP_URL, notifier: quiet });
     assert.equal(nextYear.code, "EOD-09242027");
   });
 

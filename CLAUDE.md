@@ -133,6 +133,8 @@ Controls with behaviour (Button, Input) are components; pure-styling primitives 
 - "Tomorrow" is the next ET weekday (`resolveTomorrowDate` in `src/lib/briefs/keys.ts`), never UTC.
 - The page renders from registries, never from the edition: `CARD_REGISTRY` (item kind → card, `src/components/briefs/cards.tsx`) and `TILE_REGISTRY` (read-only tile type → tile, `tiles.tsx`). Adding a kind means the registry plus the migration's kind check.
 - `/briefs/*` renders full-bleed (no sidebar) via `AppShell`; its styles are scoped under `.brief-page` and follow the OS light/dark setting, unlike the rest of the app. Page-local keys (J/K/A/D/S) are listed on the page, not in the global `?` dialog.
+- Delivery: the first save of a brief claims `notified_at` (UPDATE … WHERE notified_at IS NULL) and sends one Telegram message (`src/lib/briefs/notify.ts`); reruns never resend, and a missing env var or failed send records `notify_error` instead of failing the save. Routines never email or message.
+- The app shell shows today's (ET) brief as a button (`BriefReadyButton`, desktop rail + phone/tablet top chrome): lit with open items, a quiet "· done" once everything is decided, nothing without a brief. The layout renders it; it re-reads `/api/briefs/today` on navigation.
 - Tests: `npm run test:briefs` (pure) and `npm run test:briefs-db` (needs a local Supabase stack; refuses non-local URLs).
 
 ## Key Files
@@ -202,3 +204,4 @@ Controls with behaviour (Button, Input) are components; pure-styling primitives 
 - `WORK_ICAL_URL` — remote ICS feed URL
 - `MISSION_CONTROL_API_KEY` — legacy MCP auth
 - `MISSION_CONTROL_USER_ID` — legacy MCP user binding
+- `BASELINE_TELEGRAM_BOT_TOKEN`, `BASELINE_TELEGRAM_CHAT_ID` — the bot and chat for "brief ready" notices (main deployment; optional, a missing value is recorded on the brief)

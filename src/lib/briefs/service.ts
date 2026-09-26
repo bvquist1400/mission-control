@@ -13,7 +13,10 @@ import {
   computeBriefItemKey,
   normalizeBriefCode,
   resolveTomorrowDueAt,
+  todayInBriefTimeZone,
 } from "@/lib/briefs/keys";
+import type { TodayBriefStatus } from "@/lib/briefs/button";
+import { buildBriefNotice, telegramNotifierFromEnv, type BriefNotifier } from "@/lib/briefs/notify";
 import { normalizeBriefContent } from "@/lib/briefs/validate";
 import {
   EOD_PROPOSAL_SOURCE_SYSTEM,
@@ -50,7 +53,8 @@ export class BriefServiceError extends Error {
   }
 }
 
-const BRIEF_SELECT = "id, user_id, edition, brief_date, code, content, covered_meeting_ids, emailed_at, created_at, updated_at";
+const BRIEF_SELECT =
+  "id, user_id, edition, brief_date, code, content, covered_meeting_ids, notified_at, notify_error, created_at, updated_at";
 const ITEM_SELECT =
   "id, user_id, brief_id, n, item_key, kind, payload, task_ids, source, state, dismissed_reason, dismissed_note, choice, created_task_id, acted_at, created_at, updated_at";
 const TASK_ACTION_SELECT = "id, user_id, title, status, due_at, base_priority, priority_score, stakeholder_mentions";
@@ -152,23 +156,6 @@ function resolveAgendaChoices(agenda: BriefAgendaLine[], nByIndex: Map<number, n
   });
 }
 
-export function buildBriefEmail(code: string, url: string, counts: BriefCounts, content: BriefContent) {
-  const done = content.stats?.find((stat) => stat.key === "done")?.value;
-  const subject = [code, `${counts.open} to decide`, done !== undefined ? `${done} done` : null].filter(Boolean).join(" · ");
-  const parts: string[] = [];
-  if (counts.from_meetings) parts.push(`${counts.from_meetings} from meetings`);
-  if (counts.calls) parts.push(`${counts.calls} ${counts.calls === 1 ? "needs" : "need"} a call`);
-  const lines = [
-    `${counts.open} to decide${parts.length ? `: ${parts.join(", ")}` : ""}.`,
-    ...(done !== undefined ? [`${done} done.`] : []),
-    "",
-    url,
-    "",
-    `Or in Claude: review ${code}`,
-  ];
-  return { subject, body: lines.join("\n") };
-}
-
 // ---------------------------------------------------------------------------
 // Save (routine / chat). First save creates the brief; a same-day rerun only
 // appends items from meetings the brief hasn't covered. Existing items, their
@@ -190,7 +177,11 @@ export interface SaveBriefResult {
   appended: Array<{ n: number; kind: BriefItemKind; item_key: string; title: string }>;
   skipped: SaveBriefSkip[];
   counts: BriefCounts;
-  email: { send: boolean; subject: string; body: string; already_emailed_at: string | null } | null;
+  /**
+   * The ready-notice (Telegram). Only the first save of a brief tries to send;
+   * later saves report "already_notified". A failure never fails the save.
+   */
+  notify: { status: "sent" | "failed" | "already_notified"; error: string | null; notified_at: string | null };
 }
 
 async function loadBriefByDate(supabase: AnySupabase, userId: string, edition: string, briefDate: string) {
@@ -237,11 +228,54 @@ async function createBrief(supabase: AnySupabase, userId: string, input: SaveBri
   return asBriefRow(data as Record<string, unknown>);
 }
 
+/**
+ * Claim-then-send, so a brief notifies at most once however many saves race:
+ * only the save whose UPDATE flips notified_at from NULL sends. notified_at is
+ * the time of that one attempt; notify_error records why it failed. Never throws.
+ */
+async function notifyOnce(
+  supabase: AnySupabase,
+  userId: string,
+  brief: BriefRow,
+  text: string,
+  notifier: BriefNotifier = telegramNotifierFromEnv()
+): Promise<SaveBriefResult["notify"]> {
+  const attemptedAt = new Date().toISOString();
+  const { data: claimed, error: claimError } = await supabase
+    .from("briefs")
+    .update({ notified_at: attemptedAt })
+    .eq("id", brief.id)
+    .eq("user_id", userId)
+    .is("notified_at", null)
+    .select("id");
+  if (claimError) {
+    console.error("[briefs] notify claim failed:", claimError);
+    return { status: "failed", error: "Couldn't record the notification claim", notified_at: brief.notified_at };
+  }
+  if (!claimed?.length) {
+    return { status: "already_notified", error: brief.notify_error, notified_at: brief.notified_at };
+  }
+
+  try {
+    await notifier.send(text);
+    return { status: "sent", error: null, notified_at: attemptedAt };
+  } catch (caught) {
+    const message = (caught instanceof Error ? caught.message : String(caught)).slice(0, 1000);
+    const { error: recordError } = await supabase
+      .from("briefs")
+      .update({ notify_error: message })
+      .eq("id", brief.id)
+      .eq("user_id", userId);
+    if (recordError) console.error("[briefs] couldn't record notify_error:", recordError);
+    return { status: "failed", error: message, notified_at: attemptedAt };
+  }
+}
+
 export async function saveBrief(
   supabase: AnySupabase,
   userId: string,
   input: SaveBriefInput,
-  options: { appUrl: string }
+  options: { appUrl: string; notifier?: BriefNotifier }
 ): Promise<SaveBriefResult> {
   const referencedTaskIds = input.items.flatMap((item) => [
     ...item.task_ids,
@@ -372,20 +406,7 @@ export async function saveBrief(
   const counts = countItems((allItems ?? []) as Pick<BriefItemRow, "kind" | "state">[]);
   const url = briefUrl(options.appUrl, brief.code);
 
-  let email: SaveBriefResult["email"] = null;
-  if (input.claim_email) {
-    const { subject, body } = buildBriefEmail(brief.code, url, counts, brief.content);
-    // Claim-then-send: only the first claim gets send=true, so a rerun never emails twice.
-    const { data: claimed, error: claimError } = await supabase
-      .from("briefs")
-      .update({ emailed_at: new Date().toISOString() })
-      .eq("id", brief.id)
-      .eq("user_id", userId)
-      .is("emailed_at", null)
-      .select("id");
-    if (claimError) throw claimError;
-    email = { send: (claimed ?? []).length > 0, subject, body, already_emailed_at: brief.emailed_at };
-  }
+  const notify = await notifyOnce(supabase, userId, brief, buildBriefNotice(brief.code, url, counts, brief.content), options.notifier);
 
   return {
     code: brief.code,
@@ -396,7 +417,7 @@ export async function saveBrief(
     appended,
     skipped,
     counts,
-    email,
+    notify,
   };
 }
 
@@ -449,6 +470,39 @@ export async function getBrief(supabase: AnySupabase, userId: string, code: stri
   }
 
   return { brief, items, tasks, counts: countItems(items), url: briefUrl(options.appUrl, brief.code) };
+}
+
+/** Today's brief (ET date, never UTC) and how many items are still open, for the app-shell button. */
+export async function getTodayBriefStatus(
+  supabase: AnySupabase,
+  userId: string,
+  options: { now?: Date; edition?: string } = {}
+): Promise<TodayBriefStatus | null> {
+  const briefDate = todayInBriefTimeZone(options.now ?? new Date());
+  const { data: brief, error } = await supabase
+    .from("briefs")
+    .select("id, code, brief_date")
+    .eq("user_id", userId)
+    .eq("edition", options.edition ?? "eod")
+    .eq("brief_date", briefDate)
+    .maybeSingle();
+  if (error) throw error;
+  if (!brief) return null;
+
+  const { data: items, error: itemsError } = await supabase
+    .from("brief_items")
+    .select("state")
+    .eq("user_id", userId)
+    .eq("brief_id", (brief as { id: string }).id);
+  if (itemsError) throw itemsError;
+
+  const rows = (items ?? []) as Array<{ state: string }>;
+  return {
+    code: (brief as { code: string }).code,
+    brief_date: (brief as { brief_date: string }).brief_date,
+    open: rows.filter((row) => row.state === "open").length,
+    total: rows.length,
+  };
 }
 
 // ---------------------------------------------------------------------------

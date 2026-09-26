@@ -360,10 +360,10 @@ function createMcpServer(): McpServer {
 
   mcp.tool(
     'save_eod_brief',
-    'Save the end-of-day brief as a stored page in Baseline and get its code (EOD-MMDD) and link. Proposals are NOT tasks: nothing is created until Brent accepts an item. Every proposed_task must cite at least one meeting in source.meetings. The first save of the day creates the brief; a later save the same day only appends proposed_task items from meetings the brief has not covered yet, and never changes existing items, their numbers or their states. All task_ids and maybe_tracked.task_id must be Brent\'s own tasks. Set claim_email=true only when you are about to email the link: the result then says email.send=true exactly once per brief, with the subject and plain-text body to send.',
+    'Save the end-of-day brief as a stored page in Baseline and get its code (EOD-MMDD) and link. Proposals are NOT tasks: nothing is created until Brent accepts an item. Every proposed_task must cite at least one meeting in source.meetings. The first save of the day creates the brief; a later save the same day only appends proposed_task items from meetings the brief has not covered yet, and never changes existing items, their numbers or their states. All task_ids and maybe_tracked.task_id must be Brent\'s own tasks. Baseline itself sends Brent one "brief ready" notice on the first save of the day (never on reruns); do not email or message him yourself. The notify.status in the result says sent, failed (with the reason) or already_notified.',
     {
       date: z.string().optional().describe('Brief date YYYY-MM-DD (ET). Defaults to today ET.'),
-      content: z.record(z.string(), z.unknown()).describe('Read-only page content: heading, narrative, first_moves[], stats[{key,label,value}] (key "done" feeds the email subject), next{label, agenda[{time,title,choice_item?}]} (choice_item = 0-based position of a choice item in items; Baseline links that agenda line to the choice), meetings[{id?,title,short?,start,end?,url?,has_notes}] for the day timeline, tiles[{key,type:"narrative"|"list",label,value?,suffix?,summary?,text?,list?,list_label?,groups[{label?,rows[{title,meta?,task_id?}]}],footnote?}], footnote.'),
+      content: z.record(z.string(), z.unknown()).describe('Read-only page content: heading, narrative, first_moves[], stats[{key,label,value}] (key "done" feeds the ready notice), next{label, agenda[{time,title,choice_item?}]} (choice_item = 0-based position of a choice item in items; Baseline links that agenda line to the choice), meetings[{id?,title,short?,start,end?,url?,has_notes}] for the day timeline, tiles[{key,type:"narrative"|"list",label,value?,suffix?,summary?,text?,list?,list_label?,groups[{label?,rows[{title,meta?,task_id?}]}],footnote?}], footnote.'),
       covered_meeting_ids: z.array(z.string()).optional().describe('Granola ids of every meeting read for this brief, including ones that produced no items'),
       items: z.array(z.object({
         kind: z.enum(['proposed_task', 'carry_over', 'carry_group', 'choice']).describe('proposed_task = meeting action item (Accept/Dismiss); carry_over = one task that needs a call (Done/Tomorrow/Park); carry_group = several tasks decided together (Tomorrow/Park); choice = pick one option, e.g. a calendar clash'),
@@ -384,7 +384,6 @@ function createMcpServer(): McpServer {
           recommended: z.boolean().optional(),
         })).optional().describe('choice: 2-6 options'),
       })).describe('Items to decide, in display order. Numbers (#n) are assigned by Baseline.'),
-      claim_email: z.boolean().optional().describe('True only when about to send the email; returns email.send once per brief'),
     },
     async (args) => {
       const res = await fetch('https://mission-control-orpin-chi.vercel.app/api/briefs', {

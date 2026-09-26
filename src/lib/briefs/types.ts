@@ -146,7 +146,6 @@ export interface SaveBriefInput {
   content: BriefContent;
   covered_meeting_ids: string[];
   items: BriefItemInput[];
-  claim_email: boolean;
 }
 
 export interface BriefActionInput {
@@ -165,7 +164,8 @@ export interface BriefRow {
   code: string;
   content: BriefContent;
   covered_meeting_ids: string[];
-  emailed_at: string | null;
+  notified_at: string | null;
+  notify_error: string | null;
   created_at: string;
   updated_at: string;
 }

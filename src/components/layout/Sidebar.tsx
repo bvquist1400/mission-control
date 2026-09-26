@@ -10,6 +10,8 @@ import { ShortcutsDialog, GO_TO_KEYS } from "@/components/layout/ShortcutsDialog
 import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
+import { BriefReadyButton, useTodayBrief } from "@/components/layout/BriefReadyButton";
+import type { TodayBriefStatus } from "@/lib/briefs/button";
 import type { CommitmentSummary, TaskUpdatePayload, TaskWithImplementation } from "@/types/database";
 
 const TASK_MODAL_PAGE_SIZE = 200;
@@ -191,11 +193,14 @@ function NavList({
 export function Sidebar({
   userEmail = null,
   defaultCollapsed = false,
+  todayBrief = null,
 }: {
   userEmail?: string | null;
   defaultCollapsed?: boolean;
+  todayBrief?: TodayBriefStatus | null;
 }) {
   const pathname = usePathname();
+  const brief = useTodayBrief(todayBrief);
   const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
@@ -368,6 +373,7 @@ export function Sidebar({
       </button>
 
       <SearchLauncherButton onClick={openSearch} variant="icon" className="fixed right-4 top-4 z-40 lg:hidden" />
+      <BriefReadyButton status={brief} variant="chrome" className="fixed right-16 top-4 z-40 lg:hidden" />
 
       {mobileOpen ? (
         <>
@@ -446,6 +452,12 @@ export function Sidebar({
             </svg>
           </Button>
         </div>
+
+        <BriefReadyButton
+          status={brief}
+          variant={collapsed ? "rail-collapsed" : "rail"}
+          className={collapsed ? "mx-auto mt-4" : "mt-4"}
+        />
 
         <SearchLauncherButton
           onClick={openSearch}

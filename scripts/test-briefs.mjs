@@ -1,16 +1,17 @@
 #!/usr/bin/env node
 // Pure tests for brief pages: stable item keys, ET "Tomorrow" date math, input
-// validation and the email line. No database; see test-briefs-db.mjs for that.
+// validation, the ready notice, the Telegram call (mocked) and the button. No database; see test-briefs-db.mjs for that.
 
 import assert from "node:assert/strict";
 
 const keys = await import("../src/lib/briefs/keys.ts");
 const validate = await import("../src/lib/briefs/validate.ts");
-const { buildBriefEmail } = await import("../src/lib/briefs/service.ts");
+const { buildBriefNotice, telegramNotifierFromEnv } = await import("../src/lib/briefs/notify.ts");
+const { briefButtonView } = await import("../src/lib/briefs/button.ts");
 
 let passed = 0;
-function test(name, fn) {
-  fn();
+async function test(name, fn) {
+  await fn();
   passed += 1;
   console.log(`ok - ${name}`);
 }
@@ -37,7 +38,7 @@ function proposal(overrides = {}) {
 // item_key stability
 // ---------------------------------------------------------------------------
 
-test("proposal key ignores reworded titles, meeting order, line order, case and punctuation", () => {
+await test("proposal key ignores reworded titles, meeting order, line order, case and punctuation", () => {
   const base = keys.computeBriefItemKey("eod", "2026-09-24", proposal());
   const reworded = keys.computeBriefItemKey(
     "eod",
@@ -56,26 +57,26 @@ test("proposal key ignores reworded titles, meeting order, line order, case and 
   assert.match(base, /^proposal:[0-9a-f]{20}$/);
 });
 
-test("proposal key is date-free, so a rerun on another day maps to the same key (and the same task)", () => {
+await test("proposal key is date-free, so a rerun on another day maps to the same key (and the same task)", () => {
   assert.equal(
     keys.computeBriefItemKey("eod", "2026-09-24", proposal()),
     keys.computeBriefItemKey("eod", "2026-09-25", proposal())
   );
 });
 
-test("different cited lines give a different proposal key", () => {
+await test("different cited lines give a different proposal key", () => {
   const other = proposal();
   other.source.meetings[1].lines = ["Present the in-basket fix to the security workgroup"];
   assert.notEqual(keys.computeBriefItemKey("eod", "2026-09-24", other), keys.computeBriefItemKey("eod", "2026-09-24", proposal()));
 });
 
-test("a proposal without cited lines keys on its title", () => {
+await test("a proposal without cited lines keys on its title", () => {
   const noLines = proposal({ source: { meetings: [{ id: "m1", title: "M", start: null, url: null, lines: [] }] } });
   const same = proposal({ payload: { title: "verify RESEARCH nurse job codes in the SailPoint spreadsheet!" }, source: noLines.source });
   assert.equal(keys.computeBriefItemKey("eod", "2026-09-24", noLines), keys.computeBriefItemKey("eod", "2026-09-24", same));
 });
 
-test("carry keys are per brief date; group and choice keys ignore order", () => {
+await test("carry keys are per brief date; group and choice keys ignore order", () => {
   const carry = { kind: "carry_over", payload: { title: "x" }, task_ids: [TASK_A], source: { meetings: [] } };
   assert.equal(keys.computeBriefItemKey("eod", "2026-09-24", carry), `eod:2026-09-24:carry_over:${TASK_A}`);
   assert.notEqual(keys.computeBriefItemKey("eod", "2026-09-24", carry), keys.computeBriefItemKey("eod", "2026-09-25", carry));
@@ -95,7 +96,7 @@ test("carry keys are per brief date; group and choice keys ignore order", () => 
   );
 });
 
-test("brief codes", () => {
+await test("brief codes", () => {
   assert.equal(keys.buildBriefCode("eod", "2026-09-24"), "EOD-0924");
   assert.equal(keys.buildBriefCode("eod", "2027-09-24", true), "EOD-09242027");
   assert.equal(keys.normalizeBriefCode(" eod-0924 "), "EOD-0924");
@@ -105,30 +106,30 @@ test("brief codes", () => {
 // "Tomorrow" = next ET weekday, never UTC
 // ---------------------------------------------------------------------------
 
-test("Tomorrow from a Friday is Monday", () => {
+await test("Tomorrow from a Friday is Monday", () => {
   assert.equal(keys.resolveTomorrowDate("2026-09-25", new Date("2026-09-25T20:15:00Z")), "2026-09-28");
 });
 
-test("Tomorrow across the fall DST boundary (Nov 1 2026): Monday ends at 23:59:59.999 EST", () => {
+await test("Tomorrow across the fall DST boundary (Nov 1 2026): Monday ends at 23:59:59.999 EST", () => {
   // Friday Oct 30 brief, acted on at 4:15 PM EDT; DST ends Sunday Nov 1.
   assert.equal(keys.resolveTomorrowDueAt("2026-10-30", new Date("2026-10-30T20:15:00Z")), "2026-11-03T04:59:59.999Z");
   // Thursday Oct 29 brief: Friday is still EDT.
   assert.equal(keys.resolveTomorrowDueAt("2026-10-29", new Date("2026-10-29T20:15:00Z")), "2026-10-31T03:59:59.999Z");
 });
 
-test("Tomorrow across the spring DST boundary (Mar 14 2027): Monday ends at 23:59:59.999 EDT", () => {
+await test("Tomorrow across the spring DST boundary (Mar 14 2027): Monday ends at 23:59:59.999 EDT", () => {
   assert.equal(keys.resolveTomorrowDueAt("2027-03-12", new Date("2027-03-12T21:15:00Z")), "2027-03-16T03:59:59.999Z");
   assert.equal(keys.resolveTomorrowDueAt("2027-03-11", new Date("2027-03-11T21:15:00Z")), "2027-03-13T04:59:59.999Z");
 });
 
-test("the UTC seam: 10 PM ET Thursday is still Thursday", () => {
+await test("the UTC seam: 10 PM ET Thursday is still Thursday", () => {
   // Wed 9/23 brief worked Thu 9/24 at 10 PM ET (= Fri 02:00 UTC). The brief's
   // tomorrow (Thu) isn't past in ET, so it stays Thu. UTC math would say Fri.
   assert.equal(keys.resolveTomorrowDate("2026-09-23", new Date("2026-09-25T02:00:00Z")), "2026-09-24");
   assert.equal(keys.todayInBriefTimeZone(new Date("2026-09-25T02:00:00Z")), "2026-09-24");
 });
 
-test("a stale brief worked later moves to today (weekday) or the next weekday (weekend)", () => {
+await test("a stale brief worked later moves to today (weekday) or the next weekday (weekend)", () => {
   // Mon 9/21 brief worked Thu 9/24 afternoon -> today.
   assert.equal(keys.resolveTomorrowDate("2026-09-21", new Date("2026-09-24T18:00:00Z")), "2026-09-24");
   // Wed 9/23 brief worked Sat 9/26 -> Mon 9/28.
@@ -139,7 +140,7 @@ test("a stale brief worked later moves to today (weekday) or the next weekday (w
 // Validation
 // ---------------------------------------------------------------------------
 
-test("dismiss without a reason or a note is rejected; either one alone is enough", () => {
+await test("dismiss without a reason or a note is rejected; either one alone is enough", () => {
   assert.equal(validate.parseBriefActions([{ n: 1, action: "dismiss" }]).ok, false);
   assert.equal(validate.parseBriefActions([{ n: 1, action: "dismiss", note: "   " }]).ok, false);
   const withReason = validate.parseBriefActions([{ n: 1, action: "dismiss", reason: "Not worth it" }]);
@@ -150,7 +151,7 @@ test("dismiss without a reason or a note is rejected; either one alone is enough
   assert.equal(withNote.value[0].note, "Nancy owns this");
 });
 
-test("dismiss note over 500 characters, unknown reasons, repeated n and a pick without choice are rejected", () => {
+await test("dismiss note over 500 characters, unknown reasons, repeated n and a pick without choice are rejected", () => {
   assert.equal(validate.parseBriefActions([{ n: 1, action: "dismiss", note: "x".repeat(501) }]).ok, false);
   assert.equal(validate.parseBriefActions([{ n: 1, action: "dismiss", note: "x".repeat(500) }]).ok, true);
   assert.equal(validate.parseBriefActions([{ n: 1, action: "dismiss", reason: "boring" }]).ok, false);
@@ -160,7 +161,7 @@ test("dismiss note over 500 characters, unknown reasons, repeated n and a pick w
   assert.equal(validate.parseBriefActions([]).ok, false);
 });
 
-test("save input: proposals must cite a meeting; carry kinds need task UUIDs; choices need options", () => {
+await test("save input: proposals must cite a meeting; carry kinds need task UUIDs; choices need options", () => {
   const bad = validate.parseSaveBriefInput({
     date: "2026-09-24",
     items: [
@@ -176,7 +177,7 @@ test("save input: proposals must cite a meeting; carry kinds need task UUIDs; ch
   assert.equal(bad.errors.length >= 6, true, bad.errors.join("\n"));
 });
 
-test("save input: defaults, normalization and unsafe links", () => {
+await test("save input: defaults, normalization and unsafe links", () => {
   const parsed = validate.parseSaveBriefInput(
     {
       content: {
@@ -202,7 +203,7 @@ test("save input: defaults, normalization and unsafe links", () => {
   assert.equal(parsed.ok, true, parsed.errors?.join("\n"));
   assert.equal(parsed.value.brief_date, "2026-09-24");
   assert.equal(parsed.value.edition, "eod");
-  assert.equal(parsed.value.claim_email, false);
+  assert.equal("claim_email" in parsed.value, false);
   assert.equal(parsed.value.content.narrative, "A good day.");
   assert.equal("bogus" in parsed.value.content, false);
   assert.equal(parsed.value.content.meetings.length, 2);
@@ -212,15 +213,65 @@ test("save input: defaults, normalization and unsafe links", () => {
   assert.equal(parsed.value.items[0].payload.maybe_tracked.task_id, TASK_A);
 });
 
-test("email subject is EOD-MMDD · N to decide · N done", () => {
-  const email = buildBriefEmail(
-    "EOD-0924",
-    "https://example.test/briefs/EOD-0924",
-    { total: 13, open: 12, from_meetings: 10, calls: 2 },
+await test("ready notice is EOD-MMDD is ready · N to decide · N done, the link, and the Claude line", () => {
+  const text = buildBriefNotice(
+    "EOD-0925",
+    "https://example.test/briefs/EOD-0925",
+    { total: 13, open: 6, from_meetings: 4, calls: 2 },
     { stats: [{ key: "done", label: "done", value: 19 }] }
   );
-  assert.equal(email.subject, "EOD-0924 · 12 to decide · 19 done");
-  assert.match(email.body, /^12 to decide: 10 from meetings, 2 need a call\.\n19 done\.\n\nhttps:\/\/example\.test\/briefs\/EOD-0924\n\nOr in Claude: review EOD-0924$/);
+  assert.equal(text, "EOD-0925 is ready · 6 to decide · 19 done\nhttps://example.test/briefs/EOD-0925\nOr in Claude: review EOD-0925");
+  assert.equal(buildBriefNotice("EOD-0925", "u", { total: 0, open: 0, from_meetings: 0, calls: 0 }, {}).split("\n")[0], "EOD-0925 is ready · 0 to decide");
+});
+
+await test("Telegram: missing env rejects without any network call", async () => {
+  let calls = 0;
+  const notifier = telegramNotifierFromEnv({}, async () => {
+    calls += 1;
+    throw new Error("should not be called");
+  });
+  await assert.rejects(notifier.send("hi"), /BASELINE_TELEGRAM_BOT_TOKEN and BASELINE_TELEGRAM_CHAT_ID/);
+  assert.equal(calls, 0);
+});
+
+await test("Telegram: sends one sendMessage with the chat id and text (mocked fetch)", async () => {
+  const seen = [];
+  const notifier = telegramNotifierFromEnv(
+    { BASELINE_TELEGRAM_BOT_TOKEN: "123:SECRET", BASELINE_TELEGRAM_CHAT_ID: "42" },
+    async (url, init) => {
+      seen.push({ url, init });
+      return new Response(JSON.stringify({ ok: true, result: {} }), { status: 200 });
+    }
+  );
+  await notifier.send("EOD-0925 is ready");
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].url, "https://api.telegram.org/bot123:SECRET/sendMessage");
+  assert.equal(seen[0].init.method, "POST");
+  assert.deepEqual(JSON.parse(seen[0].init.body), { chat_id: "42", text: "EOD-0925 is ready", link_preview_options: { is_disabled: true } });
+});
+
+await test("Telegram: a failure rejects with a reason that never contains the token", async () => {
+  const env = { BASELINE_TELEGRAM_BOT_TOKEN: "123:SECRET", BASELINE_TELEGRAM_CHAT_ID: "42" };
+  const unauthorized = telegramNotifierFromEnv(env, async () => new Response(JSON.stringify({ ok: false, description: "Unauthorized" }), { status: 401 }));
+  await assert.rejects(unauthorized.send("x"), (error) => /401: Unauthorized/.test(error.message) && !error.message.includes("SECRET"));
+  const offline = telegramNotifierFromEnv(env, async (url) => {
+    throw new Error(`connect ECONNREFUSED ${url}`);
+  });
+  await assert.rejects(offline.send("x"), (error) => /unreachable/.test(error.message) && !error.message.includes("SECRET"));
+});
+
+await test("button: no brief today shows nothing; open items are lit; all decided is a quiet done", () => {
+  assert.equal(briefButtonView(null), null);
+  assert.deepEqual(briefButtonView({ code: "EOD-0925", brief_date: "2026-09-25", open: 6, total: 13 }), {
+    href: "/briefs/EOD-0925",
+    label: "EOD-0925 · 6 to decide",
+    tone: "open",
+    title: "Today's brief has 6 items to decide",
+  });
+  const done = briefButtonView({ code: "EOD-0925", brief_date: "2026-09-25", open: 0, total: 13 });
+  assert.equal(done.tone, "done");
+  assert.equal(done.label, "EOD-0925 · done");
+  assert.equal(briefButtonView({ code: "EOD-0925", brief_date: "2026-09-25", open: 0, total: 0 }).tone, "done");
 });
 
 console.log(`\n${passed} passed`);

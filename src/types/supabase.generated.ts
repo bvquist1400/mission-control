@@ -167,8 +167,9 @@ export type Database = {
           covered_meeting_ids: string[]
           created_at: string
           edition: string
-          emailed_at: string | null
           id: string
+          notified_at: string | null
+          notify_error: string | null
           updated_at: string
           user_id: string
         }
@@ -179,8 +180,9 @@ export type Database = {
           covered_meeting_ids?: string[]
           created_at?: string
           edition: string
-          emailed_at?: string | null
           id?: string
+          notified_at?: string | null
+          notify_error?: string | null
           updated_at?: string
           user_id: string
         }
@@ -191,8 +193,9 @@ export type Database = {
           covered_meeting_ids?: string[]
           created_at?: string
           edition?: string
-          emailed_at?: string | null
           id?: string
+          notified_at?: string | null
+          notify_error?: string | null
           updated_at?: string
           user_id?: string
         }

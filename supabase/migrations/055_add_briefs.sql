@@ -14,7 +14,10 @@ CREATE TABLE IF NOT EXISTS briefs (
   code TEXT NOT NULL CHECK (code ~ '^[A-Z][A-Z0-9]{1,15}-[0-9]{4}([0-9]{4})?$'),
   content JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(content) = 'object'),
   covered_meeting_ids TEXT[] NOT NULL DEFAULT '{}',
-  emailed_at TIMESTAMPTZ,
+  -- The one "brief ready" notice (Telegram): when it was attempted and, if it
+  -- failed, why. Set by the first save only, so reruns never notify twice.
+  notified_at TIMESTAMPTZ,
+  notify_error TEXT CHECK (char_length(notify_error) <= 1000),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT briefs_user_edition_date_key UNIQUE (user_id, edition, brief_date),

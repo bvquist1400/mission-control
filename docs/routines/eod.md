@@ -1,8 +1,11 @@
 # EOD brief routine
 
-A claude.ai routine that writes Brent's end-of-day brief, saves it to Baseline
-as a page (`/briefs/EOD-MMDD`) and emails him one link. Saying "eod" in the
-Baseline Claude project does the same thing on demand.
+A claude.ai routine that writes Brent's end-of-day brief and saves it to
+Baseline as a page (`/briefs/EOD-MMDD`). The routine only saves. Baseline then
+tells Brent in two places: a lit "EOD-MMDD · N to decide" button on every
+Baseline page, and one Telegram message sent by the Baseline server on the
+first save of the day. Saying "eod" in the Baseline Claude project does the
+same thing on demand.
 
 Source: Brent's brief instructions and the real 9/24 EOD in Baseline note
 `408603b2` ("Brief pages — current brief instructions + 9/24 EOD example").
@@ -15,12 +18,9 @@ tasks?", the brief is saved and Brent decides item by item on the page.
 |---|---|
 | Model | Claude Opus 5.5 (`claude-opus-5-5`) |
 | Schedule | Weekdays 4:15 PM ET. If the schedule is entered in UTC: `15 20 * * 1-5` while EDT (until Sun Nov 1 2026), then `15 21 * * 1-5` while EST. |
-| Connectors | Baseline (Mission Control MCP), Granola, Gmail (Brent's personal Gmail) |
+| Connectors | Baseline (Mission Control MCP), Granola |
 | Baseline tools used | `get_brief_digest`, `get_calendar`, `list_tasks`, `search`, `lookup_tasks_by_external_ids`, `save_eod_brief` |
-| Must not use | `create_task`, `update_task`, `act_on_brief_items`, `sync_today`, or any other write except `save_eod_brief` |
-
-Fill in `<WORK_EMAIL>` below with Brent's work address when the routine is
-created. Nothing in the repo stores it.
+| Must not use | Gmail or any other email/messaging tool (Baseline sends the notice); `create_task`, `update_task`, `act_on_brief_items`, `sync_today`, or any other write except `save_eod_brief` |
 
 ## Prompt
 
@@ -141,41 +141,33 @@ Only use task ids you got from Baseline in this run.
 
 Call `save_eod_brief` once with `content`, `covered_meeting_ids` (the Granola
 id of **every** meeting you read today, even ones with no items), `items` in
-display order (meeting items first, grouped; then the calls), and
-`claim_email: true`.
+display order (meeting items first, grouped; then the calls).
 
 - If it returns an error, fix what it names and call it again (a retry is
-  safe: it only appends what's missing). If it still fails, stop: send no
-  email.
+  safe: it only appends what's missing). If it still fails, stop and say so.
 - A second save the same day only appends items from meetings the brief
   hasn't covered yet. Existing items and their states never change.
+- Don't email or message Brent. Baseline sends him the "EOD-MMDD is ready ·
+  N to decide · N done" notice with the link and "Or in Claude: review
+  EOD-MMDD" on the first save of the day, and never again for that brief. The
+  result's `notify.status` says `sent`, `failed` (with the reason) or
+  `already_notified`.
 
-### 4. Email
+### 4. Finish
 
-Only if the result has `email.send: true`: use Gmail `send_message` to send a
-**plain-text** email to `<WORK_EMAIL>` with exactly the subject and body from
-the result (`email.subject`, `email.body`). The subject looks like
-`EOD-0924 · 12 to decide · 19 done`; the body has the counts, one link and
-`Or in Claude: review EOD-0924`. Add nothing else: no HTML, no attachments, no
-other recipients.
-
-If `email.send` is false, the brief was already emailed today; don't send
-another.
-
-### 5. Finish
-
-Reply with one line: the code, the link, the counts, and anything that went
-wrong (a meeting whose notes you couldn't read, a tool that failed). Do not
-create, update or accept any task yourself. Brent decides on the page.
+Reply with one line: the code, the link, the counts, `notify.status` (and its
+error if it failed), and anything else that went wrong (a meeting whose notes
+you couldn't read, a tool that failed). Do not create, update or accept any
+task yourself. Brent decides on the page.
 
 ---
 
 ## In chat (the Baseline Claude project)
 
-- **"eod"**: run steps 1–3 above with `claim_email: false` (unless Brent asks
-  for the email), then show the brief in chat in the same voice, numbered like
-  the page. On a day the 4:15 run already happened, this only appends items
-  from meetings that ended after it.
+- **"eod"**: run steps 1–3 above, then show the brief in chat in the same
+  voice, numbered like the page. On a day the 4:15 run already happened, this
+  only appends items from meetings that ended after it, and sends no second
+  notice. If it's the first save of the day, Baseline sends the notice.
 - **"review EOD-0924"**: `get_brief(code="EOD-0924")`, then list what's open
   (`#n` + short title + meeting time), then what was accepted, dismissed or
   decided.
@@ -185,3 +177,32 @@ create, update or accept any task yourself. Brent decides on the page.
   needs a reason (`already_tracked`, `not_mine`, `not_worth_it`) or a note of
   at most 500 characters. The page and chat share one code path, so both show
   the same state.
+
+## Brent's setup (one time, before the routine goes live)
+
+Baseline sends the notice through a Telegram bot you own. Nothing below has
+been done for you.
+
+1. **Create the bot.** In Telegram, open a chat with **@BotFather** (the one
+   with the blue check), send `/newbot`, and answer its two questions: a
+   display name (e.g. "Baseline briefs") and a username ending in `bot` (e.g.
+   `brent_baseline_bot`). BotFather replies with a token that looks like
+   `123456789:AA…`. Keep it private; anyone with it can post as the bot.
+2. **Say hello to it.** Open `t.me/<your bot's username>` and tap **Start**
+   (or send `/start`). A bot can't message you until you've done this.
+3. **Find your chat id.** In a browser, open
+   `https://api.telegram.org/bot<TOKEN>/getUpdates` with your token in place of
+   `<TOKEN>`. Find `"chat":{"id":123456789` in the reply; that number is your
+   chat id. If the reply is `{"ok":true,"result":[]}`, send the bot another
+   message and reload.
+4. **Give them to Baseline.** In Vercel, open the **main** Baseline project
+   (the app, not the MCP proxy) → Settings → Environment Variables, and add for
+   Production:
+   - `BASELINE_TELEGRAM_BOT_TOKEN` = the token from step 1
+   - `BASELINE_TELEGRAM_CHAT_ID` = the number from step 3
+
+   Then redeploy so the app picks them up.
+
+If either variable is missing or Telegram refuses the message, the brief still
+saves and the page and button still work; the brief records why in
+`notify_error`, and the save result shows `notify.status: "failed"`.
