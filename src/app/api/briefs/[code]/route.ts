@@ -46,8 +46,10 @@ export async function PATCH(request: NextRequest, { params }: RouteContext) {
 
     const { code } = await params;
     const result = await actOnBriefItems(auth.context.supabase, auth.context.userId, code, parsed.value);
+    // 409: an item changed under this call (nothing was applied to it); 207: some other entry failed.
+    const conflict = result.results.some((entry) => entry.conflict);
     const failed = result.results.some((entry) => !entry.ok);
-    return briefsJson(request, result, { status: failed ? 207 : 200 });
+    return briefsJson(request, result, { status: conflict ? 409 : failed ? 207 : 200 });
   } catch (error) {
     return handleBriefsRouteError(request, error, "Error acting on brief items:");
   }

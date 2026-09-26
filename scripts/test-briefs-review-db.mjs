@@ -58,6 +58,12 @@ function delayDismissedWrite(client) {
   });
   const delayed = new Proxy(client, {
     get(target, property) {
+      // Ported for the fix: item writes now go through the brief_item_transition RPC.
+      if (property === "rpc") return (fn, args, ...rest) => {
+        const builder = target.rpc(fn, args, ...rest);
+        if (fn === "brief_item_transition" && args?.p_state === "dismissed") { reached(); return wrap(builder); }
+        return builder;
+      };
       if (property !== "from") return target[property];
       return (table) => new Proxy(target.from(table), {
         get(query, key) {
@@ -140,7 +146,10 @@ try {
   assert.equal(accepted.results[0].ok, true);
   release();
   const dismissed = await dismissing;
-  assert.equal(dismissed.results[0].ok, true);
+  // Changed for the fix (PM): the losing call must report a conflict, not success.
+  assert.equal(dismissed.results[0].ok, false, "the Dismiss that lost the race must not report success");
+  assert.equal(dismissed.results[0].conflict, true);
+  assert.equal(dismissed.results[0].current_state, "accepted");
   const view = await getBrief(admin, alice.id, save.code, { appUrl: "http://localhost:3000" });
   const { data: tasks, error } = await admin.from("tasks").select("id").eq("user_id", alice.id).eq("external_source_id", view.items[0].item_key);
   if (error) throw error;

@@ -126,7 +126,7 @@ Controls with behaviour (Button, Input) are components; pure-styling primitives 
 ### Brief pages
 
 - A brief (`briefs`, migration 055) is content-as-data plus numbered items (`brief_items`) with a stable `item_key` and a state. Codes look like `EOD-0924`.
-- `src/lib/briefs/service.ts` is the only write path: `/api/briefs` (POST save, GET/PATCH by code) and the MCP tools `save_eod_brief`, `get_brief`, `act_on_brief_items` all go through it. Validate every action before executing any.
+- `src/lib/briefs/service.ts` is the only write path: `/api/briefs` (POST save, GET/PATCH by code) and the MCP tools `save_eod_brief`, `get_brief`, `act_on_brief_items` all go through it. Validate every action before executing any. Every item state change goes through the `brief_item_transition` RPC (055): a row-locked compare-and-set on the validated state, with Accept's task insert in the same transaction. A caller that lost a race gets `conflict: true` (HTTP 409), never success.
 - Proposals are never tasks until accepted. Accept creates the task with external source (`eod_proposal`, `item_key`), idempotent via the 054 index. A same-day re-save only appends items from uncovered meetings; existing `n` and state never change.
 - "Tomorrow" is the next ET weekday (`resolveTomorrowDate` in `src/lib/briefs/keys.ts`), never UTC.
 - The page renders from registries, never from the edition: `CARD_REGISTRY` (item kind → card, `src/components/briefs/cards.tsx`) and `TILE_REGISTRY` (read-only tile type → tile, `tiles.tsx`). Adding a kind means the registry plus the migration's kind check.

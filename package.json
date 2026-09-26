@@ -34,6 +34,7 @@
     "test:task-external-source": "node --experimental-strip-types scripts/test-task-external-source.mjs",
     "test:briefs": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-briefs.mjs",
     "test:briefs-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-briefs-db.mjs",
+    "test:briefs-review-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-briefs-review-db.mjs",
     "backfill:project-sections:dry-run": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/backfill-project-sections.mjs",
     "backfill:project-sections:apply": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/backfill-project-sections.mjs --apply",
     "backfill:task-external-source:dry-run": "node --experimental-strip-types scripts/backfill-task-external-source-ids.mjs",

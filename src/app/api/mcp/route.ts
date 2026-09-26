@@ -417,7 +417,7 @@ function createMcpServer(): McpServer {
 
   mcp.tool(
     'act_on_brief_items',
-    'Act on numbered items of a stored brief, exactly as the page buttons do. proposed_task: accept (creates the Baseline task once; repeating is safe), dismiss (needs a reason already_tracked | not_mine | not_worth_it, or a note of at most 500 characters), undo (reopens a dismissed item). carry_over: done | tomorrow (due the next ET weekday) | park. carry_group: tomorrow | park, applied to all its tasks. choice: pick with choice=<option key>, undo. Every action is validated before any runs; if one is invalid, nothing changes.',
+    'Act on numbered items of a stored brief, exactly as the page buttons do. proposed_task: accept (creates the Baseline task once; repeating is safe), dismiss (needs a reason already_tracked | not_mine | not_worth_it, or a note of at most 500 characters), undo (reopens a dismissed item). carry_over: done | tomorrow (due the next ET weekday) | park. carry_group: tomorrow | park, applied to all its tasks. choice: pick with choice=<option key>, undo. Every action is validated before any runs; if one is invalid, nothing changes. If an item changed after validation (for example Brent acted on the page at the same moment), that entry comes back ok=false with conflict=true and was not applied: re-read with get_brief before trying again.',
     {
       code: z.string().describe('Brief code, e.g. EOD-0924'),
       actions: z.array(z.object({

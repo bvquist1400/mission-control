@@ -25,6 +25,7 @@ interface ActResult {
   task_id?: string;
   choice?: string;
   error?: string;
+  conflict?: boolean;
 }
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -116,6 +117,8 @@ export function BriefPage({ view }: { view: BriefView }) {
         const result = body?.results?.[0];
         if (!response.ok || !result || !result.ok) {
           toast({ message: result?.error ?? body?.error ?? "That didn't save. Try again.", tone: "danger" });
+          // Lost a race (e.g. accepted in Claude meanwhile): show what actually happened.
+          if (result?.conflict) router.refresh();
           return;
         }
 

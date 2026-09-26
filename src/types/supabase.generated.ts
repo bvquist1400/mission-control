@@ -2371,6 +2371,17 @@ export type Database = {
         Args: { num_days: number; start_date: string }
         Returns: string
       }
+      brief_item_transition: {
+        Args: {
+          p_expected_state: string
+          p_fields?: Json
+          p_item_id: string
+          p_state: string
+          p_task?: Json
+          p_user_id: string
+        }
+        Returns: Json
+      }
       get_blocked_by_tasks: {
         Args: { p_task_id: string }
         Returns: {

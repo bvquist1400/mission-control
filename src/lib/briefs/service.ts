@@ -6,7 +6,6 @@ import {
   recalculateTaskPriority,
 } from "@/lib/priority";
 import { queueTaskStatusTransition } from "@/lib/task-status-transitions";
-import { isTaskExternalSourceUniqueViolation } from "@/lib/task-external-source";
 import {
   BRIEF_TIME_ZONE,
   buildBriefCode,
@@ -19,7 +18,6 @@ import type { TodayBriefStatus } from "@/lib/briefs/button";
 import { buildBriefNotice, telegramNotifierFromEnv, type BriefNotifier } from "@/lib/briefs/notify";
 import { normalizeBriefContent } from "@/lib/briefs/validate";
 import {
-  EOD_PROPOSAL_SOURCE_SYSTEM,
   type BriefAction,
   type BriefActionInput,
   type BriefAgendaLine,
@@ -521,6 +519,9 @@ export interface BriefActionResult {
   due_at?: string;
   choice?: string;
   error?: string;
+  /** The item changed between validation and the write; nothing was applied. Re-read and decide again. */
+  conflict?: boolean;
+  current_state?: BriefItemState;
 }
 
 function describeSources(item: BriefItemRow): string {
@@ -541,27 +542,8 @@ function describeSources(item: BriefItemRow): string {
     .join("\n");
 }
 
-async function acceptProposal(
-  supabase: AnySupabase,
-  userId: string,
-  brief: BriefRow,
-  item: BriefItemRow
-): Promise<string> {
-  const lookup = async () => {
-    const { data, error } = await supabase
-      .from("tasks")
-      .select("id")
-      .eq("user_id", userId)
-      .eq("external_source_system", EOD_PROPOSAL_SOURCE_SYSTEM)
-      .eq("external_source_id", item.item_key)
-      .maybeSingle();
-    if (error) throw error;
-    return (data as { id: string } | null)?.id ?? null;
-  };
-
-  const existing = await lookup();
-  if (existing) return existing;
-
+/** The task Accept creates. brief_item_transition inserts it in the same transaction as the state change. */
+async function buildProposalTask(supabase: AnySupabase, userId: string, brief: BriefRow, item: BriefItemRow) {
   const title = item.payload.title.slice(0, 500);
   const description = [item.payload.detail, `From ${brief.code} #${item.n}:`, describeSources(item)]
     .filter(Boolean)
@@ -569,43 +551,64 @@ async function acceptProposal(
     .slice(0, 8000);
   const highPriorityNames = await getHighPriorityStakeholderNames(supabase, userId);
   const boosts = calculatePriorityBoosts([], null, title, "Backlog", highPriorityNames);
+  return {
+    title,
+    description,
+    base_priority: 50,
+    priority_score: calculateFinalPriorityScore(50, boosts),
+    tags: ["from-meeting"],
+    source_type: "Meeting",
+    source_url: item.source.meetings.find((meeting) => meeting.url)?.url ?? null,
+  };
+}
 
-  const { data, error } = await supabase
-    .from("tasks")
-    .insert({
-      user_id: userId,
-      title,
-      description,
-      status: "Backlog",
-      task_type: "Task",
-      base_priority: 50,
-      priority_score: calculateFinalPriorityScore(50, boosts),
-      estimated_minutes: 30,
-      estimate_source: "default",
-      needs_review: false,
-      blocker: false,
-      stakeholder_mentions: [],
-      tags: ["from-meeting"],
-      source_type: "Meeting",
-      source_url: item.source.meetings.find((meeting) => meeting.url)?.url ?? null,
-      external_source_system: EOD_PROPOSAL_SOURCE_SYSTEM,
-      external_source_id: item.item_key,
-    })
-    .select("id")
-    .single();
+interface TransitionOutcome {
+  ok: boolean;
+  reason?: "conflict" | "not_found";
+  state?: BriefItemState;
+  created_task_id?: string | null;
+  choice?: string | null;
+  task_inserted?: boolean;
+}
 
-  if (error) {
-    // A concurrent Accept created it first: the 054 index guarantees one task.
-    if (isTaskExternalSourceUniqueViolation(error)) {
-      const raced = await lookup();
-      if (raced) return raced;
-    }
-    throw error;
-  }
+/**
+ * Compare-and-set on the item row (see brief_item_transition in 055): the
+ * change applies only if the item is still in `expected`, under a row lock.
+ */
+async function transitionItem(
+  supabase: AnySupabase,
+  userId: string,
+  item: BriefItemRow,
+  expected: BriefItemState,
+  next: BriefItemState,
+  fields: Record<string, unknown>,
+  task: Record<string, unknown> | null = null
+): Promise<TransitionOutcome> {
+  const { data, error } = await supabase.rpc("brief_item_transition", {
+    p_user_id: userId,
+    p_item_id: item.id,
+    p_expected_state: expected,
+    p_state: next,
+    p_fields: fields,
+    p_task: task,
+  });
+  if (error) throw error;
+  return data as TransitionOutcome;
+}
 
-  const taskId = (data as { id: string }).id;
-  queueTaskStatusTransition(supabase, { userId, taskId, fromStatus: null, toStatus: "Backlog" });
-  return taskId;
+function conflictResult(item: BriefItemRow, action: BriefAction, outcome: TransitionOutcome): BriefActionResult {
+  const current = outcome.state;
+  return {
+    n: item.n,
+    action,
+    ok: false,
+    conflict: true,
+    ...(current ? { current_state: current } : {}),
+    error:
+      outcome.reason === "not_found"
+        ? `#${item.n} no longer exists`
+        : `#${item.n} changed to ${current} while this was saving; nothing was applied. Refresh and decide again.`,
+  };
 }
 
 async function applyCarryAction(
@@ -724,40 +727,85 @@ export async function actOnBriefItems(
         continue;
       }
 
-      const updates: Record<string, unknown> = { state: rule.to, acted_at: actedAt };
-      const result: BriefActionResult = { n: item.n, action: action.action, ok: true, state: rule.to };
+      const next = rule.to as BriefItemState;
+      const result: BriefActionResult = { n: item.n, action: action.action, ok: true, state: next };
 
       switch (action.action) {
         case "accept": {
-          const taskId = await acceptProposal(supabase, userId, brief, item);
-          Object.assign(updates, { created_task_id: taskId, dismissed_reason: null, dismissed_note: null });
-          result.task_id = taskId;
+          const task = await buildProposalTask(supabase, userId, brief, item);
+          const outcome = await transitionItem(
+            supabase,
+            userId,
+            item,
+            item.state,
+            "accepted",
+            { acted_at: actedAt, dismissed_reason: null, dismissed_note: null },
+            task
+          );
+          if (!outcome.ok) {
+            // Another Accept got there first: same item, same task, so this is a repeat, not a conflict.
+            if (outcome.state === "accepted") {
+              results.push({
+                n: item.n,
+                action: action.action,
+                ok: true,
+                already: true,
+                state: "accepted",
+                ...(outcome.created_task_id ? { task_id: outcome.created_task_id } : {}),
+              });
+            } else {
+              results.push(conflictResult(item, action.action, outcome));
+            }
+            continue;
+          }
+          result.task_id = outcome.created_task_id ?? undefined;
+          if (outcome.task_inserted && outcome.created_task_id) {
+            queueTaskStatusTransition(supabase, { userId, taskId: outcome.created_task_id, fromStatus: null, toStatus: "Backlog" });
+          }
           break;
         }
         case "dismiss":
-          Object.assign(updates, { dismissed_reason: action.reason, dismissed_note: action.note });
+        case "pick":
+        case "undo": {
+          const fields =
+            action.action === "dismiss"
+              ? { acted_at: actedAt, dismissed_reason: action.reason, dismissed_note: action.note }
+              : action.action === "pick"
+                ? { acted_at: actedAt, choice: action.choice }
+                : { acted_at: null, dismissed_reason: null, dismissed_note: null, choice: null };
+          const outcome = await transitionItem(supabase, userId, item, item.state, next, fields);
+          if (!outcome.ok) {
+            results.push(conflictResult(item, action.action, outcome));
+            continue;
+          }
+          if (action.action === "pick") result.choice = action.choice ?? undefined;
           break;
+        }
         case "done":
         case "tomorrow":
-        case "park":
-          Object.assign(result, await applyCarryAction(supabase, userId, brief, item, action.action, now));
+        case "park": {
+          // Claim the item first, so two different carry actions can't both change the tasks.
+          const outcome = await transitionItem(supabase, userId, item, item.state, next, { acted_at: actedAt });
+          if (!outcome.ok) {
+            results.push(
+              outcome.state === next
+                ? { n: item.n, action: action.action, ok: true, already: true, state: next }
+                : conflictResult(item, action.action, outcome)
+            );
+            continue;
+          }
+          try {
+            Object.assign(result, await applyCarryAction(supabase, userId, brief, item, action.action, now));
+          } catch (taskError) {
+            // Give the item back so the call can be retried; the tasks it already changed stay changed.
+            await transitionItem(supabase, userId, item, next, "open", { acted_at: null }).catch(() => null);
+            throw taskError;
+          }
           result.task_ids = item.task_ids;
           break;
-        case "pick":
-          updates.choice = action.choice;
-          result.choice = action.choice ?? undefined;
-          break;
-        case "undo":
-          Object.assign(updates, { dismissed_reason: null, dismissed_note: null, choice: null, acted_at: null });
-          break;
+        }
       }
 
-      const { error: updateError } = await supabase
-        .from("brief_items")
-        .update(updates)
-        .eq("id", item.id)
-        .eq("user_id", userId);
-      if (updateError) throw updateError;
       results.push(result);
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);

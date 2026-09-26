@@ -113,6 +113,36 @@ async function eodProposalTasks(userId) {
   return data;
 }
 
+
+/**
+ * Hold one brief_item_transition call (matched by its target state) until
+ * released, after the caller has already read and validated the item. Lets a
+ * test commit a competing action in between, deterministically.
+ */
+function holdTransition(client, targetState) {
+  let release;
+  let reached;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const atCall = new Promise((resolve) => { reached = resolve; });
+  const hold = (builder) => ({
+    then: (resolve, reject) => gate.then(() => builder.then(resolve, reject)),
+  });
+  const held = new Proxy(client, {
+    get(target, property) {
+      if (property !== "rpc") return typeof target[property] === "function" ? target[property].bind(target) : target[property];
+      return (fn, args, ...rest) => {
+        const builder = target.rpc(fn, args, ...rest);
+        if (fn === "brief_item_transition" && args?.p_state === targetState) {
+          reached();
+          return hold(builder);
+        }
+        return builder;
+      };
+    },
+  });
+  return { held, atCall, release };
+}
+
 const MEETING = {
   brenda: { id: "81eb535e-5db0-4276-acd6-8e46bdb5e88f", title: "Research nurse template with Brenda", start: "2026-09-24T17:01:00Z", url: "https://notes.granola.ai/d/81eb535e" },
   saif: { id: "58210575-4ec7-4414-9a03-008396aa05d4", title: "Brent-Saif 1:1", start: "2026-09-24T19:00:00Z", url: "https://notes.granola.ai/d/58210575" },
@@ -485,6 +515,98 @@ try {
 
     const { count } = await admin.from("brief_items").select("id", { count: "exact", head: true }).eq("brief_id", saved.brief_id);
     assert.equal(count, 8, "nothing was inserted, changed or removed by Bob");
+  });
+
+  await test("races: the second of two conflicting actions gets a conflict and changes nothing", async () => {
+    const pitch2 = await makeTask(alice.id, "Race carry task");
+    const raceSave = await saveBrief(
+      admin,
+      alice.id,
+      parsed({
+        date: "2026-10-07",
+        items: [
+          proposalItem(MEETING.dep, "Race accept vs dismiss", "Race accept line (Brent)"),
+          { kind: "carry_over", title: "Race carry", task_ids: [pitch2] },
+          { kind: "choice", title: "Race choice", options: [{ key: "a", label: "A" }, { key: "b", label: "B" }] },
+        ],
+      }),
+      { appUrl: APP_URL, notifier: quiet }
+    );
+    const code = raceSave.code;
+
+    // Accept (service) validated first but commits last; Dismiss (page) wins: no task is ever created.
+    const acceptHold = holdTransition(admin, "accepted");
+    const accepting = actOnBriefItems(acceptHold.held, alice.id, code, actions([{ n: 1, action: "accept" }]));
+    await acceptHold.atCall;
+    const dismissed = await actOnBriefItems(alice.client, alice.id, code, actions([{ n: 1, action: "dismiss", reason: "not_mine" }]));
+    assert.equal(dismissed.results[0].ok, true);
+    acceptHold.release();
+    const lateAccept = await accepting;
+    assert.equal(lateAccept.results[0].ok, false);
+    assert.equal(lateAccept.results[0].conflict, true);
+    assert.equal(lateAccept.results[0].current_state, "dismissed");
+    let items = await itemsOf(alice.id, code);
+    assert.equal(items[0].state, "dismissed");
+    assert.equal(items[0].created_task_id, null);
+    const { count: raceTasks } = await admin.from("tasks").select("id", { count: "exact", head: true })
+      .eq("user_id", alice.id).eq("external_source_id", items[0].item_key);
+    assert.equal(raceTasks, 0, "a losing Accept must not leave a task behind");
+
+    // Done (page) wins over Park (service): the task ends Done, never Parked.
+    const parkHold = holdTransition(admin, "parked");
+    const parking = actOnBriefItems(parkHold.held, alice.id, code, actions([{ n: 2, action: "park" }]));
+    await parkHold.atCall;
+    const done = await actOnBriefItems(alice.client, alice.id, code, actions([{ n: 2, action: "done" }]));
+    assert.equal(done.results[0].ok, true);
+    parkHold.release();
+    const latePark = await parking;
+    assert.equal(latePark.results[0].conflict, true);
+    assert.equal(latePark.results[0].current_state, "done");
+    const { data: carried } = await admin.from("tasks").select("status").eq("id", pitch2).single();
+    assert.equal(carried.status, "Done");
+    items = await itemsOf(alice.id, code);
+    assert.equal(items[1].state, "done");
+
+    // Two picks from open: the later one conflicts; the first pick stands.
+    const pickHold = holdTransition(admin, "decided");
+    const pickingA = actOnBriefItems(pickHold.held, alice.id, code, actions([{ n: 3, action: "pick", choice: "a" }]));
+    await pickHold.atCall;
+    const pickedB = await actOnBriefItems(alice.client, alice.id, code, actions([{ n: 3, action: "pick", choice: "b" }]));
+    assert.equal(pickedB.results[0].ok, true);
+    pickHold.release();
+    const latePick = await pickingA;
+    assert.equal(latePick.results[0].conflict, true);
+    items = await itemsOf(alice.id, code);
+    assert.equal(items[2].choice, "b");
+
+    // Two concurrent Accepts of one item are a repeat, not a conflict: both succeed on one task.
+    await actOnBriefItems(admin, alice.id, code, actions([{ n: 1, action: "undo" }]));
+    const acceptHold2 = holdTransition(admin, "accepted");
+    const slowAccept = actOnBriefItems(acceptHold2.held, alice.id, code, actions([{ n: 1, action: "accept" }]));
+    await acceptHold2.atCall;
+    const fastAccept = await actOnBriefItems(alice.client, alice.id, code, actions([{ n: 1, action: "accept" }]));
+    acceptHold2.release();
+    const slow = await slowAccept;
+    assert.equal(fastAccept.results[0].ok, true);
+    assert.equal(slow.results[0].ok, true);
+    assert.equal(slow.results[0].already, true);
+    assert.equal(slow.results[0].task_id, fastAccept.results[0].task_id);
+  });
+
+  await test("the table and the transition function refuse the bad states directly", async () => {
+    const view = await getBrief(admin, alice.id, "EOD-0924", { appUrl: APP_URL });
+    const accepted = view.items.find((item) => item.state === "accepted" && item.created_task_id);
+    const direct = await admin.from("brief_items").update({ state: "dismissed", dismissed_reason: "not_mine" }).eq("id", accepted.id);
+    assert.equal(direct.error?.code, "23514", "a dismissed item can't keep a created task");
+
+    const args = { p_user_id: alice.id, p_item_id: accepted.id, p_expected_state: "accepted", p_state: "accepted", p_fields: {} };
+    const asBob = await bob.client.rpc("brief_item_transition", args);
+    assert.equal(asBob.error?.code, "42501", "another user can't drive Alice's item");
+    const bobOwn = await bob.client.rpc("brief_item_transition", { ...args, p_user_id: bob.id });
+    assert.equal(bobOwn.data?.reason, "not_found", "and naming himself finds nothing");
+    const anon = createClient(url, anonKey, { auth: { persistSession: false } });
+    const asAnon = await anon.rpc("brief_item_transition", args);
+    assert.ok(asAnon.error, "anon can't execute the function");
   });
 
   await test("the page path (user's client under RLS) reads the full view", async () => {
