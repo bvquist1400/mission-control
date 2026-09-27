@@ -217,6 +217,9 @@ try {
     assert.ok(Array.isArray(monday.items));
     const before = await latest(admin, carol.id, "eod", { appUrl: APP_URL, before: "2026-09-25" });
     assert.equal(before.brief.code, "EOD-0924");
+    // before= only tightens the bound: a future before never reaches a future-dated brief.
+    const farBefore = await latest(admin, carol.id, "eod", { appUrl: APP_URL, now: MON_AM, before: "2027-01-01" });
+    assert.equal(farBefore.brief.code, "EOD-0925");
     const am = await latest(carol.client, carol.id, "am", { appUrl: APP_URL, now: MON_AM });
     assert.equal(am.brief.code, "AM-0928");
 

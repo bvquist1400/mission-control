@@ -98,6 +98,14 @@ await test("notice: the EOD shape is unchanged ('19 done' first), and no stats m
     ],
   });
   assert.equal(eod.split("\n")[0], "EOD-0925 is ready · 6 to decide · 19 done");
+  // As on main: a "done" stat is the headline wherever the model put it.
+  const reordered = buildBriefNotice("EOD-0930", "u", counts, {
+    stats: [
+      { key: "notes", label: "notes read", value: 5 },
+      { key: "done", label: "done", value: 19 },
+    ],
+  });
+  assert.equal(reordered.split("\n")[0], "EOD-0930 is ready · 6 to decide · 19 done");
   assert.equal(buildBriefNotice("AM-0928", "u", counts, {}).split("\n")[0], "AM-0928 is ready · 6 to decide");
 });
 
@@ -237,7 +245,51 @@ await test("timeline: an EOD saved at 4:15 is all past, has no free bands and ke
   assert.equal(model.marker, 16 * 60 + 15);
 });
 
-await test("timeline: upcoming vs past comes from start vs saved_at, not the edition", () => {
+await test("timeline: an 8:00 meeting still under way at an 8:03 save is current: solid, prep row, counted, never 'No notes'", () => {
+  const { buildDayTimeline, timelineHeading } = needTimeline();
+  const tuesday = [
+    { id: null, title: "Decision Making Group", short: "DMG", start: `2026-09-29T08:00:00${ET_OFFSET}`, end: `2026-09-29T08:30:00${ET_OFFSET}`, url: null, has_notes: false,
+      prep: "Bring the Wave 2 numbers.", task_ids: [TASK_IWG] },
+    { id: null, title: "Later", short: null, start: `2026-09-29T10:00:00${ET_OFFSET}`, end: `2026-09-29T11:00:00${ET_OFFSET}`, url: null, has_notes: false },
+  ];
+  const model = buildDayTimeline(tuesday, `2026-09-29T08:03:00${ET_OFFSET}`);
+  assert.deepEqual(model.spans.map((span) => [span.meeting.title, span.upcoming]), [
+    ["Decision Making Group", true],
+    ["Later", true],
+  ]);
+  assert.equal(model.withPrep, 1, "the under-way meeting's prep task counts");
+  assert.equal(model.withNotes, 0);
+  assert.equal(timelineHeading(model), "2 on the calendar, 1 with prep tracked · free 7h");
+  assert.deepEqual(model.free, [
+    { start: 8 * 60 + 30, end: 10 * 60 },
+    { start: 11 * 60, end: 16 * 60 + 30 },
+  ], "the running meeting stays busy until it ends");
+  // A meeting with no end time that started before the save is over.
+  const noEnd = buildDayTimeline([{ ...tuesday[0], end: null }], `2026-09-29T08:03:00${ET_OFFSET}`);
+  assert.equal(noEnd.spans[0].upcoming, false);
+});
+
+await test("timeline (EOD side): ended meetings unchanged; a meeting with notes still running at the save stays a notes meeting", () => {
+  const { buildDayTimeline, timelineHeading } = needTimeline();
+  const eod = [
+    { id: "81eb535e", title: "Brenda", short: null, start: "2026-09-24T17:01:00Z", end: "2026-09-24T17:30:00Z", url: null, has_notes: true },
+    { id: "3f2e1d0c", title: "Wrap-up with notes", short: null, start: "2026-09-24T19:45:00Z", end: "2026-09-24T20:30:00Z", url: null, has_notes: true },
+    { id: null, title: "Change Control", short: null, start: "2026-09-24T15:00:00Z", end: "2026-09-24T16:00:00Z", url: null, has_notes: false },
+    { id: null, title: "Still running, no notes", short: null, start: "2026-09-24T20:00:00Z", end: "2026-09-24T20:30:00Z", url: null, has_notes: false },
+  ];
+  const model = buildDayTimeline(eod, "2026-09-24T20:15:00Z");
+  assert.deepEqual(model.spans.map((span) => [span.meeting.title, span.upcoming]), [
+    ["Brenda", false],
+    ["Wrap-up with notes", false],
+    ["Change Control", false],
+    ["Still running, no notes", true],
+  ]);
+  assert.equal(model.withNotes, 2);
+  assert.equal(timelineHeading(model), "4 on the calendar, 2 with notes");
+  assert.deepEqual(model.free, []);
+});
+
+await test("timeline: upcoming vs past comes from the meeting's end vs saved_at, not the edition", () => {
   const { buildDayTimeline } = needTimeline();
   const mixed = [
     { id: "a1", title: "Morning sync", short: null, start: `2026-09-28T09:00:00${ET_OFFSET}`, end: `2026-09-28T09:30:00${ET_OFFSET}`, url: null, has_notes: true },
@@ -248,8 +300,11 @@ await test("timeline: upcoming vs past comes from start vs saved_at, not the edi
   assert.deepEqual(model.spans.map((span) => [span.meeting.title, span.upcoming]), [
     ["Morning sync", false],
     ["Late call", true],
-    ["Starts at the save", false],
+    ["Starts at the save", true],
   ]);
+  // Ended exactly at the save: over.
+  const ended = buildDayTimeline([{ ...mixed[2], end: `2026-09-28T16:15:00${ET_OFFSET}`, start: `2026-09-28T16:00:00${ET_OFFSET}` }], `2026-09-28T16:15:00${ET_OFFSET}`);
+  assert.equal(ended.spans[0].upcoming, false);
 });
 
 // ---------------------------------------------------------------------------
