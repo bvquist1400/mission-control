@@ -482,6 +482,7 @@ export async function getBrief(supabase: AnySupabase, userId: string, code: stri
   for (const tile of brief.content.tiles ?? []) {
     for (const group of tile.groups ?? []) for (const row of group.rows) if (row.task_id) taskIds.add(row.task_id);
   }
+  for (const meeting of brief.content.meetings ?? []) for (const id of meeting.task_ids ?? []) taskIds.add(id);
 
   const tasks: Record<string, BriefTaskSummary> = {};
   if (taskIds.size) {
@@ -497,19 +498,48 @@ export async function getBrief(supabase: AnySupabase, userId: string, code: stri
   return { brief, items, tasks, counts: countItems(items), url: briefUrl(options.appUrl, brief.code) };
 }
 
-/** Today's brief (ET date, never UTC) and how many items are still open, for the app-shell button. */
+/**
+ * The most recent brief of an edition dated today or earlier (ET), e.g. the
+ * last EOD for a morning run: Friday's on a Monday. Future-dated briefs never
+ * count. `before` (YYYY-MM-DD) makes the bound strict, for "the one before".
+ */
+export async function getLatestBrief(
+  supabase: AnySupabase,
+  userId: string,
+  edition: string,
+  options: { appUrl: string; now?: Date; before?: string }
+): Promise<BriefView> {
+  let query = supabase.from("briefs").select("code").eq("user_id", userId).eq("edition", edition);
+  query = options.before
+    ? query.lt("brief_date", options.before)
+    : query.lte("brief_date", todayInBriefTimeZone(options.now ?? new Date()));
+  const { data, error } = await query
+    .order("brief_date", { ascending: false })
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new BriefServiceError(404, `No ${edition.toUpperCase()} brief yet`);
+  return getBrief(supabase, userId, (data as { code: string }).code, { appUrl: options.appUrl });
+}
+
+/**
+ * Today's brief for the app-shell button (ET date, never UTC) and how many of
+ * its items are still open. With several editions today, the one saved last
+ * wins: the morning brief until the EOD saves, then the EOD.
+ */
 export async function getTodayBriefStatus(
   supabase: AnySupabase,
   userId: string,
   options: { now?: Date; edition?: string } = {}
 ): Promise<TodayBriefStatus | null> {
   const briefDate = todayInBriefTimeZone(options.now ?? new Date());
-  const { data: brief, error } = await supabase
-    .from("briefs")
-    .select("id, code, brief_date")
-    .eq("user_id", userId)
-    .eq("edition", options.edition ?? "eod")
-    .eq("brief_date", briefDate)
+  let query = supabase.from("briefs").select("id, code, brief_date").eq("user_id", userId).eq("brief_date", briefDate);
+  if (options.edition) query = query.eq("edition", options.edition);
+  const { data: brief, error } = await query
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(1)
     .maybeSingle();
   if (error) throw error;
   if (!brief) return null;

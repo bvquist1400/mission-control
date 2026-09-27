@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, type ReactNode } from "react";
 import type {
   BriefContent,
@@ -11,7 +12,9 @@ import type {
   BriefTileType,
 } from "@/lib/briefs/types";
 import { TaskLink } from "@/components/briefs/cards";
-import { etClock, etMinutes, etTime, hourTick } from "@/components/briefs/format";
+import { safeBriefHref } from "@/lib/briefs/href";
+import { etClock, etTime, hourTick } from "@/components/briefs/format";
+import { buildDayTimeline, hasNotes, timelineHeading } from "@/components/briefs/timeline";
 
 function OpenButton({ label, onClick }: { label: string; onClick: () => void }) {
   return (
@@ -32,6 +35,7 @@ export function HeroTile({
   counts,
   stats,
   wide,
+  prepCount = 0,
 }: {
   code: string;
   heading: string;
@@ -39,6 +43,8 @@ export function HeroTile({
   counts: BriefCounts;
   stats: BriefContent["stats"];
   wide: boolean;
+  /** Upcoming meetings with tasks preparing for them. */
+  prepCount?: number;
 }) {
   const decided = counts.total - counts.open;
   const pct = counts.total ? (decided / counts.total) * 100 : 100;
@@ -71,6 +77,11 @@ export function HeroTile({
           {counts.calls ? (
             <span>
               <b>{counts.calls}</b> {counts.calls === 1 ? "needs" : "need"} a call
+            </span>
+          ) : null}
+          {prepCount ? (
+            <span>
+              <b>{prepCount}</b> {prepCount === 1 ? "meeting" : "meetings"} to prep for
             </span>
           ) : null}
         </div>
@@ -117,7 +128,7 @@ export function NextTile({
           const choice = line.choice_n ? items.find((item) => item.n === line.choice_n) : undefined;
           const picked =
             choice?.state === "decided" ? choice.payload.options?.find((option) => option.key === choice.choice)?.label : undefined;
-          const className = choice ? (picked ? "picked" : "clash") : undefined;
+          const className = choice ? (picked ? "picked" : "clash") : line.free ? "free" : undefined;
           return (
             <li key={`${line.time}-${index}`} className={className}>
               <span className="tm">{line.time}</span>
@@ -134,8 +145,19 @@ export function NextTile({
 }
 
 // ---------------------------------------------------------------------------
-// Day timeline: meetings as coloured blocks (hatched = no notes); tap to filter
+// Day timeline: meetings as coloured blocks (hatched = no notes); tap to filter.
+// Meetings that start after the save are upcoming: solid, with a prep row each,
+// and the unbooked rest of the work window shows as free bands.
 // ---------------------------------------------------------------------------
+
+function clockRange(meeting: BriefMeeting): string {
+  return meeting.end ? `${etClock(meeting.start)}–${etClock(meeting.end)}` : etClock(meeting.start);
+}
+
+function minutesClock(minutes: number): string {
+  const hour = Math.floor(minutes / 60);
+  return `${hour % 12 === 0 ? 12 : hour % 12}:${String(minutes % 60).padStart(2, "0")}`;
+}
 
 export function DayTile({
   meetings,
@@ -144,6 +166,7 @@ export function DayTile({
   onFilter,
   meetingColor,
   openCounts,
+  itemForTask,
 }: {
   meetings: BriefMeeting[];
   savedAt: string;
@@ -151,33 +174,24 @@ export function DayTile({
   onFilter: (meetingId: string) => void;
   meetingColor: (meetingId: string) => string;
   openCounts: Record<string, number>;
+  /** The item number (#n) that carries each task, so a prep row can point at its card. */
+  itemForTask: Record<string, number>;
 }) {
-  const spans = meetings
-    .map((meeting) => {
-      const start = etMinutes(meeting.start);
-      if (start === null) return null;
-      const end = Math.max(start, etMinutes(meeting.end) ?? start);
-      return { meeting, start, end };
-    })
-    .filter((span): span is { meeting: BriefMeeting; start: number; end: number } => span !== null);
-  const saved = etMinutes(savedAt);
-
-  const first = Math.min(8 * 60, ...spans.map((span) => span.start));
-  const last = Math.max(17 * 60, ...spans.map((span) => span.end), saved ?? 0);
-  const S = Math.floor(first / 60) * 60;
-  const E = Math.ceil(last / 60) * 60;
+  const model = buildDayTimeline(meetings, savedAt);
+  const { S, E, spans } = model;
   const pct = (minutes: number) => `${(((minutes - S) / (E - S)) * 100).toFixed(2)}%`;
+  const width = (start: number, end: number) => `${(((end - start) / (E - S)) * 100).toFixed(2)}%`;
   const ticks: number[] = [];
   for (let hour = S / 60; hour <= E / 60; hour += 2) ticks.push(hour);
 
-  const withNotes = spans.filter((span) => span.meeting.id && span.meeting.has_notes);
-  const withoutNotes = spans.filter((span) => !(span.meeting.id && span.meeting.has_notes));
+  const past = spans.filter((span) => !span.upcoming);
+  const upcoming = spans.filter((span) => span.upcoming);
+  const withNotes = past.filter((span) => hasNotes(span.meeting));
+  const withoutNotes = past.filter((span) => !hasNotes(span.meeting));
 
   return (
     <article className="tile span-6">
-      <div className="tile-k">
-        Meetings · {spans.length} on the calendar, {withNotes.length} with notes
-      </div>
+      <div className="tile-k">Meetings · {timelineHeading(model)}</div>
       <div className="track-wrap">
         <div className="ticks">
           {ticks.map((hour) => (
@@ -187,8 +201,27 @@ export function DayTile({
           ))}
         </div>
         <div className="bar" />
-        {spans.map(({ meeting, start, end }) => {
-          const style = { left: pct(start), width: `${(((end - start) / (E - S)) * 100).toFixed(2)}%` };
+        {model.free.map((block) => (
+          <span
+            key={`free-${block.start}`}
+            className="blk freeblk"
+            style={{ left: pct(block.start), width: width(block.start, block.end) }}
+            title={`Free ${minutesClock(block.start)}–${minutesClock(block.end)}`}
+          />
+        ))}
+        {spans.map(({ meeting, key, start, end, upcoming: ahead }) => {
+          const style = { left: pct(start), width: width(start, end) };
+          if (ahead) {
+            const prep = (meeting.task_ids?.length ?? 0) > 0;
+            return (
+              <span
+                key={key}
+                className={`blk up${prep ? " prep" : ""}`}
+                style={{ ...style, ["--mc" as string]: meetingColor(key) }}
+                title={`${meeting.title} ${clockRange(meeting)}${prep ? " (prep tracked)" : ""}`}
+              />
+            );
+          }
           if (!meeting.id || !meeting.has_notes) {
             return <span key={`${meeting.title}-${meeting.start}`} className="blk nonotes" style={style} title={`${meeting.title} (no notes)`} />;
           }
@@ -206,33 +239,65 @@ export function DayTile({
             />
           );
         })}
-        {saved !== null ? <span className="blk now" style={{ left: pct(saved) }} title={`Brief saved ${etTime(savedAt)}`} /> : null}
+        {model.marker !== null ? <span className="blk now" style={{ left: pct(model.marker) }} title={`Brief saved ${etTime(savedAt)}`} /> : null}
       </div>
-      <div className="mchips">
-        {withNotes.map(({ meeting }) => {
-          const id = meeting.id as string;
-          const count = openCounts[id] ?? 0;
-          return (
-            <button
-              key={id}
-              type="button"
-              className="mchip"
-              style={{ ["--mc" as string]: meetingColor(id) }}
-              aria-pressed={filter === id}
-              onClick={() => onFilter(id)}
-            >
-              <span className="dot" />
-              {meeting.short ?? meeting.title} <span className="t">{etClock(meeting.start)}</span>
-              {count ? <span className="c">{count}</span> : null}
-            </button>
-          );
-        })}
-        {withoutNotes.length ? (
-          <span className="mchip nonote">
-            No notes: {withoutNotes.map(({ meeting }) => `${meeting.short ?? meeting.title} ${etClock(meeting.start)}`).join(", ")}
-          </span>
-        ) : null}
-      </div>
+      {past.length ? (
+        <div className="mchips">
+          {withNotes.map(({ meeting }) => {
+            const id = meeting.id as string;
+            const count = openCounts[id] ?? 0;
+            return (
+              <button
+                key={id}
+                type="button"
+                className="mchip"
+                style={{ ["--mc" as string]: meetingColor(id) }}
+                aria-pressed={filter === id}
+                onClick={() => onFilter(id)}
+              >
+                <span className="dot" />
+                {meeting.short ?? meeting.title} <span className="t">{etClock(meeting.start)}</span>
+                {count ? <span className="c">{count}</span> : null}
+              </button>
+            );
+          })}
+          {withoutNotes.length ? (
+            <span className="mchip nonote">
+              No notes: {withoutNotes.map(({ meeting }) => `${meeting.short ?? meeting.title} ${etClock(meeting.start)}`).join(", ")}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      {upcoming.length ? (
+        <ul className="preplist">
+          {upcoming.map(({ meeting, key }) => (
+            <li key={key} style={{ ["--mc" as string]: meetingColor(key) }}>
+              <span className="pt mono">{etClock(meeting.start)}</span>
+              <div className="pb">
+                <div className="pn">
+                  <span className="dot" />
+                  {meeting.title} <span className="pd">{clockRange(meeting)}</span>
+                </div>
+                {meeting.prep ? <p className="pp">{meeting.prep}</p> : null}
+                {meeting.task_ids?.length ? (
+                  <div className="plinks">
+                    {meeting.task_ids.map((taskId) => (
+                      <span key={taskId} className="plink">
+                        {itemForTask[taskId] ? (
+                          <a className="idlink" href={`#item-${itemForTask[taskId]}`}>
+                            #{itemForTask[taskId]} below
+                          </a>
+                        ) : null}
+                        <TaskLink id={taskId} />
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </article>
   );
 }
@@ -284,7 +349,23 @@ function SheetExtras({ tile }: { tile: BriefTile }) {
         </>
       ) : null}
       {tile.footnote ? <p className="meta" style={{ margin: 0, fontSize: 13, color: "var(--muted)" }}>{tile.footnote}</p> : null}
+      {tile.href ? (
+        <p style={{ margin: 0 }}>
+          <BriefLink href={tile.href} />
+        </p>
+      ) : null}
     </>
+  );
+}
+
+/** A tile's link to another brief. Validation only lets "/briefs/<CODE>" through; checked again here. */
+function BriefLink({ href }: { href: string }) {
+  const safe = safeBriefHref(href);
+  if (!safe) return null;
+  return (
+    <Link className="open" href={safe}>
+      Open {safe.slice("/briefs/".length)} <span className="chev">›</span>
+    </Link>
   );
 }
 
@@ -324,7 +405,16 @@ export const TILE_REGISTRY: Record<
         ) : null}
         {tile.summary ? <p className="tile-p">{tile.summary}</p> : null}
         <div className="tile-foot">
-          <OpenButton label="Open" onClick={onOpen} />
+          {tile.href ? (
+            <>
+              <BriefLink href={tile.href} />
+              <button type="button" className="linkbtn lift" onClick={onOpen}>
+                Details
+              </button>
+            </>
+          ) : (
+            <OpenButton label="Open" onClick={onOpen} />
+          )}
         </div>
       </>
     ),

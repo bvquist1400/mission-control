@@ -196,6 +196,7 @@ async function handleRequest(
   }
 
   if (segments[0] === 'briefs' && segments.length === 1) {
+    if (request.method === 'GET') return invokeStatic(briefsRoute.GET, requestWithContext);
     if (request.method === 'POST') return invokeStatic(briefsRoute.POST, requestWithContext);
     return methodNotAllowed();
   }

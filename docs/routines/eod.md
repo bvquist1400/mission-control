@@ -22,6 +22,10 @@ tasks?", the brief is saved and Brent decides item by item on the page.
 | Baseline tools used | `get_brief_digest`, `get_calendar`, `list_tasks`, `search`, `lookup_tasks_by_external_ids`, `save_eod_brief` |
 | Must not use | Gmail or any other email/messaging tool (Baseline sends the notice); `create_task`, `update_task`, `act_on_brief_items`, `sync_today`, or any other write except `save_eod_brief` |
 
+`save_eod_brief` is an alias of `save_brief` with `edition: "eod"`; the live
+routine keeps using it. The morning brief uses `save_brief` with
+`edition: "am"` ([morning.md](morning.md)).
+
 ## Prompt
 
 Paste everything between the lines.

@@ -240,6 +240,8 @@ export interface DailyBriefDigestResponse {
     stale_followups: DailyBriefDigestTaskItem[];
     rolled_to_tomorrow: DailyBriefDigestTaskItem[];
     tomorrow_prep: DailyBriefDigestTaskItem[];
+    /** Morning only: tasks that prepare for today's meetings still ahead (identifyPrepTasks on today's events). */
+    today_prep: DailyBriefDigestTaskItem[];
   };
   counts: DailyBriefDigestCounts;
   signals: DailyBriefComputedSignals;
@@ -1817,6 +1819,11 @@ export async function buildDailyBriefDigest({
   );
   const projectIdsWithSections = new Set(projectSections.map((section) => section.project_id));
   const rawTomorrowPrep = resolvedMode === "eod" ? identifyPrepTasks(toTaskInputs(allTasks), tomorrowEvents, tomorrowDate) : [];
+  // The morning's counterpart: prep for today's meetings that haven't started yet.
+  const rawTodayPrep =
+    resolvedMode === "morning"
+      ? identifyPrepTasks(toTaskInputs(allTasks), remainingEvents, requestedDate, { day: "today" })
+      : [];
   const statusUpdateRecommendationResult =
     resolvedMode === "eod"
       ? await readStatusUpdateRecommendations({
@@ -1926,7 +1933,19 @@ export async function buildDailyBriefDigest({
       : [],
       projectIdsWithSections
     );
+  const baseTodayPrepDigest = annotateProjectSectionState(
+    rawTodayPrep
+      .map((prep) => {
+        const task = taskById.get(prep.task.id);
+        return task
+          ? { ...toTaskDigestItem(task, now, requestedDate, commentActivity, effectiveSince), reason: prep.reason }
+          : null;
+      })
+      .filter((item): item is DailyBriefDigestTaskItem => item !== null),
+    projectIdsWithSections
+  );
   const noteContextTaskIds = [
+    ...baseTodayPrepDigest,
     ...baseDueSoonDigest,
     ...baseBlockedDigest,
     ...baseInProgressDigest,
@@ -1953,6 +1972,7 @@ export async function buildDailyBriefDigest({
   const rolledOverDigest = applyTaskNoteContext(baseRolledOverDigest, noteContextByTaskId);
   const staleFollowupDigest = applyTaskNoteContext(baseStaleFollowupDigest, noteContextByTaskId);
   const tomorrowPrepDigest = applyTaskNoteContext(baseTomorrowPrepDigest, noteContextByTaskId);
+  const todayPrepDigest = applyTaskNoteContext(baseTodayPrepDigest, noteContextByTaskId);
   const meetings = buildMeetingDigestItems(
     remainingEvents,
     stakeholders,
@@ -2072,6 +2092,7 @@ export async function buildDailyBriefDigest({
       stale_followups: staleFollowupDigest,
       rolled_to_tomorrow: resolvedMode === "eod" ? rolledOverDigest : [],
       tomorrow_prep: resolvedMode === "eod" ? tomorrowPrepDigest : [],
+      today_prep: todayPrepDigest,
     },
     counts,
     signals,

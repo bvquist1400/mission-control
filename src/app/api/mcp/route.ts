@@ -358,58 +358,82 @@ function createMcpServer(): McpServer {
     lines: z.array(z.string()).optional().describe('The note line(s) this item came from'),
   });
 
+  // save_brief and its EOD alias share one input shape; only the edition differs.
+  const SAVE_BRIEF_FIELDS = {
+    date: z.string().optional().describe('Brief date YYYY-MM-DD (ET). Defaults to today ET.'),
+    content: z.record(z.string(), z.unknown()).describe('Read-only page content: heading, narrative, first_moves[], stats[{key,label,value}] (in display order; the first stat is the headline the ready notice quotes, e.g. {key:"done",label:"done"} for EOD or {key:"due",label:"due today"} for a morning), next{label, agenda[{time,title,free?,choice_item?}]} (free=true for a free-time line; choice_item = 0-based position of a choice item in items; Baseline links that agenda line to the choice), meetings[{id?,title,short?,start,end?,url?,has_notes,prep?,task_ids?}] for the day timeline (a meeting that starts after the save draws as upcoming: prep = one or two lines on how to go in, task_ids = Brent\'s tasks that prepare for it), tiles[{key,type:"narrative"|"list",label,value?,suffix?,summary?,text?,list?,list_label?,groups[{label?,rows[{title,meta?,task_id?}]}],footnote?,href?}] (href links the tile to another brief page and must be "/briefs/<CODE>", e.g. "/briefs/EOD-0925"; anything else is dropped), footnote.'),
+    covered_meeting_ids: z.array(z.string()).optional().describe('Granola ids of every meeting read for this brief, including ones that produced no items'),
+    items: z.array(z.object({
+      kind: z.enum(['proposed_task', 'carry_over', 'carry_group', 'choice']).describe('proposed_task = meeting action item (Accept/Dismiss); carry_over = one task that needs a call (Done/Tomorrow/Park); carry_group = several tasks decided together (Tomorrow/Park); choice = pick one option, e.g. a calendar clash'),
+      title: z.string().describe('What the item says, max 500 characters'),
+      detail: z.string().optional().describe('Extra context; becomes the task description on Accept'),
+      why: z.string().optional().describe('One line on why this needs a call'),
+      group: z.string().optional().describe('Optional grouping label for proposals, e.g. a workstream'),
+      label: z.string().optional().describe('Short eyebrow, e.g. "Due today" or "Tomorrow 10 AM"'),
+      task_ids: z.array(z.string()).optional().describe('carry_over: exactly one task UUID; carry_group: 2-50 task UUIDs'),
+      source: z.object({ meetings: z.array(BRIEF_MEETING_REF_SCHEMA) }).optional().describe('Meetings this item came from'),
+      maybe_tracked: z.object({
+        task_id: z.string().describe('UUID of an existing task that may already cover this'),
+        text: z.string().describe('Why it might already be tracked'),
+      }).optional(),
+      options: z.array(z.object({
+        key: z.string().describe('Stable lowercase key, e.g. bootcamp'),
+        label: z.string(),
+        recommended: z.boolean().optional(),
+      })).optional().describe('choice: 2-6 options'),
+    })).describe('Items to decide, in display order. Numbers (#n) are assigned by Baseline.'),
+  };
+
+  async function postBrief(edition: string, args: Record<string, unknown>) {
+    const res = await fetch('https://mission-control-orpin-chi.vercel.app/api/briefs', {
+      method: 'POST',
+      headers: {
+        'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY!,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ ...args, edition }),
+    });
+    const data = await res.json();
+    return { ...toMcpResponse(data), ...(res.ok ? {} : { isError: true }) };
+  }
+
+  const SAVE_BRIEF_RULES = 'Proposals are NOT tasks: nothing is created until Brent accepts an item. Every proposed_task must cite at least one meeting in source.meetings. The first save of the day creates the brief; a later save the same day only appends proposed_task items from meetings the brief has not covered yet, and never changes existing items, their numbers or their states. All task_ids and maybe_tracked.task_id must be Brent\'s own tasks. Baseline itself sends Brent one "brief ready" notice on the first save of the day (never on reruns); do not email or message him yourself. The notify.status in the result says sent, failed (with the reason) or already_claimed (an earlier save owns the one notice; notify.sent_at says whether it was delivered).';
+
+  mcp.tool(
+    'save_brief',
+    `Save a brief as a stored page in Baseline and get its code and link: edition "eod" is the end-of-day brief (EOD-MMDD), "am" the morning brief (AM-MMDD). ${SAVE_BRIEF_RULES}`,
+    {
+      edition: z.enum(['eod', 'am']).describe('eod = end of day (EOD-MMDD); am = morning (AM-MMDD)'),
+      ...SAVE_BRIEF_FIELDS,
+    },
+    async ({ edition, ...args }) => postBrief(edition, args)
+  );
+
   mcp.tool(
     'save_eod_brief',
-    'Save the end-of-day brief as a stored page in Baseline and get its code (EOD-MMDD) and link. Proposals are NOT tasks: nothing is created until Brent accepts an item. Every proposed_task must cite at least one meeting in source.meetings. The first save of the day creates the brief; a later save the same day only appends proposed_task items from meetings the brief has not covered yet, and never changes existing items, their numbers or their states. All task_ids and maybe_tracked.task_id must be Brent\'s own tasks. Baseline itself sends Brent one "brief ready" notice on the first save of the day (never on reruns); do not email or message him yourself. The notify.status in the result says sent, failed (with the reason) or already_claimed (an earlier save owns the one notice; notify.sent_at says whether it was delivered).',
-    {
-      date: z.string().optional().describe('Brief date YYYY-MM-DD (ET). Defaults to today ET.'),
-      content: z.record(z.string(), z.unknown()).describe('Read-only page content: heading, narrative, first_moves[], stats[{key,label,value}] (key "done" feeds the ready notice), next{label, agenda[{time,title,choice_item?}]} (choice_item = 0-based position of a choice item in items; Baseline links that agenda line to the choice), meetings[{id?,title,short?,start,end?,url?,has_notes}] for the day timeline, tiles[{key,type:"narrative"|"list",label,value?,suffix?,summary?,text?,list?,list_label?,groups[{label?,rows[{title,meta?,task_id?}]}],footnote?}], footnote.'),
-      covered_meeting_ids: z.array(z.string()).optional().describe('Granola ids of every meeting read for this brief, including ones that produced no items'),
-      items: z.array(z.object({
-        kind: z.enum(['proposed_task', 'carry_over', 'carry_group', 'choice']).describe('proposed_task = meeting action item (Accept/Dismiss); carry_over = one task that needs a call (Done/Tomorrow/Park); carry_group = several tasks decided together (Tomorrow/Park); choice = pick one option, e.g. a calendar clash'),
-        title: z.string().describe('What the item says, max 500 characters'),
-        detail: z.string().optional().describe('Extra context; becomes the task description on Accept'),
-        why: z.string().optional().describe('One line on why this needs a call'),
-        group: z.string().optional().describe('Optional grouping label for proposals, e.g. a workstream'),
-        label: z.string().optional().describe('Short eyebrow, e.g. "Due today" or "Tomorrow 10 AM"'),
-        task_ids: z.array(z.string()).optional().describe('carry_over: exactly one task UUID; carry_group: 2-50 task UUIDs'),
-        source: z.object({ meetings: z.array(BRIEF_MEETING_REF_SCHEMA) }).optional().describe('Meetings this item came from'),
-        maybe_tracked: z.object({
-          task_id: z.string().describe('UUID of an existing task that may already cover this'),
-          text: z.string().describe('Why it might already be tracked'),
-        }).optional(),
-        options: z.array(z.object({
-          key: z.string().describe('Stable lowercase key, e.g. bootcamp'),
-          label: z.string(),
-          recommended: z.boolean().optional(),
-        })).optional().describe('choice: 2-6 options'),
-      })).describe('Items to decide, in display order. Numbers (#n) are assigned by Baseline.'),
-    },
-    async (args) => {
-      const res = await fetch('https://mission-control-orpin-chi.vercel.app/api/briefs', {
-        method: 'POST',
-        headers: {
-          'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY!,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ edition: 'eod', ...args }),
-      });
-      const data = await res.json();
-      return { ...toMcpResponse(data), ...(res.ok ? {} : { isError: true }) };
-    }
+    `Save the end-of-day brief as a stored page in Baseline and get its code (EOD-MMDD) and link. Same as save_brief with edition "eod". ${SAVE_BRIEF_RULES}`,
+    SAVE_BRIEF_FIELDS,
+    async (args) => postBrief('eod', args)
   );
 
   mcp.tool(
     'get_brief',
-    'Get a stored brief page by code (e.g. "EOD-0924"): its content, every numbered item with its state (open, accepted, dismissed, done, deferred, parked, decided, expired), the tasks it references, counts and the page link. Use for "review EOD-0924".',
+    'Get a stored brief page by code (e.g. "EOD-0924"), or the latest one of an edition with latest="eod" | "am" (dated today or earlier, ET; e.g. the morning run reads last night\'s EOD, Friday\'s on a Monday). Returns its content, every numbered item with its state (open, accepted, dismissed, done, deferred, parked, decided, expired), the tasks it references, counts and the page link. Use for "review EOD-0924". Give code or latest, not both.',
     {
-      code: z.string().describe('Brief code, e.g. EOD-0924'),
+      code: z.string().optional().describe('Brief code, e.g. EOD-0924 or AM-0928'),
+      latest: z.enum(['eod', 'am']).optional().describe('Instead of a code: the most recent brief of this edition dated today or earlier (ET)'),
     },
-    async ({ code }) => {
-      const res = await fetch(
-        `https://mission-control-orpin-chi.vercel.app/api/briefs/${encodeURIComponent(code.trim())}`,
-        { headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! } }
-      );
+    async ({ code, latest }) => {
+      const trimmed = code?.trim();
+      if (Boolean(trimmed) === Boolean(latest)) {
+        return { ...toMcpResponse({ error: 'Give either code or latest ("eod" or "am"), not both' }), isError: true };
+      }
+      const path = trimmed
+        ? `/api/briefs/${encodeURIComponent(trimmed)}`
+        : `/api/briefs?latest=${encodeURIComponent(latest as string)}`;
+      const res = await fetch(`https://mission-control-orpin-chi.vercel.app${path}`, {
+        headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
+      });
       const data = await res.json();
       return { ...toMcpResponse(data), ...(res.ok ? {} : { isError: true }) };
     }

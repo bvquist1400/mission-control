@@ -1,5 +1,8 @@
 import { normalizeDateOnly } from "@/lib/date-only";
 import { todayInBriefTimeZone } from "@/lib/briefs/keys";
+import { safeBriefHref } from "@/lib/briefs/href";
+
+export { safeBriefHref };
 import {
   BRIEF_ACTIONS,
   BRIEF_EDITIONS,
@@ -73,6 +76,7 @@ export function isUuid(value: unknown): value is string {
   return typeof value === "string" && UUID_PATTERN.test(value);
 }
 
+
 // ---------------------------------------------------------------------------
 // Content: tolerant. Unknown or malformed fields are dropped, never rejected,
 // so a slightly-off model output still renders. Used on save and on read.
@@ -84,7 +88,7 @@ function normalizeMeeting(value: unknown): BriefMeeting | null {
   const start = isoOrNull(value.start);
   if (!title || !start) return null;
   const id = str(value.id, 200);
-  return {
+  const meeting: BriefMeeting = {
     id,
     title,
     short: str(value.short, 80),
@@ -93,6 +97,14 @@ function normalizeMeeting(value: unknown): BriefMeeting | null {
     url: safeUrl(value.url),
     has_notes: typeof value.has_notes === "boolean" ? value.has_notes : id !== null,
   };
+  // Optional, and only present when given, so content without them round-trips unchanged.
+  const prep = str(value.prep, 1000);
+  if (prep) meeting.prep = prep;
+  if (Array.isArray(value.task_ids)) {
+    const taskIds = [...new Set(value.task_ids.filter(isUuid).map((taskId) => taskId.toLowerCase()))].slice(0, 20);
+    if (taskIds.length) meeting.task_ids = taskIds;
+  }
+  return meeting;
 }
 
 function normalizeTileRow(value: unknown): BriefTileRow | null {
@@ -145,6 +157,8 @@ function normalizeTile(value: unknown): BriefTile | null {
   }
   const footnote = str(value.footnote, 500);
   if (footnote) tile.footnote = footnote;
+  const href = safeBriefHref(value.href);
+  if (href) tile.href = href;
   return tile;
 }
 
@@ -180,6 +194,7 @@ export function normalizeBriefContent(value: unknown): BriefContent {
             const title = str(line.title, 200);
             if (!time || !title) return null;
             const out: BriefAgendaLine = { time, title };
+            if (line.free === true) out.free = true;
             if (Number.isInteger(line.choice_n) && (line.choice_n as number) > 0) out.choice_n = line.choice_n as number;
             if (Number.isInteger(line.choice_item) && (line.choice_item as number) >= 0) out.choice_item = line.choice_item as number;
             return out;

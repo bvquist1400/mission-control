@@ -1049,3 +1049,90 @@
     animation: none !important;
   }
 }
+
+/* Upcoming meetings (start after the save): solid, with a prep row each; free time is a soft band */
+.brief-page .agenda li.free span:last-child {
+  color: var(--muted);
+}
+.brief-page .blk.up {
+  background: linear-gradient(180deg, color-mix(in oklab, var(--mc) 62%, white), var(--mc));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 3px 10px color-mix(in oklab, var(--mc) 35%, transparent);
+  cursor: default;
+}
+.brief-page .blk.up.prep {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+.brief-page .blk.freeblk {
+  top: 26px;
+  height: 14px;
+  border-radius: 5px;
+  background: color-mix(in oklab, var(--ok) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ok) 30%, transparent);
+  cursor: default;
+}
+.brief-page .preplist {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: grid;
+}
+.brief-page .preplist li {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px 0;
+  border-top: 1px solid var(--hair);
+}
+.brief-page .preplist li:first-child {
+  border-top: 0;
+  padding-top: 6px;
+}
+.brief-page .preplist .pt {
+  font-size: 11.5px;
+  color: var(--muted);
+  padding-top: 2px;
+}
+.brief-page .preplist .pb {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.brief-page .preplist .pn {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
+  font-weight: 500;
+  font-size: 14.5px;
+}
+.brief-page .preplist .pn .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mc);
+  flex: none;
+}
+.brief-page .preplist .pd {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 400;
+}
+.brief-page .preplist .pp {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--ink-2);
+  max-width: 70ch;
+}
+.brief-page .plinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: baseline;
+}
+.brief-page .plink {
+  display: inline-flex;
+  gap: 8px;
+  align-items: baseline;
+}

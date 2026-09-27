@@ -2,7 +2,8 @@
 // actionable items; each item has a stable item_key so its state survives
 // reruns and so Accept can use the key as the created task's external id.
 
-export const BRIEF_EDITIONS = ["eod"] as const;
+/** "eod" = end of day (EOD-MMDD), "am" = morning (AM-MMDD). Behavior never branches on edition. */
+export const BRIEF_EDITIONS = ["eod", "am"] as const;
 export type BriefEdition = (typeof BRIEF_EDITIONS)[number];
 
 export const BRIEF_ITEM_KINDS = ["proposed_task", "carry_over", "carry_group", "choice"] as const;
@@ -63,7 +64,11 @@ export interface BriefItemPayload {
   options?: BriefChoiceOption[];
 }
 
-/** One calendar event on the day timeline. Events without notes have no id. */
+/**
+ * One calendar event on the day timeline. Events without notes have no id.
+ * A meeting that starts after the brief was saved is "upcoming": it draws solid,
+ * and may carry a prep line and the tasks that prepare for it.
+ */
 export interface BriefMeeting {
   id: string | null;
   title: string;
@@ -72,6 +77,10 @@ export interface BriefMeeting {
   end: string | null;
   url: string | null;
   has_notes: boolean;
+  /** One or two lines on how to go in (upcoming meetings). */
+  prep?: string;
+  /** Brent's tasks that prepare for this meeting. */
+  task_ids?: string[];
 }
 
 export interface BriefStat {
@@ -83,6 +92,8 @@ export interface BriefStat {
 export interface BriefAgendaLine {
   time: string;
   title: string;
+  /** A free-time line ("Free until 10"); shown quieter. */
+  free?: boolean;
   /** When set, this line shows the pick of the choice item with this n. */
   choice_n?: number;
   /**
@@ -119,6 +130,8 @@ export interface BriefTile {
   list_label?: string;
   groups?: BriefTileGroup[];
   footnote?: string;
+  /** Link to another brief page. Only same-app /briefs/<CODE> paths survive validation. */
+  href?: string;
 }
 
 export interface BriefContent {
@@ -126,6 +139,7 @@ export interface BriefContent {
   heading?: string;
   narrative?: string;
   first_moves?: string[];
+  /** In display order. The first one is the headline the ready notice quotes ("19 done", "9 due today"). */
   stats?: BriefStat[];
   next?: { label: string; agenda: BriefAgendaLine[] };
   meetings?: BriefMeeting[];

@@ -14,6 +14,7 @@ import {
 } from "@/components/briefs/cards";
 import { DayTile, HeroTile, NextTile, RecapBento, Sheet, TILE_REGISTRY } from "@/components/briefs/tiles";
 import { dateHeading } from "@/components/briefs/format";
+import { buildDayTimeline } from "@/components/briefs/timeline";
 import type { BriefCounts, BriefItemRow, BriefMeetingRef, BriefTile, BriefView } from "@/lib/briefs/types";
 
 type Override = { baseUpdatedAt: string; patch: Partial<BriefItemRow> };
@@ -66,13 +67,24 @@ export function BriefPage({ view }: { view: BriefView }) {
   );
   const counts = useMemo(() => countOpen(items), [items]);
 
-  // One colour per meeting, in timeline order, then any meeting only an item cites.
+  const timeline = useMemo(() => buildDayTimeline(content.meetings ?? [], brief.created_at), [brief.created_at, content.meetings]);
+
+  // One colour per meeting, in timeline order, then any meeting only an item cites,
+  // then meetings still ahead of the save (which may have no id).
   const meetingOrder = useMemo(() => {
     const ids: string[] = [];
     for (const meeting of content.meetings ?? []) if (meeting.id && !ids.includes(meeting.id)) ids.push(meeting.id);
     for (const item of items) for (const meeting of item.source.meetings) if (!ids.includes(meeting.id)) ids.push(meeting.id);
+    for (const span of timeline.spans) if (span.upcoming && !ids.includes(span.key)) ids.push(span.key);
     return ids;
-  }, [content.meetings, items]);
+  }, [content.meetings, items, timeline]);
+
+  // #n of the card that carries each task, so a meeting's prep row can point at it.
+  const itemForTask = useMemo(() => {
+    const result: Record<string, number> = {};
+    for (const item of items) for (const id of item.task_ids) result[id] ??= item.n;
+    return result;
+  }, [items]);
   const meetingColor = useCallback(
     (meetingId: string) => `var(--m-${(Math.max(0, meetingOrder.indexOf(meetingId)) % 6) + 1})`,
     [meetingOrder]
@@ -311,7 +323,15 @@ export function BriefPage({ view }: { view: BriefView }) {
       </div>
 
       <div className="bento">
-        <HeroTile code={brief.code} heading={heading} savedAt={brief.created_at} counts={counts} stats={content.stats} wide={!content.next} />
+        <HeroTile
+          code={brief.code}
+          heading={heading}
+          savedAt={brief.created_at}
+          counts={counts}
+          stats={content.stats}
+          wide={!content.next}
+          prepCount={timeline.withPrep}
+        />
         {content.next ? (
           <NextTile next={content.next} items={items} movesCount={content.first_moves?.length ?? 0} onOpen={() => setSheetKey("next")} />
         ) : null}
@@ -323,6 +343,7 @@ export function BriefPage({ view }: { view: BriefView }) {
             onFilter={toggleFilter}
             meetingColor={meetingColor}
             openCounts={openCounts}
+            itemForTask={itemForTask}
           />
         ) : null}
       </div>

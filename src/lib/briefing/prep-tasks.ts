@@ -134,8 +134,11 @@ export function taskToSummary(
 export function identifyPrepTasks(
   tasks: TaskInput[],
   tomorrowEvents: ApiCalendarEvent[],
-  tomorrowDateET: string
+  tomorrowDateET: string,
+  /** Which day the events are on, for the reason text. EOD passes tomorrow's; the morning passes today's. */
+  options: { day?: "tomorrow" | "today" } = {}
 ): PrepTask[] {
+  const day = options.day ?? "tomorrow";
   const prepTasks: PrepTask[] = [];
   const tomorrowStart = `${tomorrowDateET}T00:00:00`;
   const tomorrowEnd = `${tomorrowDateET}T23:59:59`;
@@ -208,7 +211,10 @@ export function identifyPrepTasks(
             task.implementation?.phase,
             task.implementation?.rag
           ),
-          reason: `Due tomorrow (${task.estimated_minutes} min) - consider starting today`,
+          reason:
+            day === "tomorrow"
+              ? `Due tomorrow (${task.estimated_minutes} min) - consider starting today`
+              : `Due today (${task.estimated_minutes} min) - block time for it early`,
         });
       }
     }
