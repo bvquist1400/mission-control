@@ -13,12 +13,15 @@ const ERROR_MAX = 500;
 
 /**
  * "EOD-0925 is ready · 6 to decide · 19 done", the link, and the Claude fallback.
- * The third part is the brief's headline stat, its first one ("9 due today" on a
- * morning), whatever its key; no stats, no third part.
+ * The third part is the brief's headline stat: a "done" stat wherever it sits
+ * (so an EOD reads exactly as before), else the first stat ("9 due today" on a
+ * morning); no stats, no third part.
  */
 export function buildBriefNotice(code: string, url: string, counts: BriefCounts, content: BriefContent): string {
-  const headline = content.stats?.[0];
-  const head = [`${code} is ready`, `${counts.open} to decide`, headline ? `${headline.value} ${headline.label}` : null]
+  const done = content.stats?.find((stat) => stat.key === "done");
+  const first = content.stats?.[0];
+  const headline = done ? `${done.value} done` : first ? `${first.value} ${first.label}` : null;
+  const head = [`${code} is ready`, `${counts.open} to decide`, headline]
     .filter(Boolean)
     .join(" · ");
   return [head, url, `Or in Claude: review ${code}`].join("\n");

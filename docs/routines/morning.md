@@ -133,9 +133,11 @@ dashboard voice, no raw JSON in prose.
 ```
 
 - **The first stat is the headline.** Baseline quotes it in the notice
-  ("AM-0928 is ready · 3 to decide · 9 due today"), so put "due today" first.
+  ("AM-0928 is ready · 3 to decide · 9 due today"), so put "due today" first
+  and don't use a `done` key (a `done` stat always wins the notice, as on EOD).
 - `meetings` is today's calendar, every meeting, with no `id` and
-  `has_notes: false` (they haven't happened). Give a meeting `prep` when you
+  `has_notes: false` (they haven't happened; an 8:00 meeting already under way
+  when the run saves still counts as ahead and keeps its prep line). Give a meeting `prep` when you
   have something useful to say about it, and `task_ids` when Baseline has tasks
   that prepare for it (from `tasks.today_prep` or your read). A meeting with
   nothing tracked still gets a prep line if the invite says what it's for;

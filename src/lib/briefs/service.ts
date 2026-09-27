@@ -501,7 +501,7 @@ export async function getBrief(supabase: AnySupabase, userId: string, code: stri
 /**
  * The most recent brief of an edition dated today or earlier (ET), e.g. the
  * last EOD for a morning run: Friday's on a Monday. Future-dated briefs never
- * count. `before` (YYYY-MM-DD) makes the bound strict, for "the one before".
+ * count. `before` (YYYY-MM-DD) also excludes that date and later, for "the one before".
  */
 export async function getLatestBrief(
   supabase: AnySupabase,
@@ -509,10 +509,14 @@ export async function getLatestBrief(
   edition: string,
   options: { appUrl: string; now?: Date; before?: string }
 ): Promise<BriefView> {
-  let query = supabase.from("briefs").select("code").eq("user_id", userId).eq("edition", edition);
-  query = options.before
-    ? query.lt("brief_date", options.before)
-    : query.lte("brief_date", todayInBriefTimeZone(options.now ?? new Date()));
+  let query = supabase
+    .from("briefs")
+    .select("code")
+    .eq("user_id", userId)
+    .eq("edition", edition)
+    .lte("brief_date", todayInBriefTimeZone(options.now ?? new Date()));
+  // `before` only tightens the bound; it never reaches past today.
+  if (options.before) query = query.lt("brief_date", options.before);
   const { data, error } = await query
     .order("brief_date", { ascending: false })
     .order("created_at", { ascending: false })

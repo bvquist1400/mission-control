@@ -1,6 +1,8 @@
 // The day timeline's geometry, kept pure so it's testable without React.
-// Everything comes from the data: a meeting is "upcoming" when it starts after
-// the brief was saved, never because of the brief's edition.
+// Everything comes from the data, never the brief's edition: a meeting is
+// "upcoming" (still ahead or under way) when it hasn't ended by the save and has
+// no notes yet. A meeting with notes already happened, at least in part, so it
+// keeps the notes treatment even if it runs past the save.
 
 import type { BriefMeeting } from "@/lib/briefs/types";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
@@ -12,7 +14,7 @@ export interface TimelineSpan {
   key: string;
   start: number;
   end: number;
-  /** Starts after the save: drawn solid, listed with its prep line. */
+  /** Not over at the save (and no notes yet): drawn solid, listed with its prep line. */
   upcoming: boolean;
 }
 
@@ -56,8 +58,9 @@ export function buildDayTimeline(meetings: BriefMeeting[], savedAt: string): Tim
       const start = etMinutes(meeting.start);
       if (start === null) return null;
       const end = Math.max(start, etMinutes(meeting.end) ?? start);
-      const startMs = Date.parse(meeting.start);
-      const upcoming = Number.isFinite(savedMs) && Number.isFinite(startMs) && startMs > savedMs;
+      // A meeting without an end is over once it has started.
+      const endMs = Date.parse(meeting.end ?? meeting.start);
+      const upcoming = !hasNotes(meeting) && Number.isFinite(savedMs) && Number.isFinite(endMs) && endMs > savedMs;
       return { meeting, key: meetingKey(meeting), start, end, upcoming };
     })
     .filter((span): span is TimelineSpan => span !== null);
