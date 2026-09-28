@@ -315,7 +315,8 @@ export function parseMarkdown(source: string | null | undefined): MdBlock[] {
 export function safeHref(raw: string): string | null {
   const href = raw.trim();
   if (/^(https?:|mailto:)/i.test(href)) return href;
-  if (href.startsWith("/") && !href.startsWith("//")) return href;
+  // "//host" and "/\host" are protocol-relative in browsers ("\" is read as "/").
+  if (href.startsWith("/") && href[1] !== "/" && href[1] !== "\\") return href;
   if (href.startsWith("#")) return href;
   return null;
 }

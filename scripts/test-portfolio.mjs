@@ -331,6 +331,9 @@ test("markdown links: safe schemes only; bare URLs lose trailing punctuation", (
   assert.equal(safeHref("/r/task/1"), "/r/task/1");
   assert.equal(safeHref("javascript:alert(1)"), null);
   assert.equal(safeHref("//evil.example"), null);
+  // Browsers treat "\" like "/", so "/\evil.example/x" is protocol-relative too.
+  assert.equal(safeHref("/\\evil.example/x"), null);
+  assert.equal(parseInline("[x](/\\evil.example/x)").some((n) => n.type === "link"), false);
   assert.equal(safeHref("data:text/html,x"), null);
   const bad = parseInline("[click](javascript:alert(1))");
   assert.equal(bad.some((n) => n.type === "link"), false);
