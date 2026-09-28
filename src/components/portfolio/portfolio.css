@@ -171,12 +171,18 @@
   font-size: 15px;
   font-weight: 500;
   color: var(--ink);
-  text-decoration: none;
   overflow-wrap: anywhere;
+  /* A button that reads as the task's title. */
+  background: none;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  line-height: 1.35;
 }
-.brief-page .pf-you li:hover .pf-what {
+.brief-page .pf-what:hover {
   text-decoration: underline;
   text-decoration-color: var(--hair-strong);
+  text-underline-offset: 3px;
 }
 .brief-page .pf-ctx {
   grid-column: 1;
@@ -187,12 +193,67 @@
 .brief-page .pf-ctx.late {
   color: var(--danger);
 }
-.brief-page .pf-open {
+.brief-page .pf-row-actions {
   grid-row: 1 / span 2;
   grid-column: 2;
+  display: flex;
+  gap: 6px;
+  align-self: center;
 }
-.brief-page .pf-you .stretch::after {
+.brief-page .pf-handback {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 12px;
   border-radius: 12px;
+  background: var(--surface-2);
+}
+.brief-page .pf-handback label {
+  font-size: 13.5px;
+  font-weight: 500;
+}
+.brief-page .pf-handback textarea {
+  width: 100%;
+  font: inherit;
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: 10px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+.brief-page .pf-handback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.brief-page .pf-err {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--danger);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.brief-page .pf-edit {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+@container page (max-width: 440px) {
+  /* Phone: actions move under the title instead of squeezing it. */
+  .brief-page .pf-you li {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .brief-page .pf-row-actions {
+    grid-row: auto;
+    grid-column: 1;
+  }
 }
 
 /* App rows */

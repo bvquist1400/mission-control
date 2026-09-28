@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { briefMono, briefSans } from '@/components/briefs/fonts';
 import { Markdown } from '@/components/markdown/Markdown';
+import { TaskEditButton } from '@/components/portfolio/PortfolioTasks';
 import { fetchMissionControlItemById, mapRouteKindToTypedId } from '@/lib/mcp/search';
 import { getCanonicalAppUrl } from '@/lib/mcp/config';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
@@ -107,6 +108,8 @@ export default async function ReaderPage({ params }: ReaderPageProps) {
             {owner ? <span>{owner === 'brent' ? 'Owner: You' : `Owner: ${ownerLabel ?? 'Agent'}`}</span> : null}
           </div>
           <h1>{item.title}</h1>
+          {/* Signed in (the page redirects otherwise): the same editor as Today and the Portfolio. */}
+          {kind === 'task' ? <TaskEditButton taskId={decodeURIComponent(id)} /> : null}
           {statusLine ? (
             <div className="pf-stand-box">
               <span className="mono">WHERE THIS STANDS</span>

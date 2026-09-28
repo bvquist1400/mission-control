@@ -139,6 +139,8 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
   const [implementations, setImplementations] = useState<ImplementationSummary[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [projectSections, setProjectSections] = useState<ProjectSection[]>([]);
+  /** The project whose sections are in projectSections (set only after a successful load). */
+  const [sectionsProjectId, setSectionsProjectId] = useState<string | null>(null);
   const [loadingAssignments, setLoadingAssignments] = useState(true);
   const [loadingProjectSections, setLoadingProjectSections] = useState(false);
   const selectedProject = projects.find((project) => project.id === projectIdDraft)
@@ -247,6 +249,7 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
         }
 
         setProjectSections(payload);
+        setSectionsProjectId(projectIdDraft);
       } finally {
         if (isMounted) {
           setLoadingProjectSections(false);
@@ -262,14 +265,17 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
   }, [projectIdDraft]);
 
   useEffect(() => {
-    if (!projectIdDraft || !sectionIdDraft || loadingProjectSections) {
+    // Only drop the section once this project's sections have actually loaded:
+    // before that the list is empty (or another project's), and clearing it here
+    // would enable "Save edits" and silently remove the task's section.
+    if (!projectIdDraft || !sectionIdDraft || loadingProjectSections || sectionsProjectId !== projectIdDraft) {
       return;
     }
 
     if (!projectSections.some((section) => section.id === sectionIdDraft)) {
       setSectionIdDraft("");
     }
-  }, [loadingProjectSections, projectIdDraft, projectSections, sectionIdDraft]);
+  }, [loadingProjectSections, projectIdDraft, projectSections, sectionIdDraft, sectionsProjectId]);
 
   const normalizedTitle = titleDraft.trim();
   const normalizedDescription = descriptionDraft.trim();
@@ -282,7 +288,8 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
   const nextSprintId = sprintIdDraft || null;
   const currentDueDate = timestampToLocalDateInputValue(task.due_at);
   const dueDateResolution = resolveDueDateInput(dueDateDraft);
-  const hasDueDateChange = dueDateResolution.error === null && dueDateResolution.dateOnly !== currentDueDate;
+  // An empty draft resolves to null; the saved "no due date" reads as "". Both mean none.
+  const hasDueDateChange = dueDateResolution.error === null && (dueDateResolution.dateOnly ?? "") !== currentDueDate;
   const nextTags = mergeTaskTags(tagsDraft, tagInput);
   const hasTagChanges = nextTags.length !== currentTags.length || nextTags.some((tag, index) => tag !== currentTags[index]);
   const isMutating = isSaving || isUpdatingRecurrence;

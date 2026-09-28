@@ -51,6 +51,10 @@ delete process.env.MISSION_CONTROL_ACTIONS_API_KEY;
 
 const tasksRoute = await import("../src/app/api/tasks/route.ts");
 const taskRoute = await import("../src/app/api/tasks/[id]/route.ts");
+const commentsRoute = await import("../src/app/api/tasks/[id]/comments/route.ts");
+const { handBackTask } = await import("../src/lib/task-handoff.ts");
+const { buildPortfolio } = await import("../src/lib/portfolio.ts");
+const { loadPortfolioInput } = await import("../src/lib/portfolio-queries.ts");
 const { NextRequest } = await import("next/server.js");
 
 // The MCP tools fetch the API over HTTP; route those calls to the handlers above.
@@ -76,6 +80,10 @@ globalThis.fetch = async (input, init = {}) => {
   }
   if (match && request.method === "PATCH") {
     return taskRoute.PATCH(request, { params: Promise.resolve({ id: match[1] }) });
+  }
+  const commentsMatch = /^\/api\/tasks\/([^/]+)\/comments$/.exec(target.pathname);
+  if (commentsMatch && request.method === "POST") {
+    return commentsRoute.POST(request, { params: Promise.resolve({ id: commentsMatch[1] }) });
   }
   throw new Error(`test fetch: unrouted ${request.method} ${target.pathname}`);
 };
@@ -298,6 +306,59 @@ try {
     } finally {
       await admin.auth.admin.deleteUser(other.data.user.id);
     }
+  });
+  // ── Part 3: Brent hands a task back (Portfolio slice 2a) ───────────────
+  // The browser calls same-origin paths with its session; here the API key stands in for it.
+  const apiFetch = (path, init = {}) =>
+    globalThis.fetch(`http://localhost${path}`, {
+      ...init,
+      headers: { ...(init.headers ?? {}), "x-mission-control-key": process.env.MISSION_CONTROL_API_KEY },
+    });
+
+  await test("hand-back removes the task from Assigned to you, sets owner/label/line and posts the note", async () => {
+    const { data: row, error } = await admin
+      .from("tasks")
+      .insert({ user_id: userId, title: "Check Split View on the iPad", status: "In Progress", owner: "brent", status_line: "Split View left." })
+      .select("id")
+      .single();
+    if (error) throw error;
+
+    const before = buildPortfolio(await loadPortfolioInput(admin, userId), { scope: "all" });
+    assert.ok(before.assigned.some((task) => task.id === row.id), "starts in Assigned to you");
+
+    const result = await handBackTask(row.id, "Tried it twice.\nStill cut off.", { fetchImpl: apiFetch });
+    assert.equal(result.ok, true, result.error);
+    assert.equal(result.commentError, null);
+
+    const after = buildPortfolio(await loadPortfolioInput(admin, userId), { scope: "all" });
+    assert.equal(after.assigned.some((task) => task.id === row.id), false, "gone from Assigned to you");
+    assert.equal(after.brentOpen, before.brentOpen - 1, "hero count drops by one");
+
+    const { data: saved } = await admin.from("tasks").select("owner, owner_label, status_line, status").eq("id", row.id).single();
+    assert.deepEqual(saved, {
+      owner: "agent",
+      owner_label: "PM",
+      status_line: "With the PM: Tried it twice. Still cut off.",
+      status: "In Progress",
+    });
+    const { data: comments } = await admin.from("task_comments").select("content").eq("task_id", row.id);
+    assert.deepEqual(comments.map((c) => c.content), ["Brent (handed back): Tried it twice.\nStill cut off."]);
+
+    const brentList = await callTool("list_tasks", { owner: "brent", limit: 500 });
+    assert.equal(brentList.data.some((task) => task.id === row.id), false, "list_tasks owner=brent agrees");
+  });
+
+  await test("hand-back without a note: dated line, no comment; a bad id changes nothing", async () => {
+    const { data: row } = await admin.from("tasks").insert({ user_id: userId, title: "No-note hand-back", owner: "brent" }).select("id").single();
+    const result = await handBackTask(row.id, "", { fetchImpl: apiFetch, now: new Date("2026-09-29T03:30:00Z") });
+    assert.equal(result.ok, true);
+    const { data: saved } = await admin.from("tasks").select("owner, status_line").eq("id", row.id).single();
+    assert.deepEqual(saved, { owner: "agent", status_line: "With the PM: handed back by Brent Sep 28" });
+    const { count } = await admin.from("task_comments").select("id", { count: "exact", head: true }).eq("task_id", row.id);
+    assert.equal(count, 0);
+
+    const missing = await handBackTask("00000000-0000-0000-0000-000000000000", "x", { fetchImpl: apiFetch });
+    assert.equal(missing.ok, false);
   });
 } finally {
   globalThis.fetch = realFetch;

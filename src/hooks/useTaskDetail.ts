@@ -22,7 +22,8 @@ interface UseTaskDetailResult {
   checklist: TaskChecklistItem[];
   dependencies: TaskDependencySummary[];
   isSaving: boolean;
-  updateTask: (updates: TaskUpdatePayload) => Promise<void>;
+  /** Resolves true when the PATCH succeeded; on failure `error` is set and it resolves false. */
+  updateTask: (updates: TaskUpdatePayload) => Promise<boolean>;
   addComment: (comment: TaskComment) => void;
   updateComment: (comment: TaskComment) => void;
   deleteComment: (commentId: string) => void;
@@ -93,8 +94,8 @@ export function useTaskDetail({ taskId, onTaskUpdated }: UseTaskDetailOptions): 
   }, [taskId]);
 
   const updateTask = useCallback(
-    async (updates: TaskUpdatePayload) => {
-      if (!taskId) return;
+    async (updates: TaskUpdatePayload): Promise<boolean> => {
+      if (!taskId) return false;
       setIsSaving(true);
       setError(null);
 
@@ -112,10 +113,12 @@ export function useTaskDetail({ taskId, onTaskUpdated }: UseTaskDetailOptions): 
 
         const updatedTask = (await response.json()) as TaskWithImplementation;
         onTaskUpdated?.(taskId, updatedTask as unknown as TaskUpdatePayload);
+        return true;
       } catch (err) {
         if (isMountedRef.current) {
           setError(err instanceof Error ? err.message : "Failed to update task");
         }
+        return false;
       } finally {
         if (isMountedRef.current) setIsSaving(false);
       }

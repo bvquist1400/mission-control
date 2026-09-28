@@ -4,12 +4,12 @@ import {
   formatShortDate,
   formatTick,
   timelinePosition,
-  type AssignedTask,
   type PortfolioApp,
   type PortfolioView,
   type Timeline,
 } from "@/lib/portfolio";
 import type { TaskScope } from "@/lib/personal-exclusion";
+import { AssignedList, TaskEditorLayer } from "@/components/portfolio/PortfolioTasks";
 
 const SCOPES: Array<{ value: TaskScope; label: string }> = [
   { value: "personal", label: "Personal" },
@@ -42,25 +42,6 @@ function Progress({ pct, label }: { pct: number | null; label: string }) {
     <div className="prog" role="img" aria-label={label}>
       <span style={{ width: `${pct ?? 0}%` }} />
     </div>
-  );
-}
-
-function AssignedRow({ task }: { task: AssignedTask }) {
-  const ctx = [
-    task.app,
-    task.statusLine,
-    task.due ? `${task.overdue ? "was due" : "due"} ${formatShortDate(task.due)}` : null,
-  ].filter(Boolean);
-  return (
-    <li>
-      <Link className="pf-what stretch" href={`/r/task/${task.id}`}>
-        {task.title}
-      </Link>
-      <span className={`pf-ctx${task.overdue ? " late" : ""}`}>{ctx.length ? ctx.join(" · ") : task.status}</span>
-      <span className="btn sm pf-open" aria-hidden="true">
-        Open
-      </span>
-    </li>
   );
 }
 
@@ -197,124 +178,118 @@ export function PortfolioPage({ view }: { view: PortfolioView }) {
   const { overall } = view;
   const needs = view.brentOpen;
   return (
-    <div className="page pf-portfolio">
-      <nav className="pf-top" aria-label="Baseline">
-        <Link href="/" className="pf-back">
-          <span aria-hidden="true">←</span> Baseline
-        </Link>
-        <div className="pf-scope" role="group" aria-label="Which tasks">
-          {SCOPES.map((scope) => (
-            <Link
-              key={scope.value}
-              href={scope.value === "personal" ? "/portfolio" : `/portfolio?scope=${scope.value}`}
-              aria-current={view.scope === scope.value ? "page" : undefined}
-            >
-              {scope.label}
-            </Link>
-          ))}
-        </div>
-      </nav>
-
-      <div className="bento">
-        <section className="tile hero span-6" aria-label="Summary">
-          <div className="eyebrow">
-            <span className="code">PORTFOLIO</span>
-            <span>{weekdayLabel(view.today)}</span>
-            <span>{plural(view.apps.length, "app")}</span>
-          </div>
-          <h1>
-            {needs === 0 ? "Nothing needs you" : `${needs} ${needs === 1 ? "thing needs" : "things need"} you`}
-            <span className="dim">
-              {view.agentOpen > 0 ? "Everything else is with the agents." : "Nothing is open with the agents either."}
-            </span>
-          </h1>
-          <Progress pct={overall.pct} label={`${overall.done} of ${overall.total} tasks done`} />
-          <div className="pf-pl hero-pl">
-            <span>
-              <b>{overall.pct ?? 0}%</b> of all tasks done
-            </span>
-            <span className="mono">
-              {overall.done} / {overall.total}
-            </span>
-          </div>
-          {view.apps.length > 0 ? (
-            <div className="pf-where">
-              {view.apps.map((app) => (
-                <span key={app.id}>
-                  {app.name} <b>{app.counts.pct ?? 0}%</b>
-                </span>
-              ))}
-            </div>
-          ) : null}
-        </section>
-
-        <section className="tile span-4" aria-labelledby="pf-you-h">
-          <div className="sec-h pf-sec-h">
-            <h2 id="pf-you-h">Assigned to you</h2>
-            <OwnerChip who="brent" label="You" />
-          </div>
-          {view.assigned.length > 0 ? (
-            <ul className="pf-you">
-              {view.assigned.map((task) => (
-                <AssignedRow key={task.id} task={task} />
-              ))}
-            </ul>
-          ) : (
-            <p className="tile-p">Nothing is waiting on you. When an agent needs you, the task lands here.</p>
-          )}
-        </section>
-
-        <section className="tile span-2" aria-labelledby="pf-agents-h">
-          <span className="tile-k" id="pf-agents-h">
-            With the agents
-          </span>
-          <div className="tile-n">
-            {view.agentInProgress}
-            <small>in progress</small>
-          </div>
-          <p className="tile-p">
-            {view.agentOpen - view.agentInProgress > 0
-              ? `${view.agentOpen - view.agentInProgress} more open ${view.agentOpen - view.agentInProgress === 1 ? "task is" : "tasks are"} queued. `
-              : ""}
-            {needs > 0 ? `Nothing blocked on you but the ${needs === 1 ? "one" : needs} on the left.` : "Nothing blocked on you."}
-          </p>
-          {view.agentLabels.length > 0 ? (
-            <div className="pf-where pf-labels">
-              {view.agentLabels.map((label) => (
-                <OwnerChip key={label} who="agent" label={label} />
-              ))}
-            </div>
-          ) : null}
-        </section>
-      </div>
-
-      <section className="sec" aria-labelledby="pf-apps-h">
-        <div className="sec-h pf-sec-h">
-          <h2 id="pf-apps-h">Apps</h2>
-          <span className="hint">Tap a row for its timeline</span>
-        </div>
-        {view.apps.length > 0 ? (
-          <div className="pf-apps">
-            {view.apps.map((app, index) => (
-              <AppRow key={app.id} app={app} open={index === 0} />
+    <TaskEditorLayer>
+      <div className="page pf-portfolio">
+        <nav className="pf-top" aria-label="Baseline">
+          <Link href="/" className="pf-back">
+            <span aria-hidden="true">←</span> Baseline
+          </Link>
+          <div className="pf-scope" role="group" aria-label="Which tasks">
+            {SCOPES.map((scope) => (
+              <Link
+                key={scope.value}
+                href={scope.value === "personal" ? "/portfolio" : `/portfolio?scope=${scope.value}`}
+                aria-current={view.scope === scope.value ? "page" : undefined}
+              >
+                {scope.label}
+              </Link>
             ))}
           </div>
-        ) : (
-          <p className="tile-p">No apps have tasks in this view.</p>
-        )}
-        <div className="pf-legend" aria-hidden="true">
-          <span><i className="st-done" />Done</span>
-          <span><i className="st-prog" />In progress</span>
-          <span><i className="st-wait" />Waiting</span>
-          <span><i className="st-plan" />Planned</span>
-          <span><i className="st-est" />No due date (estimate)</span>
-          <span><i className="st-today" />Today</span>
-        </div>
-      </section>
+        </nav>
 
-      <p className="pf-fine">
-        Percent done counts every task in the app equally: done ÷ all tasks.
-      </p>
-    </div>
+        <div className="bento">
+          <section className="tile hero span-6" aria-label="Summary">
+            <div className="eyebrow">
+              <span className="code">PORTFOLIO</span>
+              <span>{weekdayLabel(view.today)}</span>
+              <span>{plural(view.apps.length, "app")}</span>
+            </div>
+            <h1>
+              {needs === 0 ? "Nothing needs you" : `${needs} ${needs === 1 ? "thing needs" : "things need"} you`}
+              <span className="dim">
+                {view.agentOpen > 0 ? "Everything else is with the agents." : "Nothing is open with the agents either."}
+              </span>
+            </h1>
+            <Progress pct={overall.pct} label={`${overall.done} of ${overall.total} tasks done`} />
+            <div className="pf-pl hero-pl">
+              <span>
+                <b>{overall.pct ?? 0}%</b> of all tasks done
+              </span>
+              <span className="mono">
+                {overall.done} / {overall.total}
+              </span>
+            </div>
+            {view.apps.length > 0 ? (
+              <div className="pf-where">
+                {view.apps.map((app) => (
+                  <span key={app.id}>
+                    {app.name} <b>{app.counts.pct ?? 0}%</b>
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </section>
+
+          <section className="tile span-4" aria-labelledby="pf-you-h">
+            <div className="sec-h pf-sec-h">
+              <h2 id="pf-you-h">Assigned to you</h2>
+              <OwnerChip who="brent" label="You" />
+            </div>
+            <AssignedList tasks={view.assigned} />
+          </section>
+
+          <section className="tile span-2" aria-labelledby="pf-agents-h">
+            <span className="tile-k" id="pf-agents-h">
+              With the agents
+            </span>
+            <div className="tile-n">
+              {view.agentInProgress}
+              <small>in progress</small>
+            </div>
+            <p className="tile-p">
+              {view.agentOpen - view.agentInProgress > 0
+                ? `${view.agentOpen - view.agentInProgress} more open ${view.agentOpen - view.agentInProgress === 1 ? "task is" : "tasks are"} queued. `
+                : ""}
+              {needs > 0 ? `Nothing blocked on you but the ${needs === 1 ? "one" : needs} on the left.` : "Nothing blocked on you."}
+            </p>
+            {view.agentLabels.length > 0 ? (
+              <div className="pf-where pf-labels">
+                {view.agentLabels.map((label) => (
+                  <OwnerChip key={label} who="agent" label={label} />
+                ))}
+              </div>
+            ) : null}
+          </section>
+        </div>
+
+        <section className="sec" aria-labelledby="pf-apps-h">
+          <div className="sec-h pf-sec-h">
+            <h2 id="pf-apps-h">Apps</h2>
+            <span className="hint">Tap a row for its timeline</span>
+          </div>
+          {view.apps.length > 0 ? (
+            <div className="pf-apps">
+              {view.apps.map((app, index) => (
+                <AppRow key={app.id} app={app} open={index === 0} />
+              ))}
+            </div>
+          ) : (
+            <p className="tile-p">No apps have tasks in this view.</p>
+          )}
+          <div className="pf-legend" aria-hidden="true">
+            <span><i className="st-done" />Done</span>
+            <span><i className="st-prog" />In progress</span>
+            <span><i className="st-wait" />Waiting</span>
+            <span><i className="st-plan" />Planned</span>
+            <span><i className="st-est" />No due date (estimate)</span>
+            <span><i className="st-today" />Today</span>
+          </div>
+        </section>
+
+        <p className="pf-fine">
+          Percent done counts every task in the app equally: done ÷ all tasks.
+        </p>
+      </div>
+    </TaskEditorLayer>
   );
 }

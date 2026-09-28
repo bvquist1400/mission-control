@@ -339,6 +339,9 @@ export interface TaskUpdatePayload {
   source_url?: string | null;
   external_source_system?: string | null;
   external_source_id?: string | null;
+  owner?: TaskOwner;
+  owner_label?: string | null;
+  status_line?: string | null;
 }
 
 // Implementation summary for dropdowns

@@ -3,14 +3,17 @@
 import { useEffect, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { TaskMetaEditor } from "@/components/tasks/TaskMetaEditor";
+import { TaskOwnerSection } from "@/components/tasks/TaskOwnerSection";
 import { TaskNotesPanel } from "@/components/tasks/TaskNotesPanel";
 import { ChecklistSection } from "@/components/tasks/ChecklistSection";
 import { TaskComments } from "@/components/tasks/TaskComments";
 import { TaskDependencies } from "@/components/tasks/TaskDependencies";
 import { StatusSelector } from "@/components/ui/StatusSelector";
 import { useTaskDetail } from "@/hooks/useTaskDetail";
+import { handBackTask } from "@/lib/task-handoff";
 import type {
   CommitmentSummary,
+  TaskComment,
   TaskUpdatePayload,
   TaskWithImplementation,
 } from "@/types/database";
@@ -34,6 +37,7 @@ export function TaskDetailModal({
   onTaskDeleted,
 }: TaskDetailModalProps) {
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [handBackError, setHandBackError] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const {
     loading,
@@ -56,11 +60,31 @@ export function TaskDetailModal({
 
   useEffect(() => {
     setDeleteError(null);
+    setHandBackError(null);
     setIsDeleting(false);
   }, [task?.id]);
 
   async function handleUpdate(_taskId: string, updates: TaskUpdatePayload) {
     await updateTask(updates);
+  }
+
+  async function handleHandBack(note: string): Promise<boolean> {
+    if (!task) return false;
+    setHandBackError(null);
+    const result = await handBackTask<TaskWithImplementation, TaskComment>(task.id, note);
+    if (!result.ok) {
+      setHandBackError(result.error);
+      return false;
+    }
+    if (result.comment) addComment(result.comment);
+    onTaskUpdated(task.id, result.task as unknown as TaskUpdatePayload);
+    if (result.commentError) {
+      // The task is off Brent's list; keep the modal open so the note problem is seen.
+      setHandBackError(result.commentError);
+    } else {
+      onClose();
+    }
+    return true;
   }
 
   function handleTaskReplace(updatedTask: TaskWithImplementation) {
@@ -128,7 +152,7 @@ export function TaskDetailModal({
               <Button
                 variant="primary"
                 size="sm"
-                onClick={() => void updateTask({ status: "Done" }).then(() => onClose()) }
+                onClick={() => void updateTask({ status: "Done" }).then((saved) => { if (saved) onClose(); })}
                 disabled={task.status === "Done" || isSaving || isDeleting}
               >
                 Mark Done
@@ -144,9 +168,19 @@ export function TaskDetailModal({
             </div>
           </div>
 
-          {(error || deleteError) && (
-            <p className="rounded bg-danger-soft px-3 py-2 text-xs text-danger">{error || deleteError}</p>
+          {(error || deleteError || handBackError) && (
+            <p role="alert" className="rounded bg-danger-soft px-3 py-2 text-xs text-danger">
+              {error || deleteError || handBackError}
+            </p>
           )}
+
+          <TaskOwnerSection
+            key={`${task.id}:${task.updated_at}`}
+            task={task}
+            disabled={isSaving || isDeleting}
+            onSave={updateTask}
+            onHandBack={handleHandBack}
+          />
 
           {/* Meta editor */}
           <TaskMetaEditor
