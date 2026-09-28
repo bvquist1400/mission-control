@@ -20,6 +20,7 @@ import {
   normalizeExternalSourceValue,
 } from '@/lib/task-external-source';
 import type { Task, TaskStatus, TaskType, BlockedReason } from '@/types/database';
+import { parseTaskOwnerFields } from '@/lib/task-owner';
 
 const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Missed', 'Done'];
 const VALID_TASK_TYPES: TaskType[] = ['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build'];
@@ -124,7 +125,13 @@ export async function PATCH(
       'external_source_id',
     ];
 
-    const updates: Record<string, unknown> = {};
+    // owner / owner_label / status_line are validated together (migration 056).
+    const ownerFields = parseTaskOwnerFields(body);
+    if (!ownerFields.ok) {
+      return NextResponse.json({ error: ownerFields.error }, { status: 400 });
+    }
+
+    const updates: Record<string, unknown> = { ...ownerFields.value };
     for (const field of allowedFields) {
       if (!(field in body)) {
         continue;

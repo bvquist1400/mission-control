@@ -821,6 +821,24 @@
           "description": "Pinned source excerpt",
           "type": "string"
         },
+        "owner": {
+          "description": "Who holds the task now. \"brent\" = Brent must act (it lands in his \"Assigned to you\" list); \"agent\" = an agent has it. New tasks default to \"agent\".",
+          "type": "string",
+          "enum": [
+            "brent",
+            "agent"
+          ]
+        },
+        "owner_label": {
+          "description": "Which agent holds it, e.g. \"PM\" or \"Codex\" (max 40 characters).",
+          "type": "string",
+          "maxLength": 40
+        },
+        "status_line": {
+          "description": "One plain-English sentence on where the task stands, for Brent (max 280 characters; newlines are collapsed).",
+          "type": "string",
+          "maxLength": 280
+        },
         "blocked_by_task_id": {
           "description": "Task UUID this new task should depend on",
           "type": "string"
@@ -1780,6 +1798,14 @@
         "tag": {
           "description": "Filter to tasks containing this lowercase tag",
           "type": "string"
+        },
+        "owner": {
+          "description": "Filter by owner: \"brent\" = tasks waiting on Brent to act, \"agent\" = tasks an agent holds",
+          "type": "string",
+          "enum": [
+            "brent",
+            "agent"
+          ]
         },
         "implementation_id": {
           "description": "Filter by application UUID",
@@ -3203,6 +3229,38 @@
         },
         "pinned": {
           "type": "boolean"
+        },
+        "owner": {
+          "description": "Who holds the task now. \"brent\" = Brent must act (it lands in his \"Assigned to you\" list); \"agent\" = an agent has it. New tasks default to \"agent\".",
+          "type": "string",
+          "enum": [
+            "brent",
+            "agent"
+          ]
+        },
+        "owner_label": {
+          "description": "Which agent holds it, e.g. \"PM\" or \"Codex\" (max 40 characters). Null clears it.",
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 40
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status_line": {
+          "description": "One plain-English sentence on where the task stands, for Brent (max 280 characters; newlines are collapsed). Null clears it.",
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 280
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "source_type": {
           "description": "Source label, e.g. Manual or Recurring",

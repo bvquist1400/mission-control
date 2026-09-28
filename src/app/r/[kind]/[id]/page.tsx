@@ -1,7 +1,16 @@
+import type { Metadata } from 'next';
+import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
+import { briefMono, briefSans } from '@/components/briefs/fonts';
+import { Markdown } from '@/components/markdown/Markdown';
 import { fetchMissionControlItemById, mapRouteKindToTypedId } from '@/lib/mcp/search';
 import { getCanonicalAppUrl } from '@/lib/mcp/config';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import '@/components/briefs/brief-page.css';
+import '@/components/markdown/markdown.css';
+import '@/components/portfolio/portfolio.css';
+
+export const metadata: Metadata = { title: 'Record · Baseline' };
 
 interface ReaderPageProps {
   params: Promise<{
@@ -10,16 +19,24 @@ interface ReaderPageProps {
   }>;
 }
 
-function prettyPrint(value: unknown): string {
-  if (value === null || value === undefined) {
-    return '';
-  }
+const KIND_LABELS: Record<string, string> = {
+  task: 'Task',
+  note: 'Note',
+  application: 'Application',
+  project: 'Project',
+  sprint: 'Sprint',
+  stakeholder: 'Stakeholder',
+  commitment: 'Commitment',
+  email: 'Email',
+};
 
-  if (typeof value === 'string') {
-    return value;
-  }
+function isPrimitive(value: unknown): value is string | number | boolean {
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
+}
 
-  return JSON.stringify(value, null, 2);
+function humanizeKey(key: string): string {
+  const spaced = key.replace(/_/g, ' ');
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
 export default async function ReaderPage({ params }: ReaderPageProps) {
@@ -54,27 +71,79 @@ export default async function ReaderPage({ params }: ReaderPageProps) {
     notFound();
   }
 
+  const metadataEntries = Object.entries(item.metadata ?? {}).filter(
+    ([key, value]) => key !== 'entity' && key !== 'status_line' && value !== null && value !== undefined && value !== ''
+  );
+  const simpleEntries = metadataEntries.filter(([, value]) => isPrimitive(value));
+  const complexEntries = metadataEntries.filter(
+    ([, value]) => !isPrimitive(value) && !(Array.isArray(value) && value.length === 0)
+  );
+  const status = typeof item.metadata?.status === 'string' ? item.metadata.status : null;
+  const owner = item.metadata?.owner === 'brent' || item.metadata?.owner === 'agent' ? item.metadata.owner : null;
+  const ownerLabel = typeof item.metadata?.owner_label === 'string' ? item.metadata.owner_label : null;
+  const statusLine = typeof item.metadata?.status_line === 'string' ? item.metadata.status_line : null;
+  // The text leads with "Where this stands: …" for MCP readers; the page shows it as a box instead.
+  const standPrefix = statusLine ? `Where this stands: ${statusLine}` : null;
+  const bodyText = standPrefix && item.text.startsWith(standPrefix)
+    ? item.text.slice(standPrefix.length).trim()
+    : item.text;
+
   return (
-    <main className="mx-auto max-w-3xl space-y-6 px-6 py-10">
-      <header className="space-y-2">
-        <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Mission Control Record</p>
-        <h1 className="text-3xl font-semibold text-foreground">{item.title}</h1>
-        <p className="font-mono text-xs text-muted-foreground">{item.id}</p>
-      </header>
+    <div className={`brief-page pf ${briefSans.variable} ${briefMono.variable}`}>
+      <div className="page pf-record">
+        <nav className="pf-top" aria-label="Baseline">
+          <Link href="/" className="pf-back">
+            <span aria-hidden="true">←</span> Baseline
+          </Link>
+          <Link href="/portfolio" className="pf-toplink">
+            Portfolio
+          </Link>
+        </nav>
 
-      <section className="rounded-card border border-stroke bg-panel p-6">
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.12em] text-muted-foreground">Content</h2>
-        <pre className="whitespace-pre-wrap break-words font-mono text-sm text-foreground">{prettyPrint(item.text)}</pre>
-      </section>
+        <header className="pf-record-head">
+          <div className="eyebrow">
+            <span className="code">{(KIND_LABELS[kind] ?? kind).toUpperCase()}</span>
+            {status ? <span>{status}</span> : null}
+            {owner ? <span>{owner === 'brent' ? 'Owner: You' : `Owner: ${ownerLabel ?? 'Agent'}`}</span> : null}
+          </div>
+          <h1>{item.title}</h1>
+          {statusLine ? (
+            <div className="pf-stand-box">
+              <span className="mono">WHERE THIS STANDS</span>
+              <span>{statusLine}</span>
+            </div>
+          ) : null}
+        </header>
 
-      {item.metadata ? (
-        <section className="rounded-card border border-stroke bg-panel p-6">
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.12em] text-muted-foreground">Metadata</h2>
-          <pre className="whitespace-pre-wrap break-words font-mono text-sm text-foreground">
-            {prettyPrint(item.metadata)}
-          </pre>
+        <section className="tile pf-record-body" aria-label="Content">
+          {bodyText ? <Markdown source={bodyText} /> : <p className="tile-p">No text on this record.</p>}
         </section>
-      ) : null}
-    </main>
+
+        {simpleEntries.length > 0 || complexEntries.length > 0 ? (
+          <details className="pf-details">
+            <summary>Details</summary>
+            {simpleEntries.length > 0 ? (
+              <dl className="pf-dl">
+                {simpleEntries.map(([key, value]) => (
+                  <div key={key}>
+                    <dt>{humanizeKey(key)}</dt>
+                    <dd>{String(value)}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : null}
+            {complexEntries.map(([key, value]) => (
+              <div key={key} className="pf-raw">
+                <span className="tile-k">{humanizeKey(key)}</span>
+                <pre>{JSON.stringify(value, null, 2)}</pre>
+              </div>
+            ))}
+            <p className="pf-id mono">{item.id}</p>
+          </details>
+        ) : (
+          <p className="pf-id mono">{item.id}</p>
+        )}
+      </div>
+    </div>
   );
 }

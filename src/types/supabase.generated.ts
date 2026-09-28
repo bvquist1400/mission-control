@@ -2180,6 +2180,8 @@ export type Database = {
           last_generated_at: string | null
           latest_instance_id: string | null
           needs_review: boolean
+          owner: string
+          owner_label: string | null
           pinned: boolean
           pinned_excerpt: string | null
           priority_score: number
@@ -2192,6 +2194,7 @@ export type Database = {
           sprint_id: string | null
           stakeholder_mentions: string[]
           status: Database["public"]["Enums"]["task_status"]
+          status_line: string | null
           tags: string[]
           task_type: Database["public"]["Enums"]["task_type"]
           title: string
@@ -2219,6 +2222,8 @@ export type Database = {
           last_generated_at?: string | null
           latest_instance_id?: string | null
           needs_review?: boolean
+          owner?: string
+          owner_label?: string | null
           pinned?: boolean
           pinned_excerpt?: string | null
           priority_score?: number
@@ -2231,6 +2236,7 @@ export type Database = {
           sprint_id?: string | null
           stakeholder_mentions?: string[]
           status?: Database["public"]["Enums"]["task_status"]
+          status_line?: string | null
           tags?: string[]
           task_type?: Database["public"]["Enums"]["task_type"]
           title: string
@@ -2258,6 +2264,8 @@ export type Database = {
           last_generated_at?: string | null
           latest_instance_id?: string | null
           needs_review?: boolean
+          owner?: string
+          owner_label?: string | null
           pinned?: boolean
           pinned_excerpt?: string | null
           priority_score?: number
@@ -2270,6 +2278,7 @@ export type Database = {
           sprint_id?: string | null
           stakeholder_mentions?: string[]
           status?: Database["public"]["Enums"]["task_status"]
+          status_line?: string | null
           tags?: string[]
           task_type?: Database["public"]["Enums"]["task_type"]
           title?: string

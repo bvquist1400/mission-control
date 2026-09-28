@@ -3,8 +3,12 @@
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
-/** Routes that render full-bleed, without the sidebar rail or the main panel. */
-const FULL_BLEED_PREFIXES = ["/briefs/"];
+/**
+ * Routes that render full-bleed, without the sidebar rail or the main panel:
+ * the v5 pages (brief pages, the Portfolio and record pages), which follow the
+ * OS light/dark setting and carry their own "← Baseline" link.
+ */
+const FULL_BLEED_PREFIXES = ["/briefs/", "/portfolio", "/r/"];
 
 export function AppShell({ sidebar, children }: { sidebar: ReactNode; children: ReactNode }) {
   const pathname = usePathname() ?? "";

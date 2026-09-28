@@ -131,6 +131,19 @@ function joinText(parts: Array<string | null | undefined>): string {
     .trim();
 }
 
+/**
+ * Like joinText, but keeps each part's own line breaks so Markdown (lists,
+ * tables, headings) survives into full-record fetches and the /r pages.
+ * Search snippets keep using joinText.
+ */
+function joinBlocks(parts: Array<string | null | undefined>): string {
+  return parts
+    .map((part) => (part || '').replace(/\r\n?/g, '\n').replace(/[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim())
+    .filter(Boolean)
+    .join('\n\n')
+    .trim();
+}
+
 function scoreText(query: string, fields: Array<string | null | undefined>, updatedAt?: string | null): number {
   const normalizedQuery = normalizeSearchText(query);
   if (!normalizedQuery) {
@@ -684,7 +697,7 @@ async function fetchTask(
 ): Promise<MissionControlSearchResult | null> {
   const { data } = await supabase
     .from('tasks')
-    .select('id, title, description, waiting_on, pinned_excerpt, status, due_at')
+    .select('id, title, description, waiting_on, pinned_excerpt, status, due_at, owner, owner_label, status_line')
     .eq('id', id)
     .eq('user_id', userId)
     .maybeSingle();
@@ -694,7 +707,8 @@ async function fetchTask(
   return {
     id: buildRecordId('task', data.id),
     title: data.title,
-    text: joinText([
+    text: joinBlocks([
+      data.status_line ? `Where this stands: ${data.status_line}` : null,
       data.description,
       data.waiting_on ? `Waiting on: ${data.waiting_on}` : null,
       data.pinned_excerpt ? `Pinned excerpt: ${data.pinned_excerpt}` : null,
@@ -704,6 +718,9 @@ async function fetchTask(
       entity: 'task',
       status: data.status,
       due_at: data.due_at,
+      owner: data.owner,
+      owner_label: data.owner_label,
+      status_line: data.status_line,
     },
   };
 }
@@ -720,7 +737,7 @@ async function fetchNote(
   return {
     id: buildRecordId('note', data.id),
     title: data.title,
-    text: joinText([
+    text: joinBlocks([
       data.body_markdown,
       data.decisions.length > 0
         ? `Decisions:\n${data.decisions.map((decision) => `${decision.title}: ${decision.summary}`).join('\n')}`
@@ -771,7 +788,7 @@ async function fetchApplication(
   return {
     id: buildRecordId('application', data.id),
     title: data.name,
-    text: joinText([
+    text: joinBlocks([
       data.status_summary,
       data.next_milestone ? `Next milestone: ${data.next_milestone}` : null,
       data.next_milestone_date ? `Target date: ${data.next_milestone_date}` : null,
@@ -803,7 +820,7 @@ async function fetchProject(
   return {
     id: buildRecordId('project', data.id),
     title: data.name,
-    text: joinText([
+    text: joinBlocks([
       data.description,
       data.status_summary,
       data.target_date ? `Target date: ${data.target_date}` : null,
@@ -835,7 +852,7 @@ async function fetchSprint(
   return {
     id: buildRecordId('sprint', data.id),
     title: data.name,
-    text: joinText([
+    text: joinBlocks([
       data.theme,
       `Sprint window: ${data.start_date} to ${data.end_date}`,
     ]),
@@ -866,7 +883,7 @@ async function fetchStakeholder(
   return {
     id: buildRecordId('stakeholder', data.id),
     title: data.name,
-    text: joinText([
+    text: joinBlocks([
       data.role ? `Role: ${data.role}` : null,
       data.organization ? `Organization: ${data.organization}` : null,
       data.email ? `Email: ${data.email}` : null,
@@ -896,7 +913,7 @@ async function fetchCommitment(
   return {
     id: buildRecordId('commitment', data.id),
     title: data.title,
-    text: joinText([
+    text: joinBlocks([
       data.notes,
       readNestedName(data.stakeholder) ? `Stakeholder: ${readNestedName(data.stakeholder)}` : null,
       data.direction ? `Direction: ${data.direction}` : null,
@@ -928,7 +945,7 @@ async function fetchEmail(
   return {
     id: `email:${data.id}`,
     title: data.subject,
-    text: joinText([
+    text: joinBlocks([
       data.from_name ? `From: ${data.from_name}` : null,
       data.from_email ? `Email: ${data.from_email}` : null,
       data.received_at ? `Received: ${data.received_at}` : null,
@@ -979,7 +996,7 @@ async function fetchCalendar(
   return {
     id: `calendar:${encodedId}`,
     title: event.title,
-    text: joinText([
+    text: joinBlocks([
       event.body_scrubbed_preview,
       context?.meeting_context ? `Meeting context: ${context.meeting_context}` : null,
     ]),

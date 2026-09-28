@@ -1,5 +1,8 @@
 export type TaskStatus = "Backlog" | "Planned" | "In Progress" | "Blocked/Waiting" | "Parked" | "Missed" | "Done";
 export type TaskType = "Task" | "Ticket" | "MeetingPrep" | "FollowUp" | "Admin" | "Build";
+/** Who holds a task: "brent" means Brent must act; "agent" means an agent has it (migration 056). */
+export type TaskOwner = "brent" | "agent";
+
 export type BlockedReason = "prerequisite" | "need_info" | "decision" | "approval" | "external" | "other";
 export type CommentSource = "manual" | "system" | "llm";
 export type CommitmentStatus = "Open" | "Done" | "Dropped";
@@ -100,6 +103,9 @@ export interface Task {
   inbox_item_id: string | null;
   pinned_excerpt: string | null;
   pinned: boolean;
+  owner: TaskOwner;
+  owner_label: string | null;
+  status_line: string | null;
   created_at: string;
   updated_at: string;
 }

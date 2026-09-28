@@ -30,6 +30,7 @@ import {
   normalizeExternalSourceValue,
 } from '@/lib/task-external-source';
 import type { TaskStatus, TaskType, EstimateSource, BlockedReason } from '@/types/database';
+import { normalizeTaskOwner, parseTaskOwnerFields, TASK_OWNERS } from '@/lib/task-owner';
 
 const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Missed', 'Done'];
 const VALID_TASK_TYPES: TaskType[] = ['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build'];
@@ -92,6 +93,14 @@ export async function GET(request: NextRequest) {
     const sectionId = searchParams.get('section_id');
     const externalSourceSystem = normalizeExternalSourceValue(searchParams.get('external_source_system'));
     const externalSourceId = normalizeExternalSourceValue(searchParams.get('external_source_id'));
+    const ownerParam = searchParams.get('owner');
+    const owner = ownerParam ? normalizeTaskOwner(ownerParam) : null;
+    if (ownerParam && !owner) {
+      return NextResponse.json(
+        { error: `Invalid owner. Must be one of: ${TASK_OWNERS.join(', ')}` },
+        { status: 400 }
+      );
+    }
     const includeDone = searchParams.get('include_done') === 'true';
     const includeParked = searchParams.get('include_parked') === 'true';
     const includeMissed = searchParams.get('include_missed') === 'true';
@@ -217,6 +226,10 @@ export async function GET(request: NextRequest) {
       query = query.contains('tags', [tag]);
     }
 
+    if (owner) {
+      query = query.eq('owner', owner);
+    }
+
     const projectId = searchParams.get('project_id');
     if (projectId) {
       query = query.eq('project_id', projectId);
@@ -317,6 +330,11 @@ export async function POST(request: NextRequest) {
 
     if (typeof body.pinned_excerpt === 'string' && body.pinned_excerpt.length > 2000) {
       return NextResponse.json({ error: 'pinned_excerpt must be 2000 characters or fewer' }, { status: 400 });
+    }
+
+    const ownerFields = parseTaskOwnerFields(body);
+    if (!ownerFields.ok) {
+      return NextResponse.json({ error: ownerFields.error }, { status: 400 });
     }
 
     // Validate status if provided
@@ -520,6 +538,7 @@ export async function POST(request: NextRequest) {
         external_source_system: externalSourceSystem,
         external_source_id: externalSourceId,
         pinned_excerpt: asStringOrNull(body.pinned_excerpt),
+        ...ownerFields.value,
       })
       .select(TASK_WITH_RELATIONS_SELECT)
       .single();

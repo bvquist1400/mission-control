@@ -63,6 +63,12 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Portfolio",
     items: [
       {
+        href: "/portfolio",
+        label: "Portfolio",
+        hint: "What needs you, % done and a timeline per app",
+        icon: <Icon><path d="M4 6h9M4 12h13M4 18h6" /><path d="M20 4v16" /></Icon>,
+      },
+      {
         href: "/applications",
         label: "Applications",
         hint: "Portfolio health and updates",

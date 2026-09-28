@@ -1,0 +1,112 @@
+/*
+ * Formatted Markdown on v5 pages (record pages). Scoped under .brief-page .md,
+ * so it only applies inside a v5 page and uses that page's tokens.
+ */
+
+.brief-page .md {
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--ink-2);
+  max-width: 72ch;
+  overflow-wrap: anywhere;
+}
+.brief-page .md > :first-child { margin-top: 0; }
+.brief-page .md > :last-child { margin-bottom: 0; }
+.brief-page .md p { margin: 0 0 12px; }
+.brief-page .md strong { color: var(--ink); font-weight: 600; }
+.brief-page .md a { color: var(--ink); text-decoration: underline; text-decoration-color: var(--hair-strong); }
+.brief-page .md a:hover { text-decoration-color: var(--accent); }
+.brief-page .md code {
+  font-family: var(--mono);
+  font-size: 0.88em;
+  background: var(--surface-2);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+.brief-page .md .md-h {
+  color: var(--ink);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.3;
+  margin: 22px 0 8px;
+}
+.brief-page .md .md-h1 { font-size: 21px; }
+.brief-page .md .md-h2 { font-size: 18px; }
+.brief-page .md .md-h3 { font-size: 16px; }
+.brief-page .md .md-h4,
+.brief-page .md .md-h5,
+.brief-page .md .md-h6 { font-size: 14.5px; }
+.brief-page .md ul,
+.brief-page .md ol {
+  margin: 0 0 12px;
+  padding-left: 22px;
+  display: grid;
+  gap: 5px;
+}
+/* The app's Tailwind reset strips list markers; put them back here. */
+.brief-page .md ul { list-style: disc; }
+.brief-page .md ol { list-style: decimal; }
+.brief-page .md li ul { list-style: circle; }
+.brief-page .md li > ul,
+.brief-page .md li > ol { margin: 5px 0 0; }
+.brief-page .md li::marker { color: var(--muted); }
+.brief-page .md li > p { margin: 6px 0 0; }
+.brief-page .md ul.md-tasks,
+.brief-page .md ol.md-tasks { padding-left: 2px; }
+.brief-page .md li.md-task {
+  list-style: none;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.brief-page .md .md-task-body { min-width: 0; flex: 1; }
+.brief-page .md .md-box {
+  flex: 0 0 17px;
+  height: 17px;
+  margin-top: 3px;
+  border-radius: 5px;
+  border: 1.5px solid var(--hair-strong);
+  display: grid;
+  place-items: center;
+  font-size: 10.5px;
+  line-height: 1;
+  color: var(--surface);
+}
+.brief-page .md li.md-task.done .md-box { background: var(--ok); border-color: var(--ok); }
+.brief-page .md li.md-task.done .md-li-text { color: var(--muted); }
+.brief-page .md blockquote {
+  margin: 0 0 12px;
+  padding: 2px 0 2px 14px;
+  border-left: 3px solid var(--hair-strong);
+  color: var(--muted);
+}
+.brief-page .md hr { border: 0; border-top: 1px solid var(--hair); margin: 18px 0; }
+.brief-page .md .md-pre {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border-radius: 12px;
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.brief-page .md .md-pre code { background: none; padding: 0; font-size: inherit; }
+.brief-page .md .md-table {
+  margin: 0 0 14px;
+  overflow-x: auto;
+  border: 1px solid var(--hair);
+  border-radius: 12px;
+  max-width: 100%;
+}
+.brief-page .md table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+.brief-page .md th,
+.brief-page .md td {
+  text-align: left;
+  vertical-align: top;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--hair);
+  overflow-wrap: normal;
+  min-width: 8ch;
+}
+.brief-page .md th { color: var(--ink); font-weight: 600; background: var(--surface-2); }
+.brief-page .md tr:last-child td { border-bottom: 0; }

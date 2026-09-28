@@ -52,7 +52,7 @@ External task identities are stored as the nullable pair `external_source_system
 
 - RLS: 4-policy pattern (SELECT, INSERT, UPDATE, DELETE) on every table
 - `updated_at` triggers: reuse `set_updated_at()` function
-- Migrations: `supabase/migrations/` (latest: 055)
+- Migrations: `supabase/migrations/` (latest: 056)
 - New tables get explicit `GRANT ... TO authenticated, service_role` (see 055): newer Supabase stacks, including a fresh `supabase start`, no longer auto-grant public tables to the API roles
 
 ### Schema Types
@@ -138,6 +138,14 @@ Controls with behaviour (Button, Input) are components; pure-styling primitives 
 - The app shell shows today's (ET) brief as a button (`BriefReadyButton`, desktop rail + phone/tablet top chrome): the brief created last today (the AM brief until the EOD saves), lit with open items, a quiet "· done" once everything is decided, nothing without a brief. The layout renders it; it re-reads `/api/briefs/today` on navigation.
 - Tests: `npm run test:briefs` and `test:briefs-am` (pure), `test:briefs-db`, `test:briefs-review-db`, `test:briefs-r2-db` and `test:briefs-am-db` (need a local Supabase stack; refuse non-local URLs).
 
+### Task owner and the Portfolio page
+
+- Every task has an `owner` (migration 056): `'brent'` means Brent must act, `'agent'` (the default) means an agent holds it; `owner_label` names the agent ("PM", "Codex"); `status_line` is one plain sentence on where it stands. `parseTaskOwnerFields()` (`src/lib/task-owner.ts`) validates all three for POST/PATCH `/api/tasks` and mirrors the DB checks (owner label ≤ 40, status line ≤ 280, whitespace collapsed, empty clears). MCP `create_task` / `update_task` take them; `list_tasks` filters by `owner`. A bulk insert where only some rows set `owner` sends NULL for the rest (PostgREST), so set it on every row or on none.
+- `/portfolio` (`src/app/portfolio/page.tsx`) is built in code by `buildPortfolio()` (`src/lib/portfolio.ts`, pure, tested) from `loadPortfolioInput()` (`src/lib/portfolio-queries.ts`, paged task reads): one row per application with % done (Done ÷ all tasks, recurring templates excluded), the newest open `status_line` (else the app's summary), next, and owner counts; a `<details>` timeline of project sections from task created/due dates in ET (dashed when no due date, 12 weeks ahead at most). Scope `?scope=personal|work|all`, default personal.
+- `/portfolio` and `/r/*` render full-bleed like `/briefs/*` and reuse the brief-page v5 styles (wrapper `brief-page pf`); new classes are prefixed `pf-` because generic brief-page classes (`.prog`, `.open`, …) would otherwise apply.
+- Record pages (`/r/[kind]/[id]`) render Markdown with `<Markdown>` (`src/components/markdown/`, parser `src/lib/markdown.ts`): no raw HTML, links limited to http(s)/mailto/same-site. Full-record fetches keep line breaks (`joinBlocks` in `src/lib/mcp/search.ts`); search snippets still collapse them.
+- Tests: `npm run test:portfolio` (pure) and `test:task-owner-db` (local Supabase stack; drives the MCP tools through the real API handlers).
+
 ## Key Files
 
 | Purpose | Path |
@@ -174,6 +182,8 @@ Controls with behaviour (Button, Input) are components; pure-styling primitives 
 | Upstream API router | `src/app/api/mcp-upstream/[...path]/route.ts` |
 | Brief pages service (save / get / act) | `src/lib/briefs/service.ts` |
 | Brief page (`/briefs/[code]`) | `src/app/briefs/[code]/page.tsx`, `src/components/briefs/` |
+| Portfolio page + model | `src/app/portfolio/page.tsx`, `src/components/portfolio/`, `src/lib/portfolio.ts` |
+| Task owner fields | `src/lib/task-owner.ts`, `supabase/migrations/056_add_task_owner.sql` |
 | EOD routine prompt | `docs/routines/eod.md` |
 
 ## Briefing Model Note

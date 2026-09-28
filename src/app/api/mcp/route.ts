@@ -6,6 +6,7 @@ import { getCanonicalAppUrl, getUpstreamApiUrl, isMcpDeployment } from '@/lib/mc
 import { fetchMissionControlItemById, searchMissionControlData } from '@/lib/mcp/search';
 import { PROJECT_STAGE_VALUES } from '@/lib/project-stage';
 import { secureCompare } from '@/lib/secure-compare';
+import { OWNER_LABEL_MAX_LENGTH, STATUS_LINE_MAX_LENGTH, TASK_OWNERS } from '@/lib/task-owner';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
 import { z } from 'zod';
 
@@ -13,6 +14,13 @@ const ET_TIMEZONE = 'America/New_York';
 const LEGACY_APP_ORIGIN = 'https://mission-control-orpin-chi.vercel.app';
 const TASK_RECURRENCE_FREQUENCIES = ['daily', 'weekday', 'weekly', 'biweekly', 'monthly'] as const;
 const EXTERNAL_SOURCE_ID_INPUT_SCHEMA = z.union([z.string(), z.number()]).transform((value) => String(value));
+const TASK_OWNER_INPUT_SCHEMA = z.enum(TASK_OWNERS as unknown as ['brent', 'agent']);
+const TASK_OWNER_DESCRIPTION =
+  'Who holds the task now. "brent" = Brent must act (it lands in his "Assigned to you" list); "agent" = an agent has it. New tasks default to "agent".';
+const TASK_OWNER_LABEL_DESCRIPTION =
+  `Which agent holds it, e.g. "PM" or "Codex" (max ${OWNER_LABEL_MAX_LENGTH} characters).`;
+const TASK_STATUS_LINE_DESCRIPTION =
+  `One plain-English sentence on where the task stands, for Brent (max ${STATUS_LINE_MAX_LENGTH} characters; newlines are collapsed).`;
 const NOTE_TYPE_VALUES = [
   'working_note',
   'meeting_note',
@@ -520,6 +528,7 @@ function createMcpServer(): McpServer {
       status: z.enum(['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Missed', 'Done']).optional().describe('Filter by status'),
       needs_review: z.boolean().optional().describe('Only tasks flagged for review'),
       tag: z.string().optional().describe('Filter to tasks containing this lowercase tag'),
+      owner: TASK_OWNER_INPUT_SCHEMA.optional().describe('Filter by owner: "brent" = tasks waiting on Brent to act, "agent" = tasks an agent holds'),
       implementation_id: z.string().optional().describe('Filter by application UUID'),
       project_id: z.string().optional().describe('Filter by project UUID'),
       section_id: z.string().optional().describe('Filter by project section UUID'),
@@ -538,6 +547,7 @@ function createMcpServer(): McpServer {
       if (args.status) url.searchParams.set('status', args.status);
       if (args.needs_review) url.searchParams.set('needs_review', 'true');
       if (args.tag) url.searchParams.set('tag', args.tag);
+      if (args.owner) url.searchParams.set('owner', args.owner);
       if (args.implementation_id) url.searchParams.set('implementation_id', args.implementation_id);
       if (args.project_id) url.searchParams.set('project_id', args.project_id);
       if (args.section_id) url.searchParams.set('section_id', args.section_id);
@@ -674,6 +684,9 @@ function createMcpServer(): McpServer {
       external_source_system: z.string().optional().describe('External source namespace, e.g. taskadvisor'),
       external_source_id: EXTERNAL_SOURCE_ID_INPUT_SCHEMA.nullable().optional().describe('Identifier within the external source system'),
       pinned_excerpt: z.string().optional().describe('Pinned source excerpt'),
+      owner: TASK_OWNER_INPUT_SCHEMA.optional().describe(TASK_OWNER_DESCRIPTION),
+      owner_label: z.string().max(OWNER_LABEL_MAX_LENGTH).optional().describe(TASK_OWNER_LABEL_DESCRIPTION),
+      status_line: z.string().max(STATUS_LINE_MAX_LENGTH).optional().describe(TASK_STATUS_LINE_DESCRIPTION),
       blocked_by_task_id: z.string().optional().describe('Task UUID this new task should depend on'),
       initial_comment: z.string().optional().describe('Creates first comment on the task'),
       initial_checklist: z.array(z.string()).optional().describe('Creates checklist items'),
@@ -720,6 +733,9 @@ function createMcpServer(): McpServer {
       priority_score: z.number().min(0).max(100).optional().describe('New base priority 0-100; urgency/stakeholder/due-date boosts are applied on top'),
       pinned_excerpt: z.string().nullable().optional(),
       pinned: z.boolean().optional(),
+      owner: TASK_OWNER_INPUT_SCHEMA.optional().describe(TASK_OWNER_DESCRIPTION),
+      owner_label: z.string().max(OWNER_LABEL_MAX_LENGTH).nullable().optional().describe(`${TASK_OWNER_LABEL_DESCRIPTION} Null clears it.`),
+      status_line: z.string().max(STATUS_LINE_MAX_LENGTH).nullable().optional().describe(`${TASK_STATUS_LINE_DESCRIPTION} Null clears it.`),
       source_type: z.string().optional().describe('Source label, e.g. Manual or Recurring'),
       source_url: z.string().nullable().optional().describe('Source URL for traceability, or null to clear'),
       external_source_system: z.string().nullable().optional().describe('External source namespace, or null to clear'),
