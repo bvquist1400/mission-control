@@ -314,6 +314,8 @@ export function parseMarkdown(source: string | null | undefined): MdBlock[] {
 /** Only these reach an href; anything else (javascript:, data:, …) stays text. */
 export function safeHref(raw: string): string | null {
   const href = raw.trim();
+  // Browsers drop tabs and newlines before resolving, so "/\t/host" would become "//host".
+  if (/[\u0000- \u007f]/.test(href)) return null;
   if (/^(https?:|mailto:)/i.test(href)) return href;
   // "//host" and "/\host" are protocol-relative in browsers ("\" is read as "/").
   if (href.startsWith("/") && href[1] !== "/" && href[1] !== "\\") return href;
