@@ -1,5 +1,6 @@
 import { addDateOnlyDays, getDateOnlyInTimeZone, toUtcDateMs } from "@/lib/date-only";
 import { matchesTaskScope, type TaskScope } from "@/lib/personal-exclusion";
+import { isDecisionTask } from "@/lib/task-handoff";
 import type { TaskOwner, TaskStatus } from "@/types/database";
 
 /**
@@ -30,6 +31,10 @@ export interface PortfolioTaskRow {
   is_recurring_template: boolean;
   tags: string[] | null;
   project: { tags: string[] | null } | null;
+  /** Who or what it waits on (free text), shown in "Coming to you later". */
+  waiting_on?: string | null;
+  blocked_reason?: string | null;
+  follow_up_at?: string | null;
 }
 
 export interface PortfolioImplementationRow {
@@ -56,6 +61,9 @@ export interface PortfolioSectionRow {
   project_id: string;
   name: string;
   sort_order: number;
+  /** Planned dates (migration 057, YYYY-MM-DD). Timeline only: never due dates or overdue. */
+  planned_start?: string | null;
+  planned_end?: string | null;
 }
 
 export interface PortfolioInput {
@@ -63,6 +71,11 @@ export interface PortfolioInput {
   implementations: PortfolioImplementationRow[];
   projects: PortfolioProjectRow[];
   sections: PortfolioSectionRow[];
+  /**
+   * Unfinished dependencies per task id (the titles of what it waits on). Only
+   * Brent's open tasks need it: a task still waiting on another isn't his to act on yet.
+   */
+  blockers?: Record<string, string[]>;
 }
 
 export interface TaskCounts {
@@ -71,7 +84,10 @@ export interface TaskCounts {
   /** Rounded percent done, or null when there are no tasks. Never 100 unless all done, never 0 once any are. */
   pct: number | null;
   open: number;
+  /** Brent's open tasks he can act on now (not Blocked/Waiting, no unfinished dependency). */
   brentOpen: number;
+  /** Brent's open tasks that are blocked: they come to him later. */
+  brentLater: number;
   agentOpen: number;
 }
 
@@ -87,8 +103,10 @@ export interface TimelineLane {
   state: LaneState;
   start: string;
   end: string;
-  /** No task in the lane has a due date, so the end is a placeholder. Drawn dashed. */
+  /** No planned end and no task due date, so the end is a placeholder. Drawn dashed. */
   estimated: boolean;
+  /** The section has planned dates (migration 057): drawn solid from them. */
+  planned: boolean;
   overdue: boolean;
   /** The bar runs past the chart's right edge (drawn with an arrow). */
   continues: boolean;
@@ -112,6 +130,24 @@ export interface AssignedTask {
   status: TaskStatus;
   due: string | null;
   overdue: boolean;
+  /** A decision task: handing it back with no answer gets a warning. */
+  decision: boolean;
+}
+
+/** A task that will be Brent's, but is blocked for now ("Coming to you later"). */
+export interface LaterTask {
+  id: string;
+  title: string;
+  app: string | null;
+  statusLine: string | null;
+  status: TaskStatus;
+  /** waiting_on text, if any. */
+  waitingOn: string | null;
+  /** Unfinished dependencies' titles. */
+  blockedBy: string[];
+  /** When an agent looks again (ET date), if set. */
+  followUp: string | null;
+  due: string | null;
 }
 
 export interface PortfolioApp {
@@ -129,11 +165,14 @@ export interface PortfolioView {
   scope: TaskScope;
   today: string;
   overall: TaskCounts;
+  /** Brent's actionable open tasks: the hero count. */
   brentOpen: number;
+  brentLater: number;
   agentOpen: number;
   agentInProgress: number;
   agentLabels: string[];
   assigned: AssignedTask[];
+  comingLater: LaterTask[];
   apps: PortfolioApp[];
 }
 
@@ -154,21 +193,36 @@ export function percentDone(done: number, total: number): number | null {
   return pct;
 }
 
-export function countTasks(tasks: PortfolioTaskRow[]): TaskCounts {
+/**
+ * Brent's open task is blocked when it's Blocked/Waiting or still waits on an
+ * unfinished dependency. It isn't his to act on yet ("do not assign to me
+ * until something is actionable", 9/28), so it leaves "Assigned to you".
+ */
+export function isBlockedForBrent(
+  task: Pick<PortfolioTaskRow, "id" | "status">,
+  blockers: PortfolioInput["blockers"] = {}
+): boolean {
+  return task.status === "Blocked/Waiting" || (blockers[task.id]?.length ?? 0) > 0;
+}
+
+export function countTasks(tasks: PortfolioTaskRow[], blockers: PortfolioInput["blockers"] = {}): TaskCounts {
   let done = 0;
   let open = 0;
   let brentOpen = 0;
+  let brentLater = 0;
   let agentOpen = 0;
   for (const task of tasks) {
     if (task.status === "Done") done += 1;
     if (isOpenTask(task)) {
       open += 1;
-      if (task.owner === "brent") brentOpen += 1;
-      else agentOpen += 1;
+      if (task.owner !== "brent") agentOpen += 1;
+      else if (isBlockedForBrent(task, blockers)) brentLater += 1;
+      else brentOpen += 1;
     }
   }
-  return { done, total: tasks.length, pct: percentDone(done, tasks.length), open, brentOpen, agentOpen };
+  return { done, total: tasks.length, pct: percentDone(done, tasks.length), open, brentOpen, brentLater, agentOpen };
 }
+
 
 export function toEtDate(timestamp: string | null | undefined, timeZone = PORTFOLIO_TIME_ZONE): string | null {
   if (!timestamp) return null;
@@ -208,6 +262,7 @@ const WINDOW_AHEAD_MIN_DAYS = 28;
 const WINDOW_AHEAD_MAX_DAYS = 84;
 
 function laneState(tasks: PortfolioTaskRow[]): LaneState {
+  if (tasks.length === 0) return "plan";
   const open = tasks.filter(isOpenTask);
   if (open.length === 0) return "done";
   if (open.some((task) => task.status === "In Progress")) return "prog";
@@ -216,18 +271,26 @@ function laneState(tasks: PortfolioTaskRow[]): LaneState {
   return "plan";
 }
 
+function validPlannedDate(value: string | null | undefined): string | null {
+  return value && toUtcDateMs(value) !== null ? value : null;
+}
+
 function buildLane(
   key: string,
   label: string,
   project: string | null,
   tasks: PortfolioTaskRow[],
-  today: string
+  today: string,
+  plan: { start: string | null; end: string | null } = { start: null, end: null }
 ): TimelineLane {
   const created = tasks.map((task) => toEtDate(task.created_at)).filter((d): d is string => Boolean(d));
   const dues = tasks.map((task) => toEtDate(task.due_at)).filter((d): d is string => Boolean(d));
   const state = laneState(tasks);
   const open = tasks.filter(isOpenTask);
   const done = tasks.filter((task) => task.status === "Done").length;
+  // Overdue comes from task due dates only; a planned end in the past never turns a lane red.
+  const latestDue = dues.length ? dues.reduce(maxDate) : null;
+  const overdue = state !== "done" && tasks.length > 0 && latestDue !== null && latestDue < today;
 
   let start = created.length ? created.reduce(minDate) : today;
   let end: string;
@@ -246,9 +309,24 @@ function buildLane(
     end = addDays(maxDate(today, start), ESTIMATE_DAYS_PAST_TODAY);
   }
   if (dues.length) start = minDate(start, dues.reduce(minDate));
+
+  // Planned dates (057) replace the estimate for the bar's ends; they never move a due date.
+  const planned = Boolean(plan.start || plan.end);
+  if (plan.start) start = plan.start;
+  if (plan.end) {
+    end = plan.end;
+    estimated = false;
+  } else if (plan.start && estimated) {
+    end = addDays(maxDate(today, plan.start), ESTIMATE_DAYS_PAST_TODAY);
+  }
   if (end < start) end = start;
 
-  const sub = state === "done" ? "Done" : `${done} of ${tasks.length} done${estimated ? " · no due date" : ""}`;
+  const sub =
+    tasks.length === 0
+      ? "Planned · no tasks yet"
+      : state === "done"
+        ? "Done"
+        : `${done} of ${tasks.length} done${estimated ? (planned ? " · no planned end" : " · no due date") : ""}`;
 
   return {
     key,
@@ -260,7 +338,8 @@ function buildLane(
     start,
     end,
     estimated,
-    overdue: state !== "done" && !estimated && end < today,
+    planned,
+    overdue,
     continues: false,
   };
 }
@@ -306,6 +385,21 @@ export function buildTimeline(
     groups.set(key, group);
   }
 
+  // A section with planned dates is on the timeline even before it has tasks.
+  for (const section of sections) {
+    const project = projectById.get(section.project_id);
+    if (!project || project.stage === "Cancelled") continue;
+    if (!validPlannedDate(section.planned_start) && !validPlannedDate(section.planned_end)) continue;
+    const key = `s:${section.id}`;
+    if (groups.has(key)) continue;
+    groups.set(key, {
+      label: section.name,
+      projectId: project.id,
+      order: [project.portfolio_rank, section.sort_order, section.name],
+      tasks: [],
+    });
+  }
+
   const projectIds = new Set([...groups.values()].map((group) => group.projectId).filter(Boolean));
   const showProject = projectIds.size > 1;
   const sectionedProjects = new Set(
@@ -319,12 +413,17 @@ export function buildTimeline(
       const isProjectLane = key.startsWith("p:");
       // A project's unsectioned tasks sit beside its sections as "Other tasks".
       const leftovers = isProjectLane && sectionedProjects.has(group.projectId);
+      const section = key.startsWith("s:") ? sectionById.get(key.slice(2)) : undefined;
+      let plan = { start: validPlannedDate(section?.planned_start), end: validPlannedDate(section?.planned_end) };
+      // A bad pair (the database forbids it) falls back to the estimate rather than drawing backwards.
+      if (plan.start && plan.end && plan.end < plan.start) plan = { start: null, end: null };
       return buildLane(
         key,
         leftovers ? "Other tasks" : group.label,
         showProject && (!isProjectLane || leftovers) ? projectName : null,
         group.tasks,
-        today
+        today,
+        plan
       );
     });
 
@@ -392,6 +491,9 @@ export function buildPortfolio(
     (task) => !task.is_recurring_template && matchesTaskScope(task, options.scope)
   );
   const implementationById = new Map(input.implementations.map((impl) => [impl.id, impl]));
+  const blockers = input.blockers ?? {};
+  const appName = (task: PortfolioTaskRow) =>
+    task.implementation_id ? implementationById.get(task.implementation_id)?.name ?? null : null;
 
   const byApp = new Map<string, PortfolioTaskRow[]>();
   for (const task of tasks) {
@@ -422,7 +524,7 @@ export function buildPortfolio(
         id,
         name: impl.name,
         phase: impl.phase,
-        counts: countTasks(appTasks),
+        counts: countTasks(appTasks, blockers),
         stand,
         next,
         agentLabels: distinctLabels(appTasks),
@@ -439,20 +541,22 @@ export function buildPortfolio(
     .map(({ app }) => app);
 
   const appTasks = [...byApp.values()].flat();
-  const overall = countTasks(appTasks);
+  const overall = countTasks(appTasks, blockers);
   const openTasks = tasks.filter(isOpenTask);
-  const assigned = openTasks
-    .filter((task) => task.owner === "brent")
+  const brentTasks = openTasks.filter((task) => task.owner === "brent");
+  const assigned = brentTasks
+    .filter((task) => !isBlockedForBrent(task, blockers))
     .map((task) => {
       const due = toEtDate(task.due_at);
       const item: AssignedTask = {
         id: task.id,
         title: task.title,
-        app: task.implementation_id ? implementationById.get(task.implementation_id)?.name ?? null : null,
+        app: appName(task),
         statusLine: task.status_line,
         status: task.status,
         due,
         overdue: Boolean(due && due < today),
+        decision: isDecisionTask(task),
       };
       return { item, priority: task.priority_score };
     })
@@ -464,16 +568,43 @@ export function buildPortfolio(
     })
     .map(({ item }) => item);
 
+  // Blocked for now: the soonest follow-up (or due date) first, then the newest change.
+  const comingLater = brentTasks
+    .filter((task) => isBlockedForBrent(task, blockers))
+    .map((task) => {
+      const item: LaterTask = {
+        id: task.id,
+        title: task.title,
+        app: appName(task),
+        statusLine: task.status_line,
+        status: task.status,
+        waitingOn: task.waiting_on?.trim() || null,
+        blockedBy: blockers[task.id] ?? [],
+        followUp: toEtDate(task.follow_up_at),
+        due: toEtDate(task.due_at),
+      };
+      return { item, when: item.followUp ?? item.due, updated: task.updated_at };
+    })
+    .sort((a, b) => {
+      if (a.when && b.when) return a.when.localeCompare(b.when) || b.updated.localeCompare(a.updated);
+      if (a.when) return -1;
+      if (b.when) return 1;
+      return b.updated.localeCompare(a.updated);
+    })
+    .map(({ item }) => item);
+
   const agentOpenTasks = openTasks.filter((task) => task.owner === "agent");
   return {
     scope: options.scope,
     today,
     overall,
     brentOpen: assigned.length,
+    brentLater: comingLater.length,
     agentOpen: agentOpenTasks.length,
     agentInProgress: agentOpenTasks.filter((task) => task.status === "In Progress").length,
     agentLabels: distinctLabels(openTasks),
     assigned,
+    comingLater,
     apps,
   };
 }

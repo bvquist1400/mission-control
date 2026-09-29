@@ -1508,6 +1508,8 @@ export type Database = {
           created_at: string
           id: string
           name: string
+          planned_end: string | null
+          planned_start: string | null
           project_id: string
           sort_order: number
           updated_at: string
@@ -1517,6 +1519,8 @@ export type Database = {
           created_at?: string
           id?: string
           name: string
+          planned_end?: string | null
+          planned_start?: string | null
           project_id: string
           sort_order?: number
           updated_at?: string
@@ -1526,6 +1530,8 @@ export type Database = {
           created_at?: string
           id?: string
           name?: string
+          planned_end?: string | null
+          planned_start?: string | null
           project_id?: string
           sort_order?: number
           updated_at?: string

@@ -17,6 +17,24 @@ export const HAND_BACK_COMMENT_PREFIX = "Brent (handed back):";
 /** The note lands in a task comment (5,000 max, with the prefix). */
 export const HAND_BACK_NOTE_MAX_LENGTH = 2000;
 export const AGENT_LABEL_SUGGESTIONS = ["PM", "Builder", "Codex", "Fable"] as const;
+/** The hand-back box's label: Brent's answer goes here, not in "Where it stands" (9/28). */
+export const HAND_BACK_NOTE_LABEL = "Your answer or decision (the agent reads this)";
+export const HAND_BACK_EMPTY_DECISION_WARNING =
+  "This task asks for a decision, and your answer box is empty. The agent won't know what you decided.";
+
+/** A decision for Brent: tagged `decision`, or titled "Decide: …" / "Decision …". */
+export function isDecisionTask(task: { title: string; tags?: string[] | null }): boolean {
+  if ((task.tags ?? []).some((tag) => tag.trim().toLowerCase() === "decision")) return true;
+  return /^\s*(decide\s*:|decision\b)/i.test(task.title);
+}
+
+/**
+ * Whether sending a hand-back should stop for a warning first: a decision task
+ * (isDecisionTask) handed back with nothing in the box.
+ */
+export function handBackNeedsAnswerWarning(isDecision: boolean, note: string | null | undefined): boolean {
+  return isDecision && toOneLine(note).length === 0;
+}
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 

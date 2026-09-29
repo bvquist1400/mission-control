@@ -1,8 +1,35 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { PortfolioInput, PortfolioTaskRow } from "@/lib/portfolio";
+import { isOpenTask, type PortfolioInput, type PortfolioTaskRow } from "@/lib/portfolio";
+import { fetchTaskDependencySummaries } from "@/lib/task-dependencies";
 
 const TASK_COLUMNS =
-  "id, title, status, owner, owner_label, status_line, due_at, created_at, updated_at, priority_score, implementation_id, project_id, section_id, is_recurring_template, tags, project:projects(tags)";
+  "id, title, status, owner, owner_label, status_line, due_at, created_at, updated_at, priority_score, implementation_id, project_id, section_id, is_recurring_template, tags, waiting_on, blocked_reason, follow_up_at, project:projects(tags)";
+
+/** Keeps each dependency lookup's id list (a URL filter) short. */
+const DEPENDENCY_CHUNK = 100;
+
+/**
+ * Unfinished dependencies for Brent's open tasks: a task that still waits on
+ * another isn't his to act on yet. Agents' tasks don't need the lookup.
+ */
+async function loadBrentBlockers(
+  supabase: SupabaseClient,
+  userId: string,
+  tasks: PortfolioTaskRow[]
+): Promise<Record<string, string[]>> {
+  const ids = tasks
+    .filter((task) => task.owner === "brent" && isOpenTask(task) && !task.is_recurring_template)
+    .map((task) => task.id);
+  const blockers: Record<string, string[]> = {};
+  for (let from = 0; from < ids.length; from += DEPENDENCY_CHUNK) {
+    const summaries = await fetchTaskDependencySummaries(supabase, userId, ids.slice(from, from + DEPENDENCY_CHUNK));
+    for (const [taskId, list] of summaries) {
+      const titles = list.filter((dependency) => dependency.unresolved).map((dependency) => dependency.title);
+      if (titles.length > 0) blockers[taskId] = titles;
+    }
+  }
+  return blockers;
+}
 
 /** PostgREST caps a response (1,000 rows by default), so read tasks in pages. */
 const PAGE_SIZE = 1000;
@@ -31,7 +58,7 @@ export async function loadPortfolioInput(supabase: SupabaseClient, userId: strin
     if (rows.length < PAGE_SIZE) break;
   }
 
-  const [implementations, projects, sections] = await Promise.all([
+  const [implementations, projects, sections, blockers] = await Promise.all([
     supabase
       .from("implementations")
       .select("id, name, phase, rag, status_summary, next_milestone, next_milestone_date, portfolio_rank")
@@ -42,8 +69,9 @@ export async function loadPortfolioInput(supabase: SupabaseClient, userId: strin
       .eq("user_id", userId),
     supabase
       .from("project_sections")
-      .select("id, project_id, name, sort_order")
+      .select("id, project_id, name, sort_order, planned_start, planned_end")
       .eq("user_id", userId),
+    loadBrentBlockers(supabase, userId, tasks),
   ]);
   if (implementations.error) throw implementations.error;
   if (projects.error) throw projects.error;
@@ -54,5 +82,6 @@ export async function loadPortfolioInput(supabase: SupabaseClient, userId: strin
     implementations: implementations.data ?? [],
     projects: projects.data ?? [],
     sections: sections.data ?? [],
+    blockers,
   };
 }

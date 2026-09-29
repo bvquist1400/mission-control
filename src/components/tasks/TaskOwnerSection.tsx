@@ -5,8 +5,12 @@ import { Button } from "@/components/ui/Button";
 import { Input, Textarea } from "@/components/ui/Field";
 import {
   AGENT_LABEL_SUGGESTIONS,
+  HAND_BACK_EMPTY_DECISION_WARNING,
+  HAND_BACK_NOTE_LABEL,
   HAND_BACK_NOTE_MAX_LENGTH,
   buildOwnerUpdate,
+  handBackNeedsAnswerWarning,
+  isDecisionTask,
   toOneLine,
 } from "@/lib/task-handoff";
 import { OWNER_LABEL_MAX_LENGTH, STATUS_LINE_MAX_LENGTH } from "@/lib/task-owner";
@@ -25,16 +29,22 @@ interface TaskOwnerSectionProps {
  * "Who has it" for a task: Brent or an agent, which agent, and one line on
  * where it stands, plus the hand-back button that takes it off Brent's list.
  * Drafts start from the saved task; the caller keys this on the task's id and
- * updated_at, so a save (or another task) starts fresh drafts.
+ * updated_at, so a save (or another task) starts fresh drafts. When the task
+ * is Brent's, the hand-back box starts open: it's where his answer goes.
  */
 export function TaskOwnerSection({ task, disabled, onSave, onHandBack }: TaskOwnerSectionProps) {
   const labelListId = useId();
   const [owner, setOwner] = useState<TaskOwner>(task.owner);
   const [ownerLabel, setOwnerLabel] = useState(task.owner_label ?? "");
   const [statusLine, setStatusLine] = useState(task.status_line ?? "");
-  const [handingBack, setHandingBack] = useState(false);
+  const [handingBack, setHandingBack] = useState(task.owner === "brent");
+  /** Opened by a tap (focus the box), not by default (don't steal focus on open). */
+  const [openedByTap, setOpenedByTap] = useState(false);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+  /** A decision task with an empty answer: the first Send shows a warning, the second sends. */
+  const [warned, setWarned] = useState(false);
+  const decision = isDecisionTask(task);
 
   const update = buildOwnerUpdate(task, { owner, ownerLabel, statusLine });
   const lineLength = toOneLine(statusLine).length;
@@ -48,12 +58,17 @@ export function TaskOwnerSection({ task, disabled, onSave, onHandBack }: TaskOwn
   }
 
   async function confirmHandBack() {
+    if (handBackNeedsAnswerWarning(decision, note) && !warned) {
+      setWarned(true);
+      return;
+    }
     setBusy(true);
     const done = await onHandBack(note);
     setBusy(false);
     if (done) {
       setHandingBack(false);
       setNote("");
+      setWarned(false);
     }
   }
 
@@ -64,7 +79,15 @@ export function TaskOwnerSection({ task, disabled, onSave, onHandBack }: TaskOwn
           Who has it
         </h4>
         {task.owner === "brent" && !handingBack ? (
-          <Button variant="primary" size="sm" onClick={() => setHandingBack(true)} disabled={locked}>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => {
+              setHandingBack(true);
+              setOpenedByTap(true);
+            }}
+            disabled={locked}
+          >
             Hand back to agent
           </Button>
         ) : null}
@@ -73,26 +96,42 @@ export function TaskOwnerSection({ task, disabled, onSave, onHandBack }: TaskOwn
       {handingBack ? (
         <div className="mt-3 space-y-2">
           <label className="block space-y-1">
-            <span className="text-sm text-foreground">Anything the agent should know? (optional)</span>
+            <span className="text-sm font-medium text-foreground">{HAND_BACK_NOTE_LABEL}</span>
             <Textarea
               size="sm"
               rows={3}
               value={note}
               maxLength={HAND_BACK_NOTE_MAX_LENGTH}
-              onChange={(event) => setNote(event.target.value)}
+              onChange={(event) => {
+                setNote(event.target.value);
+                setWarned(false);
+              }}
               disabled={locked}
-              placeholder="e.g. Checked on my iPhone; Split View still fails."
-              autoFocus
+              placeholder={decision ? "e.g. Keep both boards." : "e.g. Checked on my iPhone; Split View still fails."}
+              autoFocus={openedByTap}
             />
           </label>
           <p className="text-xs text-muted-foreground">
-            It goes back to the PM. Your note is saved as a comment and becomes the task&apos;s &ldquo;where it stands&rdquo; line.
+            Hand back sends it to the PM. Your answer is saved as a comment and becomes the task&apos;s &ldquo;where it stands&rdquo; line.
           </p>
+          {warned ? (
+            <p role="alert" className="rounded border border-warning-border bg-warning-soft px-3 py-2 text-xs text-warning">
+              {HAND_BACK_EMPTY_DECISION_WARNING} Add your answer above, or send it anyway.
+            </p>
+          ) : null}
           <div className="flex flex-wrap gap-2">
             <Button variant="primary" size="sm" onClick={() => void confirmHandBack()} disabled={locked}>
-              {busy ? "Handing back…" : "Hand back"}
+              {busy ? "Handing back…" : warned ? "Send without an answer" : "Hand back"}
             </Button>
-            <Button variant="secondary" size="sm" onClick={() => setHandingBack(false)} disabled={busy}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                setHandingBack(false);
+                setWarned(false);
+              }}
+              disabled={busy}
+            >
               Cancel
             </Button>
           </div>

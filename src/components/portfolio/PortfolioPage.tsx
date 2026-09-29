@@ -9,7 +9,7 @@ import {
   type Timeline,
 } from "@/lib/portfolio";
 import type { TaskScope } from "@/lib/personal-exclusion";
-import { AssignedList, TaskEditorLayer } from "@/components/portfolio/PortfolioTasks";
+import { AssignedList, LaterList, TaskEditorLayer } from "@/components/portfolio/PortfolioTasks";
 
 const SCOPES: Array<{ value: TaskScope; label: string }> = [
   { value: "personal", label: "Personal" },
@@ -95,7 +95,8 @@ function TimelineChart({ timeline, appId }: { timeline: Timeline; appId: string 
                       ? "waiting"
                       : lane.state === "prog"
                         ? "in progress"
-                        : "planned";
+                        : "not started";
+            const when = lane.planned ? `${range} (planned)` : range;
             return (
               <div className="pf-lane-row" key={`${appId}-${lane.key}`}>
                 <div className="pf-lbl">
@@ -111,12 +112,12 @@ function TimelineChart({ timeline, appId }: { timeline: Timeline; appId: string 
                 <div className="pf-lane">
                   <span className="pf-today" style={{ left: `${todayLeft}%` }} aria-hidden="true" />
                   <span
-                    className={`pf-seg st-${lane.state}${lane.estimated ? " est" : ""}${lane.overdue ? " late" : ""}${lane.continues ? " cont" : ""}`}
+                    className={`pf-seg st-${lane.state}${lane.estimated ? " est" : ""}${lane.planned ? " planned" : ""}${lane.overdue ? " late" : ""}${lane.continues ? " cont" : ""}`}
                     style={style}
-                    title={`${range} · ${stateText}`}
+                    title={`${when} · ${stateText}`}
                   >
                     <span className="pf-sr">
-                      {range}, {stateText}
+                      {when}, {stateText}
                     </span>
                   </span>
                 </div>
@@ -163,6 +164,7 @@ function AppRow({ app, open }: { app: PortfolioApp; open: boolean }) {
         </div>
         <div className="pf-owners">
           {counts.brentOpen > 0 ? <OwnerChip who="brent" label={`You · ${counts.brentOpen}`} /> : null}
+          {counts.brentLater > 0 ? <span className="pf-own quiet">Later · {counts.brentLater}</span> : null}
           {counts.agentOpen > 0 ? <OwnerChip who="agent" label={`Agents · ${counts.agentOpen}`} /> : null}
           {counts.open === 0 ? <span className="pf-own agent quiet">Nothing open</span> : null}
         </div>
@@ -207,7 +209,11 @@ export function PortfolioPage({ view }: { view: PortfolioView }) {
             <h1>
               {needs === 0 ? "Nothing needs you" : `${needs} ${needs === 1 ? "thing needs" : "things need"} you`}
               <span className="dim">
-                {view.agentOpen > 0 ? "Everything else is with the agents." : "Nothing is open with the agents either."}
+                {view.brentLater > 0
+                  ? `${plural(view.brentLater, "more comes", "more come")} to you once unblocked.`
+                  : view.agentOpen > 0
+                    ? "Everything else is with the agents."
+                    : "Nothing is open with the agents either."}
               </span>
             </h1>
             <Progress pct={overall.pct} label={`${overall.done} of ${overall.total} tasks done`} />
@@ -236,6 +242,7 @@ export function PortfolioPage({ view }: { view: PortfolioView }) {
               <OwnerChip who="brent" label="You" />
             </div>
             <AssignedList tasks={view.assigned} />
+            <LaterList tasks={view.comingLater} />
           </section>
 
           <section className="tile span-2" aria-labelledby="pf-agents-h">
@@ -280,14 +287,15 @@ export function PortfolioPage({ view }: { view: PortfolioView }) {
             <span><i className="st-done" />Done</span>
             <span><i className="st-prog" />In progress</span>
             <span><i className="st-wait" />Waiting</span>
-            <span><i className="st-plan" />Planned</span>
-            <span><i className="st-est" />No due date (estimate)</span>
+            <span><i className="st-plan" />Not started</span>
+            <span><i className="st-est" />No dates yet (estimate)</span>
             <span><i className="st-today" />Today</span>
           </div>
         </section>
 
         <p className="pf-fine">
-          Percent done counts every task in the app equally: done ÷ all tasks.
+          Percent done counts every task in the app equally: done ÷ all tasks. Solid bars use a section&apos;s planned dates
+          or its tasks&apos; due dates; dashed bars have no dates yet and are estimates.
         </p>
       </div>
     </TaskEditorLayer>

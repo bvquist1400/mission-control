@@ -14,6 +14,9 @@ const {
   truncateLine,
   HAND_BACK_COMMENT_PREFIX,
   HAND_BACK_NOTE_MAX_LENGTH,
+  HAND_BACK_NOTE_LABEL,
+  handBackNeedsAnswerWarning,
+  isDecisionTask,
 } = await import("../src/lib/task-handoff.ts");
 
 let passed = 0;
@@ -160,6 +163,30 @@ await test("runner: task ids are URL-encoded", async () => {
   const { impl, calls } = fakeFetch([{ status: 200, body: {} }]);
   await handBackTask("a/b", "", { fetchImpl: impl });
   assert.equal(calls[0].url, "/api/tasks/a%2Fb");
+});
+
+// ── Decision tasks (slice 2) ──────────────────────────────────────────────
+await test("the hand-back box is labelled as Brent's answer", () => {
+  assert.equal(HAND_BACK_NOTE_LABEL, "Your answer or decision (the agent reads this)");
+});
+
+await test("isDecisionTask: tag 'decision' (any case) or a title starting 'Decide:' / 'Decision'", () => {
+  assert.equal(isDecisionTask({ title: "Decide: keep both boards?", tags: [] }), true);
+  assert.equal(isDecisionTask({ title: "  decide : which sign-in", tags: null }), true);
+  assert.equal(isDecisionTask({ title: "Decision on the iPad sign-in", tags: [] }), true);
+  assert.equal(isDecisionTask({ title: "Board merge", tags: ["personal", " Decision "] }), true);
+  assert.equal(isDecisionTask({ title: "Decisions log cleanup", tags: [] }), false);
+  assert.equal(isDecisionTask({ title: "Undecided: nothing", tags: [] }), false);
+  assert.equal(isDecisionTask({ title: "Run the checklist", tags: ["decisions"] }), false);
+  assert.equal(isDecisionTask({ title: "Run the checklist" }), false);
+});
+
+await test("an empty answer on a decision task needs the warning; anything typed, or a non-decision, doesn't", () => {
+  assert.equal(handBackNeedsAnswerWarning(true, ""), true);
+  assert.equal(handBackNeedsAnswerWarning(true, "   \n "), true);
+  assert.equal(handBackNeedsAnswerWarning(true, null), true);
+  assert.equal(handBackNeedsAnswerWarning(true, "Keep both."), false);
+  assert.equal(handBackNeedsAnswerWarning(false, ""), false);
 });
 
 console.log(`\n${passed} passed`);

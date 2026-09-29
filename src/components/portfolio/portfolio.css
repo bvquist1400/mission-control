@@ -239,6 +239,77 @@
   gap: 8px;
   align-items: center;
 }
+.brief-page .pf-warn {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+/* Coming to you later: Brent's blocked tasks, under Assigned to you */
+.brief-page .pf-later {
+  margin-top: 6px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--hair-strong);
+  display: grid;
+  gap: 8px;
+}
+.brief-page .pf-later-h {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.brief-page .pf-later-h h3 {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.brief-page .pf-later-h .mono {
+  font-size: 12px;
+  color: var(--muted);
+}
+.brief-page .pf-later-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.brief-page .pf-later-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+.brief-page .pf-later-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.brief-page .pf-later-body .pf-what {
+  font-size: 14px;
+  color: var(--ink-2);
+}
+.brief-page .pf-later-line {
+  color: var(--ink-2);
+}
+.brief-page .pf-blocked {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-radius: 999px;
+  padding: 2px 8px;
+  margin-top: 1px;
+  white-space: nowrap;
+}
+
 .brief-page .pf-edit {
   display: inline-flex;
   flex-wrap: wrap;

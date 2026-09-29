@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
+  PROJECT_SECTION_COLUMNS,
+  isProjectSectionPlannedRangeViolation,
   isProjectSectionUniqueViolation,
   normalizeProjectSectionName,
+  normalizeProjectSectionPlannedDates,
   normalizeProjectSectionSortOrder,
   sortProjectSections,
   ProjectSectionServiceError,
@@ -57,7 +60,7 @@ export async function GET(
 
     const { data, error } = await context.supabase
       .from("project_sections")
-      .select("id, user_id, project_id, name, sort_order, created_at, updated_at")
+      .select(PROJECT_SECTION_COLUMNS)
       .eq("project_id", id)
       .eq("user_id", context.userId)
       .order("sort_order", { ascending: true })
@@ -93,8 +96,10 @@ export async function POST(
     }
 
     let sortOrder: number;
+    let plannedDates: ReturnType<typeof normalizeProjectSectionPlannedDates>;
     try {
       sortOrder = normalizeProjectSectionSortOrder(body.sort_order) ?? 0;
+      plannedDates = normalizeProjectSectionPlannedDates(body);
     } catch (error) {
       if (error instanceof ProjectSectionServiceError) {
         return NextResponse.json({ error: error.message }, { status: error.status });
@@ -109,8 +114,9 @@ export async function POST(
         project_id: id,
         name,
         sort_order: sortOrder,
+        ...plannedDates,
       })
-      .select("id, user_id, project_id, name, sort_order, created_at, updated_at")
+      .select(PROJECT_SECTION_COLUMNS)
       .single();
 
     if (error) {
@@ -119,6 +125,9 @@ export async function POST(
           { error: "A section with that name already exists on this project" },
           { status: 409 }
         );
+      }
+      if (isProjectSectionPlannedRangeViolation(error)) {
+        return NextResponse.json({ error: "planned_end can't be before planned_start" }, { status: 400 });
       }
       throw error;
     }

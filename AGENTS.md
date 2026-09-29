@@ -50,7 +50,7 @@ External task identities are stored as the nullable pair `external_source_system
 
 - RLS: 4-policy pattern (SELECT, INSERT, UPDATE, DELETE) on every table
 - `updated_at` triggers: reuse `set_updated_at()` function
-- Migrations: `supabase/migrations/` (latest: 056)
+- Migrations: `supabase/migrations/` (latest: 057); rollbacks in `supabase/rollbacks/`
 - New tables get explicit `GRANT ... TO authenticated, service_role` (see 055): newer Supabase stacks, including a fresh `supabase start`, no longer auto-grant public tables to the API roles
 
 ### Schema Types
@@ -144,7 +144,10 @@ Controls with behaviour (Button, Input) are components; pure-styling primitives 
 - Record pages (`/r/[kind]/[id]`) render Markdown with `<Markdown>` (`src/components/markdown/`, parser `src/lib/markdown.ts`): no raw HTML, links limited to http(s)/mailto/same-site. Full-record fetches keep line breaks (`joinBlocks` in `src/lib/mcp/search.ts`); search snippets still collapse them.
 - Brent edits and hands back tasks from the Portfolio ("Assigned to you": title/Open open the editor, "Hand back" on the row) and from `/r/task/*` (Edit). Both reuse the Today page's `TodayModalProvider` + `TaskDetailModal` via `TaskEditorLayer` / `TaskEditButton` (`src/components/portfolio/PortfolioTasks.tsx`); saves call `router.refresh()`, so the server-rendered page re-reads. The modal's "Who has it" section is `TaskOwnerSection`. Hand-back logic is pure in `src/lib/task-handoff.ts`: `composeHandBack()` (owner agent/PM, status line "With the PM: <note>" cut to 280, or "handed back by Brent <Mon D>" in ET; comment "Brent (handed back): <note>") and `handBackTask()` (PATCH first, then the comment; a comment failure is reported, the hand-back stands).
 - `useTaskDetail().updateTask` resolves true/false, so callers (Mark Done, hand-back) only close the modal after a successful save.
-- Tests: `npm run test:portfolio` and `test:task-handoff` (pure), `test:task-owner-db` (local Supabase stack; drives the MCP tools and a hand-back through the real API handlers).
+- "Assigned to you" and the hero count only list what Brent can act on now: a Brent-owned open task that is Blocked/Waiting or has an unfinished dependency (`blockers` from `loadPortfolioInput`, via `fetchTaskDependencySummaries`) goes to "Coming to you later" instead, with its `waiting_on`, blockers, follow-up date and status line (`isBlockedForBrent`, `comingLater`). Process rule (Brent, 9/28): set owner 'brent' only when he can act now.
+- The hand-back box is labelled "Your answer or decision (the agent reads this)" (`HAND_BACK_NOTE_LABEL`). On a decision task (`isDecisionTask`: tag `decision`, or a title starting "Decide:" / "Decision") an empty box warns once before sending. In the task editor the box starts open when Brent owns the task.
+- Project sections have optional `planned_start` / `planned_end` dates (migration 057, CHECK end ≥ start when both are set). They are **timeline only**: the Portfolio draws a section from them (solid; dashed = no dates, an estimate), and a section with planned dates shows even before it has tasks. They never change due dates, overdue red (lane overdue comes from task due dates only), priority, briefs, Today or the routines. API `POST /api/projects/[id]/sections` and `PATCH /api/sections/[id]` and the MCP section tools take them (YYYY-MM-DD; null clears).
+- Tests: `npm run test:portfolio` and `test:task-handoff` (pure), `test:task-owner-db` (local Supabase stack; drives the MCP tools and a hand-back through the real API handlers), `test:portfolio-db` (local stack + `PORTFOLIO_TEST_DB_CONTAINER`: 057 checks, rollback/re-apply, the MCP section tools, and a before/after proof that planned dates leave tasks, priority, the AM/EOD digest and the Portfolio outside the timeline unchanged).
 
 ## Key Files
 
@@ -184,6 +187,7 @@ Controls with behaviour (Button, Input) are components; pure-styling primitives 
 | Brief page (`/briefs/[code]`) | `src/app/briefs/[code]/page.tsx`, `src/components/briefs/` |
 | Portfolio page + model | `src/app/portfolio/page.tsx`, `src/components/portfolio/`, `src/lib/portfolio.ts` |
 | Task owner fields | `src/lib/task-owner.ts`, `supabase/migrations/056_add_task_owner.sql` |
+| Section planned dates | `src/lib/project-sections.ts` (`normalizeProjectSectionPlannedDates`), `supabase/migrations/057_add_section_planned_dates.sql` |
 | EOD routine prompt | `docs/routines/eod.md` |
 
 ## Briefing Model Note

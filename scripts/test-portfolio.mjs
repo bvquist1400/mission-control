@@ -99,7 +99,20 @@ test("countTasks: Parked and Missed are closed but not done; owners count open t
     task({ status: "Blocked/Waiting" }),
     task({ status: "Backlog" }),
   ]);
-  assert.deepEqual(counts, { done: 2, total: 7, pct: 29, open: 3, brentOpen: 1, agentOpen: 2 });
+  assert.deepEqual(counts, { done: 2, total: 7, pct: 29, open: 3, brentOpen: 1, brentLater: 0, agentOpen: 2 });
+});
+
+test("countTasks: Brent's blocked tasks (Blocked/Waiting or an open dependency) count as later, not open for him", () => {
+  const counts = countTasks(
+    [
+      task({ id: "c1", status: "In Progress", owner: "brent" }),
+      task({ id: "c2", status: "Blocked/Waiting", owner: "brent" }),
+      task({ id: "c3", status: "Planned", owner: "brent" }),
+      task({ id: "c4", status: "Blocked/Waiting", owner: "agent" }),
+    ],
+    { c3: ["Release 3.1"] }
+  );
+  assert.deepEqual(counts, { done: 0, total: 4, pct: 0, open: 4, brentOpen: 1, brentLater: 2, agentOpen: 1 });
 });
 
 // ── buildPortfolio ────────────────────────────────────────────────────────
@@ -195,6 +208,63 @@ test("ET dates: a due time late in the ET evening stays on that ET day", () => {
   assert.equal(toEtDate("not a date"), null);
 });
 
+// ── Assigned to you: actionable only (slice 2) ─────────────────────────────
+function blockedInput() {
+  const input = sampleInput();
+  input.tasks.push(
+    task({ id: "x1", status: "Blocked/Waiting", owner: "brent", waiting_on: "Release 3.1 build", status_line: "Comes to you when 3.1 is on TestFlight.", follow_up_at: "2026-10-02T13:00:00Z", due_at: "2026-09-20T21:00:00Z" }),
+    task({ id: "x2", status: "Planned", owner: "brent", title: "Check the rename on the iPad" }),
+    task({ id: "x3", status: "Blocked/Waiting", owner: "brent", implementation_id: "app-b", project_id: "proj-b1", updated_at: "2026-09-27T12:00:00Z" }),
+    task({ id: "x4", status: "Done", owner: "brent", section_id: "sec-r3" })
+  );
+  input.blockers = { x2: ["Menu & Market rename", "Siri fix"] };
+  return input;
+}
+
+test("assigned to you shows only actionable tasks; blocked ones move to coming later", () => {
+  const view = buildPortfolio(blockedInput(), { scope: "personal", now: NOW });
+  assert.deepEqual(view.assigned.map((t) => t.id), ["b2", "a2", "loose"], "same list as without the blocked tasks");
+  assert.deepEqual(view.comingLater.map((t) => t.id), ["x1", "x3", "x2"], "dated first, then newest change");
+  const [x1, x3, x2] = view.comingLater;
+  assert.equal(x1.waitingOn, "Release 3.1 build");
+  assert.equal(x1.followUp, "2026-10-02");
+  assert.equal(x1.statusLine, "Comes to you when 3.1 is on TestFlight.");
+  assert.deepEqual(x1.blockedBy, []);
+  assert.deepEqual(x2.blockedBy, ["Menu & Market rename", "Siri fix"], "dependency-blocked even though Planned");
+  assert.equal(x2.status, "Planned");
+  assert.equal(x3.app, "FamCal");
+  assert.equal(x3.waitingOn, null);
+});
+
+test("hero count counts only actionable tasks; blocked ones are brentLater", () => {
+  const before = buildPortfolio(sampleInput(), { scope: "personal", now: NOW });
+  const view = buildPortfolio(blockedInput(), { scope: "personal", now: NOW });
+  assert.equal(view.brentOpen, before.brentOpen);
+  assert.equal(view.brentOpen, 3);
+  assert.equal(view.brentLater, 3);
+  const ss = view.apps.find((app) => app.name === "Stock & Stir");
+  assert.equal(ss.counts.brentOpen, 1);
+  assert.equal(ss.counts.brentLater, 2);
+  // A dependency that is done no longer blocks: the lookup only lists unfinished ones.
+  const unblocked = blockedInput();
+  unblocked.blockers = {};
+  assert.deepEqual(
+    buildPortfolio(unblocked, { scope: "personal", now: NOW }).assigned.map((t) => t.id),
+    ["b2", "a2", "x2", "loose"]
+  );
+});
+
+test("assigned rows flag decision tasks (tag or 'Decide:' title) for the hand-back warning", () => {
+  const input = sampleInput();
+  input.tasks.push(
+    task({ id: "d1", owner: "brent", status: "Planned", title: "Decide: keep both boards?" }),
+    task({ id: "d2", owner: "brent", status: "Planned", title: "Board merge", tags: ["personal", "Decision"] })
+  );
+  const view = buildPortfolio(input, { scope: "personal", now: NOW });
+  const byId = Object.fromEntries(view.assigned.map((t) => [t.id, t.decision]));
+  assert.deepEqual(byId, { b2: false, a2: false, d1: true, d2: true, loose: false });
+});
+
 // ── Timeline ──────────────────────────────────────────────────────────────
 test("timeline: one lane per section, unsectioned tasks as 'Other tasks', cancelled projects skipped", () => {
   const view = buildPortfolio(sampleInput(), { scope: "personal", now: NOW });
@@ -253,6 +323,75 @@ test("timeline with no tasks is empty and centred on today", () => {
   assert.deepEqual(timeline.lanes, []);
   assert.equal(timeline.today, TODAY);
   assert.ok(timeline.start <= TODAY && timeline.end > TODAY);
+});
+
+// ── Timeline with planned section dates (migration 057) ────────────────────
+function plannedInput() {
+  const input = sampleInput();
+  input.sections = [
+    { ...SECTIONS[0], planned_start: "2026-09-21", planned_end: "2026-10-09" },
+    { ...SECTIONS[1], planned_start: "2026-10-12", planned_end: "2026-11-06" },
+    { id: "sec-r5", project_id: "proj-a", name: "Release 5", sort_order: 2, planned_start: "2026-11-09", planned_end: null },
+    { id: "sec-old", project_id: "proj-a", name: "Past plan", sort_order: 3, planned_start: "2026-09-01", planned_end: "2026-09-10" },
+    { id: "sec-bad", project_id: "proj-a", name: "Backwards", sort_order: 4, planned_start: "2026-10-20", planned_end: "2026-10-01" },
+    { id: "sec-none", project_id: "proj-a", name: "No plan, no tasks", sort_order: 5, planned_start: null, planned_end: null },
+    { id: "sec-x", project_id: "proj-x", name: "Cancelled plan", sort_order: 0, planned_start: "2026-10-01", planned_end: "2026-10-20" },
+  ];
+  return input;
+}
+
+test("timeline: planned dates set the bar (solid); sections without dates stay dashed estimates", () => {
+  const lanes = buildPortfolio(plannedInput(), { scope: "personal", now: NOW }).apps.find((app) => app.name === "Stock & Stir").timeline.lanes;
+  const byLabel = Object.fromEntries(lanes.map((lane) => [lane.label, lane]));
+  assert.deepEqual(Object.keys(byLabel), ["Release 3", "Release 4", "Release 5", "Past plan", "Backwards", "Other tasks"]);
+  const r3 = byLabel["Release 3"];
+  assert.deepEqual([r3.start, r3.end, r3.planned, r3.estimated], ["2026-09-21", "2026-10-09", true, false]);
+  assert.equal(r3.sub, "1 of 2 done");
+  const r4 = byLabel["Release 4"];
+  assert.deepEqual([r4.start, r4.end, r4.planned, r4.estimated], ["2026-10-12", "2026-11-06", true, false], "no due dates, but planned: solid");
+  assert.equal(r4.sub, "0 of 1 done");
+  // Planned start only, no tasks: dashed end a week after its start.
+  const r5 = byLabel["Release 5"];
+  assert.deepEqual([r5.start, r5.end, r5.planned, r5.estimated, r5.state], ["2026-11-09", "2026-11-16", true, true, "plan"]);
+  assert.equal(r5.sub, "Planned · no tasks yet");
+  // A backwards pair (the database forbids it) falls back to the estimate.
+  const bad = byLabel["Backwards"];
+  assert.equal(bad.planned, false);
+  assert.equal(bad.estimated, true);
+  assert.equal(byLabel["Other tasks"].planned, false);
+});
+
+test("planned dates never make a lane overdue, and never touch due dates or Assigned to you", () => {
+  const plain = buildPortfolio(sampleInput(), { scope: "personal", now: NOW });
+  const planned = buildPortfolio(plannedInput(), { scope: "personal", now: NOW });
+  const past = planned.apps.find((app) => app.name === "Stock & Stir").timeline.lanes.find((lane) => lane.label === "Past plan");
+  assert.equal(past.end, "2026-09-10");
+  assert.equal(past.overdue, false, "a planned end in the past is not overdue red");
+  assert.equal(past.state, "plan");
+  // Everything outside the timeline is identical.
+  assert.deepEqual(planned.assigned, plain.assigned);
+  assert.deepEqual(planned.comingLater, plain.comingLater);
+  assert.equal(planned.brentOpen, plain.brentOpen);
+  assert.deepEqual(planned.overall, plain.overall);
+  for (const app of planned.apps) {
+    const before = plain.apps.find((a) => a.id === app.id);
+    assert.deepEqual({ ...app, timeline: null }, { ...before, timeline: null });
+  }
+  // A lane that is overdue by its tasks' due dates stays overdue with a later planned end.
+  const input = sampleInput();
+  input.tasks.push(task({ id: "late", status: "Planned", section_id: "sec-r4", due_at: "2026-09-25T21:00:00Z" }));
+  input.sections = [SECTIONS[0], { ...SECTIONS[1], planned_start: "2026-09-21", planned_end: "2026-10-30" }];
+  const r4 = buildPortfolio(input, { scope: "personal", now: NOW }).apps.find((app) => app.name === "Stock & Stir").timeline.lanes.find((lane) => lane.label === "Release 4");
+  assert.equal(r4.end, "2026-10-30");
+  assert.equal(r4.overdue, true, "overdue comes from due dates only");
+});
+
+test("planned-only sections of a cancelled project, or with no dates, stay off the timeline", () => {
+  const fam = buildPortfolio(plannedInput(), { scope: "personal", now: NOW }).apps.find((app) => app.name === "FamCal").timeline;
+  assert.equal(fam.lanes.some((lane) => lane.label === "Cancelled plan"), false);
+  const ss = buildPortfolio(plannedInput(), { scope: "personal", now: NOW }).apps.find((app) => app.name === "Stock & Stir").timeline;
+  assert.equal(ss.lanes.some((lane) => lane.label === "No plan, no tasks"), false);
+  assert.ok(ss.end >= "2026-11-06", "the window stretches to show the planned bars");
 });
 
 // ── Owner fields ──────────────────────────────────────────────────────────

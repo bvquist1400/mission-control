@@ -1,13 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  PROJECT_SECTION_COLUMNS,
+  isProjectSectionPlannedRangeViolation,
   isProjectSectionUniqueViolation,
   normalizeProjectSectionName,
+  normalizeProjectSectionPlannedDates,
   normalizeProjectSectionSortOrder,
   ProjectSectionServiceError,
 } from "@/lib/project-sections";
 import { requireAuthenticatedRoute } from "@/lib/supabase/route-auth";
 
-// PATCH /api/sections/[id] - Rename or reorder a project section
+// PATCH /api/sections/[id] - Rename, reorder or re-plan a project section
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -43,6 +46,15 @@ export async function PATCH(
       }
     }
 
+    try {
+      Object.assign(updates, normalizeProjectSectionPlannedDates(body));
+    } catch (error) {
+      if (error instanceof ProjectSectionServiceError) {
+        return NextResponse.json({ error: error.message }, { status: error.status });
+      }
+      throw error;
+    }
+
     if (Object.keys(updates).length === 0) {
       return NextResponse.json({ error: "No valid fields to update" }, { status: 400 });
     }
@@ -52,7 +64,7 @@ export async function PATCH(
       .update(updates)
       .eq("id", id)
       .eq("user_id", userId)
-      .select("id, user_id, project_id, name, sort_order, created_at, updated_at")
+      .select(PROJECT_SECTION_COLUMNS)
       .single();
 
     if (error) {
@@ -60,6 +72,13 @@ export async function PATCH(
         return NextResponse.json(
           { error: "A section with that name already exists on this project" },
           { status: 409 }
+        );
+      }
+
+      if (isProjectSectionPlannedRangeViolation(error)) {
+        return NextResponse.json(
+          { error: "planned_end can't be before planned_start" },
+          { status: 400 }
         );
       }
 

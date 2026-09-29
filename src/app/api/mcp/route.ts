@@ -21,6 +21,11 @@ const TASK_OWNER_LABEL_DESCRIPTION =
   `Which agent holds it, e.g. "PM" or "Codex" (max ${OWNER_LABEL_MAX_LENGTH} characters).`;
 const TASK_STATUS_LINE_DESCRIPTION =
   `One plain-English sentence on where the task stands, for Brent (max ${STATUS_LINE_MAX_LENGTH} characters; newlines are collapsed).`;
+const SECTION_PLANNED_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const SECTION_PLANNED_START_DESCRIPTION =
+  'Planned start date YYYY-MM-DD (timeline only: never changes due dates, overdue, priority or briefs).';
+const SECTION_PLANNED_END_DESCRIPTION =
+  'Planned end date YYYY-MM-DD, on or after planned_start (timeline only).';
 const NOTE_TYPE_VALUES = [
   'working_note',
   'meeting_note',
@@ -1218,7 +1223,7 @@ function createMcpServer(): McpServer {
   // ── PROJECT SECTIONS ─────────────────────────────────────────────────
   mcp.tool(
     'list_project_sections',
-    'List sections for a project ordered by sort_order and creation time.',
+    'List sections for a project ordered by sort_order and creation time. Each section includes planned_start / planned_end (timeline-only planned dates, or null).',
     {
       project_id: z.string().describe('Project UUID'),
     },
@@ -1234,11 +1239,13 @@ function createMcpServer(): McpServer {
 
   mcp.tool(
     'create_project_section',
-    'Create a section within a project.',
+    'Create a section within a project. planned_start / planned_end place it on the Portfolio timeline (drawn solid); they never change task due dates, priority or briefs.',
     {
       project_id: z.string().describe('Project UUID'),
       name: z.string().describe('Section name'),
       sort_order: z.number().int().optional().describe('Integer sort order'),
+      planned_start: z.string().regex(SECTION_PLANNED_DATE_PATTERN).optional().describe(SECTION_PLANNED_START_DESCRIPTION),
+      planned_end: z.string().regex(SECTION_PLANNED_DATE_PATTERN).optional().describe(SECTION_PLANNED_END_DESCRIPTION),
     },
     async ({ project_id, ...payload }) => {
       const res = await fetch(
@@ -1394,11 +1401,13 @@ function createMcpServer(): McpServer {
 
   mcp.tool(
     'update_project_section',
-    'Rename or reorder a project section.',
+    'Rename, reorder or re-plan a project section. planned_start / planned_end (null clears) only move its bar on the Portfolio timeline; they never change task due dates, priority or briefs.',
     {
       section_id: z.string().describe('Project section UUID'),
       name: z.string().optional().describe('Section name'),
       sort_order: z.number().int().optional().describe('Integer sort order'),
+      planned_start: z.string().regex(SECTION_PLANNED_DATE_PATTERN).nullable().optional().describe(`${SECTION_PLANNED_START_DESCRIPTION} Null clears it.`),
+      planned_end: z.string().regex(SECTION_PLANNED_DATE_PATTERN).nullable().optional().describe(`${SECTION_PLANNED_END_DESCRIPTION} Null clears it.`),
     },
     async ({ section_id, ...updates }) => {
       const res = await fetch(

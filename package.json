@@ -40,6 +40,7 @@
     "test:portfolio": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-portfolio.mjs",
     "test:task-handoff": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-task-handoff.mjs",
     "test:task-owner-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-task-owner-db.mjs",
+    "test:portfolio-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-portfolio-db.mjs",
     "test:briefs-am-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-briefs-am-db.mjs",
     "backfill:project-sections:dry-run": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/backfill-project-sections.mjs",
     "backfill:project-sections:apply": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/backfill-project-sections.mjs --apply",

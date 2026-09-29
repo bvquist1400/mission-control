@@ -1,5 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { normalizeDateOnly } from "@/lib/date-only";
 import type { ProjectSection } from "@/types/database";
+
+/** Every project_sections column the API returns (planned dates: migration 057). */
+export const PROJECT_SECTION_COLUMNS =
+  "id, user_id, project_id, name, sort_order, planned_start, planned_end, created_at, updated_at";
 
 export const PROJECT_SECTION_TITLE_PATTERN = /^\[([^\]]+)\]\s*-\s*(.+)$/;
 
@@ -113,6 +118,61 @@ export function normalizeProjectSectionSortOrder(value: unknown): number | null 
   return Math.round(value);
 }
 
+export interface ProjectSectionPlannedDates {
+  planned_start?: string | null;
+  planned_end?: string | null;
+}
+
+function parsePlannedDate(field: "planned_start" | "planned_end", value: unknown): string | null {
+  if (value === null || value === "") {
+    return null;
+  }
+  const normalized = typeof value === "string" ? normalizeDateOnly(value) : null;
+  if (!normalized) {
+    throw new ProjectSectionServiceError(
+      `${field} must be a calendar date (YYYY-MM-DD) or null`,
+      400,
+      "invalid_planned_date"
+    );
+  }
+  return normalized;
+}
+
+/**
+ * Reads planned_start / planned_end from a request body. Only keys that are
+ * present come back (null or "" clears); a bad date or an end before the start
+ * (when both are sent) is a 400. These dates only place a section on the
+ * Portfolio timeline; nothing else reads them.
+ */
+export function normalizeProjectSectionPlannedDates(body: Record<string, unknown>): ProjectSectionPlannedDates {
+  const dates: ProjectSectionPlannedDates = {};
+  if ("planned_start" in body) {
+    dates.planned_start = parsePlannedDate("planned_start", body.planned_start);
+  }
+  if ("planned_end" in body) {
+    dates.planned_end = parsePlannedDate("planned_end", body.planned_end);
+  }
+  if (dates.planned_start && dates.planned_end && dates.planned_end < dates.planned_start) {
+    throw new ProjectSectionServiceError(
+      "planned_end can't be before planned_start",
+      400,
+      "invalid_planned_range"
+    );
+  }
+  return dates;
+}
+
+/** The database's own range check (for a PATCH that sends only one of the two dates). */
+export function isProjectSectionPlannedRangeViolation(error: unknown): boolean {
+  return Boolean(
+    error
+    && typeof error === "object"
+    && "code" in error
+    && String((error as { code?: unknown }).code) === "23514"
+    && String((error as { message?: unknown }).message ?? "").includes("project_sections_planned_range_check")
+  );
+}
+
 export function isProjectSectionUniqueViolation(error: unknown): boolean {
   return Boolean(
     error
@@ -166,7 +226,7 @@ export async function requireOwnedProjectSection(
 ): Promise<ProjectSection> {
   const { data, error } = await supabase
     .from("project_sections")
-    .select("id, user_id, project_id, name, sort_order, created_at, updated_at")
+    .select(PROJECT_SECTION_COLUMNS)
     .eq("id", sectionId)
     .eq("user_id", userId)
     .maybeSingle();
@@ -193,7 +253,7 @@ export async function listOwnedProjectSections(
 
   const { data, error } = await supabase
     .from("project_sections")
-    .select("id, user_id, project_id, name, sort_order, created_at, updated_at")
+    .select(PROJECT_SECTION_COLUMNS)
     .eq("user_id", userId)
     .in("project_id", [...new Set(projectIds)])
     .order("sort_order", { ascending: true })
@@ -234,11 +294,14 @@ export async function validateTaskSectionAssignment(
   return section;
 }
 
+/** The section fields grouping needs (planned dates play no part in it). */
+export type GroupableProjectSection = Pick<ProjectSection, "id" | "project_id" | "name" | "sort_order" | "created_at">;
+
 export function groupTasksByProjectSections<T extends SectionAwareTaskLike>(
   tasks: T[],
-  projectSections: ProjectSection[]
+  projectSections: GroupableProjectSection[]
 ): { grouped_projects: ProjectTaskGroups<T>[]; unassigned_tasks: T[] } {
-  const sectionsByProjectId = new Map<string, ProjectSection[]>();
+  const sectionsByProjectId = new Map<string, GroupableProjectSection[]>();
   for (const section of projectSections) {
     const existing = sectionsByProjectId.get(section.project_id) ?? [];
     existing.push(section);

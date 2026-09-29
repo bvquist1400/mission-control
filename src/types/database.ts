@@ -399,6 +399,9 @@ export interface ProjectSection {
   project_id: string;
   name: string;
   sort_order: number;
+  /** Timeline only (migration 057): never affects due dates, priority or briefs. */
+  planned_start: string | null;
+  planned_end: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -422,6 +425,9 @@ export interface ProjectTemplateSection {
   template_id: string;
   name: string;
   sort_order: number;
+  /** Timeline only (migration 057): never affects due dates, priority or briefs. */
+  planned_start: string | null;
+  planned_end: string | null;
   created_at: string;
   updated_at: string;
 }
