@@ -189,4 +189,50 @@ await test("an empty answer on a decision task needs the warning; anything typed
   assert.equal(handBackNeedsAnswerWarning(false, ""), false);
 });
 
+// ── Drafts survive a Status change (fix round 1, Fable finding 1) ─────────
+// The editor keys TaskOwnerSection on the task; a Status PATCH bumps updated_at,
+// and keying on that remounted the section with an empty answer box. The rule
+// now lives in ownerDraftReset (exported from the component), loaded here from
+// the real source: TypeScript strips the types, the imports are stubbed out
+// (they are only used when the component renders), and the exported function runs.
+import { readFileSync } from "node:fs";
+import ts from "typescript";
+
+const ownerSectionSource = readFileSync(new URL("../src/components/tasks/TaskOwnerSection.tsx", import.meta.url), "utf8");
+const modalSource = readFileSync(new URL("../src/components/tasks/TaskDetailModal.tsx", import.meta.url), "utf8");
+const ownerSectionJs = ts
+  .transpileModule(ownerSectionSource, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } })
+  .outputText.replace(/^import[\s\S]*?from\s+["'][^"']+["'];?\s*$/gm, "");
+const ownerSectionModule = await import(`data:text/javascript;base64,${Buffer.from(ownerSectionJs).toString("base64")}`);
+const { ownerDraftReset } = ownerSectionModule;
+
+const savedBrent = { owner: "brent", owner_label: null, status_line: "Needs your call on the boards." };
+
+await test("ownerDraftReset: a save that leaves owner, agent name and status line alone touches no drafts (Status change)", () => {
+  assert.equal(ownerDraftReset(savedBrent, { ...savedBrent }), "none");
+  // Status, due date, title etc. are not part of the snapshot, so they can't reset anything.
+  assert.equal(ownerDraftReset(savedBrent, { ...savedBrent, status: "Done", updated_at: "2026-09-29T20:00:00Z" }), "none");
+});
+
+await test("ownerDraftReset: a new owner (a hand-back, an owner flip) starts everything fresh", () => {
+  assert.equal(ownerDraftReset(savedBrent, { owner: "agent", owner_label: "PM", status_line: "With the PM: keep both." }), "all");
+  assert.equal(ownerDraftReset({ owner: "agent", owner_label: "PM", status_line: null }, savedBrent), "all");
+});
+
+await test("ownerDraftReset: a new status line or agent name refreshes those drafts but not the answer box", () => {
+  assert.equal(ownerDraftReset(savedBrent, { ...savedBrent, status_line: "8 of 11 checks passed." }), "fields");
+  assert.equal(ownerDraftReset(savedBrent, { ...savedBrent, status_line: null }), "fields");
+  const agent = { owner: "agent", owner_label: "PM", status_line: "Building." };
+  assert.equal(ownerDraftReset(agent, { ...agent, owner_label: "Builder" }), "fields");
+});
+
+await test("the editor keys the owner section on the task id only, never on updated_at", () => {
+  const section = modalSource.match(/<TaskOwnerSection[\s\S]*?\/>/);
+  assert.ok(section, "TaskOwnerSection is rendered in TaskDetailModal");
+  const key = section[0].match(/\bkey=(\{[^}]*\}|"[^"]*")/);
+  assert.ok(key, "TaskOwnerSection has a key");
+  assert.equal(key[1], "{task.id}");
+  assert.ok(!/updated_at/.test(key[1]));
+});
+
 console.log(`\n${passed} passed`);

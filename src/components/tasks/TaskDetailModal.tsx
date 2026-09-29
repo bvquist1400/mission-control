@@ -175,7 +175,7 @@ export function TaskDetailModal({
           )}
 
           <TaskOwnerSection
-            key={`${task.id}:${task.updated_at}`}
+            key={task.id}
             task={task}
             disabled={isSaving || isDeleting}
             onSave={updateTask}

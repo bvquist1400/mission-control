@@ -16,6 +16,22 @@ import {
 import { OWNER_LABEL_MAX_LENGTH, STATUS_LINE_MAX_LENGTH } from "@/lib/task-owner";
 import type { TaskOwner, TaskUpdatePayload, TaskWithImplementation } from "@/types/database";
 
+type OwnerSnapshotFields = Pick<TaskWithImplementation, "owner" | "owner_label" | "status_line">;
+
+/**
+ * What a change to the saved task means for the section's drafts. Saving
+ * anything else (a Status change bumps updated_at) must not touch them, or
+ * Brent's half-typed answer disappears. A different owner starts everything
+ * fresh (the answer box opens or closes with it); a changed agent name or
+ * status line refreshes just those two drafts, so an answer being typed
+ * survives a "Where it stands" save.
+ */
+export function ownerDraftReset(before: OwnerSnapshotFields, after: OwnerSnapshotFields): "none" | "fields" | "all" {
+  if (before.owner !== after.owner) return "all";
+  if (before.owner_label !== after.owner_label || before.status_line !== after.status_line) return "fields";
+  return "none";
+}
+
 interface TaskOwnerSectionProps {
   task: TaskWithImplementation;
   disabled: boolean;
@@ -28,9 +44,11 @@ interface TaskOwnerSectionProps {
 /**
  * "Who has it" for a task: Brent or an agent, which agent, and one line on
  * where it stands, plus the hand-back button that takes it off Brent's list.
- * Drafts start from the saved task; the caller keys this on the task's id and
- * updated_at, so a save (or another task) starts fresh drafts. When the task
- * is Brent's, the hand-back box starts open: it's where his answer goes.
+ * Drafts start from the saved task; the caller keys this on the task's id
+ * only, so another task starts fresh drafts. A save that changes who has the
+ * task or its status line refreshes them (ownerDraftReset); a save of anything
+ * else (Status, due date) leaves what Brent typed alone. When the task is
+ * Brent's, the hand-back box starts open: it's where his answer goes.
  */
 export function TaskOwnerSection({ task, disabled, onSave, onHandBack }: TaskOwnerSectionProps) {
   const labelListId = useId();
@@ -45,6 +63,27 @@ export function TaskOwnerSection({ task, disabled, onSave, onHandBack }: TaskOwn
   /** A decision task with an empty answer: the first Send shows a warning, the second sends. */
   const [warned, setWarned] = useState(false);
   const decision = isDecisionTask(task);
+
+  // Saved owner/label/status line as of the last render; when they change under
+  // us (a save, a hand-back, an agent), refresh the drafts they feed.
+  const [seen, setSeen] = useState<OwnerSnapshotFields>({
+    owner: task.owner,
+    owner_label: task.owner_label,
+    status_line: task.status_line,
+  });
+  const reset = ownerDraftReset(seen, task);
+  if (reset !== "none") {
+    setSeen({ owner: task.owner, owner_label: task.owner_label, status_line: task.status_line });
+    setOwner(task.owner);
+    setOwnerLabel(task.owner_label ?? "");
+    setStatusLine(task.status_line ?? "");
+    if (reset === "all") {
+      setHandingBack(task.owner === "brent");
+      setOpenedByTap(false);
+      setNote("");
+      setWarned(false);
+    }
+  }
 
   const update = buildOwnerUpdate(task, { owner, ownerLabel, statusLine });
   const lineLength = toOneLine(statusLine).length;
