@@ -10,6 +10,7 @@ import { buildColdCommitments, normalizeCommitmentRows, type IntelligenceCommitm
 import { normalizeDateOnly } from "@/lib/date-only";
 import { buildReviewSnapshotSummary, buildReviewSnapshotTitle, upsertReviewSnapshot } from "@/lib/briefing/review-snapshots";
 import { identifyPrepTasks, type TaskInput } from "@/lib/briefing/prep-tasks";
+import { buildListTotals, groupByIdenticalTitle, isoRange, type ListTotals } from "@/lib/briefing/collapse";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
 import { buildCanonicalMetadata, buildFreshness } from "./metadata";
 import { workExecutionStateRead } from "./execution-state";
@@ -70,6 +71,9 @@ interface OpenCommitmentRow {
   task: { id: string; title: string; status: TaskStatus } | null;
 }
 
+/** How many entries the "tomorrow first things" list shows at most. */
+export const TOMORROW_FIRST_THINGS_CAP = 5;
+
 interface PrepCandidate {
   taskId: string;
   title: string;
@@ -77,6 +81,8 @@ interface PrepCandidate {
   reason: string;
   updatedAt: string;
   dueAt: string | null;
+  createdAt?: string | null;
+  recurringTemplateId?: string | null;
 }
 
 export interface WorkEodReviewTaskItem {
@@ -86,6 +92,17 @@ export interface WorkEodReviewTaskItem {
   reason: string;
   updatedAt: string;
   dueAt: string | null;
+  /** When the task row was created; lets a reader tell old rows from new ones. */
+  createdAt?: string | null;
+  /** The recurring template this row was generated from; null for one-off tasks and orphaned copies. */
+  recurringTemplateId?: string | null;
+  /** Tomorrow-first list only: how many open tasks share this exact title (1 = unique). */
+  duplicateCount?: number;
+  /** Tomorrow-first list only: the other tasks collapsed into this entry. */
+  duplicateTaskIds?: string[];
+  /** Tomorrow-first list only, when duplicateCount > 1: oldest and newest created_at among the copies. */
+  duplicatesCreatedFrom?: string | null;
+  duplicatesCreatedTo?: string | null;
 }
 
 export interface WorkEodReviewFollowupItem {
@@ -131,7 +148,10 @@ export interface WorkEodReviewRead extends WorkIntelligenceMetadata<WorkEodRevie
   rolledForward: WorkEodReviewTaskItem[];
   openBlockers: WorkEodReviewTaskItem[];
   coldFollowups: WorkEodReviewFollowupItem[];
+  /** Identical titles collapsed into one entry, then capped at TOMORROW_FIRST_THINGS_CAP. */
   tomorrowFirstThings: WorkEodReviewTaskItem[];
+  /** Size of the tomorrow-first list before collapsing and before the cap, so a capped list can't pass for the real count. */
+  tomorrowFirstThingsTotals?: ListTotals;
   statusUpdateRecommendations: WorkStatusUpdateRecommendation[];
   operatingRisks: WorkEodReviewRisk[];
   narrativeHints: string[];
@@ -379,6 +399,8 @@ function toReviewTaskItem(
     reason,
     updatedAt,
     dueAt: task.due_at ?? null,
+    createdAt: task.created_at ?? null,
+    recurringTemplateId: task.recurring_template_id ?? null,
   };
 }
 
@@ -418,16 +440,18 @@ function buildPrepCandidates(
         reason: prep.reason,
         updatedAt: item.updatedAt,
         dueAt: item.dueAt,
+        createdAt: item.createdAt ?? null,
+        recurringTemplateId: item.recurringTemplateId ?? null,
       } satisfies PrepCandidate;
     })
-    .filter((item): item is PrepCandidate => item !== null);
+    .filter((item): item is NonNullable<typeof item> => item !== null);
 }
 
 function buildTomorrowFirstThings(
   prepCandidates: PrepCandidate[],
   snapshot: ReturnType<typeof buildWorkIntelligenceSnapshot>
-): WorkEodReviewTaskItem[] {
-  const items: WorkEodReviewTaskItem[] = [];
+): { items: WorkEodReviewTaskItem[]; totals: ListTotals } {
+  const all: WorkEodReviewTaskItem[] = [];
   const seen = new Set<string>();
 
   for (const candidate of prepCandidates) {
@@ -436,13 +460,15 @@ function buildTomorrowFirstThings(
     }
 
     seen.add(candidate.taskId);
-    items.push({
+    all.push({
       taskId: candidate.taskId,
       title: candidate.title,
       context: candidate.context,
       reason: candidate.reason,
       updatedAt: candidate.updatedAt,
       dueAt: candidate.dueAt,
+      createdAt: candidate.createdAt ?? null,
+      recurringTemplateId: candidate.recurringTemplateId ?? null,
     });
   }
 
@@ -452,10 +478,26 @@ function buildTomorrowFirstThings(
     }
 
     seen.add(task.id);
-    items.push(toReviewTaskItem(task, "Still open heading into tomorrow, so it needs a deliberate restart instead of another warm-up lap.", snapshot.commentActivity));
+    all.push(toReviewTaskItem(task, "Still open heading into tomorrow, so it needs a deliberate restart instead of another warm-up lap.", snapshot.commentActivity));
   }
 
-  return items.slice(0, 5);
+  // Identical titles become one entry that says how many copies there are, so
+  // eight copies of one task neither fill the list nor look like eight things.
+  const entries = groupByIdenticalTitle(all, (item) => item.title).map((group): WorkEodReviewTaskItem => {
+    const copies = group.members;
+    const range = copies.length > 1 ? isoRange(copies.map((copy) => copy.createdAt)) : null;
+
+    return {
+      ...group.first,
+      duplicateCount: copies.length,
+      duplicateTaskIds: copies.slice(1).map((copy) => copy.taskId),
+      duplicatesCreatedFrom: range?.from ?? null,
+      duplicatesCreatedTo: range?.to ?? null,
+    };
+  });
+  const items = entries.slice(0, TOMORROW_FIRST_THINGS_CAP);
+
+  return { items, totals: buildListTotals(all.length, entries.length, items.length) };
 }
 
 function buildDayOutcome(
@@ -592,6 +634,17 @@ function buildNarrativeHints(
   return uniqueStrings(hints).slice(0, 4);
 }
 
+function buildTomorrowPrepSummary(totals: ListTotals): string {
+  const noun = (count: number) => `first-thing candidate${count === 1 ? "" : "s"}`;
+  if (totals.tasks === totals.shown) {
+    return `${totals.shown} clear ${noun(totals.shown)} for tomorrow.`;
+  }
+
+  const collapsed = totals.tasks !== totals.entries ? `, ${totals.tasks - totals.entries} identical copies collapsed` : "";
+  const capped = totals.capped ? `, showing the first ${totals.shown}` : "";
+  return `${totals.tasks} ${noun(totals.tasks)} for tomorrow (${totals.entries} distinct${collapsed}${capped}).`;
+}
+
 export function buildWorkEodReview(input: BuildWorkEodReviewInput): WorkEodReviewRead {
   const completedToday = input.snapshot.completedTodayTasks.map((task) =>
     toReviewTaskItem(task, "Closed today.", input.snapshot.commentActivity)
@@ -634,7 +687,10 @@ export function buildWorkEodReview(input: BuildWorkEodReviewInput): WorkEodRevie
       dueAt: commitment.due_at,
     })),
   ];
-  const tomorrowFirstThings = buildTomorrowFirstThings(input.prepCandidates, input.snapshot);
+  const { items: tomorrowFirstThings, totals: tomorrowFirstThingsTotals } = buildTomorrowFirstThings(
+    input.prepCandidates,
+    input.snapshot
+  );
   const executionState = workExecutionStateRead(input.snapshot);
   const operatingRisks = buildOperatingRisks(input.snapshot, input.openCommitments, executionState, rolledForward);
   const dayOutcome = buildDayOutcome(completedToday, rolledForward, openBlockers, coldFollowups);
@@ -706,7 +762,7 @@ export function buildWorkEodReview(input: BuildWorkEodReviewInput): WorkEodRevie
       },
       {
         kind: "tomorrow_prep",
-        summary: `${tomorrowFirstThings.length} clear first-thing candidate${tomorrowFirstThings.length === 1 ? "" : "s"} for tomorrow.`,
+        summary: buildTomorrowPrepSummary(tomorrowFirstThingsTotals),
         relatedTaskIds: tomorrowFirstThings.slice(0, 4).map((item) => item.taskId),
       },
       {
@@ -723,7 +779,7 @@ export function buildWorkEodReview(input: BuildWorkEodReviewInput): WorkEodRevie
       blockerTaskIds: openBlockers.map((item) => item.taskId),
       followUpRiskTaskIds: input.snapshot.followUpRiskTasks.map((task) => task.id),
       coldCommitmentIds: coldCommitments.map((item) => `${item.stakeholder_name}:${item.title}`),
-      tomorrowFirstTaskIds: tomorrowFirstThings.map((item) => item.taskId),
+      tomorrowFirstTaskIds: tomorrowFirstThings.flatMap((item) => [item.taskId, ...(item.duplicateTaskIds ?? [])]),
       statusUpdateRecommendationKeys: input.statusUpdateRecommendations.map((item) => item.key),
       momentum: executionState.momentum.label,
       loadStatus: executionState.loadAssessment.status,
@@ -739,6 +795,7 @@ export function buildWorkEodReview(input: BuildWorkEodReviewInput): WorkEodRevie
     openBlockers,
     coldFollowups,
     tomorrowFirstThings,
+    tomorrowFirstThingsTotals,
     statusUpdateRecommendations: input.statusUpdateRecommendations,
     operatingRisks,
     narrativeHints: buildNarrativeHints(
@@ -800,6 +857,8 @@ export async function workEodReviewRead(input: WorkEodReviewReadInput): Promise<
         reason: "Still the strongest reopening move if tomorrow starts cold.",
         updatedAt: task.updated_at,
         dueAt: task.due_at ?? null,
+        createdAt: task.created_at ?? null,
+        recurringTemplateId: task.recurring_template_id ?? null,
       });
     }
   }

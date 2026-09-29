@@ -40,29 +40,56 @@ export type TaskInput = Task & {
 };
 
 /**
+ * Words too generic to link a task to a meeting on their own: task verbs and
+ * meeting/ritual words that appear in many unrelated titles ("Check for REDCap
+ * Upgrade" vs "BOS calendar and budget build weekly check in" only share
+ * "check"; two Google IT cert modules only shared one topic word with the
+ * day's meetings). They still count toward a task's keyword total, so a
+ * generic word can never help a match, but a title made only of them cannot
+ * match at all.
+ */
+const GENERIC_WORDS = [
+  // Articles, prepositions, auxiliaries
+  "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
+  "of", "with", "by", "from", "as", "is", "was", "are", "were", "been",
+  "be", "have", "has", "had", "do", "does", "did", "will", "would",
+  "could", "should", "may", "might", "must", "shall", "can", "need",
+  // Meeting and ritual words
+  "meeting", "call", "sync", "review", "update", "updates", "status", "weekly",
+  "daily", "monthly", "prep", "preparation", "prepare", "check", "checkin",
+  "follow", "followup", "team", "notes", "note", "standup", "agenda", "touchbase",
+  // Generic task verbs and nouns
+  "verify", "test", "run", "build", "add", "create", "apply", "fix", "idea",
+  "project", "module", "task", "work", "item", "items", "action",
+];
+const STOP_WORDS = new Set(GENERIC_WORDS);
+
+/** A task links to an event only when at least this many significant words are shared. */
+const MIN_SHARED_KEYWORDS = 2;
+/** ...and those shared words are at least this share of the task title's significant words. */
+const MIN_KEYWORD_OVERLAP = 0.3;
+
+/**
  * Extract keywords from a string for matching
  * Removes common words and returns significant terms
  */
 function extractKeywords(text: string): string[] {
-  const stopWords = new Set([
-    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
-    "of", "with", "by", "from", "as", "is", "was", "are", "were", "been",
-    "be", "have", "has", "had", "do", "does", "did", "will", "would",
-    "could", "should", "may", "might", "must", "shall", "can", "need",
-    "meeting", "call", "sync", "review", "update", "status", "weekly",
-    "daily", "monthly", "prep", "preparation", "prepare",
-  ]);
-
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .split(/\s+/)
-    .filter((word) => word.length > 2 && !stopWords.has(word));
+  return [
+    ...new Set(
+      text
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .split(/\s+/)
+        .filter((word) => word.length > 2 && !STOP_WORDS.has(word))
+    ),
+  ];
 }
 
 /**
- * Check if a task title matches a calendar event
- * Returns true if there's significant keyword overlap
+ * Check if a task title matches a calendar event.
+ * Needs at least two shared significant keywords (one shared word, however
+ * distinctive, is how unrelated tasks got linked to meetings) and the shared
+ * words must be at least 30% of the task's significant keywords.
  */
 function titleMatchesEvent(taskTitle: string, eventTitle: string): boolean {
   const taskKeywords = extractKeywords(taskTitle);
@@ -72,12 +99,9 @@ function titleMatchesEvent(taskTitle: string, eventTitle: string): boolean {
     return false;
   }
 
-  // Count matching keywords
   const matches = taskKeywords.filter((kw) => eventKeywords.includes(kw));
 
-  // Require at least 1 significant keyword match
-  // and at least 30% of task keywords to match
-  return matches.length >= 1 && matches.length / taskKeywords.length >= 0.3;
+  return matches.length >= MIN_SHARED_KEYWORDS && matches.length / taskKeywords.length >= MIN_KEYWORD_OVERLAP;
 }
 
 /**

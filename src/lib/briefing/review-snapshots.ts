@@ -105,9 +105,13 @@ export function buildEodReviewSummary(payload: EodReviewPayloadLike): string {
   const rolledCount = Array.isArray(review.rolledForward) ? review.rolledForward.length : 0;
   const blockerCount = Array.isArray(review.openBlockers) ? review.openBlockers.length : 0;
   const followupCount = Array.isArray(review.coldFollowups) ? review.coldFollowups.length : 0;
-  const tomorrowCount = Array.isArray(review.tomorrowFirstThings) ? review.tomorrowFirstThings.length : 0;
+  const tomorrowShown = Array.isArray(review.tomorrowFirstThings) ? review.tomorrowFirstThings.length : 0;
+  // The list is collapsed and capped; the summary reports the real count when the review carries it.
+  const totals = review.tomorrowFirstThingsTotals as { tasks?: unknown } | undefined;
+  const tomorrowTotal = typeof totals?.tasks === "number" ? totals.tasks : tomorrowShown;
+  const tomorrowLabel = tomorrowTotal === tomorrowShown ? `${tomorrowShown}` : `${tomorrowTotal} (${tomorrowShown} listed)`;
 
-  return `${completedCount} completed, ${rolledCount} rolling forward, ${blockerCount} open blockers, ${followupCount} cold follow-ups, ${tomorrowCount} tomorrow-first items.`;
+  return `${completedCount} completed, ${rolledCount} rolling forward, ${blockerCount} open blockers, ${followupCount} cold follow-ups, ${tomorrowLabel} tomorrow-first items.`;
 }
 
 export function buildWeeklyReviewSummary(payload: WeeklyReviewPayloadLike): string {

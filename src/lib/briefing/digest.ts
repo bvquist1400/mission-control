@@ -19,6 +19,13 @@ import {
 import { buildCalendarEntityId } from "@/lib/calendar-event-identity";
 import { detectBriefingMode, formatETTime, getTodayET, getTomorrowET, type BriefingMode } from "@/lib/briefing";
 import { identifyPrepTasks, type TaskInput } from "@/lib/briefing/prep-tasks";
+import {
+  buildListTotals,
+  describeDuplicates,
+  groupByIdenticalTitle,
+  isoRange,
+  type ListTotals,
+} from "@/lib/briefing/collapse";
 import { addDateOnlyDays, normalizeDateOnly } from "@/lib/date-only";
 import { readIntelligenceTaskContexts } from "@/lib/intelligence-layer";
 import { hydrateNotes } from "@/lib/notes-relations";
@@ -126,6 +133,21 @@ export interface DailyBriefDigestTaskItem {
   context: string | null;
   reason: string;
   recent_update: string | null;
+  /**
+   * When this task row was created. Compare it with the previous brief before
+   * saying a task or list is new, duplicated or growing: a count that changes
+   * between briefs does not by itself mean new rows.
+   */
+  created_at: string | null;
+  /** The recurring template this row came from; null for one-off tasks and for copies whose template was deleted. */
+  recurring_template_id: string | null;
+  /** Prep lists only: how many open tasks share this exact title (1 = unique). */
+  duplicate_count?: number;
+  /** Prep lists only: the other tasks collapsed into this entry (the entry's own id is `id`). */
+  duplicate_task_ids?: string[];
+  /** Prep lists only, when duplicate_count > 1: oldest and newest created_at among the copies. */
+  duplicates_created_from?: string | null;
+  duplicates_created_to?: string | null;
   supporting_notes: Array<{
     id: string;
     title: string;
@@ -244,6 +266,15 @@ export interface DailyBriefDigestResponse {
     today_prep: DailyBriefDigestTaskItem[];
   };
   counts: DailyBriefDigestCounts;
+  /**
+   * Real sizes of the prep lists: `tasks` before collapsing identical titles,
+   * `entries` after, `shown` as returned. Use these, not the array length,
+   * when saying how many tasks there are.
+   */
+  list_totals: {
+    today_prep: ListTotals;
+    tomorrow_prep: ListTotals;
+  };
   signals: DailyBriefComputedSignals;
   meetings: DailyBriefDigestMeetingItem[];
   commitments: {
@@ -431,7 +462,7 @@ function formatDecisionHeadline(title: string, summary: string): string {
   return summary ? `${title}: ${truncate(summary, 140)}` : title;
 }
 
-function toTaskDigestItem(
+export function toTaskDigestItem(
   task: TaskWithRelations,
   now: Date,
   requestedDate: string,
@@ -451,9 +482,33 @@ function toTaskDigestItem(
     context: buildTaskContextLabel(task),
     reason: buildTaskReason(task, now, requestedDate),
     recent_update: buildRecentUpdate(task, commentActivity, sinceIso),
+    created_at: task.created_at ?? null,
+    recurring_template_id: task.recurring_template_id ?? null,
     supporting_notes: [],
     active_decisions: [],
   };
+}
+
+/**
+ * Collapse tasks with identical titles into one entry (the first one, in the
+ * list's existing order) that reports how many copies there are, which ones,
+ * and when the oldest and newest were created.
+ */
+export function collapseDigestTaskItems(items: DailyBriefDigestTaskItem[]): DailyBriefDigestTaskItem[] {
+  return groupByIdenticalTitle(items, (item) => item.title).map((group) => {
+    const copies = group.members;
+    const range = copies.length > 1 ? isoRange(copies.map((copy) => copy.created_at)) : null;
+    const duplicates = describeDuplicates(copies.length);
+
+    return {
+      ...group.first,
+      reason: duplicates ? `${group.first.reason}. ${duplicates}, listed once` : group.first.reason,
+      duplicate_count: copies.length,
+      duplicate_task_ids: copies.slice(1).map((copy) => copy.id),
+      duplicates_created_from: range?.from ?? null,
+      duplicates_created_to: range?.to ?? null,
+    };
+  });
 }
 
 function matchesStakeholderName(text: string, stakeholderName: string): boolean {
@@ -1676,6 +1731,8 @@ function buildEodPrepCandidates(
   reason: string;
   updatedAt: string;
   dueAt: string | null;
+  createdAt: string | null;
+  recurringTemplateId: string | null;
 }> {
   const byId = new Map(allTasks.map((task) => [task.id, task]));
 
@@ -1693,6 +1750,8 @@ function buildEodPrepCandidates(
         reason: prep.reason,
         updatedAt: getLatestTimestamp([task.updated_at, commentActivity.get(task.id)?.latestAt ?? null]) ?? task.updated_at,
         dueAt: task.due_at,
+        createdAt: task.created_at ?? null,
+        recurringTemplateId: task.recurring_template_id ?? null,
       };
     })
     .filter((item): item is NonNullable<typeof item> => item !== null);
@@ -1719,12 +1778,24 @@ function toDigestTaskItemFromReview(
     due_at: item.dueAt,
     due_label: formatEtDueLabel(item.dueAt, now, requestedDate),
     context: item.context ?? (task ? buildTaskContextLabel(task) : null),
-    reason: item.reason,
+    reason: item.duplicateCount && item.duplicateCount > 1
+      ? `${item.reason}. ${describeDuplicates(item.duplicateCount)}, listed once`
+      : item.reason,
     recent_update: task
       ? buildRecentUpdate(task, commentActivity, sinceIso)
       : item.updatedAt
         ? `Updated at ${formatEtDateTime(item.updatedAt)}`
         : null,
+    created_at: item.createdAt ?? task?.created_at ?? null,
+    recurring_template_id: item.recurringTemplateId ?? task?.recurring_template_id ?? null,
+    ...(item.duplicateCount !== undefined
+      ? {
+          duplicate_count: item.duplicateCount,
+          duplicate_task_ids: item.duplicateTaskIds ?? [],
+          duplicates_created_from: item.duplicatesCreatedFrom ?? null,
+          duplicates_created_to: item.duplicatesCreatedTo ?? null,
+        }
+      : {}),
     supporting_notes: [],
     active_decisions: [],
   };
@@ -1933,17 +2004,16 @@ export async function buildDailyBriefDigest({
       : [],
       projectIdsWithSections
     );
-  const baseTodayPrepDigest = annotateProjectSectionState(
-    rawTodayPrep
-      .map((prep) => {
-        const task = taskById.get(prep.task.id);
-        return task
-          ? { ...toTaskDigestItem(task, now, requestedDate, commentActivity, effectiveSince), reason: prep.reason }
-          : null;
-      })
-      .filter((item): item is DailyBriefDigestTaskItem => item !== null),
-    projectIdsWithSections
-  );
+  const todayPrepItems = rawTodayPrep
+    .map((prep) => {
+      const task = taskById.get(prep.task.id);
+      return task
+        ? { ...toTaskDigestItem(task, now, requestedDate, commentActivity, effectiveSince), reason: prep.reason }
+        : null;
+    })
+    .filter((item): item is DailyBriefDigestTaskItem => item !== null);
+  const collapsedTodayPrepItems = collapseDigestTaskItems(todayPrepItems);
+  const baseTodayPrepDigest = annotateProjectSectionState(collapsedTodayPrepItems, projectIdsWithSections);
   const noteContextTaskIds = [
     ...baseTodayPrepDigest,
     ...baseDueSoonDigest,
@@ -2083,6 +2153,14 @@ export async function buildDailyBriefDigest({
     markdown,
     narrative,
     sprint,
+    list_totals: {
+      today_prep: buildListTotals(todayPrepItems.length, collapsedTodayPrepItems.length, todayPrepDigest.length),
+      // EOD only: the review reports its own pre-cap total.
+      tomorrow_prep:
+        resolvedMode === "eod" && eodReview?.tomorrowFirstThingsTotals
+          ? eodReview.tomorrowFirstThingsTotals
+          : buildListTotals(0, 0, 0),
+    },
     tasks: {
       due_soon: dueSoonDigest,
       blocked: blockedDigest,

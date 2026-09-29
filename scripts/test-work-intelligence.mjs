@@ -1208,4 +1208,111 @@ assert.equal(fallbackMonthlyReview.confidence, "low");
 assert.equal(fallbackMonthlyReview.recurringPressurePoints.length > 0, true);
 assert.equal(fallbackMonthlyReview.caveats.some((caveat) => /project status history/i.test(caveat)), true);
 
+// ---------------------------------------------------------------------------
+// Tomorrow-first list: identical titles collapse, and the pre-cap total is reported.
+// Regression for the 9/28 EOD "four identical REDCap tasks" line: eight old copies
+// of one task filled a top-5 list that silently dropped the rest, so Monday said
+// "four" and Tuesday's brief (uncapped) said "eight" and called it duplication.
+// ---------------------------------------------------------------------------
+
+function buildTomorrowReview({ tasks, prepCandidates = [] }) {
+  const snapshot = buildSnapshot({
+    now: "2026-03-24T22:30:00.000Z",
+    window: buildWindow({
+      since: "2026-03-24T04:00:00.000Z",
+      dayStartIso: "2026-03-24T04:00:00.000Z",
+      dayEndExclusiveIso: "2026-03-25T04:00:00.000Z",
+    }),
+    tasks,
+  });
+
+  return buildWorkEodReview({
+    requestedDate: "2026-03-24",
+    timezone: "America/New_York",
+    snapshot,
+    openCommitments: [],
+    openCommitmentRows: [],
+    tomorrowEventLatestAt: null,
+    prepCandidates,
+    statusUpdateRecommendations: [],
+    statusArtifactsLatestAt: null,
+    includeRawSignals: true,
+  });
+}
+
+// Eight weekly copies of one task (orphaned: no template), one higher-priority task ahead of them.
+const redcapCopies = Array.from({ length: 8 }, (_, index) =>
+  makeTask(`redcap-${index + 1}`, {
+    title: "Check for REDCap Upgrade",
+    priority_score: 50,
+    due_at: `2026-03-${String(2 + index).padStart(2, "0")}T21:00:00.000Z`,
+    created_at: `2026-02-${String(2 + index).padStart(2, "0")}T14:00:00.000Z`,
+    updated_at: "2026-03-10T14:00:00.000Z",
+    recurring_template_id: null,
+  })
+);
+const realWork = makeTask("real-work", {
+  title: "Pick a real study for a parallel calendar build",
+  priority_score: 65,
+  due_at: "2026-03-23T21:00:00.000Z",
+});
+
+const collapsedReview = buildTomorrowReview({ tasks: [realWork, ...redcapCopies] });
+assert.equal(collapsedReview.tomorrowFirstThings.length, 2, "8 identical titles + 1 other = 2 entries, not a capped 5");
+const redcapEntry = collapsedReview.tomorrowFirstThings.find((item) => item.title === "Check for REDCap Upgrade");
+assert.ok(redcapEntry, "the REDCap entry is listed");
+assert.equal(redcapEntry.duplicateCount, 8);
+assert.equal(redcapEntry.duplicateTaskIds.length, 7);
+assert.equal(redcapEntry.recurringTemplateId, null);
+assert.equal(redcapEntry.duplicatesCreatedFrom, "2026-02-02T14:00:00.000Z");
+assert.equal(redcapEntry.duplicatesCreatedTo, "2026-02-09T14:00:00.000Z");
+assert.deepEqual(collapsedReview.tomorrowFirstThingsTotals, { tasks: 9, entries: 2, shown: 2, capped: false });
+assert.match(collapsedReview.supportingSignals.find((signal) => signal.kind === "tomorrow_prep").summary, /9 first-thing candidates/);
+assert.equal(collapsedReview.rawSignals.tomorrowFirstTaskIds.length, 9, "the ids of every collapsed copy stay reachable");
+
+// The same list twice, once with more copies: the entry count stays put, the total moves. Nothing reads as "duplicating".
+const fewerCopies = buildTomorrowReview({ tasks: [realWork, ...redcapCopies.slice(0, 4)] });
+assert.equal(fewerCopies.tomorrowFirstThings.length, collapsedReview.tomorrowFirstThings.length);
+assert.equal(fewerCopies.tomorrowFirstThings.find((item) => item.title === "Check for REDCap Upgrade").duplicateCount, 4);
+assert.equal(fewerCopies.tomorrowFirstThingsTotals.tasks, 5);
+
+// A capped list says how many there really are.
+const sixDistinct = buildTomorrowReview({
+  tasks: Array.from({ length: 6 }, (_, index) =>
+    makeTask(`distinct-${index + 1}`, {
+      title: `Distinct rollover ${index + 1}`,
+      priority_score: 60 - index,
+      due_at: "2026-03-23T21:00:00.000Z",
+    })
+  ),
+});
+assert.equal(sixDistinct.tomorrowFirstThings.length, 5, "the list is still capped at 5");
+assert.deepEqual(sixDistinct.tomorrowFirstThingsTotals, { tasks: 6, entries: 6, shown: 5, capped: true });
+assert.match(sixDistinct.supportingSignals.find((signal) => signal.kind === "tomorrow_prep").summary, /^6 first-thing candidates .*showing the first 5/);
+assert.match(buildReviewSnapshotSummary("eod", { review: sixDistinct }), /6 \(5 listed\) tomorrow-first items/);
+
+// Collapsing happens before the cap, so eight copies don't crowd out four other things.
+const crowded = buildTomorrowReview({
+  tasks: [
+    ...redcapCopies,
+    ...Array.from({ length: 4 }, (_, index) =>
+      makeTask(`other-${index + 1}`, { title: `Other rollover ${index + 1}`, priority_score: 40 - index, due_at: "2026-03-23T21:00:00.000Z" })
+    ),
+  ],
+});
+assert.equal(crowded.tomorrowFirstThings.length, 5);
+assert.deepEqual(crowded.tomorrowFirstThingsTotals, { tasks: 12, entries: 5, shown: 5, capped: false });
+
+// Task rows now carry created_at and recurring_template_id (null-safe) everywhere the review lists tasks.
+const templated = makeTask("templated", { title: "Weekly template copy", due_at: "2026-03-23T21:00:00.000Z", recurring_template_id: "tmpl-1" });
+const legacy = makeTask("legacy", { title: "Row without the new columns", due_at: "2026-03-23T21:00:00.000Z" });
+delete legacy.created_at;
+delete legacy.recurring_template_id;
+const nullSafe = buildTomorrowReview({ tasks: [templated, legacy] });
+const byTitle = Object.fromEntries(nullSafe.rolledForward.map((item) => [item.title, item]));
+assert.equal(byTitle["Weekly template copy"].recurringTemplateId, "tmpl-1");
+assert.equal(byTitle["Weekly template copy"].createdAt, "2026-03-20T14:00:00.000Z");
+assert.equal(byTitle["Row without the new columns"].recurringTemplateId, null);
+assert.equal(byTitle["Row without the new columns"].createdAt, null);
+
 console.log(updateFixtures ? "Work-intelligence fixtures updated." : "Work-intelligence tests passed.");

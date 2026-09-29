@@ -12,7 +12,9 @@
       "context": "Alpha Platform / Quarterly Launch / Sprint 12",
       "reason": "Closed today.",
       "updatedAt": "2026-03-24T20:15:00.000Z",
-      "dueAt": null
+      "dueAt": null,
+      "createdAt": "2026-03-20T14:00:00.000Z",
+      "recurringTemplateId": null
     },
     {
       "taskId": "done-note",
@@ -20,7 +22,9 @@
       "context": "Alpha Platform / Quarterly Launch / Sprint 12",
       "reason": "Closed today.",
       "updatedAt": "2026-03-24T18:30:00.000Z",
-      "dueAt": null
+      "dueAt": null,
+      "createdAt": "2026-03-20T14:00:00.000Z",
+      "recurringTemplateId": null
     }
   ],
   "rolledForward": [
@@ -30,7 +34,9 @@
       "context": "Alpha Platform / Quarterly Launch / Sprint 12",
       "reason": "Still open at close of day and likely to reopen tomorrow.",
       "updatedAt": "2026-03-24T17:30:00.000Z",
-      "dueAt": "2026-03-24T21:00:00.000Z"
+      "dueAt": "2026-03-24T21:00:00.000Z",
+      "createdAt": "2026-03-20T14:00:00.000Z",
+      "recurringTemplateId": null
     }
   ],
   "openBlockers": [
@@ -40,7 +46,9 @@
       "context": "Alpha Platform / Quarterly Launch / Sprint 12",
       "reason": "Still waiting on Vendor signoff.",
       "updatedAt": "2026-03-21T16:00:00.000Z",
-      "dueAt": null
+      "dueAt": null,
+      "createdAt": "2026-03-20T14:00:00.000Z",
+      "recurringTemplateId": null
     }
   ],
   "coldFollowups": [
@@ -72,7 +80,13 @@
       "context": "Alpha Platform / Quarterly Launch / Sprint 12",
       "reason": "Tomorrow starts with customer-facing time, so the deck should be ready before the first open block.",
       "updatedAt": "2026-03-24T15:20:00.000Z",
-      "dueAt": "2026-03-25T15:00:00.000Z"
+      "dueAt": "2026-03-25T15:00:00.000Z",
+      "createdAt": null,
+      "recurringTemplateId": null,
+      "duplicateCount": 1,
+      "duplicateTaskIds": [],
+      "duplicatesCreatedFrom": null,
+      "duplicatesCreatedTo": null
     },
     {
       "taskId": "roll-cutover",
@@ -80,9 +94,21 @@
       "context": "Alpha Platform / Quarterly Launch / Sprint 12",
       "reason": "Still open heading into tomorrow, so it needs a deliberate restart instead of another warm-up lap.",
       "updatedAt": "2026-03-24T17:30:00.000Z",
-      "dueAt": "2026-03-24T21:00:00.000Z"
+      "dueAt": "2026-03-24T21:00:00.000Z",
+      "createdAt": "2026-03-20T14:00:00.000Z",
+      "recurringTemplateId": null,
+      "duplicateCount": 1,
+      "duplicateTaskIds": [],
+      "duplicatesCreatedFrom": null,
+      "duplicatesCreatedTo": null
     }
   ],
+  "tomorrowFirstThingsTotals": {
+    "tasks": 2,
+    "entries": 2,
+    "shown": 2,
+    "capped": false
+  },
   "statusUpdateRecommendations": [
     {
       "key": "project:proj-1:completed_thread_reporting_hygiene",

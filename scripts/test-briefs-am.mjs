@@ -19,6 +19,7 @@ const keys = await import("../src/lib/briefs/keys.ts");
 const validate = await import("../src/lib/briefs/validate.ts");
 const { buildBriefNotice } = await import("../src/lib/briefs/notify.ts");
 const { identifyPrepTasks } = await import("../src/lib/briefing/prep-tasks.ts");
+const digestModule = await import("../src/lib/briefing/digest.ts").catch((error) => ({ missing: error.message }));
 const timeline = await import("../src/components/briefs/timeline.ts").catch((error) => ({ missing: error.message }));
 
 let passed = 0;
@@ -342,6 +343,139 @@ await test("prep from today's events: meeting matches and due-today work, worded
   // EOD's call (no option) keeps its wording.
   const eod = identifyPrepTasks(tasks, todayEvents, "2026-09-28");
   assert.equal(eod[1].reason, "Due tomorrow (90 min) - consider starting today");
+});
+
+// ---------------------------------------------------------------------------
+// (g2) the task-to-meeting match must not link unrelated tasks on one generic word
+// Regression for 9/29: all eight "Check for REDCap Upgrade" copies were listed as prep
+// for the 8:00 "BOS check-in" because both titles contain "check". On 9/28 two Google IT
+// cert modules were linked to Monday's meetings the same way.
+// ---------------------------------------------------------------------------
+
+function relatedTo(taskTitle, eventTitle, extra = {}) {
+  const events = [{ title: eventTitle, start_at: "2026-09-29T12:00:00.000Z", end_at: "2026-09-29T12:30:00.000Z" }];
+  const prep = identifyPrepTasks([task({ id: "e0000000-0000-4000-8000-000000000001", title: taskTitle, ...extra })], events, "2026-09-29", { day: "today" });
+  return prep.length === 1 && prep[0].targetMeetingTitle === eventTitle;
+}
+
+await test("match: 'Check for REDCap Upgrade' is not prep for the BOS check-in (the 9/29 false match)", () => {
+  assert.equal(relatedTo("Check for REDCap Upgrade", "BOS check-in"), false);
+  assert.equal(relatedTo("Check for REDCap Upgrade", "BOS calendar and budget build weekly check in"), false);
+  // All eight orphaned copies at once: none of them is prep for the meeting.
+  const events = [{ title: "BOS check-in", start_at: "2026-09-29T12:00:00.000Z", end_at: "2026-09-29T12:30:00.000Z" }];
+  const copies = Array.from({ length: 8 }, (_, index) => task({ id: `e0000000-0000-4000-8000-00000000010${index}`, title: "Check for REDCap Upgrade" }));
+  assert.deepEqual(identifyPrepTasks(copies, events, "2026-09-29", { day: "today" }), []);
+});
+
+await test("match: one shared word never links, even a distinctive one (a reconstruction of the 9/28 Google IT cert false match)", () => {
+  // The exact 9/28 titles were not kept; this has the same shape: a course module sharing one topic word with a meeting.
+  assert.equal(relatedTo("Google IT Support Certificate C4 M5: Security basics", "Security IWG 2026"), false);
+  assert.equal(relatedTo("Google IT Support Certificate C4 M6: Data storage and backups", "Cayuse-iCooper Data Flow"), false);
+  // A task that is only generic words cannot match anything.
+  assert.equal(relatedTo("Weekly check in follow up notes", "Weekly check in with the team: follow up on notes"), false);
+});
+
+await test("match: generic words do not count toward the two-word minimum", () => {
+  // "check", "build", "verify", "test" are shared here, but they are generic; only "redcap" is left.
+  assert.equal(relatedTo("Verify and test REDCap build", "REDCap build check"), false);
+  // With a second real word in common it matches.
+  assert.equal(relatedTo("Verify REDCap upgrade plan", "REDCap upgrade planning session"), true);
+});
+
+await test("match: real task-to-meeting matches still link (2+ shared words, 30%+ of the task's)", () => {
+  // The existing fixture case.
+  assert.equal(relatedTo("Present IB 225 request at Security IWG", "Security IWG 2026"), true);
+  // Modeled on the 9/28 brief: Cayuse prep and the OnCore status meeting.
+  assert.equal(relatedTo("Cayuse routing: sponsor data fields", "Cayuse-iCooper Data Flow"), true);
+  assert.equal(relatedTo("Chase Saif on OnCore CTMS field mapping", "OnCore CTMS Weekly Project Status Meeting"), true);
+  // A long task title that only touches the meeting with 2 of 10 words stays out (30% floor still applies).
+  assert.equal(relatedTo("Send Nancy the OnCore CTMS budget template and the billing grid for the coordinators", "OnCore CTMS Weekly Project Status Meeting"), false);
+});
+
+await test("match: a MeetingPrep task still shows up without a matching meeting, just with no link", () => {
+  const events = [{ title: "BOS check-in", start_at: "2026-09-29T12:00:00.000Z", end_at: "2026-09-29T12:30:00.000Z" }];
+  const prep = identifyPrepTasks([task({ id: "e0000000-0000-4000-8000-000000000002", title: "Check for REDCap Upgrade", task_type: "MeetingPrep" })], events, "2026-09-29", { day: "today" });
+  assert.equal(prep.length, 1);
+  assert.equal(prep[0].targetMeetingTitle, undefined);
+  assert.equal(prep[0].reason, "Meeting preparation task");
+});
+
+// ---------------------------------------------------------------------------
+// (g3) the digest's task items: created_at, recurring_template_id, identical titles collapsed
+// ---------------------------------------------------------------------------
+
+function digestItem(id, title, extra = {}) {
+  return {
+    id,
+    title,
+    status: "Planned",
+    project_id: null,
+    project_name: null,
+    section_id: null,
+    section_name: null,
+    due_at: null,
+    due_label: null,
+    context: null,
+    reason: "Related to: Security IWG 2026 at 1:00 PM",
+    recent_update: null,
+    created_at: null,
+    recurring_template_id: null,
+    supporting_notes: [],
+    active_decisions: [],
+    ...extra,
+  };
+}
+
+await test("digest: task items carry created_at and recurring_template_id, null-safe", () => {
+  assert.ok(!digestModule.missing, `digest.ts: ${digestModule.missing}`);
+  const now = new Date("2026-09-29T12:00:00.000Z");
+  const base = {
+    id: "f0000000-0000-4000-8000-000000000001",
+    title: "Check for REDCap Upgrade",
+    status: "Planned",
+    project_id: null,
+    section_id: null,
+    due_at: null,
+    stakeholder_mentions: [],
+    waiting_on: null,
+    blocker: false,
+    project: null,
+    implementation: null,
+    sprint: null,
+  };
+  const withColumns = digestModule.toTaskDigestItem({ ...base, created_at: "2026-05-11T12:00:00.000Z", recurring_template_id: "tmpl-9" }, now, "2026-09-29", new Map(), null);
+  assert.equal(withColumns.created_at, "2026-05-11T12:00:00.000Z");
+  assert.equal(withColumns.recurring_template_id, "tmpl-9");
+  const without = digestModule.toTaskDigestItem({ ...base }, now, "2026-09-29", new Map(), null);
+  assert.equal(without.created_at, null);
+  assert.equal(without.recurring_template_id, null);
+});
+
+await test("digest: eight identical titles become one entry x8 with the copies listed", () => {
+  assert.ok(!digestModule.missing, `digest.ts: ${digestModule.missing}`);
+  const mondays = ["2026-05-11", "2026-05-18", "2026-05-25", "2026-06-01", "2026-06-08", "2026-06-15", "2026-06-22", "2026-06-29"];
+  const eight = mondays.map((day, index) =>
+    digestItem(`f0000000-0000-4000-8000-0000000001${index}0`, "Check for REDCap Upgrade", { created_at: `${day}T12:00:00.000Z` })
+  );
+  const other = digestItem("f0000000-0000-4000-8000-000000000999", "Pick a real study for a parallel calendar build");
+  const collapsed = digestModule.collapseDigestTaskItems([other, ...eight]);
+  assert.equal(collapsed.length, 2);
+  assert.equal(collapsed[0].title, other.title);
+  assert.equal(collapsed[0].duplicate_count, 1);
+  assert.deepEqual(collapsed[0].duplicate_task_ids, []);
+  assert.equal(collapsed[0].reason, other.reason);
+  assert.equal(collapsed[1].duplicate_count, 8);
+  assert.deepEqual(collapsed[1].duplicate_task_ids, eight.slice(1).map((item) => item.id));
+  assert.equal(collapsed[1].id, eight[0].id);
+  assert.equal(collapsed[1].duplicates_created_from, "2026-05-11T12:00:00.000Z");
+  assert.equal(collapsed[1].duplicates_created_to, "2026-06-29T12:00:00.000Z");
+  assert.match(collapsed[1].reason, /8 identical open tasks, listed once/);
+  // Case and spacing don't hide a duplicate.
+  const messy = digestModule.collapseDigestTaskItems([digestItem("a", "Check for  REDCap Upgrade"), digestItem("b", " check for redcap upgrade ")]);
+  assert.equal(messy.length, 1);
+  assert.equal(messy[0].duplicate_count, 2);
+  // Blank titles never merge.
+  assert.equal(digestModule.collapseDigestTaskItems([digestItem("c", ""), digestItem("d", "")]).length, 2);
 });
 
 // ---------------------------------------------------------------------------
