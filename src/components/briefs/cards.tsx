@@ -13,13 +13,15 @@ import {
 } from "@/lib/briefs/types";
 import {
   ACCEPT_DUE_PRESETS,
+  defaultAcceptDueChoice,
   isAcceptDuePreset,
+  isDatePassed,
   isDateOnlyString,
   resolveAcceptDueDate,
   type AcceptDueChoice,
   type AcceptDuePreset,
 } from "@/lib/briefs/due";
-import { etClock, etDay, etTime, shortId, weekdayDate } from "@/components/briefs/format";
+import { etClock, etDay, etTime, notesDueParts, shortId, weekdayDate } from "@/components/briefs/format";
 
 export interface ActRequest {
   n: number;
@@ -80,9 +82,12 @@ export function suggestedDue(item: BriefItemRow): string | null {
   return isDateOnlyString(item.payload.suggested_due) ? item.payload.suggested_due : null;
 }
 
-/** Where a card's due choice starts: the notes' date when there is one, else Tomorrow. */
-export function defaultAcceptDue(item: BriefItemRow): AcceptDueChoice {
-  return (suggestedDue(item) as AcceptDueChoice | null) ?? "tomorrow";
+/**
+ * Where a card's due choice starts: the notes' date when it is today or later,
+ * else Tomorrow (also when the notes' date has already passed, ET).
+ */
+export function defaultAcceptDue(item: BriefItemRow, now: Date = new Date()): AcceptDueChoice {
+  return defaultAcceptDueChoice(suggestedDue(item), now);
 }
 
 export const DISMISS_REASON_LABELS: Record<DismissReason, string> = {
@@ -162,6 +167,8 @@ function acceptedWhere(task: BriefTaskSummary | undefined): string | null {
 function DuePicker({ item, ctx }: CardProps) {
   const suggested = suggestedDue(item);
   const selected = ctx.dueChoice;
+  // "Passed" is judged in ET at render time, so a stale page can't offer yesterday as the default.
+  const notesParts = suggested ? notesDueParts(suggested, isDatePassed(suggested)) : null;
   // Show which day a relative choice lands on (the notes' date already says it).
   const lands = isAcceptDuePreset(selected) && selected !== "none" ? resolveAcceptDueDate(selected, ctx.briefDate) : null;
   return (
@@ -171,10 +178,13 @@ function DuePicker({ item, ctx }: CardProps) {
         <button
           type="button"
           aria-pressed={selected === suggested}
+          suppressHydrationWarning
           disabled={ctx.pending}
           onClick={() => ctx.setDueChoice(suggested as AcceptDueChoice)}
         >
-          {weekdayDate(suggested)} <span className="from">(from notes)</span>
+          {notesParts?.day} <span className="from" suppressHydrationWarning>
+            {notesParts?.note}
+          </span>
         </button>
       ) : null}
       {ACCEPT_DUE_PRESETS.map((preset) => (

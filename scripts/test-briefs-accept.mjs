@@ -211,5 +211,57 @@ await test("labels: the notes' chip reads 'Mon 10/12'; an end-of-day due_at read
   assert.equal(format.etDay(null), "");
 });
 
+// ---------------------------------------------------------------------------
+// Fix round 1: a notes date that has already passed is offered, not pre-selected
+// ---------------------------------------------------------------------------
+
+await test("default chip: a past notes date pre-selects Tomorrow (Mon 9/28 notes date, Tue 9/29 5 PM ET)", () => {
+  need(due, "defaultAcceptDueChoice");
+  assert.equal(due.defaultAcceptDueChoice("2026-09-28", at("2026-09-29T21:00:00Z")), "tomorrow");
+  assert.equal(due.defaultAcceptDueChoice("2026-01-01", at("2026-09-29T21:00:00Z")), "tomorrow");
+});
+
+await test("default chip: a notes date of today or later stays pre-selected", () => {
+  need(due, "defaultAcceptDueChoice");
+  const now = at("2026-09-29T21:00:00Z");
+  assert.equal(due.defaultAcceptDueChoice("2026-09-29", now), "2026-09-29");
+  assert.equal(due.defaultAcceptDueChoice("2026-09-30", now), "2026-09-30");
+  assert.equal(due.defaultAcceptDueChoice("2026-10-12", now), "2026-10-12");
+});
+
+await test("default chip: no notes date (or a malformed one) is Tomorrow", () => {
+  need(due, "defaultAcceptDueChoice");
+  const now = at("2026-09-29T21:00:00Z");
+  assert.equal(due.defaultAcceptDueChoice(null, now), "tomorrow");
+  assert.equal(due.defaultAcceptDueChoice("", now), "tomorrow");
+  assert.equal(due.defaultAcceptDueChoice("2026-9-30", now), "tomorrow");
+});
+
+await test("default chip: 'passed' is judged at ET midnight, never UTC", () => {
+  need(due, "defaultAcceptDueChoice", "isDatePassed");
+  // 11:59 PM ET Tue 9/29 is 03:59 UTC Wed 9/30: 9/29 is still today in ET.
+  assert.equal(due.defaultAcceptDueChoice("2026-09-29", at("2026-09-30T03:59:00Z")), "2026-09-29");
+  assert.equal(due.isDatePassed("2026-09-29", at("2026-09-30T03:59:00Z")), false);
+  // 12:00 AM ET Wed 9/30 is 04:00 UTC: 9/29 has now passed.
+  assert.equal(due.defaultAcceptDueChoice("2026-09-29", at("2026-09-30T04:00:00Z")), "tomorrow");
+  assert.equal(due.isDatePassed("2026-09-29", at("2026-09-30T04:00:00Z")), true);
+  // 8 PM ET is already the next UTC day, and 9/29 is still not passed at 7:30 PM ET 9/29 (23:30 UTC).
+  assert.equal(due.defaultAcceptDueChoice("2026-09-29", at("2026-09-29T23:30:00Z")), "2026-09-29");
+  // Winter (EST): 11:30 PM ET 1/15 is 04:30 UTC 1/16.
+  assert.equal(due.defaultAcceptDueChoice("2027-01-15", at("2027-01-16T04:30:00Z")), "2027-01-15");
+  assert.equal(due.defaultAcceptDueChoice("2027-01-15", at("2027-01-16T05:00:00Z")), "tomorrow");
+});
+
+await test("the server default with no choice is still tomorrow", () => {
+  need(due, "resolveAcceptDueAt");
+  assert.equal(due.DEFAULT_ACCEPT_DUE, "tomorrow");
+});
+
+await test("the notes chip says 'from notes', and 'from notes, passed' once the date is behind us", () => {
+  need(format, "notesDueLabel");
+  assert.equal(format.notesDueLabel("2026-10-12", false), "Mon 10/12 \u00b7 from notes");
+  assert.equal(format.notesDueLabel("2026-09-28", true), "Mon 9/28 \u00b7 from notes, passed");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

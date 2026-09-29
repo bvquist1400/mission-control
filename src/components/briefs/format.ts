@@ -60,6 +60,17 @@ export function weekdayDate(dateOnly: string): string {
   return date.toLocaleDateString("en-US", { timeZone: "UTC", weekday: "short", month: "numeric", day: "numeric" }).replace(",", "");
 }
 
+/** The notes' date chip on a proposal: day "Mon 10/12" + note "· from notes", or "· from notes, passed". */
+export function notesDueParts(dateOnly: string, passed: boolean): { day: string; note: string } {
+  return { day: weekdayDate(dateOnly), note: `\u00b7 from notes${passed ? ", passed" : ""}` };
+}
+
+/** The whole chip text, e.g. "Mon 9/28 · from notes, passed". */
+export function notesDueLabel(dateOnly: string, passed: boolean): string {
+  const { day, note } = notesDueParts(dateOnly, passed);
+  return `${day} ${note}`;
+}
+
 /** "Wed 9/30": the ET day of a timestamp (a due_at at 23:59:59.999 ET stays on its day). */
 export function etDay(iso: string | null | undefined): string {
   if (!iso) return "";

@@ -111,3 +111,21 @@ export function resolveAcceptDueAt(choice: AcceptDueChoice, briefDate: string, n
   const date = resolveAcceptDueDate(choice, briefDate, now);
   return date ? buildRecurringDueAt(date, BRIEF_TIME_ZONE) : null;
 }
+
+/** True when a YYYY-MM-DD is before today in ET (never UTC). Today itself is not passed. */
+export function isDatePassed(dateOnly: string, now: Date = new Date()): boolean {
+  return dateOnly < todayInBriefTimeZone(now);
+}
+
+/**
+ * Which chip a proposal's Due row starts on. The notes' date when it is today or
+ * later; Tomorrow when the notes carry no date or the date has already passed
+ * (a pre-selected past date would make the task overdue the moment it's accepted).
+ * The passed date stays offered as a chip, so Brent can still pick it on purpose.
+ */
+export function defaultAcceptDueChoice(suggestedDue: string | null, now: Date = new Date()): AcceptDueChoice {
+  if (suggestedDue && isDateOnlyString(suggestedDue) && !isDatePassed(suggestedDue, now)) {
+    return suggestedDue as AcceptDueChoice;
+  }
+  return DEFAULT_ACCEPT_DUE;
+}
