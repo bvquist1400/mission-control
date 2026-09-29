@@ -3,10 +3,12 @@ import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { briefMono, briefSans } from '@/components/briefs/fonts';
 import { Markdown } from '@/components/markdown/Markdown';
-import { TaskEditButton } from '@/components/portfolio/PortfolioTasks';
+import { TaskRecordPage } from '@/components/portfolio/TaskRecordPage';
 import { fetchMissionControlItemById, mapRouteKindToTypedId } from '@/lib/mcp/search';
 import { getCanonicalAppUrl } from '@/lib/mcp/config';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { buildTaskPageView } from '@/lib/task-page';
+import { loadTaskPageInput } from '@/lib/task-page-queries';
 import '@/components/briefs/brief-page.css';
 import '@/components/markdown/markdown.css';
 import '@/components/portfolio/portfolio.css';
@@ -72,6 +74,12 @@ export default async function ReaderPage({ params }: ReaderPageProps) {
     notFound();
   }
 
+  // Tasks get the redesigned page (Portfolio slice 2); other records keep the reader.
+  const taskInput = kind === 'task' ? await loadTaskPageInput(supabase, user.id, decodeURIComponent(id)) : null;
+  if (kind === 'task' && !taskInput) {
+    notFound();
+  }
+
   const metadataEntries = Object.entries(item.metadata ?? {}).filter(
     ([key, value]) => key !== 'entity' && key !== 'status_line' && value !== null && value !== undefined && value !== ''
   );
@@ -89,9 +97,38 @@ export default async function ReaderPage({ params }: ReaderPageProps) {
     ? item.text.slice(standPrefix.length).trim()
     : item.text;
 
+  const details = (
+    <>
+      {simpleEntries.length > 0 || complexEntries.length > 0 ? (
+        <details className="pf-details">
+          <summary>Details</summary>
+          {simpleEntries.length > 0 ? (
+            <dl className="pf-dl">
+              {simpleEntries.map(([key, value]) => (
+                <div key={key}>
+                  <dt>{humanizeKey(key)}</dt>
+                  <dd>{String(value)}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : null}
+          {complexEntries.map(([key, value]) => (
+            <div key={key} className="pf-raw">
+              <span className="tile-k">{humanizeKey(key)}</span>
+              <pre>{JSON.stringify(value, null, 2)}</pre>
+            </div>
+          ))}
+          <p className="pf-id mono">{item.id}</p>
+        </details>
+      ) : (
+        <p className="pf-id mono">{item.id}</p>
+      )}
+    </>
+  );
+
   return (
     <div className={`brief-page pf ${briefSans.variable} ${briefMono.variable}`}>
-      <div className="page pf-record">
+      <div className={`page pf-record${taskInput ? ' pf-task' : ''}`}>
         <nav className="pf-top" aria-label="Baseline">
           <Link href="/" className="pf-back">
             <span aria-hidden="true">←</span> Baseline
@@ -101,50 +138,31 @@ export default async function ReaderPage({ params }: ReaderPageProps) {
           </Link>
         </nav>
 
-        <header className="pf-record-head">
-          <div className="eyebrow">
-            <span className="code">{(KIND_LABELS[kind] ?? kind).toUpperCase()}</span>
-            {status ? <span>{status}</span> : null}
-            {owner ? <span>{owner === 'brent' ? 'Owner: You' : `Owner: ${ownerLabel ?? 'Agent'}`}</span> : null}
-          </div>
-          <h1>{item.title}</h1>
-          {/* Signed in (the page redirects otherwise): the same editor as Today and the Portfolio. */}
-          {kind === 'task' ? <TaskEditButton taskId={decodeURIComponent(id)} /> : null}
-          {statusLine ? (
-            <div className="pf-stand-box">
-              <span className="mono">WHERE THIS STANDS</span>
-              <span>{statusLine}</span>
-            </div>
-          ) : null}
-        </header>
-
-        <section className="tile pf-record-body" aria-label="Content">
-          {bodyText ? <Markdown source={bodyText} /> : <p className="tile-p">No text on this record.</p>}
-        </section>
-
-        {simpleEntries.length > 0 || complexEntries.length > 0 ? (
-          <details className="pf-details">
-            <summary>Details</summary>
-            {simpleEntries.length > 0 ? (
-              <dl className="pf-dl">
-                {simpleEntries.map(([key, value]) => (
-                  <div key={key}>
-                    <dt>{humanizeKey(key)}</dt>
-                    <dd>{String(value)}</dd>
-                  </div>
-                ))}
-              </dl>
-            ) : null}
-            {complexEntries.map(([key, value]) => (
-              <div key={key} className="pf-raw">
-                <span className="tile-k">{humanizeKey(key)}</span>
-                <pre>{JSON.stringify(value, null, 2)}</pre>
-              </div>
-            ))}
-            <p className="pf-id mono">{item.id}</p>
-          </details>
+        {taskInput ? (
+          <TaskRecordPage view={buildTaskPageView(taskInput)} details={details} />
         ) : (
-          <p className="pf-id mono">{item.id}</p>
+          <>
+            <header className="pf-record-head">
+              <div className="eyebrow">
+                <span className="code">{(KIND_LABELS[kind] ?? kind).toUpperCase()}</span>
+                {status ? <span>{status}</span> : null}
+                {owner ? <span>{owner === 'brent' ? 'Owner: You' : `Owner: ${ownerLabel ?? 'Agent'}`}</span> : null}
+              </div>
+              <h1>{item.title}</h1>
+              {statusLine ? (
+                <div className="pf-stand-box">
+                  <span className="mono">WHERE THIS STANDS</span>
+                  <span>{statusLine}</span>
+                </div>
+              ) : null}
+            </header>
+
+            <section className="tile pf-record-body" aria-label="Content">
+              {bodyText ? <Markdown source={bodyText} /> : <p className="tile-p">No text on this record.</p>}
+            </section>
+
+            {details}
+          </>
         )}
       </div>
     </div>

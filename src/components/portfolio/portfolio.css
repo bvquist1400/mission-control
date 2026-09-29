@@ -700,6 +700,239 @@
   overflow-wrap: anywhere;
 }
 
+/* Task page (/r/task/[id], mockup section 4) */
+.brief-page .pf-record.pf-task {
+  max-width: 920px;
+  gap: 16px;
+}
+.brief-page .pf-task-head {
+  padding: 22px;
+  gap: 12px;
+}
+.brief-page .pf-task-head h1 {
+  margin: 0;
+  font-size: clamp(24px, 4.6vw, 30px);
+  line-height: 1.15;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  overflow-wrap: anywhere;
+}
+.brief-page .pf-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.brief-page .pf-pill {
+  font-size: 12px;
+  border-radius: 999px;
+  padding: 3px 10px;
+  background: var(--surface-2);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.brief-page .pf-pill.tone-prog { background: rgba(91, 108, 255, 0.13); color: var(--g3); }
+.brief-page .pf-pill.tone-wait { background: var(--warn-soft); color: var(--warn); }
+.brief-page .pf-pill.tone-done { background: var(--ok-soft); color: var(--ok); }
+.brief-page .pf-pill.tone-late { background: var(--warn-soft); color: var(--danger); }
+.brief-page .pf-stand-box .pf-stand-waits {
+  font-size: 13px;
+  color: var(--warn);
+}
+.brief-page .pf-task-actions {
+  display: grid;
+  gap: 10px;
+  max-width: 72ch;
+}
+.brief-page .pf-handoff {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+.brief-page .pf-task-handback {
+  margin-top: 0;
+}
+.brief-page .pf-handback-hint {
+  font-size: 12.5px;
+  color: var(--muted);
+  align-self: center;
+}
+.brief-page .pf-task-desc {
+  padding: 16px 22px;
+}
+.brief-page .pf-task-desc > summary {
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  list-style: none;
+}
+.brief-page .pf-task-desc > summary::-webkit-details-marker { display: none; }
+.brief-page .pf-task-desc > summary::after {
+  content: " · show";
+  font-weight: 400;
+  color: var(--muted);
+}
+.brief-page .pf-task-desc[open] > summary {
+  margin-bottom: 10px;
+}
+.brief-page .pf-task-desc[open] > summary::after {
+  content: "";
+}
+.brief-page .pf-two {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+  gap: 16px;
+  align-items: start;
+}
+@container page (max-width: 720px) {
+  .brief-page .pf-two {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.brief-page .pf-task-col {
+  padding: 18px;
+  gap: 10px;
+}
+.brief-page .pf-col-h {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.brief-page .pf-col-h h2 {
+  font-size: 15px;
+  font-weight: 600;
+}
+.brief-page .pf-count {
+  font-size: 12px;
+  color: var(--muted);
+}
+.brief-page .pf-check {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.brief-page .pf-check li {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  overflow-wrap: anywhere;
+}
+.brief-page .pf-check li.done > span:last-child {
+  color: var(--muted);
+}
+.brief-page .pf-box {
+  flex: 0 0 17px;
+  height: 17px;
+  border-radius: 5px;
+  border: 1.5px solid var(--hair-strong);
+  margin-top: 1px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  line-height: 1;
+  color: #fff;
+}
+.brief-page .pf-box.y {
+  background: var(--ok);
+  border-color: var(--ok);
+}
+.brief-page .pf-cmts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.brief-page .pf-cmt {
+  border: 1px solid var(--hair);
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 4px;
+  background: var(--surface);
+  min-width: 0;
+}
+.brief-page .pf-cmt-m {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+.brief-page .pf-cmt-g {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.brief-page .pf-cmt-more > summary,
+.brief-page .pf-older > summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--accent);
+  list-style: none;
+  width: fit-content;
+}
+.brief-page .pf-cmt-more > summary::-webkit-details-marker,
+.brief-page .pf-older > summary::-webkit-details-marker {
+  display: none;
+}
+.brief-page .pf-cmt-more[open] > summary {
+  margin-bottom: 6px;
+}
+.brief-page .pf-cmt-more .pf-when-open,
+.brief-page .pf-cmt-more[open] .pf-when-closed {
+  display: none;
+}
+.brief-page .pf-cmt-more[open] .pf-when-open {
+  display: inline;
+}
+.brief-page .pf-older[open] > summary {
+  margin-bottom: 8px;
+}
+.brief-page .md.pf-cmt-full {
+  font-size: 13.5px;
+  line-height: 1.55;
+  max-width: 68ch;
+}
+.brief-page .pf-compose {
+  display: grid;
+  gap: 6px;
+}
+.brief-page .pf-compose textarea {
+  width: 100%;
+  font: inherit;
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: 12px;
+  padding: 9px 12px;
+  resize: vertical;
+}
+.brief-page .pf-compose textarea::placeholder,
+.brief-page .pf-handback textarea::placeholder {
+  color: var(--muted);
+}
+@container page (max-width: 560px) {
+  .brief-page .pf-task-head,
+  .brief-page .pf-task-desc {
+    padding: 16px;
+  }
+  .brief-page .pf-task-col {
+    padding: 14px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .brief-page .pf-chev,
   .brief-page .pf-app {
