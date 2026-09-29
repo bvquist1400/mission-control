@@ -1,9 +1,14 @@
 import { createHash } from "node:crypto";
-import { addDateOnlyDays, getDateOnlyInTimeZone, getDateOnlyWeekday } from "@/lib/date-only";
-import { buildRecurringDueAt } from "@/lib/recurrence";
 import type { BriefEdition, BriefItemInput } from "@/lib/briefs/types";
 
-export const BRIEF_TIME_ZONE = "America/New_York";
+// The ET date math moved to due.ts (browser-safe); re-exported so callers keep working.
+export {
+  BRIEF_TIME_ZONE,
+  nextWeekday,
+  resolveTomorrowDate,
+  resolveTomorrowDueAt,
+  todayInBriefTimeZone,
+} from "@/lib/briefs/due";
 
 function normalizeText(value: string): string {
   return value.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
@@ -58,41 +63,4 @@ export function buildBriefCode(edition: BriefEdition, briefDate: string, withYea
 
 export function normalizeBriefCode(value: string): string {
   return value.trim().toUpperCase();
-}
-
-function isWeekday(dateOnly: string): boolean {
-  const weekday = getDateOnlyWeekday(dateOnly);
-  return weekday !== null && weekday !== 0 && weekday !== 6;
-}
-
-export function nextWeekday(dateOnly: string): string {
-  let candidate = addDateOnlyDays(dateOnly, 1);
-  while (candidate && !isWeekday(candidate)) {
-    candidate = addDateOnlyDays(candidate, 1);
-  }
-  if (!candidate) {
-    throw new Error(`Invalid date: ${dateOnly}`);
-  }
-  return candidate;
-}
-
-export function todayInBriefTimeZone(now: Date = new Date()): string {
-  return getDateOnlyInTimeZone(BRIEF_TIME_ZONE, now);
-}
-
-/**
- * The ET date "Tomorrow" means for a brief: the next weekday after the brief's
- * date. If the brief is being worked late and that day is already past (in ET,
- * never UTC), it's today when today is a weekday, else the next weekday.
- */
-export function resolveTomorrowDate(briefDate: string, now: Date = new Date()): string {
-  const todayEt = todayInBriefTimeZone(now);
-  const target = nextWeekday(briefDate);
-  if (target >= todayEt) return target;
-  return isWeekday(todayEt) ? todayEt : nextWeekday(todayEt);
-}
-
-/** due_at for "Tomorrow": end of that ET day, DST-correct. */
-export function resolveTomorrowDueAt(briefDate: string, now: Date = new Date()): string {
-  return buildRecurringDueAt(resolveTomorrowDate(briefDate, now), BRIEF_TIME_ZONE);
 }

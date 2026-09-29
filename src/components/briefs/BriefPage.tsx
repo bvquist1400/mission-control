@@ -8,6 +8,7 @@ import {
   BRIEF_SECTIONS,
   CARD_REGISTRY,
   TaskLink,
+  defaultAcceptDue,
   type ActRequest,
   type BriefCardContext,
   type DismissDraft,
@@ -15,7 +16,8 @@ import {
 import { DayTile, HeroTile, NextTile, RecapBento, Sheet, TILE_REGISTRY } from "@/components/briefs/tiles";
 import { dateHeading } from "@/components/briefs/format";
 import { buildDayTimeline } from "@/components/briefs/timeline";
-import type { BriefCounts, BriefItemRow, BriefMeetingRef, BriefTile, BriefView } from "@/lib/briefs/types";
+import type { AcceptDueChoice } from "@/lib/briefs/due";
+import type { BriefCounts, BriefItemRow, BriefMeetingRef, BriefTaskSummary, BriefTile, BriefView } from "@/lib/briefs/types";
 
 type Override = { baseUpdatedAt: string; patch: Partial<BriefItemRow> };
 
@@ -25,6 +27,8 @@ interface ActResult {
   state?: BriefItemRow["state"];
   task_id?: string;
   choice?: string;
+  due_at?: string | null;
+  owner?: string;
   error?: string;
   conflict?: boolean;
 }
@@ -44,7 +48,7 @@ function countOpen(items: BriefItemRow[]): BriefCounts {
 export function BriefPage({ view }: { view: BriefView }) {
   const router = useRouter();
   const { toast } = useToast();
-  const { brief, tasks } = view;
+  const { brief } = view;
   const content = brief.content;
 
   const [filter, setFilter] = useState<string | null>(null);
@@ -54,6 +58,11 @@ export function BriefPage({ view }: { view: BriefView }) {
   const [sources, setSources] = useState<Record<number, boolean>>({});
   const [pending, setPending] = useState<Record<number, boolean>>({});
   const [overrides, setOverrides] = useState<Record<number, Override>>({});
+  const [dueChoices, setDueChoices] = useState<Record<number, AcceptDueChoice>>({});
+  // Tasks this page just created, so the accepted tile can say where it went
+  // before router.refresh() brings the server's copy (which then wins).
+  const [createdTasks, setCreatedTasks] = useState<Record<string, BriefTaskSummary>>({});
+  const tasks = useMemo(() => ({ ...createdTasks, ...view.tasks }), [createdTasks, view.tasks]);
 
   // Show an action's result immediately; once router.refresh() brings the
   // server's row (a newer updated_at), the server copy wins.
@@ -136,6 +145,16 @@ export function BriefPage({ view }: { view: BriefView }) {
 
         const patch: Partial<BriefItemRow> = { state: result.state ?? item.state, acted_at: new Date().toISOString() };
         if (result.task_id) patch.created_task_id = result.task_id;
+        if (request.action === "accept" && result.task_id && result.due_at !== undefined) {
+          const created: BriefTaskSummary = {
+            id: result.task_id,
+            title: item.payload.title,
+            status: "Backlog",
+            due_at: result.due_at,
+            owner: result.owner ?? null,
+          };
+          setCreatedTasks((current) => ({ ...current, [created.id]: created }));
+        }
         if (request.action === "pick") patch.choice = result.choice ?? request.choice ?? null;
         if (request.action === "dismiss") {
           patch.dismissed_reason = request.reason ?? null;
@@ -184,7 +203,7 @@ export function BriefPage({ view }: { view: BriefView }) {
       if (!item || item.state !== "open" || CARD_REGISTRY[item.kind].keyboard !== "decide" || pending[item.n]) return;
       if (key === "a") {
         event.preventDefault();
-        void act({ n: item.n, action: "accept" });
+        void act({ n: item.n, action: "accept", due: dueChoices[item.n] ?? defaultAcceptDue(item) });
       } else if (key === "d") {
         event.preventDefault();
         startDismiss(item.n);
@@ -195,13 +214,16 @@ export function BriefPage({ view }: { view: BriefView }) {
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [act, focusItem, focusN, items, navigable, pending, sheetKey, startDismiss]);
+  }, [act, dueChoices, focusItem, focusN, items, navigable, pending, sheetKey, startDismiss]);
 
   const closeSheet = useCallback(() => setSheetKey(null), []);
   const toggleFilter = useCallback((meetingId: string) => setFilter((current) => (current === meetingId ? null : meetingId)), []);
 
   const cardContext = (item: BriefItemRow): BriefCardContext => ({
     tasks,
+    briefDate: brief.brief_date,
+    dueChoice: dueChoices[item.n] ?? defaultAcceptDue(item),
+    setDueChoice: (choice) => setDueChoices((current) => ({ ...current, [item.n]: choice })),
     meetingColor,
     meetingLabel,
     pending: Boolean(pending[item.n]),

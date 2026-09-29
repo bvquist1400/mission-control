@@ -52,3 +52,18 @@ export function hourTick(hour: number): string {
 export function shortId(id: string): string {
   return id.slice(0, 8);
 }
+
+/** "Wed 9/30" from a YYYY-MM-DD date. */
+export function weekdayDate(dateOnly: string): string {
+  const date = new Date(`${dateOnly}T12:00:00Z`);
+  if (Number.isNaN(date.getTime())) return dateOnly;
+  return date.toLocaleDateString("en-US", { timeZone: "UTC", weekday: "short", month: "numeric", day: "numeric" }).replace(",", "");
+}
+
+/** "Wed 9/30": the ET day of a timestamp (a due_at at 23:59:59.999 ET stays on its day). */
+export function etDay(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("en-US", { timeZone: ET, weekday: "short", month: "numeric", day: "numeric" }).replace(",", "");
+}

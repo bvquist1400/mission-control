@@ -383,6 +383,7 @@ function createMcpServer(): McpServer {
       why: z.string().optional().describe('One line on why this needs a call'),
       group: z.string().optional().describe('Optional grouping label for proposals, e.g. a workstream'),
       label: z.string().optional().describe('Short eyebrow, e.g. "Due today" or "Tomorrow 10 AM"'),
+      suggested_due: z.string().optional().describe('proposed_task only: the due date the meeting notes give, YYYY-MM-DD (ET). Only when the notes state a date; never invent one. Accept offers it and pre-selects it.'),
       task_ids: z.array(z.string()).optional().describe('carry_over: exactly one task UUID; carry_group: 2-50 task UUIDs'),
       source: z.object({ meetings: z.array(BRIEF_MEETING_REF_SCHEMA) }).optional().describe('Meetings this item came from'),
       maybe_tracked: z.object({
@@ -454,7 +455,7 @@ function createMcpServer(): McpServer {
 
   mcp.tool(
     'act_on_brief_items',
-    'Act on numbered items of a stored brief, exactly as the page buttons do. proposed_task: accept (creates the Baseline task once; repeating is safe), dismiss (needs a reason already_tracked | not_mine | not_worth_it, or a note of at most 500 characters), undo (reopens a dismissed item). carry_over: done | tomorrow (due the next ET weekday) | park. carry_group: tomorrow | park, applied to all its tasks. choice: pick with choice=<option key>, undo. Every action is validated before any runs; if one is invalid, nothing changes. If an item changed after validation (for example Brent acted on the page at the same moment), that entry comes back ok=false with conflict=true and was not applied: re-read with get_brief before trying again.',
+    'Act on numbered items of a stored brief, exactly as the page buttons do. proposed_task: accept (creates the Baseline task once, owned by Brent so it lands in his "Assigned to you"; repeating is safe and never changes the task; optional due = today | tomorrow | this_week (Friday of this ET week, next Friday from Fri-Sun) | none | the item payload.suggested_due as YYYY-MM-DD; without due it is due tomorrow, the next ET weekday, end of day), dismiss (needs a reason already_tracked | not_mine | not_worth_it, or a note of at most 500 characters), undo (reopens a dismissed item). carry_over: done | tomorrow (due the next ET weekday) | park. carry_group: tomorrow | park, applied to all its tasks. choice: pick with choice=<option key>, undo. Every action is validated before any runs; if one is invalid, nothing changes. If an item changed after validation (for example Brent acted on the page at the same moment), that entry comes back ok=false with conflict=true and was not applied: re-read with get_brief before trying again.',
     {
       code: z.string().describe('Brief code, e.g. EOD-0924'),
       actions: z.array(z.object({
@@ -463,6 +464,7 @@ function createMcpServer(): McpServer {
         reason: z.enum(['already_tracked', 'not_mine', 'not_worth_it']).optional().describe('Dismiss reason'),
         note: z.string().max(500).optional().describe('Dismiss note, at most 500 characters'),
         choice: z.string().optional().describe('Option key for pick'),
+        due: z.string().optional().describe('Accept only: today | tomorrow | this_week | none | YYYY-MM-DD (must equal the item\'s suggested_due). Omit for tomorrow.'),
       })).min(1).describe('One entry per item'),
     },
     async ({ code, actions }) => {

@@ -1,5 +1,6 @@
 import { normalizeDateOnly } from "@/lib/date-only";
 import { todayInBriefTimeZone } from "@/lib/briefs/keys";
+import { ACCEPT_DUE_HELP, isDateOnlyString, parseAcceptDue, type AcceptDueChoice } from "@/lib/briefs/due";
 import { safeBriefHref } from "@/lib/briefs/href";
 
 export { safeBriefHref };
@@ -307,6 +308,13 @@ function parseItem(value: unknown, index: number, errors: string[]): BriefItemIn
   const label = str(value.label, 80);
   if (label) payload.label = label;
 
+  // Optional, proposals only: a date the notes give. A malformed one is a routine bug, so it's rejected, not dropped.
+  if (value.suggested_due !== undefined && value.suggested_due !== null) {
+    if (kind !== "proposed_task") errors.push(`${path}.suggested_due only applies to a proposed_task`);
+    else if (!isDateOnlyString(value.suggested_due)) errors.push(`${path}.suggested_due must be a real date written YYYY-MM-DD`);
+    else payload.suggested_due = value.suggested_due;
+  }
+
   const taskIds = parseTaskIds(value.task_ids, `${path}.task_ids`, errors);
 
   const rawSource = isObject(value.source) ? value.source : {};
@@ -460,7 +468,18 @@ export function parseBriefActions(raw: unknown): ParseResult<BriefActionInput[]>
     }
     if (action === "pick" && !choice) errors.push(`${path}: pick needs a choice`);
 
-    actions.push({ n, action, reason, note, choice });
+    // Accept's due choice. Absent = the default ("tomorrow"); present must be valid, and only on accept.
+    let due: AcceptDueChoice | undefined;
+    if (entry.due !== undefined) {
+      if (action !== "accept") errors.push(`${path}.due only applies to accept`);
+      else {
+        const parsedDue = parseAcceptDue(entry.due);
+        if (parsedDue) due = parsedDue;
+        else errors.push(`${path}.${ACCEPT_DUE_HELP}`);
+      }
+    }
+
+    actions.push({ n, action, reason, note, choice, ...(due ? { due } : {}) });
   });
 
   if (errors.length) return { ok: false, errors };

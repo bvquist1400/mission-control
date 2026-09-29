@@ -11,7 +11,15 @@ import {
   type BriefTaskSummary,
   type DismissReason,
 } from "@/lib/briefs/types";
-import { etClock, etTime, shortId } from "@/components/briefs/format";
+import {
+  ACCEPT_DUE_PRESETS,
+  isAcceptDuePreset,
+  isDateOnlyString,
+  resolveAcceptDueDate,
+  type AcceptDueChoice,
+  type AcceptDuePreset,
+} from "@/lib/briefs/due";
+import { etClock, etDay, etTime, shortId, weekdayDate } from "@/components/briefs/format";
 
 export interface ActRequest {
   n: number;
@@ -19,6 +27,8 @@ export interface ActRequest {
   reason?: DismissReason | null;
   note?: string | null;
   choice?: string | null;
+  /** accept only; the page always sends the card's pick. */
+  due?: AcceptDueChoice;
 }
 
 export interface DismissDraft {
@@ -28,6 +38,11 @@ export interface DismissDraft {
 
 export interface BriefCardContext {
   tasks: Record<string, BriefTaskSummary>;
+  /** The brief's date (YYYY-MM-DD, ET); "Tomorrow" counts from it. */
+  briefDate: string;
+  /** The due choice Accept will send for this card. */
+  dueChoice: AcceptDueChoice;
+  setDueChoice: (choice: AcceptDueChoice) => void;
   meetingColor: (meetingId: string) => string;
   meetingLabel: (meeting: BriefMeetingRef) => string;
   pending: boolean;
@@ -52,6 +67,23 @@ export const BRIEF_SECTIONS: Record<BriefSection, { title: string; hint?: string
   meetings: { title: "From meetings", hint: "Nothing becomes a task until you accept it." },
   calls: { title: "Needs a call" },
 };
+
+export const ACCEPT_DUE_LABELS: Record<AcceptDuePreset, string> = {
+  today: "Today",
+  tomorrow: "Tomorrow",
+  this_week: "This week",
+  none: "No date",
+};
+
+/** A proposal's due date from its notes, if it carries a real one. */
+export function suggestedDue(item: BriefItemRow): string | null {
+  return isDateOnlyString(item.payload.suggested_due) ? item.payload.suggested_due : null;
+}
+
+/** Where a card's due choice starts: the notes' date when there is one, else Tomorrow. */
+export function defaultAcceptDue(item: BriefItemRow): AcceptDueChoice {
+  return (suggestedDue(item) as AcceptDueChoice | null) ?? "tomorrow";
+}
 
 export const DISMISS_REASON_LABELS: Record<DismissReason, string> = {
   already_tracked: "Already tracked",
@@ -120,10 +152,50 @@ function SourceRow({ item, ctx }: CardProps) {
   );
 }
 
+/** "yours · due Wed 9/30" / "yours · no date" for an accepted proposal's task, once it's loaded. */
+function acceptedWhere(task: BriefTaskSummary | undefined): string | null {
+  if (!task) return null;
+  return [task.owner === "brent" ? "yours" : null, task.due_at ? `due ${etDay(task.due_at)}` : "no date"].filter(Boolean).join(" · ");
+}
+
+/** Today / Tomorrow / This week / No date, plus the notes' date when there is one. */
+function DuePicker({ item, ctx }: CardProps) {
+  const suggested = suggestedDue(item);
+  const selected = ctx.dueChoice;
+  // Show which day a relative choice lands on (the notes' date already says it).
+  const lands = isAcceptDuePreset(selected) && selected !== "none" ? resolveAcceptDueDate(selected, ctx.briefDate) : null;
+  return (
+    <div className="seg due" role="group" aria-label={`Due date if you accept #${item.n}`}>
+      <span>Due</span>
+      {suggested ? (
+        <button
+          type="button"
+          aria-pressed={selected === suggested}
+          disabled={ctx.pending}
+          onClick={() => ctx.setDueChoice(suggested as AcceptDueChoice)}
+        >
+          {weekdayDate(suggested)} <span className="from">(from notes)</span>
+        </button>
+      ) : null}
+      {ACCEPT_DUE_PRESETS.map((preset) => (
+        <button key={preset} type="button" aria-pressed={selected === preset} disabled={ctx.pending} onClick={() => ctx.setDueChoice(preset)}>
+          {ACCEPT_DUE_LABELS[preset]}
+        </button>
+      ))}
+      {lands ? (
+        <span className="when" suppressHydrationWarning>
+          {weekdayDate(lands)}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 function ProposedTaskCard({ item, ctx }: CardProps) {
   const title = item.payload.title;
 
   if (item.state === "accepted") {
+    const where = acceptedWhere(item.created_task_id ? ctx.tasks[item.created_task_id] : undefined);
     return (
       <div className={cardClass("slim", ctx)} data-n={item.n}>
         <StateIcon ok />
@@ -132,7 +204,7 @@ function ProposedTaskCard({ item, ctx }: CardProps) {
           {title}
         </span>
         <span className="st">
-          Accepted {etTime(item.acted_at)}
+          {where ? `Accepted · ${where}` : `Accepted ${etTime(item.acted_at)}`}
           {item.created_task_id ? (
             <>
               <ArrowIcon /> <TaskLink id={item.created_task_id} />
@@ -281,8 +353,14 @@ function ProposedTaskCard({ item, ctx }: CardProps) {
   return (
     <article className={cardClass("card", ctx)} tabIndex={0} data-n={item.n} id={`item-${item.n}`} onFocus={ctx.focus}>
       {body}
+      <DuePicker item={item} ctx={ctx} />
       <div className="side">
-        <button type="button" className="btn solid" disabled={ctx.pending} onClick={() => ctx.act({ n: item.n, action: "accept" })}>
+        <button
+          type="button"
+          className="btn solid"
+          disabled={ctx.pending}
+          onClick={() => ctx.act({ n: item.n, action: "accept", due: ctx.dueChoice })}
+        >
           Accept <kbd>A</kbd>
         </button>
         <button type="button" className="btn" disabled={ctx.pending} onClick={ctx.startDismiss}>

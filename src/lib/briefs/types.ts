@@ -2,6 +2,8 @@
 // actionable items; each item has a stable item_key so its state survives
 // reruns and so Accept can use the key as the created task's external id.
 
+import type { AcceptDueChoice } from "@/lib/briefs/due";
+
 /** "eod" = end of day (EOD-MMDD), "am" = morning (AM-MMDD). Behavior never branches on edition. */
 export const BRIEF_EDITIONS = ["eod", "am"] as const;
 export type BriefEdition = (typeof BRIEF_EDITIONS)[number];
@@ -62,6 +64,11 @@ export interface BriefItemPayload {
   label?: string;
   maybe_tracked?: { task_id: string; text: string };
   options?: BriefChoiceOption[];
+  /**
+   * proposed_task only: a due date the meeting notes themselves give
+   * (YYYY-MM-DD, ET). Offered and pre-selected on Accept; never invented.
+   */
+  suggested_due?: string;
 }
 
 /**
@@ -168,6 +175,8 @@ export interface BriefActionInput {
   reason: DismissReason | null;
   note: string | null;
   choice: string | null;
+  /** accept only. Absent = "tomorrow". A date must equal the item's suggested_due. */
+  due?: AcceptDueChoice | null;
 }
 
 export interface BriefRow {
@@ -210,6 +219,8 @@ export interface BriefTaskSummary {
   title: string;
   status: string;
   due_at: string | null;
+  /** "brent" | "agent" (migration 056). */
+  owner?: string | null;
 }
 
 export interface BriefCounts {

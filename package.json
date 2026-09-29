@@ -43,6 +43,8 @@
     "test:task-page": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-task-page.mjs",
     "test:portfolio-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-portfolio-db.mjs",
     "test:briefs-am-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-briefs-am-db.mjs",
+    "test:briefs-accept": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-briefs-accept.mjs",
+    "test:briefs-accept-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-briefs-accept-db.mjs",
     "backfill:project-sections:dry-run": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/backfill-project-sections.mjs",
     "backfill:project-sections:apply": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/backfill-project-sections.mjs --apply",
     "backfill:task-external-source:dry-run": "node --experimental-strip-types scripts/backfill-task-external-source-ids.mjs",

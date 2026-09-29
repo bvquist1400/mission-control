@@ -599,6 +599,8 @@
   min-width: 0;
 }
 .brief-page .card .side {
+  grid-column: 2;
+  grid-row: 1;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -607,9 +609,31 @@
   width: 132px;
   justify-content: space-between;
 }
+/* Accept's due choice: a row under the card, above the buttons on a phone. */
+.brief-page .card .due {
+  grid-column: 1 / -1;
+  padding-top: 10px;
+  border-top: 1px solid var(--hair);
+}
+.brief-page .seg button[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.brief-page .seg.due button {
+  padding: 3px 11px;
+}
+.brief-page .seg.due .from {
+  font-size: 12px;
+  opacity: 0.7;
+}
+.brief-page .seg.due .when {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  margin-left: 2px;
+}
 @container page (max-width: 620px) {
   .brief-page .card { grid-template-columns: minmax(0, 1fr); }
-  .brief-page .card .side { flex-direction: row; justify-content: flex-end; }
+  .brief-page .card .side { grid-column: auto; grid-row: auto; flex-direction: row; justify-content: flex-end; }
   .brief-page .card .side .btn { width: auto; }
 }
 .brief-page .src-row {

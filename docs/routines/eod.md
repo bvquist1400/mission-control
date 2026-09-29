@@ -183,6 +183,47 @@ task yourself. Brent decides on the page.
   at most 500 characters. The page and chat share one code path, so both show
   the same state.
 
+## Proposed: due dates on proposals (not live until Brent OKs the routine change)
+
+> **Status: not live.** Nothing below is in the live EOD routine or the
+> Baseline Claude project yet. Baseline accepts it once migration 058 and the
+> matching code are deployed (task 98683030, see
+> [../handoffs/brief-accept-schedule.md](../handoffs/brief-accept-schedule.md));
+> the prompt text changes only after Brent OKs it in chat.
+
+What Baseline does either way (no routine change needed): Accept on a
+proposal now creates the task owned by Brent, so it shows in "Assigned to
+you", with a due date he picks next to the button: Today, Tomorrow (the
+default, the next ET weekday), This week (Friday; next Friday from Friday to
+Sunday) or No date. Every date is the end of that day in ET.
+
+**The optional field.** A `proposed_task` item may carry
+`suggested_due: "YYYY-MM-DD"` (ET): a date the meeting notes themselves give
+for that action. The page then offers it as a chip, e.g. "Mon 10/12 (from
+notes)", and pre-selects it. Rules Baseline enforces: a real date written
+exactly `YYYY-MM-DD`, only on `proposed_task` items, otherwise the save is
+rejected with the reason (so the routine fixes it and saves again). Leaving it
+out is always fine; old briefs without it keep working. It never changes the
+item's key, so it can't create a second task.
+
+**Proposed prompt addition** (goes at the end of the "Meeting action items
+(`proposed_task`)" bullets in step 2):
+
+> - If a note line itself gives a date for the action ("by Friday", "before
+>   the 10/12 vendor call", "due Mon 10/12"), add `suggested_due` as that date
+>   in `YYYY-MM-DD`, resolving weekdays against the meeting's date in
+>   America/New_York. Only use a date the notes state for this action; never
+>   infer one from urgency, from another item, or from the calendar. If the
+>   line has no date, leave `suggested_due` out: Brent picks a date when he
+>   accepts.
+
+**Proposed chat addition** (the "accept" bullet under "In chat"): "accept 1
+today", "accept 4 this week", "accept 3 no date", "accept 5 notes date" →
+`act_on_brief_items(code, [{ n, action: "accept", due }])` with `due` =
+`today`, `tomorrow`, `this_week`, `none`, or the item's `suggested_due`.
+Without `due` the task is due tomorrow. Accepting again never changes the
+task; change its date in Baseline instead.
+
 ## Brent's setup (one time, before the routine goes live)
 
 Baseline sends the notice through a Telegram bot you own. Nothing below has

@@ -68,6 +68,10 @@
               "choice": {
                 "description": "Option key for pick",
                 "type": "string"
+              },
+              "due": {
+                "description": "Accept only: today | tomorrow | this_week | none | YYYY-MM-DD (must equal the item's suggested_due). Omit for tomorrow.",
+                "type": "string"
               }
             },
             "required": [
@@ -2001,6 +2005,10 @@
                 "description": "Short eyebrow, e.g. \"Due today\" or \"Tomorrow 10 AM\"",
                 "type": "string"
               },
+              "suggested_due": {
+                "description": "proposed_task only: the due date the meeting notes give, YYYY-MM-DD (ET). Only when the notes state a date; never invent one. Accept offers it and pre-selects it.",
+                "type": "string"
+              },
               "task_ids": {
                 "description": "carry_over: exactly one task UUID; carry_group: 2-50 task UUIDs",
                 "type": "array",
@@ -2166,6 +2174,10 @@
               },
               "label": {
                 "description": "Short eyebrow, e.g. \"Due today\" or \"Tomorrow 10 AM\"",
+                "type": "string"
+              },
+              "suggested_due": {
+                "description": "proposed_task only: the due date the meeting notes give, YYYY-MM-DD (ET). Only when the notes state a date; never invent one. Accept offers it and pre-selects it.",
                 "type": "string"
               },
               "task_ids": {

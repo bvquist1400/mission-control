@@ -14,6 +14,7 @@ import {
   resolveTomorrowDueAt,
   todayInBriefTimeZone,
 } from "@/lib/briefs/keys";
+import { DEFAULT_ACCEPT_DUE, isAcceptDuePreset, resolveAcceptDueAt } from "@/lib/briefs/due";
 import type { TodayBriefStatus } from "@/lib/briefs/button";
 import { buildBriefNotice, telegramNotifierFromEnv, type BriefNotifier } from "@/lib/briefs/notify";
 import { normalizeBriefContent } from "@/lib/briefs/validate";
@@ -488,7 +489,7 @@ export async function getBrief(supabase: AnySupabase, userId: string, code: stri
   if (taskIds.size) {
     const { data: taskRows, error: taskError } = await supabase
       .from("tasks")
-      .select("id, title, status, due_at")
+      .select("id, title, status, due_at, owner")
       .eq("user_id", userId)
       .in("id", [...taskIds]);
     if (taskError) throw taskError;
@@ -577,7 +578,10 @@ export interface BriefActionResult {
   already?: boolean;
   task_id?: string;
   task_ids?: string[];
-  due_at?: string;
+  /** Tomorrow: the new due date. Accept: the created task's due date (null = no date), only when this call created it. */
+  due_at?: string | null;
+  /** Accept: who holds the created task ("brent"), only when this call created it. */
+  owner?: string;
   choice?: string;
   error?: string;
   /** The item changed between validation and the write; nothing was applied. Re-read and decide again. */
@@ -603,18 +607,23 @@ function describeSources(item: BriefItemRow): string {
     .join("\n");
 }
 
-/** The task Accept creates. brief_item_transition inserts it in the same transaction as the state change. */
-async function buildProposalTask(supabase: AnySupabase, userId: string, brief: BriefRow, item: BriefItemRow) {
+/**
+ * The task Accept creates. brief_item_transition inserts it in the same
+ * transaction as the state change, owned by Brent (058) with this due date
+ * (null = none), so the due-date boost is part of its first priority score.
+ */
+async function buildProposalTask(supabase: AnySupabase, userId: string, brief: BriefRow, item: BriefItemRow, dueAt: string | null) {
   const title = item.payload.title.slice(0, 500);
   const description = [item.payload.detail, `From ${brief.code} #${item.n}:`, describeSources(item)]
     .filter(Boolean)
     .join("\n\n")
     .slice(0, 8000);
   const highPriorityNames = await getHighPriorityStakeholderNames(supabase, userId);
-  const boosts = calculatePriorityBoosts([], null, title, "Backlog", highPriorityNames);
+  const boosts = calculatePriorityBoosts([], dueAt, title, "Backlog", highPriorityNames);
   return {
     title,
     description,
+    due_at: dueAt,
     base_priority: 50,
     priority_score: calculateFinalPriorityScore(50, boosts),
     tags: ["from-meeting"],
@@ -762,6 +771,16 @@ export async function actOnBriefItems(
     if (action.action === "dismiss" && !action.reason && !action.note) {
       problems.push(`#${action.n}: dismiss needs a reason or a note`);
     }
+    if (action.due && action.action !== "accept") {
+      problems.push(`#${action.n}: due only applies to accept`);
+    }
+    if (action.action === "accept" && action.due && !isAcceptDuePreset(action.due) && action.due !== item.payload.suggested_due) {
+      problems.push(
+        item.payload.suggested_due
+          ? `#${action.n}: the only date allowed is the one from the notes (${item.payload.suggested_due}); otherwise use today, tomorrow, this_week or none`
+          : `#${action.n} has no date from the notes; use today, tomorrow, this_week or none`
+      );
+    }
   }
   if (problems.length) {
     throw new BriefServiceError(400, problems.join("; "), { problems });
@@ -790,7 +809,8 @@ export async function actOnBriefItems(
 
       switch (action.action) {
         case "accept": {
-          const task = await buildProposalTask(supabase, userId, brief, item);
+          const dueAt = resolveAcceptDueAt(action.due ?? DEFAULT_ACCEPT_DUE, brief.brief_date, now);
+          const task = await buildProposalTask(supabase, userId, brief, item, dueAt);
           const outcome = await transitionItem(
             supabase,
             userId,
@@ -818,6 +838,8 @@ export async function actOnBriefItems(
           }
           result.task_id = outcome.created_task_id ?? undefined;
           if (outcome.task_inserted && outcome.created_task_id) {
+            result.due_at = dueAt;
+            result.owner = "brent";
             queueTaskStatusTransition(supabase, { userId, taskId: outcome.created_task_id, fromStatus: null, toStatus: "Backlog" });
           }
           break;
