@@ -489,6 +489,11 @@ export function toTaskDigestItem(
   };
 }
 
+/** Append the "N identical open tasks, listed once" note to a reason; a reason that already ends in a period keeps just one. */
+export function withDuplicateNote(reason: string, duplicates: string): string {
+  return duplicates ? `${reason.replace(/[.\s]+$/, "")}. ${duplicates}, listed once` : reason;
+}
+
 /**
  * Collapse tasks with identical titles into one entry (the first one, in the
  * list's existing order) that reports how many copies there are, which ones,
@@ -502,7 +507,7 @@ export function collapseDigestTaskItems(items: DailyBriefDigestTaskItem[]): Dail
 
     return {
       ...group.first,
-      reason: duplicates ? `${group.first.reason}. ${duplicates}, listed once` : group.first.reason,
+      reason: withDuplicateNote(group.first.reason, duplicates),
       duplicate_count: copies.length,
       duplicate_task_ids: copies.slice(1).map((copy) => copy.id),
       duplicates_created_from: range?.from ?? null,
@@ -1757,7 +1762,7 @@ function buildEodPrepCandidates(
     .filter((item): item is NonNullable<typeof item> => item !== null);
 }
 
-function toDigestTaskItemFromReview(
+export function toDigestTaskItemFromReview(
   item: WorkEodReviewTaskItem,
   taskById: Map<string, TaskWithRelations>,
   now: Date,
@@ -1778,9 +1783,7 @@ function toDigestTaskItemFromReview(
     due_at: item.dueAt,
     due_label: formatEtDueLabel(item.dueAt, now, requestedDate),
     context: item.context ?? (task ? buildTaskContextLabel(task) : null),
-    reason: item.duplicateCount && item.duplicateCount > 1
-      ? `${item.reason}. ${describeDuplicates(item.duplicateCount)}, listed once`
-      : item.reason,
+    reason: withDuplicateNote(item.reason, describeDuplicates(item.duplicateCount)),
     recent_update: task
       ? buildRecentUpdate(task, commentActivity, sinceIso)
       : item.updatedAt

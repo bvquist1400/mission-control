@@ -382,14 +382,39 @@ await test("match: generic words do not count toward the two-word minimum", () =
   assert.equal(relatedTo("Verify REDCap upgrade plan", "REDCap upgrade planning session"), true);
 });
 
-await test("match: real task-to-meeting matches still link (2+ shared words, 30%+ of the task's)", () => {
+await test("match: real task-to-meeting matches still link (2+ shared words, and 30%+ of the task's or 60%+ of the meeting's)", () => {
   // The existing fixture case.
   assert.equal(relatedTo("Present IB 225 request at Security IWG", "Security IWG 2026"), true);
-  // Modeled on the 9/28 brief: Cayuse prep and the OnCore status meeting.
-  assert.equal(relatedTo("Cayuse routing: sponsor data fields", "Cayuse-iCooper Data Flow"), true);
+  // Live titles (9/29 replay of tasks x calendar). Long task titles share only a few words with a short meeting
+  // title, so the task-side 30% floor alone dropped them; the meeting-side 60% coverage keeps them.
+  assert.equal(relatedTo("Present the ECL security class change at Change Control before the prod push", "Bi-Weekly Change Control Meeting"), true);
+  assert.equal(relatedTo("Watch Bootcamp demo \u2014 Calendar Import (Trainer Bootcamp homework)", "Trainer Bootcamp - OnCore"), true);
+  assert.equal(relatedTo("Watch Bootcamp demo \u2014 Calendar Build: Procedures Visits (Trainer Bootcamp homework)", "Trainer Bootcamp - OnCore"), true);
+  assert.equal(relatedTo("Present IB 225 / Reporting Workbench routing request at Security IWG", "Security IWG 2026"), true);
+  assert.equal(relatedTo("Update Research security classes for research and non-research users", "Research Security Class Questions"), true);
+  // Modeled on the 9/28 brief: OnCore CTMS prep and the OnCore status meeting.
   assert.equal(relatedTo("Chase Saif on OnCore CTMS field mapping", "OnCore CTMS Weekly Project Status Meeting"), true);
-  // A long task title that only touches the meeting with 2 of 10 words stays out (30% floor still applies).
-  assert.equal(relatedTo("Send Nancy the OnCore CTMS budget template and the billing grid for the coordinators", "OnCore CTMS Weekly Project Status Meeting"), false);
+  // A long task title that shares OnCore + CTMS covers all of the meeting's significant words, so it links now.
+  assert.equal(relatedTo("Send Nancy the OnCore CTMS budget template and the billing grid for the coordinators", "OnCore CTMS Weekly Project Status Meeting"), true);
+});
+
+await test("match: the live false links stay out (REDCap Upgrade, Research-owned navigators, C4 M6)", () => {
+  assert.equal(relatedTo("Check for REDCap Upgrade", "Advarra OnCore - BOS calendar and budget build weekly check in"), false);
+  assert.equal(relatedTo("Check for REDCap Upgrade", "Epic Upgrade Weekly Project Meeting"), false);
+  assert.equal(relatedTo("Check for REDCap Upgrade", "GBM1 Trial \u2013 REDCap Data Decommissioning"), false);
+  assert.equal(relatedTo("Update Research-owned navigators", "Strategic meeting: Research Technology"), false);
+  assert.equal(relatedTo("C4 M6: Final Project", "OnCore CTMS Weekly Project Status Meeting"), false);
+});
+
+await test("match: accepted losses stay unlinked (one-word Cayuse, and 'build' is a generic word)", () => {
+  // Real, but a one-shared-word link is exactly the false-match class (the same one-word rule linked REDCap Upgrade
+  // to Epic Upgrade and to the GBM1 REDCap meeting), so no single-word exception was added. The task still lists as prep.
+  assert.equal(relatedTo("Cayuse Routing", "Cayuse-iCooper Data Flow"), false);
+  // Also unlinked: "classes" vs "class" are different words (no plural matching; adding it re-links weak "Research ..." meetings).
+  assert.equal(relatedTo("Configure Research security classes to support study record creation and management", "Research Security Class Questions"), false);
+  // Real too, but it only overlaps on "calendar" and "budget" (2 of the task's 9 words, 2 of the meeting's 5); keeping "build"
+  // as a generic word is what keeps unrelated tasks out, and taking it off the list re-links a false one.
+  assert.equal(relatedTo("Pick a real study for a parallel calendar build in staging (you and the budget team build the same study)", "Advarra OnCore - BOS calendar and budget build weekly check in"), false);
 });
 
 await test("match: a MeetingPrep task still shows up without a matching meeting, just with no link", () => {
@@ -449,6 +474,36 @@ await test("digest: task items carry created_at and recurring_template_id, null-
   const without = digestModule.toTaskDigestItem({ ...base }, now, "2026-09-29", new Map(), null);
   assert.equal(without.created_at, null);
   assert.equal(without.recurring_template_id, null);
+});
+
+await test("digest: a collapsed EOD entry's reason has no double period (reason ending in '.' + duplicate note)", () => {
+  assert.ok(!digestModule.missing, `digest.ts: ${digestModule.missing}`);
+  const now = new Date("2026-09-29T12:00:00.000Z");
+  const eodItem = {
+    taskId: "f0000000-0000-4000-8000-0000000002a0",
+    title: "Check for REDCap Upgrade",
+    context: null,
+    reason: "Still open heading into tomorrow, so it needs a deliberate restart instead of another warm-up lap.",
+    updatedAt: "2026-07-09T12:00:00.000Z",
+    dueAt: null,
+    duplicateCount: 8,
+    duplicateTaskIds: [],
+  };
+  const eodEntry = digestModule.toDigestTaskItemFromReview(eodItem, new Map(), now, "2026-09-29", new Map(), null);
+  assert.equal(
+    eodEntry.reason,
+    "Still open heading into tomorrow, so it needs a deliberate restart instead of another warm-up lap. 8 identical open tasks, listed once"
+  );
+  assert.doesNotMatch(eodEntry.reason, /\.\./);
+  // A reason with no trailing period still reads the same way.
+  const plain = digestModule.toDigestTaskItemFromReview({ ...eodItem, reason: "Due today" }, new Map(), now, "2026-09-29", new Map(), null);
+  assert.equal(plain.reason, "Due today. 8 identical open tasks, listed once");
+  // The morning/midday collapse path uses the same join.
+  const collapsed = digestModule.collapseDigestTaskItems([
+    digestItem("a1", "Same title", { reason: "Ends with a period." }),
+    digestItem("a2", "Same title", { reason: "Ends with a period." }),
+  ]);
+  assert.equal(collapsed[0].reason, "Ends with a period. 2 identical open tasks, listed once");
 });
 
 await test("digest: eight identical titles become one entry x8 with the copies listed", () => {

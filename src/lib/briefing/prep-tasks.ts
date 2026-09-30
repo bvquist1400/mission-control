@@ -44,9 +44,9 @@ export type TaskInput = Task & {
  * meeting/ritual words that appear in many unrelated titles ("Check for REDCap
  * Upgrade" vs "BOS calendar and budget build weekly check in" only share
  * "check"; two Google IT cert modules only shared one topic word with the
- * day's meetings). They still count toward a task's keyword total, so a
- * generic word can never help a match, but a title made only of them cannot
- * match at all.
+ * day's meetings). They are dropped before matching: they never count as a
+ * shared word and never count toward a title's keyword total, and a title
+ * made only of them cannot match at all.
  */
 const GENERIC_WORDS = [
   // Articles, prepositions, auxiliaries
@@ -66,8 +66,15 @@ const STOP_WORDS = new Set(GENERIC_WORDS);
 
 /** A task links to an event only when at least this many significant words are shared. */
 const MIN_SHARED_KEYWORDS = 2;
-/** ...and those shared words are at least this share of the task title's significant words. */
+/** ...and those shared words are at least this share of the task title's significant words... */
 const MIN_KEYWORD_OVERLAP = 0.3;
+/**
+ * ...or at least this share of the meeting title's significant words. A long task title
+ * ("Present the ECL security class change at Change Control before the prod push") shares
+ * few words in proportion to its length with a short meeting title ("Bi-Weekly Change
+ * Control Meeting"), but it covers nearly all of the meeting's words.
+ */
+const MIN_EVENT_COVERAGE = 0.6;
 
 /**
  * Extract keywords from a string for matching
@@ -89,7 +96,8 @@ function extractKeywords(text: string): string[] {
  * Check if a task title matches a calendar event.
  * Needs at least two shared significant keywords (one shared word, however
  * distinctive, is how unrelated tasks got linked to meetings) and the shared
- * words must be at least 30% of the task's significant keywords.
+ * words must be at least 30% of the task's significant keywords or at least
+ * 60% of the meeting's significant keywords.
  */
 function titleMatchesEvent(taskTitle: string, eventTitle: string): boolean {
   const taskKeywords = extractKeywords(taskTitle);
@@ -101,7 +109,10 @@ function titleMatchesEvent(taskTitle: string, eventTitle: string): boolean {
 
   const matches = taskKeywords.filter((kw) => eventKeywords.includes(kw));
 
-  return matches.length >= MIN_SHARED_KEYWORDS && matches.length / taskKeywords.length >= MIN_KEYWORD_OVERLAP;
+  return (
+    matches.length >= MIN_SHARED_KEYWORDS &&
+    (matches.length / taskKeywords.length >= MIN_KEYWORD_OVERLAP || matches.length / eventKeywords.length >= MIN_EVENT_COVERAGE)
+  );
 }
 
 /**
