@@ -65,7 +65,7 @@ export async function loadPortfolioInput(supabase: SupabaseClient, userId: strin
       .eq("user_id", userId),
     supabase
       .from("projects")
-      .select("id, name, implementation_id, stage, portfolio_rank")
+      .select("id, name, implementation_id, stage, portfolio_rank, target_date")
       .eq("user_id", userId),
     supabase
       .from("project_sections")

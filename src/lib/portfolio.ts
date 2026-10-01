@@ -54,6 +54,8 @@ export interface PortfolioProjectRow {
   implementation_id: string | null;
   stage: string;
   portfolio_rank: number;
+  /** The project's target date (YYYY-MM-DD): the purple diamond on the timeline. */
+  target_date?: string | null;
 }
 
 export interface PortfolioSectionRow {
@@ -91,25 +93,65 @@ export interface TaskCounts {
   agentOpen: number;
 }
 
-export type LaneState = "done" | "prog" | "wait" | "plan";
+/**
+ * How a planned section is doing. "empty" (no tasks yet) and "plan" (starts
+ * later) are grey; "done", "ahead" and "ok" are green; "behind" is amber;
+ * "late" is red.
+ */
+export type LaneHealthKind = "empty" | "plan" | "done" | "ok" | "ahead" | "behind" | "late";
 
+export interface LaneHealth {
+  kind: LaneHealthKind;
+  /** The chip text: "On track", "Late · due 10/2", "Starts 10/5", … */
+  label: string;
+}
+
+/** A section with planned dates, drawn as a track filled by tasks done ÷ tasks. */
 export interface TimelineLane {
   key: string;
   label: string;
   /** The project name, shown when an app has more than one project on the timeline. */
   project: string | null;
+  /** "6 of 9 done · 2 in progress", or "Planned" when there are no tasks. */
   sub: string;
   hasBrent: boolean;
-  state: LaneState;
+  /** The planned window (inclusive ET dates). */
   start: string;
   end: string;
-  /** No planned end and no task due date, so the end is a placeholder. Drawn dashed. */
-  estimated: boolean;
-  /** The section has planned dates (migration 057): drawn solid from them. */
-  planned: boolean;
-  overdue: boolean;
-  /** The bar runs past the chart's right edge (drawn with an arrow). */
-  continues: boolean;
+  done: number;
+  total: number;
+  /** done ÷ total, 0–1 (0 when there are no tasks): the fill. */
+  share: number;
+  health: LaneHealth;
+}
+
+/** A section kept off the chart: finished, or with no planned window. Listed under the chart. */
+export interface EarlierLane {
+  key: string;
+  label: string;
+  project: string | null;
+  done: number;
+  total: number;
+  /** "9 of 12 done", "No tasks yet". */
+  text: string;
+}
+
+export interface TimelineTarget {
+  /** ET date of the project's target. */
+  date: string;
+  /** App-specific name ("App Store"), or null for the generic "Target". */
+  name: string | null;
+}
+
+/** The app card's chip and line (scheduled sections only). */
+export interface TimelineSummary {
+  /** The worst health among started sections, or null when none has started. */
+  health: LaneHealth | null;
+  targetDate: string | null;
+  /** "App Store target 11/20 · 3 of 20 launch-list tasks done". */
+  line: string;
+  done: number;
+  total: number;
 }
 
 export interface Timeline {
@@ -117,9 +159,14 @@ export interface Timeline {
   end: string;
   today: string;
   ticks: string[];
+  /** Sections with planned dates that are unfinished: the chart's rows. */
   lanes: TimelineLane[];
-  /** Lanes that finished before the window starts, left off the chart. */
-  hiddenEarlier: number;
+  /** Finished, unscheduled and long-past sections, in chart order. */
+  earlier: EarlierLane[];
+  /** The target marker, only when its date falls inside the chart window. */
+  target: TimelineTarget | null;
+  /** null when the app has no target date and no planned section. */
+  summary: TimelineSummary | null;
 }
 
 export interface AssignedTask {
@@ -254,107 +301,155 @@ function startOfWeek(date: string): string {
   return addDays(date, -((weekday + 6) % 7));
 }
 
-/** Placeholder length for an open lane with no due date: it runs a week past today. */
-const ESTIMATE_DAYS_PAST_TODAY = 7;
-/** How far back the chart looks, and the minimum it looks ahead. */
+/** How far back the chart looks, and how far ahead it looks (at least / at most). */
 const WINDOW_BACK_DAYS = 56;
 const WINDOW_AHEAD_MIN_DAYS = 28;
 const WINDOW_AHEAD_MAX_DAYS = 84;
 
-function laneState(tasks: PortfolioTaskRow[]): LaneState {
-  if (tasks.length === 0) return "plan";
-  const open = tasks.filter(isOpenTask);
-  if (open.length === 0) return "done";
-  if (open.some((task) => task.status === "In Progress")) return "prog";
-  if (open.some((task) => task.status === "Blocked/Waiting")) return "wait";
-  if (tasks.some((task) => task.status === "Done")) return "prog";
-  return "plan";
+/** Behind: the done share trails the expected share by more than this. */
+const BEHIND_MARGIN = 0.25;
+/** Ahead: the done share beats the expected share by at least this. */
+const AHEAD_MARGIN = 0.15;
+const EPSILON = 1e-9;
+
+export interface LaneHealthInput {
+  done: number;
+  total: number;
+  /** Tasks still open. Defaults to total − done (Parked and Missed are closed, not done). */
+  open?: number;
+  /** The planned window, inclusive ET dates. */
+  start: string;
+  end: string;
+  /** Today in ET. */
+  today: string;
+}
+
+/**
+ * Where a planned section stands. Pure; today is an ET date.
+ * expected = share of the planned window that has passed (the window counts
+ * both end days, and today counts as half a day in), clamped 0–1.
+ *   No tasks yet → grey · Done → green · before the start → grey "Starts M/D"
+ *   after the end with work open → red "Late · due M/D"
+ *   done share + 25% < expected → amber "Behind" · done share ≥ expected + 15% → green "Ahead"
+ *   otherwise → green "On track"
+ */
+export function laneHealth(input: LaneHealthInput): LaneHealth {
+  const { done, total, start, end, today } = input;
+  const open = input.open ?? Math.max(total - done, 0);
+  if (total <= 0) return { kind: "empty", label: "No tasks yet" };
+  if (open <= 0) return { kind: "done", label: "Done" };
+  if (today < start) return { kind: "plan", label: `Starts ${formatTick(start)}` };
+  if (today > end) return { kind: "late", label: `Late · due ${formatTick(end)}` };
+  const windowDays = daysBetween(start, end) + 1;
+  const expected = Math.min(1, Math.max(0, (daysBetween(start, today) + 0.5) / windowDays));
+  const share = Math.min(Math.max(done, 0), total) / total;
+  // EPSILON keeps the exact-margin cases (0.55 + 0.15 is 0.7000000000000001) on the right side.
+  if (share + BEHIND_MARGIN < expected - EPSILON) return { kind: "behind", label: "Behind" };
+  if (share >= expected + AHEAD_MARGIN - EPSILON) return { kind: "ahead", label: "Ahead" };
+  return { kind: "ok", label: "On track" };
 }
 
 function validPlannedDate(value: string | null | undefined): string | null {
   return value && toUtcDateMs(value) !== null ? value : null;
 }
 
-function buildLane(
+interface PlannedWindow {
+  start: string | null;
+  end: string | null;
+}
+
+interface LaneSummaryData {
+  key: string;
+  label: string;
+  project: string | null;
+  done: number;
+  total: number;
+  open: number;
+  hasBrent: boolean;
+  inProgress: number;
+  /** Both planned dates are set (and in order): the lane can be drawn and judged. */
+  scheduled: boolean;
+  start: string;
+  end: string;
+  health: LaneHealth | null;
+}
+
+function summarizeLane(
   key: string,
   label: string,
   project: string | null,
   tasks: PortfolioTaskRow[],
   today: string,
-  plan: { start: string | null; end: string | null } = { start: null, end: null }
-): TimelineLane {
-  const created = tasks.map((task) => toEtDate(task.created_at)).filter((d): d is string => Boolean(d));
-  const dues = tasks.map((task) => toEtDate(task.due_at)).filter((d): d is string => Boolean(d));
-  const state = laneState(tasks);
+  plan: PlannedWindow
+): LaneSummaryData {
   const open = tasks.filter(isOpenTask);
   const done = tasks.filter((task) => task.status === "Done").length;
-  // Overdue comes from task due dates only; a planned end in the past never turns a lane red.
-  const latestDue = dues.length ? dues.reduce(maxDate) : null;
-  const overdue = state !== "done" && tasks.length > 0 && latestDue !== null && latestDue < today;
-
-  let start = created.length ? created.reduce(minDate) : today;
-  let end: string;
-  let estimated = false;
-  if (state === "done") {
-    // Finished: from the first task to the last change (tasks have no completed_at).
-    const lastChange = tasks
-      .map((task) => toEtDate(task.updated_at))
-      .filter((d): d is string => Boolean(d))
-      .reduce(maxDate, start);
-    end = dues.length ? maxDate(lastChange, dues.reduce(maxDate)) : lastChange;
-  } else if (dues.length) {
-    end = dues.reduce(maxDate);
-  } else {
-    estimated = true;
-    end = addDays(maxDate(today, start), ESTIMATE_DAYS_PAST_TODAY);
-  }
-  if (dues.length) start = minDate(start, dues.reduce(minDate));
-
-  // Planned dates (057) replace the estimate for the bar's ends; they never move a due date.
-  const planned = Boolean(plan.start || plan.end);
-  if (plan.start) start = plan.start;
-  if (plan.end) {
-    end = plan.end;
-    estimated = false;
-  } else if (plan.start && estimated) {
-    end = addDays(maxDate(today, plan.start), ESTIMATE_DAYS_PAST_TODAY);
-  }
-  if (end < start) end = start;
-
-  const sub =
-    tasks.length === 0
-      ? "Planned · no tasks yet"
-      : state === "done"
-        ? "Done"
-        : `${done} of ${tasks.length} done${estimated ? (planned ? " · no planned end" : " · no due date") : ""}`;
-
+  const scheduled = Boolean(plan.start && plan.end);
+  const start = plan.start ?? today;
+  const end = plan.end ?? today;
   return {
     key,
     label,
     project,
-    sub,
+    done,
+    total: tasks.length,
+    open: open.length,
     hasBrent: open.some((task) => task.owner === "brent"),
-    state,
+    inProgress: open.filter((task) => task.status === "In Progress").length,
+    scheduled,
     start,
     end,
-    estimated,
-    planned,
-    overdue,
-    continues: false,
+    health: scheduled ? laneHealth({ done, total: tasks.length, open: open.length, start, end, today }) : null,
   };
 }
 
+function laneSub(lane: LaneSummaryData): string {
+  if (lane.total === 0) return "Planned";
+  return `${lane.done} of ${lane.total} done${lane.inProgress > 0 ? ` · ${lane.inProgress} in progress` : ""}`;
+}
+
+function earlierText(lane: LaneSummaryData): string {
+  if (lane.total === 0) return "No tasks yet";
+  return `${lane.done} of ${lane.total} done${lane.open === 0 && lane.done < lane.total ? " · nothing open" : ""}`;
+}
+
+/** Worst first: the app's chip takes the worst colour among started sections. */
+const HEALTH_SEVERITY: Partial<Record<LaneHealthKind, number>> = { late: 4, behind: 3, ok: 2, ahead: 2, done: 1 };
+
 /**
- * One lane per project section that has tasks (plus one per project for tasks
- * with no section). Bars run from the first task's creation (or earliest due
- * date) to the latest due date; open lanes with no due dates get a dashed
- * placeholder ending a week after today.
+ * The app chip: Late > Behind > On track among started sections (done ones
+ * count as started). None started → no chip. All scheduled sections finished → "Done".
+ */
+function appHealth(lanes: LaneSummaryData[]): LaneHealth | null {
+  const started = lanes.filter((lane) => lane.health && HEALTH_SEVERITY[lane.health.kind] !== undefined);
+  if (started.length === 0) return null;
+  const worst = started.reduce((a, b) =>
+    (HEALTH_SEVERITY[b.health!.kind] ?? 0) > (HEALTH_SEVERITY[a.health!.kind] ?? 0) ? b : a
+  ).health!;
+  if (worst.kind === "late" || worst.kind === "behind") return worst;
+  if (worst.kind === "done" && started.length === lanes.length) return worst;
+  return { kind: "ok", label: "On track" };
+}
+
+/** The project target that matters now: the nearest one still ahead, else the latest one that passed. */
+function pickTarget(dates: string[], today: string): string | null {
+  const sorted = [...dates].sort();
+  return sorted.find((date) => date >= today) ?? sorted[sorted.length - 1] ?? null;
+}
+
+/**
+ * One chart row per project section that has planned dates (both start and
+ * end), drawn as its planned window and filled by tasks done ÷ tasks. Finished
+ * sections, sections with no planned window (including each project's "Other
+ * tasks") and sections whose window ended long ago go in `earlier`, a list under
+ * the chart: no more guessed bars. The project's target date is the marker.
  */
 export function buildTimeline(
   tasks: PortfolioTaskRow[],
   projects: PortfolioProjectRow[],
   sections: PortfolioSectionRow[],
-  today: string
+  today: string,
+  options: { targetName?: string | null } = {}
 ): Timeline {
   const projectById = new Map(projects.map((project) => [project.id, project]));
   const sectionById = new Map(sections.map((section) => [section.id, section]));
@@ -406,7 +501,7 @@ export function buildTimeline(
     [...groups.entries()].filter(([key]) => key.startsWith("s:")).map(([, group]) => group.projectId)
   );
 
-  const allLanes = [...groups.entries()]
+  const summaries = [...groups.entries()]
     .sort(([, a], [, b]) => a.order[0] - b.order[0] || a.order[1] - b.order[1] || a.order[2].localeCompare(b.order[2]))
     .map(([key, group]) => {
       const projectName = group.projectId ? projectById.get(group.projectId)?.name ?? null : null;
@@ -414,10 +509,10 @@ export function buildTimeline(
       // A project's unsectioned tasks sit beside its sections as "Other tasks".
       const leftovers = isProjectLane && sectionedProjects.has(group.projectId);
       const section = key.startsWith("s:") ? sectionById.get(key.slice(2)) : undefined;
-      let plan = { start: validPlannedDate(section?.planned_start), end: validPlannedDate(section?.planned_end) };
-      // A bad pair (the database forbids it) falls back to the estimate rather than drawing backwards.
+      let plan: PlannedWindow = { start: validPlannedDate(section?.planned_start), end: validPlannedDate(section?.planned_end) };
+      // A bad pair (the database forbids it) is treated as unscheduled rather than drawn backwards.
       if (plan.start && plan.end && plan.end < plan.start) plan = { start: null, end: null };
-      return buildLane(
+      return summarizeLane(
         key,
         leftovers ? "Other tasks" : group.label,
         showProject && (!isProjectLane || leftovers) ? projectName : null,
@@ -428,31 +523,78 @@ export function buildTimeline(
     });
 
   const earliest = addDays(today, -WINDOW_BACK_DAYS);
-  const lanes = allLanes.filter((lane) => lane.end >= earliest);
-  const hiddenEarlier = allLanes.length - lanes.length;
+  const scheduled = summaries.filter((lane) => lane.scheduled);
+  // On the chart: planned, unfinished, and not long past. Everything else is listed below it.
+  const onChart = (lane: LaneSummaryData) => lane.scheduled && lane.health?.kind !== "done" && lane.end >= earliest;
+  const lanes: TimelineLane[] = summaries.filter(onChart).map((lane) => ({
+    key: lane.key,
+    label: lane.label,
+    project: lane.project,
+    sub: laneSub(lane),
+    hasBrent: lane.hasBrent,
+    start: lane.start,
+    end: lane.end,
+    done: lane.done,
+    total: lane.total,
+    share: lane.total > 0 ? Math.min(lane.done / lane.total, 1) : 0,
+    health: lane.health!,
+  }));
+  const earlier: EarlierLane[] = summaries
+    .filter((lane) => !onChart(lane))
+    .map((lane) => ({
+      key: lane.key,
+      label: lane.label,
+      project: lane.project,
+      done: lane.done,
+      total: lane.total,
+      text: earlierText(lane),
+    }));
 
+  // The target: the projects on this timeline that are still going and have a target date.
+  const targetDates = [...projectIds]
+    .map((id) => (id ? projectById.get(id) : undefined))
+    .filter((project): project is PortfolioProjectRow => Boolean(project) && project!.stage !== "Done")
+    .map((project) => validPlannedDate(project.target_date))
+    .filter((date): date is string => Boolean(date));
+  const targetDate = pickTarget(targetDates, today);
+  const targetName = options.targetName?.trim() || null;
+
+  const maxEnd = addDays(today, WINDOW_AHEAD_MAX_DAYS);
   const firstStart = lanes.length ? lanes.map((lane) => lane.start).reduce(minDate) : today;
-  const lastEnd = lanes.length ? lanes.map((lane) => lane.end).reduce(maxDate) : today;
+  let lastEnd = lanes.length ? lanes.map((lane) => lane.end).reduce(maxDate) : today;
+  if (targetDate && targetDate <= maxEnd) lastEnd = maxDate(lastEnd, targetDate);
   const start = startOfWeek(maxDate(minDate(firstStart, addDays(today, -7)), earliest));
-  const end = minDate(
-    maxDate(addDays(lastEnd, 3), addDays(today, WINDOW_AHEAD_MIN_DAYS)),
-    addDays(today, WINDOW_AHEAD_MAX_DAYS)
-  );
-
-  for (const lane of lanes) lane.continues = lane.end > end;
+  const end = minDate(maxDate(addDays(lastEnd, 3), addDays(today, WINDOW_AHEAD_MIN_DAYS)), maxEnd);
 
   const spanDays = Math.max(daysBetween(start, end), 1);
   const step = spanDays <= 84 ? 7 : spanDays <= 168 ? 14 : 28;
   const ticks: string[] = [];
   for (let tick = start; tick <= end; tick = addDays(tick, step)) ticks.push(tick);
 
-  return { start, end, today, ticks, lanes, hiddenEarlier };
+  const target: TimelineTarget | null =
+    targetDate && targetDate >= start && targetDate <= end ? { date: targetDate, name: targetName } : null;
+
+  let summary: TimelineSummary | null = null;
+  if (targetDate || scheduled.length > 0) {
+    const done = scheduled.reduce((sum, lane) => sum + lane.done, 0);
+    const total = scheduled.reduce((sum, lane) => sum + lane.total, 0);
+    const parts: string[] = [];
+    if (targetDate) parts.push(`${targetName ? `${targetName} target` : "Target"} ${formatTick(targetDate)}`);
+    if (total > 0) parts.push(`${done} of ${total} launch-list tasks done`);
+    summary = { health: appHealth(scheduled), targetDate, line: parts.join(" · "), done, total };
+  }
+
+  return { start, end, today, ticks, lanes, earlier, target, summary };
 }
 
-/** Where a date falls on the timeline, 0–100. */
-export function timelinePosition(timeline: Pick<Timeline, "start" | "end">, date: string): number {
+/**
+ * Where a date falls on the timeline, 0–100. `offsetDays` shifts it into the
+ * day: 0.5 for "today"/a marker (the middle of the day), 1 for the end of a
+ * bar that includes its last day.
+ */
+export function timelinePosition(timeline: Pick<Timeline, "start" | "end">, date: string, offsetDays = 0): number {
   const span = Math.max(daysBetween(timeline.start, timeline.end), 1);
-  const at = daysBetween(timeline.start, date);
+  const at = daysBetween(timeline.start, date) + offsetDays;
   return Math.min(100, Math.max(0, (at / span) * 100));
 }
 
@@ -480,6 +622,14 @@ function distinctLabels(tasks: PortfolioTaskRow[]): string[] {
   }
   return [...labels].sort((a, b) => a.localeCompare(b));
 }
+
+/**
+ * App-specific names for the target date ("App Store target 11/20"). Anything
+ * not listed gets the generic "Target M/D".
+ */
+const APP_TARGET_NAMES: Record<string, string> = {
+  "stock & stir": "App Store",
+};
 
 export function buildPortfolio(
   input: PortfolioInput,
@@ -532,7 +682,8 @@ export function buildPortfolio(
           appTasks,
           input.projects.filter((project) => project.implementation_id === id),
           input.sections,
-          today
+          today,
+          { targetName: APP_TARGET_NAMES[impl.name.trim().toLowerCase()] ?? null }
         ),
       };
       return { app, rank: impl.portfolio_rank };

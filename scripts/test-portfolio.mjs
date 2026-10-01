@@ -1,4 +1,5 @@
-// Pure tests for the Portfolio page model (src/lib/portfolio.ts), the task
+// Pure tests for the Portfolio page model (src/lib/portfolio.ts: counts, timeline
+// planned windows, lane health), the task
 // owner field parser (src/lib/task-owner.ts) and the record-page Markdown
 // parser (src/lib/markdown.ts). No database.
 //
@@ -11,6 +12,7 @@ const {
   countTasks,
   buildPortfolio,
   buildTimeline,
+  laneHealth,
   timelinePosition,
   toEtDate,
 } = await import("../src/lib/portfolio.ts");
@@ -266,109 +268,331 @@ test("assigned rows flag decision tasks (tag or 'Decide:' title) for the hand-ba
 });
 
 // ── Timeline ──────────────────────────────────────────────────────────────
-test("timeline: one lane per section, unsectioned tasks as 'Other tasks', cancelled projects skipped", () => {
+// No section has planned dates in this fixture, so every lane is "unscheduled":
+// the chart is empty and the sections are listed under it.
+test("timeline: sections with no planned dates move to the earlier/unscheduled list (no guessed bars)", () => {
   const view = buildPortfolio(sampleInput(), { scope: "personal", now: NOW });
   const ss = view.apps.find((app) => app.name === "Stock & Stir").timeline;
-  assert.deepEqual(ss.lanes.map((lane) => lane.label), ["Release 3", "Release 4", "Other tasks"]);
+  assert.deepEqual(ss.lanes, [], "nothing is drawn without planned dates");
+  assert.deepEqual(ss.earlier.map((lane) => lane.label), ["Release 3", "Release 4", "Other tasks"]);
+  assert.deepEqual(ss.earlier.map((lane) => lane.text), ["1 of 2 done", "0 of 1 done", "0 of 2 done"]);
+  assert.equal(ss.summary, null, "no target date and no planned section: no app chip");
+  assert.equal(ss.target, null);
   const fam = view.apps.find((app) => app.name === "FamCal").timeline;
-  assert.deepEqual(fam.lanes.map((lane) => lane.label), ["Finance Loop", "Sunday Brief"]);
-  assert.equal(fam.lanes.every((lane) => lane.project === null), true);
+  assert.deepEqual(fam.earlier.map((lane) => lane.label), ["Finance Loop", "Sunday Brief"], "cancelled project skipped");
+  assert.equal(fam.earlier.every((lane) => lane.project === null), true);
+  assert.deepEqual(fam.earlier.map((lane) => lane.text), ["1 of 1 done", "0 of 1 done"]);
 });
 
-test("timeline lanes: state, due-date bars, dashed estimates, overdue, Brent marker", () => {
-  const view = buildPortfolio(sampleInput(), { scope: "personal", now: NOW });
-  const [r3, r4, other] = view.apps.find((app) => app.name === "Stock & Stir").timeline.lanes;
-  assert.equal(r3.state, "prog");
-  assert.equal(r3.estimated, false);
-  assert.equal(r3.start, "2026-09-24");
-  assert.equal(r3.end, "2026-10-01");
-  assert.equal(r3.hasBrent, true);
-  assert.equal(r3.sub, "1 of 2 done");
-  assert.equal(r4.state, "plan");
-  assert.equal(r4.estimated, true); // no due dates: dashed, ends a week after today
-  assert.equal(r4.end, "2026-10-05");
-  assert.match(r4.sub, /no due date/);
-  assert.equal(other.state, "prog");
-  const fam = view.apps.find((app) => app.name === "FamCal").timeline;
-  const sunday = fam.lanes.find((lane) => lane.label === "Sunday Brief");
-  assert.equal(sunday.overdue, true);
-  const loop = fam.lanes.find((lane) => lane.label === "Finance Loop");
-  assert.equal(loop.state, "done");
-  assert.equal(loop.sub, "Done");
+test("timeline: a project's unsectioned tasks sit beside its sections as 'Other tasks', labelled by project when there are several", () => {
+  const input = sampleInput();
+  input.tasks.push(task({ id: "c1", implementation_id: "app-b", project_id: "proj-b1", section_id: "sec-b1", status: "Backlog" }));
+  input.sections = [...SECTIONS, { id: "sec-b1", project_id: "proj-b1", name: "Slice", sort_order: 0 }];
+  const fam = buildPortfolio(input, { scope: "personal", now: NOW }).apps.find((app) => app.name === "FamCal").timeline;
+  assert.deepEqual(fam.earlier.map((lane) => [lane.project, lane.label]), [
+    ["Finance Loop", "Slice"],
+    ["Finance Loop", "Other tasks"],
+    [null, "Sunday Brief"],
+  ]);
 });
 
-test("timeline window: starts on a Monday, hides long-finished lanes, clips far-future bars", () => {
-  const tasks = [
-    task({ id: "old", status: "Done", project_id: "proj-b1", implementation_id: "app-b", created_at: "2026-03-01T15:00:00Z", updated_at: "2026-03-10T15:00:00Z" }),
-    task({ id: "now", status: "In Progress", project_id: "proj-b2", implementation_id: "app-b", due_at: "2027-03-18T21:00:00Z" }),
+// ── Health rule (the approved mockup's rule) ───────────────────────────────
+const health = (done, total, start, end, today, open) => laneHealth({ done, total, start, end, today, open });
+
+test("laneHealth: no tasks, done, starts later", () => {
+  assert.deepEqual(health(0, 0, "2026-10-05", "2026-10-09", "2026-10-06"), { kind: "empty", label: "No tasks yet" });
+  assert.deepEqual(health(4, 4, "2026-10-05", "2026-10-09", "2026-10-30"), { kind: "done", label: "Done" }, "all done wins even long after the end");
+  assert.deepEqual(health(0, 3, "2026-10-05", "2026-10-09", "2026-09-30"), { kind: "plan", label: "Starts 10/5" });
+  assert.deepEqual(health(3, 4, "2026-10-05", "2026-10-09", "2026-09-30", 1), { kind: "plan", label: "Starts 10/5" });
+  assert.deepEqual(health(2, 4, "2026-10-05", "2026-10-09", "2026-10-30", 0), { kind: "done", label: "Done" }, "nothing open (the rest parked) is finished");
+});
+
+test("laneHealth: late is after the planned end with work open; the end day itself is not late", () => {
+  assert.deepEqual(health(0, 4, "2026-09-30", "2026-10-02", "2026-10-03"), { kind: "late", label: "Late · due 10/2" });
+  assert.deepEqual(health(8, 9, "2026-09-29", "2026-10-06", "2026-10-07"), { kind: "late", label: "Late · due 10/6" });
+  assert.notEqual(health(0, 4, "2026-09-30", "2026-10-02", "2026-10-02").kind, "late");
+});
+
+test("laneHealth: behind, ahead and on track around the 25% and 15% margins", () => {
+  // 10-day window 10/1–10/10; on 10/6 expected = 5.5 / 10 = 0.55.
+  const run = (done, total) => health(done, total, "2026-10-01", "2026-10-10", "2026-10-06").kind;
+  assert.equal(run(0, 10), "behind"); // 0 + .25 < .55
+  assert.equal(run(3, 10), "ok"); // .3 + .25 = .55, not below it
+  assert.equal(run(2, 10), "behind"); // .2 + .25 < .55
+  assert.equal(run(6, 10), "ok"); // .6 < .55 + .15
+  assert.equal(run(7, 10), "ahead"); // .7 ≥ .7
+  assert.equal(run(9, 10), "ahead");
+  assert.deepEqual(health(2, 10, "2026-10-01", "2026-10-10", "2026-10-06"), { kind: "behind", label: "Behind" });
+  assert.deepEqual(health(7, 10, "2026-10-01", "2026-10-10", "2026-10-06"), { kind: "ahead", label: "Ahead" });
+  assert.deepEqual(health(5, 10, "2026-10-01", "2026-10-10", "2026-10-06"), { kind: "ok", label: "On track" });
+});
+
+test("laneHealth: a 3-day window on its first day is On track with nothing done", () => {
+  // expected = 0.5 / 3 = 0.17: 0 + .25 is not below it, and 0 is not .15 above it.
+  assert.deepEqual(health(0, 4, "2026-09-30", "2026-10-02", "2026-09-30"), { kind: "ok", label: "On track" });
+  // The rule's own edge: a 1-day window is half over on its day (0.5 ÷ 1), so nothing done is Behind.
+  assert.deepEqual(health(0, 1, "2026-09-30", "2026-09-30", "2026-09-30"), { kind: "behind", label: "Behind" });
+});
+
+test("laneHealth: the mockup's '10/7 if nothing else finishes' case", () => {
+  const today = "2026-10-07";
+  assert.equal(health(0, 4, "2026-09-30", "2026-10-02", today).label, "Late · due 10/2"); // Build 32
+  assert.equal(health(6, 9, "2026-09-29", "2026-10-06", today).label, "Late · due 10/6"); // Redesign
+  assert.equal(health(0, 3, "2026-10-05", "2026-10-09", today).label, "Behind"); // Link import
+  assert.equal(health(0, 3, "2026-10-05", "2026-10-27", today).label, "On track"); // Plus
+  assert.equal(health(0, 3, "2026-10-08", "2026-10-22", today).label, "Starts 10/8"); // Duo
+});
+
+test("laneHealth: expected share is clamped 0–1 and ignores out-of-range done counts", () => {
+  assert.equal(health(99, 4, "2026-10-01", "2026-10-10", "2026-10-02", 1).kind, "ahead");
+  assert.equal(health(-3, 4, "2026-10-01", "2026-10-10", "2026-10-10").kind, "behind"); // 0 + .25 < .95
+});
+
+// ── Menu & Market: the real lanes from the approved mockup ─────────────────
+const MM_PROJECTS = [
+  { id: "proj-a", name: "Stock & Stir", implementation_id: "app-a", stage: "In Progress", portfolio_rank: 1, target_date: "2026-11-20" },
+];
+const MM_LANES = [
+  ["mm1", "Build 32", "2026-09-30", "2026-10-02", 0, 4, true],
+  ["mm2", "Redesign", "2026-09-29", "2026-10-06", 6, 9, false],
+  ["mm3", "Link import", "2026-10-05", "2026-10-09", 0, 3, false],
+  ["mm4", "Plus", "2026-10-05", "2026-10-27", 0, 3, true],
+  ["mm5", "Duo", "2026-10-08", "2026-10-22", 0, 3, true],
+  ["mm6", "Launch prep", "2026-10-26", "2026-11-04", 0, 4, false],
+  ["mm7", "App Review", "2026-11-04", "2026-11-20", 0, 0, false],
+];
+function mmSections() {
+  return MM_LANES.map(([id, name, start, end], index) => ({ id, project_id: "proj-a", name, sort_order: index, planned_start: start, planned_end: end }));
+}
+function mmTasks() {
+  const out = [];
+  for (const [id, , , , done, total, brent] of MM_LANES) {
+    for (let i = 0; i < total; i += 1) {
+      out.push(task({ id: `${id}-${i}`, section_id: id, status: i < done ? "Done" : "Backlog", owner: brent && i === done ? "brent" : "agent" }));
+    }
+  }
+  return out;
+}
+const mm = (today) => buildTimeline(mmTasks(), MM_PROJECTS, mmSections(), today, { targetName: "App Store" });
+
+test("timeline (9/30): one lane per planned section, in order, with health, share, You badge", () => {
+  const timeline = mm("2026-09-30");
+  assert.deepEqual(timeline.lanes.map((lane) => lane.label), MM_LANES.map((lane) => lane[1]));
+  assert.deepEqual(timeline.lanes.map((lane) => lane.health.label), [
+    "On track", // Build 32: the first day of a 3-day window
+    "Ahead", // Redesign 6/9
+    "Starts 10/5",
+    "Starts 10/5",
+    "Starts 10/8",
+    "Starts 10/26",
+    "No tasks yet", // App Review: planned, no tasks
+  ]);
+  assert.deepEqual(timeline.lanes.map((lane) => lane.health.kind), ["ok", "ahead", "plan", "plan", "plan", "plan", "empty"]);
+  const [build, redesign] = timeline.lanes;
+  assert.equal(redesign.share, 6 / 9);
+  assert.deepEqual([redesign.start, redesign.end, redesign.done, redesign.total], ["2026-09-29", "2026-10-06", 6, 9]);
+  assert.equal(redesign.sub, "6 of 9 done");
+  assert.equal(build.share, 0);
+  assert.equal(build.hasBrent, true);
+  assert.equal(redesign.hasBrent, false);
+  assert.equal(timeline.lanes[6].sub, "Planned");
+  assert.equal(timeline.earlier.length, 0);
+});
+
+test("timeline (10/7, nothing finished since): Build 32 and Redesign Late, Link import Behind, Plus On track", () => {
+  const timeline = mm("2026-10-07");
+  const byName = Object.fromEntries(timeline.lanes.map((lane) => [lane.label, lane.health]));
+  assert.deepEqual(byName["Build 32"], { kind: "late", label: "Late · due 10/2" });
+  assert.deepEqual(byName["Redesign"], { kind: "late", label: "Late · due 10/6" });
+  assert.deepEqual(byName["Link import"], { kind: "behind", label: "Behind" });
+  assert.deepEqual(byName["Plus"], { kind: "ok", label: "On track" });
+  assert.deepEqual(byName["Duo"], { kind: "plan", label: "Starts 10/8" });
+  assert.equal(timeline.summary.health.kind, "late");
+  assert.equal(timeline.summary.health.label, "Late · due 10/2");
+});
+
+test("app chip: the worst health among started lanes (Late > Behind > On track); not-started lanes don't count", () => {
+  assert.deepEqual(mm("2026-09-30").summary.health, { kind: "ok", label: "On track" }, "ahead shows as On track on the app chip");
+  assert.equal(mm("2026-10-07").summary.health.kind, "late");
+  // Only Behind and On track started: Behind wins.
+  const behindOnly = buildTimeline(
+    [task({ id: "p1", section_id: "mm3" }), task({ id: "p2", section_id: "mm4" })],
+    MM_PROJECTS,
+    mmSections().filter((section) => ["mm3", "mm4"].includes(section.id)),
+    "2026-10-07"
+  );
+  assert.equal(behindOnly.summary.health.label, "Behind");
+  // Before anything starts there is no chip colour, but the line still shows.
+  const early = mm("2026-09-01");
+  assert.equal(early.summary.health, null);
+  assert.match(early.summary.line, /^App Store target 11\/20 · 6 of 26 launch-list tasks done$/);
+  // Once everything scheduled is finished the chip says Done.
+  const allDone = buildTimeline(
+    [task({ id: "d1", section_id: "mm3", status: "Done" }), task({ id: "d2", section_id: "mm4", status: "Done" })],
+    MM_PROJECTS,
+    mmSections().filter((section) => ["mm3", "mm4"].includes(section.id)),
+    "2026-10-07"
+  );
+  assert.deepEqual(allDone.summary.health, { kind: "done", label: "Done" });
+});
+
+test("app line: 'App Store target 11/20 · X of Y launch-list tasks done', scheduled sections only", () => {
+  const timeline = mm("2026-09-30");
+  assert.equal(timeline.summary.line, "App Store target 11/20 · 6 of 26 launch-list tasks done");
+  assert.deepEqual([timeline.summary.done, timeline.summary.total, timeline.summary.targetDate], [6, 26, "2026-11-20"]);
+  // A section without planned dates isn't counted, and neither are its tasks.
+  const withExtra = buildTimeline(
+    [...mmTasks(), task({ id: "free1", section_id: "later", status: "Done" }), task({ id: "free2", section_id: "later" })],
+    MM_PROJECTS,
+    [...mmSections(), { id: "later", project_id: "proj-a", name: "Later", sort_order: 9, planned_start: null, planned_end: null }],
+    "2026-09-30",
+    { targetName: "App Store" }
+  );
+  assert.equal(withExtra.summary.line, "App Store target 11/20 · 6 of 26 launch-list tasks done");
+  assert.deepEqual(withExtra.earlier.map((lane) => [lane.label, lane.text]), [["Later", "1 of 2 done"]]);
+  // No app-specific name: the generic wording.
+  const generic = buildTimeline(mmTasks(), MM_PROJECTS, mmSections(), "2026-09-30");
+  assert.equal(generic.summary.line, "Target 11/20 · 6 of 26 launch-list tasks done");
+  assert.equal(generic.target.name, null);
+});
+
+test("app summary shows only with a project target date or a planned section", () => {
+  const none = buildTimeline(mmTasks(), [{ ...MM_PROJECTS[0], target_date: null }], [], "2026-09-30");
+  assert.equal(none.summary, null);
+  // A target date alone: the line is just the target; no chip colour (nothing scheduled has started).
+  const targetOnly = buildTimeline(mmTasks(), MM_PROJECTS, [], "2026-09-30");
+  assert.equal(targetOnly.summary.line, "Target 11/20");
+  assert.equal(targetOnly.summary.health, null);
+  assert.equal(targetOnly.lanes.length, 0);
+  // A planned section alone: no target in the line.
+  const plannedOnly = buildTimeline(mmTasks(), [{ ...MM_PROJECTS[0], target_date: null }], mmSections(), "2026-09-30");
+  assert.equal(plannedOnly.summary.line, "6 of 26 launch-list tasks done");
+  assert.equal(plannedOnly.target, null);
+  // A cancelled or finished project's target isn't shown.
+  for (const stage of ["Done", "Cancelled"]) {
+    assert.equal(buildTimeline(mmTasks(), [{ ...MM_PROJECTS[0], stage, target_date: "2026-11-20" }], [], "2026-09-30").summary, null, stage);
+  }
+});
+
+test("target marker: placed in the middle of its day, inside the window, with the dashed guide's position", () => {
+  const timeline = mm("2026-09-30");
+  assert.deepEqual(timeline.target, { date: "2026-11-20", name: "App Store" });
+  assert.ok(timeline.target.date >= timeline.start && timeline.target.date <= timeline.end);
+  const span = Math.round((Date.parse(`${timeline.end}T00:00:00Z`) - Date.parse(`${timeline.start}T00:00:00Z`)) / 86_400_000);
+  const days = Math.round((Date.parse("2026-11-20T00:00:00Z") - Date.parse(`${timeline.start}T00:00:00Z`)) / 86_400_000);
+  assert.equal(timelinePosition(timeline, "2026-11-20", 0.5), ((days + 0.5) / span) * 100);
+  const today = timelinePosition(timeline, "2026-09-30", 0.5);
+  assert.ok(today > 0 && today < timelinePosition(timeline, "2026-11-20", 0.5));
+  // A bar that includes its last day ends at the end of that day.
+  assert.ok(timelinePosition(timeline, "2026-10-02", 1) > timelinePosition(timeline, "2026-10-02"));
+});
+
+test("target marker: the window stretches to show it; one beyond 12 weeks or already past is left off the chart", () => {
+  const far = buildTimeline(mmTasks(), [{ ...MM_PROJECTS[0], target_date: "2027-06-01" }], mmSections(), "2026-09-30");
+  assert.equal(far.target, null);
+  assert.equal(far.summary.line.startsWith("Target 6/1 · "), true, "the line still names it");
+  const past = buildTimeline(mmTasks(), [{ ...MM_PROJECTS[0], target_date: "2026-05-01" }], mmSections(), "2026-09-30");
+  assert.equal(past.target, null);
+  // Today is 10/28 in a window that would end ~11/25 without it: a 12/10 target stretches the end.
+  const late = buildTimeline(
+    [task({ id: "z1", section_id: "mm3" })],
+    [{ ...MM_PROJECTS[0], target_date: "2026-12-10" }],
+    mmSections().filter((section) => section.id === "mm3"),
+    "2026-10-28"
+  );
+  assert.equal(late.target?.date, "2026-12-10");
+});
+
+test("finished and unscheduled sections go to the earlier list, but finished planned ones still count toward the line", () => {
+  const sections = [
+    ...mmSections().slice(0, 2),
+    { id: "mm-done", project_id: "proj-a", name: "Shipped", sort_order: 3, planned_start: "2026-09-01", planned_end: "2026-09-20" },
+    { id: "mm-half", project_id: "proj-a", name: "Start only", sort_order: 4, planned_start: "2026-10-01", planned_end: null },
+    { id: "mm-end", project_id: "proj-a", name: "End only", sort_order: 5, planned_start: null, planned_end: "2026-10-30" },
+    { id: "mm-bad", project_id: "proj-a", name: "Backwards", sort_order: 6, planned_start: "2026-10-20", planned_end: "2026-10-01" },
+    { id: "mm-old", project_id: "proj-a", name: "Stale", sort_order: 7, planned_start: "2026-06-01", planned_end: "2026-06-30" },
   ];
-  const timeline = buildTimeline(tasks, PROJECTS, SECTIONS, TODAY);
-  assert.equal(timeline.hiddenEarlier, 1);
-  assert.deepEqual(timeline.lanes.map((lane) => lane.label), ["Sunday Brief"]);
+  const tasks = [
+    ...mmTasks().filter((t) => t.section_id === "mm1" || t.section_id === "mm2"),
+    task({ id: "sh1", section_id: "mm-done", status: "Done" }),
+    task({ id: "sh2", section_id: "mm-done", status: "Done" }),
+    task({ id: "so1", section_id: "mm-half" }),
+    task({ id: "eo1", section_id: "mm-end", status: "Done" }),
+    task({ id: "bd1", section_id: "mm-bad" }),
+    task({ id: "st1", section_id: "mm-old" }),
+  ];
+  const timeline = buildTimeline(tasks, MM_PROJECTS, sections, "2026-09-30", { targetName: "App Store" });
+  assert.deepEqual(timeline.lanes.map((lane) => lane.label), ["Build 32", "Redesign"]);
+  assert.deepEqual(timeline.earlier.map((lane) => [lane.label, lane.text]), [
+    ["Shipped", "2 of 2 done"],
+    ["Start only", "0 of 1 done"],
+    ["End only", "1 of 1 done"],
+    ["Backwards", "0 of 1 done"],
+    ["Stale", "0 of 1 done"],
+  ]);
+  // Scheduled (both dates, in order): Build 32 0/4, Redesign 6/9, Shipped 2/2, Stale 0/1.
+  assert.equal(timeline.summary.line, "App Store target 11/20 · 8 of 16 launch-list tasks done");
+  assert.equal(timeline.summary.health.kind, "late", "the stale open lane is still late");
+});
+
+test("timeline window: starts on a Monday a week back, ends 4–12 weeks ahead, weekly ticks", () => {
+  const timeline = buildTimeline(mmTasks(), MM_PROJECTS, mmSections(), "2026-09-30");
   assert.equal(new Date(`${timeline.start}T00:00:00Z`).getUTCDay(), 1);
-  assert.ok(timeline.start <= "2026-09-21");
-  assert.equal(timeline.end, "2026-12-21"); // 12 weeks ahead at most
-  assert.equal(timeline.lanes[0].continues, true);
+  assert.ok(timeline.start <= "2026-09-23" && timeline.start >= "2026-09-14");
+  assert.ok(timeline.end >= "2026-11-23" && timeline.end <= "2026-12-23");
   assert.equal(timelinePosition(timeline, timeline.start), 0);
   assert.equal(timelinePosition(timeline, "2030-01-01"), 100);
-  const todayAt = timelinePosition(timeline, TODAY);
-  assert.ok(todayAt > 0 && todayAt < 100);
   assert.equal(timeline.ticks[0], timeline.start);
-  // A 13-week window gets fortnightly ticks, all on Mondays.
-  assert.deepEqual(timeline.ticks.slice(0, 3), ["2026-09-21", "2026-10-05", "2026-10-19"]);
+  assert.equal(Date.parse(timeline.ticks[1]) - Date.parse(timeline.ticks[0]), 7 * 86_400_000);
+  assert.equal(timeline.ticks.every((tick) => new Date(`${tick}T00:00:00Z`).getUTCDay() === 1), true);
 });
 
-test("timeline with no tasks is empty and centred on today", () => {
+test("timeline with no tasks and no plans is empty and centred on today", () => {
   const timeline = buildTimeline([], PROJECTS, SECTIONS, TODAY);
   assert.deepEqual(timeline.lanes, []);
+  assert.deepEqual(timeline.earlier, []);
+  assert.equal(timeline.summary, null);
   assert.equal(timeline.today, TODAY);
   assert.ok(timeline.start <= TODAY && timeline.end > TODAY);
 });
 
-// ── Timeline with planned section dates (migration 057) ────────────────────
-function plannedInput() {
+test("a planned section with no tasks yet still draws, as 'No tasks yet'", () => {
+  const timeline = buildTimeline([], MM_PROJECTS, mmSections().slice(6), "2026-10-01");
+  assert.equal(timeline.lanes.length, 1);
+  assert.deepEqual(timeline.lanes[0].health, { kind: "empty", label: "No tasks yet" });
+  assert.equal(timeline.lanes[0].share, 0);
+  assert.equal(timeline.summary.health, null, "nothing has started");
+});
+
+test("buildPortfolio: Stock & Stir's target reads 'App Store'; other apps get the generic 'Target'", () => {
+  const input = sampleInput();
+  input.projects = PROJECTS.map((project) =>
+    project.id === "proj-a" || project.id === "proj-b2" ? { ...project, target_date: "2026-11-20" } : project
+  );
+  input.sections = [
+    { ...SECTIONS[0], planned_start: "2026-09-21", planned_end: "2026-10-09" },
+    { ...SECTIONS[1], planned_start: "2026-10-12", planned_end: "2026-11-06" },
+  ];
+  const view = buildPortfolio(input, { scope: "personal", now: NOW });
+  const ss = view.apps.find((app) => app.name === "Stock & Stir").timeline;
+  assert.deepEqual(ss.lanes.map((lane) => lane.label), ["Release 3", "Release 4"]);
+  assert.equal(ss.summary.line, "App Store target 11/20 · 1 of 3 launch-list tasks done");
+  assert.deepEqual(ss.earlier.map((lane) => lane.label), ["Other tasks"]);
+  const fam = view.apps.find((app) => app.name === "FamCal").timeline;
+  assert.equal(fam.summary.line, "Target 11/20");
+  assert.equal(fam.lanes.length, 0);
+  assert.deepEqual(fam.earlier.map((lane) => lane.label), ["Finance Loop", "Sunday Brief"]);
+});
+
+test("planned dates never change Assigned to you, the counts or anything outside the timeline", () => {
+  const plain = buildPortfolio(sampleInput(), { scope: "personal", now: NOW });
   const input = sampleInput();
   input.sections = [
     { ...SECTIONS[0], planned_start: "2026-09-21", planned_end: "2026-10-09" },
     { ...SECTIONS[1], planned_start: "2026-10-12", planned_end: "2026-11-06" },
-    { id: "sec-r5", project_id: "proj-a", name: "Release 5", sort_order: 2, planned_start: "2026-11-09", planned_end: null },
-    { id: "sec-old", project_id: "proj-a", name: "Past plan", sort_order: 3, planned_start: "2026-09-01", planned_end: "2026-09-10" },
-    { id: "sec-bad", project_id: "proj-a", name: "Backwards", sort_order: 4, planned_start: "2026-10-20", planned_end: "2026-10-01" },
-    { id: "sec-none", project_id: "proj-a", name: "No plan, no tasks", sort_order: 5, planned_start: null, planned_end: null },
-    { id: "sec-x", project_id: "proj-x", name: "Cancelled plan", sort_order: 0, planned_start: "2026-10-01", planned_end: "2026-10-20" },
   ];
-  return input;
-}
-
-test("timeline: planned dates set the bar (solid); sections without dates stay dashed estimates", () => {
-  const lanes = buildPortfolio(plannedInput(), { scope: "personal", now: NOW }).apps.find((app) => app.name === "Stock & Stir").timeline.lanes;
-  const byLabel = Object.fromEntries(lanes.map((lane) => [lane.label, lane]));
-  assert.deepEqual(Object.keys(byLabel), ["Release 3", "Release 4", "Release 5", "Past plan", "Backwards", "Other tasks"]);
-  const r3 = byLabel["Release 3"];
-  assert.deepEqual([r3.start, r3.end, r3.planned, r3.estimated], ["2026-09-21", "2026-10-09", true, false]);
-  assert.equal(r3.sub, "1 of 2 done");
-  const r4 = byLabel["Release 4"];
-  assert.deepEqual([r4.start, r4.end, r4.planned, r4.estimated], ["2026-10-12", "2026-11-06", true, false], "no due dates, but planned: solid");
-  assert.equal(r4.sub, "0 of 1 done");
-  // Planned start only, no tasks: dashed end a week after its start.
-  const r5 = byLabel["Release 5"];
-  assert.deepEqual([r5.start, r5.end, r5.planned, r5.estimated, r5.state], ["2026-11-09", "2026-11-16", true, true, "plan"]);
-  assert.equal(r5.sub, "Planned · no tasks yet");
-  // A backwards pair (the database forbids it) falls back to the estimate.
-  const bad = byLabel["Backwards"];
-  assert.equal(bad.planned, false);
-  assert.equal(bad.estimated, true);
-  assert.equal(byLabel["Other tasks"].planned, false);
-});
-
-test("planned dates never make a lane overdue, and never touch due dates or Assigned to you", () => {
-  const plain = buildPortfolio(sampleInput(), { scope: "personal", now: NOW });
-  const planned = buildPortfolio(plannedInput(), { scope: "personal", now: NOW });
-  const past = planned.apps.find((app) => app.name === "Stock & Stir").timeline.lanes.find((lane) => lane.label === "Past plan");
-  assert.equal(past.end, "2026-09-10");
-  assert.equal(past.overdue, false, "a planned end in the past is not overdue red");
-  assert.equal(past.state, "plan");
-  // Everything outside the timeline is identical.
+  input.projects = PROJECTS.map((project) => (project.id === "proj-a" ? { ...project, target_date: "2026-11-20" } : project));
+  const planned = buildPortfolio(input, { scope: "personal", now: NOW });
   assert.deepEqual(planned.assigned, plain.assigned);
   assert.deepEqual(planned.comingLater, plain.comingLater);
   assert.equal(planned.brentOpen, plain.brentOpen);
@@ -377,21 +601,19 @@ test("planned dates never make a lane overdue, and never touch due dates or Assi
     const before = plain.apps.find((a) => a.id === app.id);
     assert.deepEqual({ ...app, timeline: null }, { ...before, timeline: null });
   }
-  // A lane that is overdue by its tasks' due dates stays overdue with a later planned end.
-  const input = sampleInput();
-  input.tasks.push(task({ id: "late", status: "Planned", section_id: "sec-r4", due_at: "2026-09-25T21:00:00Z" }));
-  input.sections = [SECTIONS[0], { ...SECTIONS[1], planned_start: "2026-09-21", planned_end: "2026-10-30" }];
-  const r4 = buildPortfolio(input, { scope: "personal", now: NOW }).apps.find((app) => app.name === "Stock & Stir").timeline.lanes.find((lane) => lane.label === "Release 4");
-  assert.equal(r4.end, "2026-10-30");
-  assert.equal(r4.overdue, true, "overdue comes from due dates only");
 });
 
-test("planned-only sections of a cancelled project, or with no dates, stay off the timeline", () => {
-  const fam = buildPortfolio(plannedInput(), { scope: "personal", now: NOW }).apps.find((app) => app.name === "FamCal").timeline;
-  assert.equal(fam.lanes.some((lane) => lane.label === "Cancelled plan"), false);
-  const ss = buildPortfolio(plannedInput(), { scope: "personal", now: NOW }).apps.find((app) => app.name === "Stock & Stir").timeline;
-  assert.equal(ss.lanes.some((lane) => lane.label === "No plan, no tasks"), false);
-  assert.ok(ss.end >= "2026-11-06", "the window stretches to show the planned bars");
+test("a planned end in the past is Late on the timeline only (open work), and Done once nothing is open", () => {
+  const input = sampleInput();
+  input.sections = [{ ...SECTIONS[0], planned_start: "2026-09-01", planned_end: "2026-09-10" }];
+  const ss = buildPortfolio(input, { scope: "personal", now: NOW }).apps.find((app) => app.name === "Stock & Stir").timeline;
+  assert.deepEqual(ss.lanes.map((lane) => [lane.label, lane.health.label]), [["Release 3", "Late · due 9/10"]]);
+  assert.equal(ss.summary.health.kind, "late");
+  input.tasks = input.tasks.map((t) => (t.section_id === "sec-r3" ? { ...t, status: "Done" } : t));
+  const done = buildPortfolio(input, { scope: "personal", now: NOW }).apps.find((app) => app.name === "Stock & Stir").timeline;
+  assert.deepEqual(done.lanes, []);
+  assert.deepEqual(done.earlier.map((lane) => [lane.label, lane.text]), [["Release 3", "2 of 2 done"], ["Other tasks", "0 of 3 done"]]);
+  assert.equal(done.summary.health.label, "Done");
 });
 
 // ── Owner fields ──────────────────────────────────────────────────────────

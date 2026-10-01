@@ -427,65 +427,137 @@
   }
 }
 
-/* Timeline */
+/* Timeline: each section's planned window as a track, filled by tasks done. */
+.brief-page.pf {
+  /* Tokens brief-page.css doesn't define: built from the ones it does, so both themes follow. */
+  --pf-danger-soft: color-mix(in srgb, var(--danger) 13%, transparent);
+  --pf-plan: var(--muted);
+  --pf-plan-soft: color-mix(in srgb, var(--muted) 13%, transparent);
+}
 .brief-page .pf-tl {
   border-top: 1px solid var(--hair);
   padding: 14px 18px 16px;
   display: grid;
-  gap: 8px;
+  gap: 10px;
 }
-.brief-page .pf-tlscroll {
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  padding-bottom: 2px;
+.brief-page .pf-chart {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
-.brief-page .pf-gantt {
-  min-width: 620px;
-  display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
-  row-gap: 8px;
-}
+/* Phone first: the name and meta sit above the bar, full width. */
 .brief-page .pf-lane-row {
-  display: contents;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  padding-block: 8px;
+  border-top: 1px solid var(--hair);
+}
+.brief-page .pf-lane-row.pf-axis-row {
+  border-top: 0;
+  padding-block: 0 4px;
+}
+.brief-page .pf-lbl-gap {
+  display: none;
 }
 .brief-page .pf-axis {
   position: relative;
+  height: 40px;
+}
+.brief-page .pf-ticks {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
   height: 16px;
   font-family: var(--mono);
   font-size: 10.5px;
   color: var(--muted);
 }
-.brief-page .pf-axis span {
+.brief-page .pf-ticks span {
   position: absolute;
   transform: translateX(-50%);
   white-space: nowrap;
 }
-.brief-page .pf-axis span.first {
+.brief-page .pf-ticks span.first {
   transform: none;
 }
-.brief-page .pf-axis span.last {
+.brief-page .pf-ticks span.last {
   transform: translateX(-100%);
 }
-.brief-page .pf-lbl {
-  font-size: 13px;
-  padding-right: 12px;
-  align-self: center;
-  line-height: 1.25;
+.brief-page .pf-ticks span.minor {
+  display: none;
+}
+.brief-page .pf-ms {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 1px;
+  white-space: nowrap;
+}
+.brief-page .pf-ms b {
+  width: 9px;
+  height: 9px;
+  background: var(--g2);
+  transform: rotate(45deg);
+  border-radius: 1px;
+}
+.brief-page .pf-ms em {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+.brief-page .pf-ms.today b {
+  width: 7px;
+  height: 7px;
+  background: var(--accent);
+}
+.brief-page .pf-ms.today em {
+  color: var(--accent);
+}
+.brief-page .pf-ms.edge-r {
+  transform: translateX(-85%);
+}
+.brief-page .pf-ms.edge-l {
+  transform: translateX(-15%);
+}
+.brief-page .pf-lbl {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
   min-width: 0;
+  line-height: 1.25;
+}
+.brief-page .pf-lbl-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.brief-page .pf-lname {
+  font-size: 14px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
 }
 .brief-page .pf-lbl-p {
   color: var(--muted);
+  font-weight: 400;
 }
-.brief-page .pf-lbl small {
+.brief-page .pf-meta {
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 12px;
   display: flex;
-  gap: 6px;
-  align-items: center;
   flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+}
+.brief-page .pf-meta .mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
 }
 .brief-page .pf-mini {
   font-size: 10.5px;
@@ -499,72 +571,141 @@
   background: linear-gradient(90deg, rgba(225, 29, 72, 0.16), rgba(139, 92, 246, 0.16));
   color: var(--ink);
 }
+
+/* Health chip: beside each lane name, and on the app card. */
+.brief-page .pf-hc {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 2px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+  color: var(--muted);
+  background: var(--pf-plan-soft);
+}
+.brief-page .pf-hc::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.brief-page .pf-hc.ok,
+.brief-page .pf-hc.ahead,
+.brief-page .pf-hc.done {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+.brief-page .pf-hc.behind {
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+.brief-page .pf-hc.late {
+  color: var(--danger);
+  background: var(--pf-danger-soft);
+}
+.brief-page .pf-hline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
 .brief-page .pf-lane {
   position: relative;
-  height: 26px;
-  border-radius: 8px;
-  background: var(--surface-2);
+  height: 22px;
 }
-.brief-page .pf-seg {
+.brief-page .pf-track {
   position: absolute;
-  top: 4px;
-  height: 18px;
+  top: 3px;
+  height: 16px;
   border-radius: 6px;
+  overflow: hidden;
+  background: var(--pf-plan-soft);
+  border: 1px solid color-mix(in srgb, var(--pf-plan) 35%, transparent);
 }
-.brief-page .pf-seg.st-done {
+.brief-page .pf-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--pf-plan);
+}
+.brief-page .pf-track.ok,
+.brief-page .pf-track.ahead {
+  background: var(--ok-soft);
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+}
+.brief-page .pf-track.ok .pf-fill,
+.brief-page .pf-track.ahead .pf-fill {
   background: var(--ok);
 }
-.brief-page .pf-seg.st-prog {
-  background: linear-gradient(90deg, var(--accent), var(--g2));
+.brief-page .pf-track.behind {
+  background: var(--warn-soft);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
 }
-.brief-page .pf-seg.st-wait {
+.brief-page .pf-track.behind .pf-fill {
   background: var(--warn);
 }
-.brief-page .pf-seg.st-plan {
-  background: var(--g3);
-  opacity: 0.55;
+.brief-page .pf-track.late {
+  background: var(--pf-danger-soft);
+  border-color: var(--danger);
 }
-.brief-page .pf-seg.est {
+.brief-page .pf-track.late .pf-fill {
+  background: var(--danger);
+}
+.brief-page .pf-track.empty {
   background: transparent;
-  opacity: 1;
-  border: 1.5px dashed var(--hair-strong);
-}
-.brief-page .pf-seg.est.st-prog {
-  border-color: var(--g2);
-}
-.brief-page .pf-seg.est.st-wait {
-  border-color: var(--warn);
-}
-.brief-page .pf-seg.cont {
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
-}
-.brief-page .pf-seg.cont::after {
-  content: "→";
-  position: absolute;
-  right: 4px;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 11px;
-  line-height: 1;
-  color: #fff;
-}
-.brief-page .pf-seg.est.cont::after {
-  color: var(--muted);
-}
-.brief-page .pf-seg.late {
-  box-shadow: inset 0 0 0 2px var(--danger);
+  border-style: dashed;
 }
 .brief-page .pf-today {
   position: absolute;
-  top: -3px;
-  bottom: -3px;
+  top: -6px;
+  bottom: -6px;
   width: 2px;
   margin-left: -1px;
   background: var(--accent);
-  z-index: 1;
+  z-index: 2;
   border-radius: 2px;
 }
+.brief-page .pf-guide {
+  position: absolute;
+  top: -10px;
+  bottom: -10px;
+  width: 0;
+  border-left: 1px dashed color-mix(in srgb, var(--g2) 60%, transparent);
+  z-index: 1;
+}
+
+.brief-page .pf-earlier {
+  border-top: 1px solid var(--hair);
+  padding-top: 10px;
+}
+.brief-page .pf-earlier summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--muted);
+}
+.brief-page .pf-earlier summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.brief-page .pf-earlier ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--ink-2);
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .brief-page .pf-legend {
   display: flex;
   flex-wrap: wrap;
@@ -580,25 +721,41 @@
   margin-right: 5px;
   vertical-align: -1px;
 }
-.brief-page .pf-legend i.st-done { background: var(--ok); }
-.brief-page .pf-legend i.st-prog { background: linear-gradient(90deg, var(--accent), var(--g2)); }
-.brief-page .pf-legend i.st-wait { background: var(--warn); }
-.brief-page .pf-legend i.st-plan { background: var(--g3); opacity: 0.55; }
-.brief-page .pf-legend i.st-est { border: 1.5px dashed var(--hair-strong); }
-.brief-page .pf-legend i.st-today { background: var(--accent); width: 3px; }
+.brief-page .pf-legend i.st-fill {
+  background: linear-gradient(90deg, var(--ok) 55%, var(--ok-soft) 55%);
+  border: 1px solid color-mix(in srgb, var(--ok) 40%, transparent);
+}
+.brief-page .pf-legend i.st-today {
+  background: var(--accent);
+  width: 3px;
+}
+.brief-page .pf-legend i.st-target {
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  background: var(--g2);
+  transform: rotate(45deg);
+}
 .brief-page .pf-fine {
   margin: 0;
   font-size: 12.5px;
   color: var(--muted);
 }
+/* Wide: the name sits beside its bar. */
+@container page (min-width: 720px) {
+  .brief-page .pf-lane-row {
+    grid-template-columns: 250px minmax(0, 1fr);
+    gap: 14px;
+    align-items: center;
+  }
+  .brief-page .pf-lbl-gap {
+    display: block;
+  }
+  .brief-page .pf-ticks span.minor {
+    display: inline;
+  }
+}
 @container page (max-width: 560px) {
-  .brief-page .pf-axis span.minor {
-    display: none;
-  }
-  .brief-page .pf-gantt {
-    grid-template-columns: 150px minmax(0, 1fr);
-    min-width: 560px;
-  }
   .brief-page .pf-tl {
     padding: 12px 12px 14px;
   }

@@ -1,9 +1,8 @@
 import Link from "next/link";
-import type { CSSProperties } from "react";
 import {
-  formatShortDate,
   formatTick,
   timelinePosition,
+  type LaneHealth,
   type PortfolioApp,
   type PortfolioView,
   type Timeline,
@@ -45,90 +44,121 @@ function Progress({ pct, label }: { pct: number | null; label: string }) {
   );
 }
 
+function HealthChip({ health }: { health: LaneHealth }) {
+  return <span className={`pf-hc ${health.kind}`}>{health.label}</span>;
+}
+
+function dateRange(start: string, end: string): string {
+  return start === end ? formatTick(start) : `${formatTick(start)} – ${formatTick(end)}`;
+}
+
 function TimelineChart({ timeline, appId }: { timeline: Timeline; appId: string }) {
-  if (timeline.lanes.length === 0) {
+  const { lanes, earlier, target } = timeline;
+  const earlierList =
+    earlier.length > 0 ? (
+      <details className="pf-earlier">
+        <summary>Earlier and unscheduled · {plural(earlier.length, "section")}</summary>
+        <ul>
+          {earlier.map((lane) => (
+            <li key={`${appId}-${lane.key}`}>
+              {lane.project ? <span className="pf-lbl-p">{lane.project} · </span> : null}
+              {lane.label} · {lane.text}
+            </li>
+          ))}
+        </ul>
+      </details>
+    ) : null;
+
+  if (lanes.length === 0) {
     return (
-      <p className="tile-p">
-        {timeline.hiddenEarlier > 0
-          ? `Nothing on the calendar right now; ${plural(timeline.hiddenEarlier, "section")} finished earlier.`
-          : "No sections with tasks yet."}
-      </p>
+      <>
+        <p className="tile-p">
+          {earlier.length > 0
+            ? "No sections with planned dates are open right now."
+            : "No sections with tasks yet."}
+        </p>
+        {earlierList}
+      </>
     );
   }
-  const todayLeft = timelinePosition(timeline, timeline.today);
+
+  const todayLeft = timelinePosition(timeline, timeline.today, 0.5);
+  const targetLeft = target ? timelinePosition(timeline, target.date, 0.5) : null;
+  const targetText = target ? `${target.name ?? "Target"} ${formatTick(target.date)}` : "";
+  const edge = (left: number) => (left > 88 ? " edge-r" : left < 6 ? " edge-l" : "");
   return (
     <>
-      <div className="pf-tlscroll" role="region" aria-label="Timeline" tabIndex={0}>
-        <div className="pf-gantt">
-          <div aria-hidden="true" />
-          <div className="pf-axis" aria-hidden="true">
-            {timeline.ticks.map((tick, index) => {
-              const left = timelinePosition(timeline, tick);
-              // With many ticks, every other label hides on a phone (see portfolio.css).
-              const classes = [
-                left < 3 ? "first" : left > 94 ? "last" : "",
-                timeline.ticks.length > 7 && index % 2 === 1 ? "minor" : "",
-              ].filter(Boolean);
-              return (
-                <span key={tick} className={classes.join(" ") || undefined} style={{ left: `${left}%` }}>
-                  {formatTick(tick)}
-                </span>
-              );
-            })}
+      <div className="pf-chart" role="group" aria-label="Timeline">
+        <div className="pf-lane-row pf-axis-row" aria-hidden="true">
+          <div className="pf-lbl-gap" />
+          <div className="pf-axis">
+            {target && targetLeft !== null ? (
+              <span className={`pf-ms target${edge(targetLeft)}`} style={{ left: `${targetLeft}%` }}>
+                <b />
+                <em>{targetText}</em>
+              </span>
+            ) : null}
+            <span className={`pf-ms today${edge(todayLeft)}`} style={{ left: `${todayLeft}%` }}>
+              <b />
+              <em>Today</em>
+            </span>
+            <div className="pf-ticks">
+              {timeline.ticks.map((tick, index) => {
+                const left = timelinePosition(timeline, tick);
+                // With many ticks, every other label hides on a phone (see portfolio.css).
+                const classes = [
+                  left < 3 ? "first" : left > 94 ? "last" : "",
+                  timeline.ticks.length > 7 && index % 2 === 1 ? "minor" : "",
+                ].filter(Boolean);
+                return (
+                  <span key={tick} className={classes.join(" ") || undefined} style={{ left: `${left}%` }}>
+                    {formatTick(tick)}
+                  </span>
+                );
+              })}
+            </div>
           </div>
-          {timeline.lanes.map((lane) => {
-            const left = timelinePosition(timeline, lane.start);
-            const right = timelinePosition(timeline, lane.end);
-            const style: CSSProperties = { left: `${left}%`, width: `${Math.max(right - left, 1.4)}%` };
-            const range =
-              lane.start === lane.end
-                ? formatShortDate(lane.start)
-                : `${formatShortDate(lane.start)} – ${formatShortDate(lane.end)}`;
-            const stateText =
-              lane.state === "done"
-                ? "done"
-                : lane.overdue
-                  ? "past due"
-                  : lane.estimated
-                    ? "no due date"
-                    : lane.state === "wait"
-                      ? "waiting"
-                      : lane.state === "prog"
-                        ? "in progress"
-                        : "not started";
-            const when = lane.planned ? `${range} (planned)` : range;
-            return (
-              <div className="pf-lane-row" key={`${appId}-${lane.key}`}>
-                <div className="pf-lbl">
-                  <span>
+        </div>
+        {lanes.map((lane) => {
+          const left = timelinePosition(timeline, lane.start);
+          const right = timelinePosition(timeline, lane.end, 1);
+          const range = dateRange(lane.start, lane.end);
+          const name = lane.project ? `${lane.project} · ${lane.label}` : lane.label;
+          const summary = `${name}: ${lane.health.label}, ${lane.done} of ${lane.total} done, planned ${range}`;
+          return (
+            <div className="pf-lane-row" key={`${appId}-${lane.key}`}>
+              <div className="pf-lbl">
+                <span className="pf-lbl-top">
+                  <span className="pf-lname">
                     {lane.project ? <span className="pf-lbl-p">{lane.project} · </span> : null}
                     {lane.label}
                   </span>
-                  <small>
-                    {lane.sub}
-                    {lane.hasBrent ? <span className="pf-mini you">You</span> : null}
-                  </small>
-                </div>
-                <div className="pf-lane">
-                  <span className="pf-today" style={{ left: `${todayLeft}%` }} aria-hidden="true" />
-                  <span
-                    className={`pf-seg st-${lane.state}${lane.estimated ? " est" : ""}${lane.planned ? " planned" : ""}${lane.overdue ? " late" : ""}${lane.continues ? " cont" : ""}`}
-                    style={style}
-                    title={`${when} · ${stateText}`}
-                  >
-                    <span className="pf-sr">
-                      {when}, {stateText}
-                    </span>
-                  </span>
-                </div>
+                  <HealthChip health={lane.health} />
+                </span>
+                <small className="pf-meta">
+                  <span className="mono">{range}</span>
+                  <span>{lane.sub}</span>
+                  {lane.hasBrent ? <span className="pf-mini you">You</span> : null}
+                </small>
               </div>
-            );
-          })}
-        </div>
+              <div className="pf-lane">
+                {targetLeft !== null ? <span className="pf-guide" style={{ left: `${targetLeft}%` }} aria-hidden="true" /> : null}
+                <span
+                  className={`pf-track ${lane.health.kind}${lane.total === 0 ? " empty" : ""}`}
+                  style={{ left: `${left}%`, width: `${Math.max(right - left, 1.4)}%` }}
+                  role="img"
+                  aria-label={summary}
+                  title={summary}
+                >
+                  <span className="pf-fill" style={{ width: `${lane.share * 100}%` }} />
+                </span>
+                <span className="pf-today" style={{ left: `${todayLeft}%` }} aria-hidden="true" />
+              </div>
+            </div>
+          );
+        })}
       </div>
-      {timeline.hiddenEarlier > 0 ? (
-        <p className="pf-fine">{plural(timeline.hiddenEarlier, "earlier section")} finished before {formatShortDate(timeline.start)}.</p>
-      ) : null}
+      {earlierList}
     </>
   );
 }
@@ -161,6 +191,12 @@ function AppRow({ app, open }: { app: PortfolioApp; open: boolean }) {
         <div className="pf-stand">
           {app.stand ?? <span className="pf-muted">No status yet.</span>}
           {app.next ? <span className="pf-next">Next: {app.next}</span> : null}
+          {app.timeline.summary ? (
+            <span className="pf-hline">
+              {app.timeline.summary.health ? <HealthChip health={app.timeline.summary.health} /> : null}
+              {app.timeline.summary.line ? <span>{app.timeline.summary.line}</span> : null}
+            </span>
+          ) : null}
         </div>
         <div className="pf-owners">
           {counts.brentOpen > 0 ? <OwnerChip who="brent" label={`You · ${counts.brentOpen}`} /> : null}
@@ -284,18 +320,17 @@ export function PortfolioPage({ view }: { view: PortfolioView }) {
             <p className="tile-p">No apps have tasks in this view.</p>
           )}
           <div className="pf-legend" aria-hidden="true">
-            <span><i className="st-done" />Done</span>
-            <span><i className="st-prog" />In progress</span>
-            <span><i className="st-wait" />Waiting</span>
-            <span><i className="st-plan" />Not started</span>
-            <span><i className="st-est" />No dates yet (estimate)</span>
+            <span><i className="st-fill" />Planned window, filled by tasks done</span>
             <span><i className="st-today" />Today</span>
+            <span><i className="st-target" />Target date</span>
           </div>
         </section>
 
         <p className="pf-fine">
-          Percent done counts every task in the app equally: done ÷ all tasks. Solid bars use a section&apos;s planned dates
-          or its tasks&apos; due dates; dashed bars have no dates yet and are estimates.
+          Percent done counts every task in the app equally: done ÷ all tasks. Each bar is a section&apos;s planned window,
+          filled by its tasks done ÷ its tasks. Green is on track or ahead, amber is behind (done share more than a quarter
+          short of the share of the window that has passed), red is past its planned end with work open, and grey has not
+          started. Finished sections and sections with no planned dates are listed under the chart.
         </p>
       </div>
     </TaskEditorLayer>
