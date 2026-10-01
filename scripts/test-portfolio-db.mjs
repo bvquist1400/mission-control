@@ -443,7 +443,7 @@ try {
   });
 
   // ── Part 4: the Portfolio from the database ────────────────────────────
-  await test("Portfolio: planned sections draw from their dates (solid), a planned-only section shows with no tasks", async () => {
+  await test("Portfolio: planned sections draw from their dates, a planned-only section shows with no tasks", async () => {
     await makeTask({ title: "Rename screens", project_id: project.id, section_id: releaseId, status: "In Progress" });
     const { data: future } = await admin
       .from("project_sections")
@@ -454,9 +454,9 @@ try {
     const app = view.apps.find((a) => a.id === project.implementation_id);
     const lanes = Object.fromEntries(app.timeline.lanes.map((lane) => [lane.key, lane]));
     const r3 = lanes[`s:${releaseId}`];
-    assert.deepEqual([r3.start, r3.end, r3.planned, r3.estimated], ["2026-09-21", "2026-10-09", true, false]);
+    assert.deepEqual([r3.start, r3.end, r3.done, r3.total, r3.sub, r3.health], ["2026-09-21", "2026-10-09", 0, 1, "0 of 1 done · 1 in progress", { kind: "behind", label: "Behind" }]);
     const r5 = lanes[`s:${future.id}`];
-    assert.deepEqual([r5.start, r5.end, r5.planned, r5.sub], ["2026-11-02", "2026-11-20", true, "Planned · no tasks yet"]);
+    assert.deepEqual([r5.start, r5.end, r5.total, r5.sub, r5.health], ["2026-11-02", "2026-11-20", 0, "Planned", { kind: "empty", label: "No tasks yet" }]);
   });
 
   await test("Portfolio: Brent's blocked tasks move to Coming to you later; the hero counts only actionable ones", async () => {

@@ -134,21 +134,25 @@ export interface EarlierLane {
   total: number;
   /** "9 of 12 done", "No tasks yet". */
   text: string;
+  /** Brent owns an open task in it. */
+  hasBrent: boolean;
+  /** Earliest passed task due date (ET) among its open tasks: "overdue since M/D". */
+  overdueSince: string | null;
+  /** What its open tasks are doing, when any are open. */
+  state: "in progress" | "waiting" | null;
 }
 
 export interface TimelineTarget {
   /** ET date of the project's target. */
   date: string;
-  /** App-specific name ("App Store"), or null for the generic "Target". */
-  name: string | null;
 }
 
-/** The app card's chip and line (scheduled sections only). */
+/** The app card's chip and line. Counts only the sections drawn on the chart. */
 export interface TimelineSummary {
-  /** The worst health among started sections, or null when none has started. */
+  /** The worst health among drawn sections, as just "Late", "Behind" or "On track"; null when none has started. */
   health: LaneHealth | null;
   targetDate: string | null;
-  /** "App Store target 11/20 · 3 of 20 launch-list tasks done". */
+  /** "Target 11/20 · 3 of 20 tasks done". */
   line: string;
   done: number;
   total: number;
@@ -367,6 +371,8 @@ interface LaneSummaryData {
   open: number;
   hasBrent: boolean;
   inProgress: number;
+  overdueSince: string | null;
+  state: "in progress" | "waiting" | null;
   /** Both planned dates are set (and in order): the lane can be drawn and judged. */
   scheduled: boolean;
   start: string;
@@ -396,6 +402,15 @@ function summarizeLane(
     open: open.length,
     hasBrent: open.some((task) => task.owner === "brent"),
     inProgress: open.filter((task) => task.status === "In Progress").length,
+    overdueSince: open
+      .map((task) => toEtDate(task.due_at))
+      .filter((date): date is string => Boolean(date && date < today))
+      .reduce<string | null>((first, date) => (first === null || date < first ? date : first), null),
+    state: open.some((task) => task.status === "In Progress")
+      ? "in progress"
+      : open.some((task) => task.status === "Blocked/Waiting")
+        ? "waiting"
+        : null,
     scheduled,
     start,
     end,
@@ -413,21 +428,22 @@ function earlierText(lane: LaneSummaryData): string {
   return `${lane.done} of ${lane.total} done${lane.open === 0 && lane.done < lane.total ? " · nothing open" : ""}`;
 }
 
-/** Worst first: the app's chip takes the worst colour among started sections. */
-const HEALTH_SEVERITY: Partial<Record<LaneHealthKind, number>> = { late: 4, behind: 3, ok: 2, ahead: 2, done: 1 };
+/** Worst first: the app's chip takes the worst colour among the sections drawn on the chart. */
+const HEALTH_SEVERITY: Partial<Record<LaneHealthKind, number>> = { late: 3, behind: 2, ok: 1, ahead: 1 };
 
 /**
- * The app chip: Late > Behind > On track among started sections (done ones
- * count as started). None started → no chip. All scheduled sections finished → "Done".
+ * The app chip: Late > Behind > On track among drawn sections that have started.
+ * It says only the health word ("Late", never "Late · due 10/2": that is the
+ * lane's own label). None started → no chip.
  */
-function appHealth(lanes: LaneSummaryData[]): LaneHealth | null {
-  const started = lanes.filter((lane) => lane.health && HEALTH_SEVERITY[lane.health.kind] !== undefined);
+function appHealth(lanes: TimelineLane[]): LaneHealth | null {
+  const started = lanes.filter((lane) => HEALTH_SEVERITY[lane.health.kind] !== undefined);
   if (started.length === 0) return null;
   const worst = started.reduce((a, b) =>
-    (HEALTH_SEVERITY[b.health!.kind] ?? 0) > (HEALTH_SEVERITY[a.health!.kind] ?? 0) ? b : a
-  ).health!;
-  if (worst.kind === "late" || worst.kind === "behind") return worst;
-  if (worst.kind === "done" && started.length === lanes.length) return worst;
+    (HEALTH_SEVERITY[b.health.kind] ?? 0) > (HEALTH_SEVERITY[a.health.kind] ?? 0) ? b : a
+  ).health.kind;
+  if (worst === "late") return { kind: "late", label: "Late" };
+  if (worst === "behind") return { kind: "behind", label: "Behind" };
   return { kind: "ok", label: "On track" };
 }
 
@@ -448,8 +464,7 @@ export function buildTimeline(
   tasks: PortfolioTaskRow[],
   projects: PortfolioProjectRow[],
   sections: PortfolioSectionRow[],
-  today: string,
-  options: { targetName?: string | null } = {}
+  today: string
 ): Timeline {
   const projectById = new Map(projects.map((project) => [project.id, project]));
   const sectionById = new Map(sections.map((section) => [section.id, section]));
@@ -523,7 +538,6 @@ export function buildTimeline(
     });
 
   const earliest = addDays(today, -WINDOW_BACK_DAYS);
-  const scheduled = summaries.filter((lane) => lane.scheduled);
   // On the chart: planned, unfinished, and not long past. Everything else is listed below it.
   const onChart = (lane: LaneSummaryData) => lane.scheduled && lane.health?.kind !== "done" && lane.end >= earliest;
   const lanes: TimelineLane[] = summaries.filter(onChart).map((lane) => ({
@@ -548,6 +562,9 @@ export function buildTimeline(
       done: lane.done,
       total: lane.total,
       text: earlierText(lane),
+      hasBrent: lane.hasBrent,
+      overdueSince: lane.overdueSince,
+      state: lane.state,
     }));
 
   // The target: the projects on this timeline that are still going and have a target date.
@@ -557,7 +574,6 @@ export function buildTimeline(
     .map((project) => validPlannedDate(project.target_date))
     .filter((date): date is string => Boolean(date));
   const targetDate = pickTarget(targetDates, today);
-  const targetName = options.targetName?.trim() || null;
 
   const maxEnd = addDays(today, WINDOW_AHEAD_MAX_DAYS);
   const firstStart = lanes.length ? lanes.map((lane) => lane.start).reduce(minDate) : today;
@@ -572,16 +588,18 @@ export function buildTimeline(
   for (let tick = start; tick <= end; tick = addDays(tick, step)) ticks.push(tick);
 
   const target: TimelineTarget | null =
-    targetDate && targetDate >= start && targetDate <= end ? { date: targetDate, name: targetName } : null;
+    targetDate && targetDate >= start && targetDate <= end ? { date: targetDate } : null;
 
+  // The chip and the count use only the sections drawn on the chart: sections the chart
+  // hides (finished, unscheduled, long past) never change either.
   let summary: TimelineSummary | null = null;
-  if (targetDate || scheduled.length > 0) {
-    const done = scheduled.reduce((sum, lane) => sum + lane.done, 0);
-    const total = scheduled.reduce((sum, lane) => sum + lane.total, 0);
+  if (targetDate || lanes.length > 0) {
+    const done = lanes.reduce((sum, lane) => sum + lane.done, 0);
+    const total = lanes.reduce((sum, lane) => sum + lane.total, 0);
     const parts: string[] = [];
-    if (targetDate) parts.push(`${targetName ? `${targetName} target` : "Target"} ${formatTick(targetDate)}`);
-    if (total > 0) parts.push(`${done} of ${total} launch-list tasks done`);
-    summary = { health: appHealth(scheduled), targetDate, line: parts.join(" · "), done, total };
+    if (targetDate) parts.push(`Target ${formatTick(targetDate)}`);
+    if (total > 0) parts.push(`${done} of ${total} tasks done`);
+    summary = { health: appHealth(lanes), targetDate, line: parts.join(" · "), done, total };
   }
 
   return { start, end, today, ticks, lanes, earlier, target, summary };
@@ -622,14 +640,6 @@ function distinctLabels(tasks: PortfolioTaskRow[]): string[] {
   }
   return [...labels].sort((a, b) => a.localeCompare(b));
 }
-
-/**
- * App-specific names for the target date ("App Store target 11/20"). Anything
- * not listed gets the generic "Target M/D".
- */
-const APP_TARGET_NAMES: Record<string, string> = {
-  "stock & stir": "App Store",
-};
 
 export function buildPortfolio(
   input: PortfolioInput,
@@ -682,8 +692,7 @@ export function buildPortfolio(
           appTasks,
           input.projects.filter((project) => project.implementation_id === id),
           input.sections,
-          today,
-          { targetName: APP_TARGET_NAMES[impl.name.trim().toLowerCase()] ?? null }
+          today
         ),
       };
       return { app, rank: impl.portfolio_rank };

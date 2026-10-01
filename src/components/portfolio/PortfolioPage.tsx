@@ -54,15 +54,19 @@ function dateRange(start: string, end: string): string {
 
 function TimelineChart({ timeline, appId }: { timeline: Timeline; appId: string }) {
   const { lanes, earlier, target } = timeline;
+  // With nothing drawn, the list is all there is to see, so it starts open.
   const earlierList =
     earlier.length > 0 ? (
-      <details className="pf-earlier">
+      <details className="pf-earlier" open={lanes.length === 0}>
         <summary>Earlier and unscheduled · {plural(earlier.length, "section")}</summary>
         <ul>
           {earlier.map((lane) => (
             <li key={`${appId}-${lane.key}`}>
               {lane.project ? <span className="pf-lbl-p">{lane.project} · </span> : null}
               {lane.label} · {lane.text}
+              {lane.state ? ` · ${lane.state}` : ""}
+              {lane.overdueSince ? <span className="pf-overdue"> · overdue since {formatTick(lane.overdueSince)}</span> : null}
+              {lane.hasBrent ? <span className="pf-mini you">You</span> : null}
             </li>
           ))}
         </ul>
@@ -84,7 +88,7 @@ function TimelineChart({ timeline, appId }: { timeline: Timeline; appId: string 
 
   const todayLeft = timelinePosition(timeline, timeline.today, 0.5);
   const targetLeft = target ? timelinePosition(timeline, target.date, 0.5) : null;
-  const targetText = target ? `${target.name ?? "Target"} ${formatTick(target.date)}` : "";
+  const targetText = target ? `Target ${formatTick(target.date)}` : "";
   const edge = (left: number) => (left > 88 ? " edge-r" : left < 6 ? " edge-l" : "");
   return (
     <>

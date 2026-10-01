@@ -696,6 +696,12 @@
   outline-offset: 2px;
   border-radius: 4px;
 }
+.brief-page .pf-earlier li .pf-mini {
+  margin-left: 6px;
+}
+.brief-page .pf-earlier .pf-overdue {
+  color: var(--danger);
+}
 .brief-page .pf-earlier ul {
   margin: 8px 0 0;
   padding-left: 18px;
