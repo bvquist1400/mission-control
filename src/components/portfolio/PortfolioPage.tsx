@@ -74,7 +74,7 @@ function TimelineChart({ timeline, appId }: { timeline: Timeline; appId: string 
       <>
         <p className="tile-p">
           {earlier.length > 0
-            ? "No sections with planned dates are open right now."
+            ? "No unfinished section has planned dates, so there is nothing to chart."
             : "No sections with tasks yet."}
         </p>
         {earlierList}
