@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { isOpenTask, type PortfolioInput, type PortfolioTaskRow } from "@/lib/portfolio";
+import { isOpenTask, type ChecklistProgress, type PortfolioInput, type PortfolioTaskRow } from "@/lib/portfolio";
 import { fetchTaskDependencySummaries } from "@/lib/task-dependencies";
 
 const TASK_COLUMNS =
@@ -35,6 +35,36 @@ async function loadBrentBlockers(
 const PAGE_SIZE = 1000;
 const MAX_PAGES = 20;
 
+/**
+ * Checklist items ticked / all per task, for % done's partial credit. One paged read of the
+ * user's items (two small columns each, not one query per task); a task with no items has no entry.
+ * Scoped by user_id like every other query here; RLS also limits it to the signed-in user.
+ */
+export async function loadChecklistProgress(
+  supabase: SupabaseClient,
+  userId: string
+): Promise<Record<string, ChecklistProgress>> {
+  const progress: Record<string, ChecklistProgress> = {};
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const from = page * PAGE_SIZE;
+    const { data, error } = await supabase
+      .from("task_checklist_items")
+      .select("task_id, is_done")
+      .eq("user_id", userId)
+      .order("id", { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+    if (error) throw error;
+    const rows = (data ?? []) as Array<{ task_id: string; is_done: boolean }>;
+    for (const row of rows) {
+      const entry = (progress[row.task_id] ??= { done: 0, total: 0 });
+      entry.total += 1;
+      if (row.is_done) entry.done += 1;
+    }
+    if (rows.length < PAGE_SIZE) break;
+  }
+  return progress;
+}
+
 function single<T>(value: T | T[] | null | undefined): T | null {
   if (Array.isArray(value)) return value[0] ?? null;
   return value ?? null;
@@ -58,7 +88,7 @@ export async function loadPortfolioInput(supabase: SupabaseClient, userId: strin
     if (rows.length < PAGE_SIZE) break;
   }
 
-  const [implementations, projects, sections, blockers] = await Promise.all([
+  const [implementations, projects, sections, blockers, checklist] = await Promise.all([
     supabase
       .from("implementations")
       .select("id, name, phase, rag, status_summary, next_milestone, next_milestone_date, portfolio_rank")
@@ -72,6 +102,12 @@ export async function loadPortfolioInput(supabase: SupabaseClient, userId: strin
       .select("id, project_id, name, sort_order, planned_start, planned_end")
       .eq("user_id", userId),
     loadBrentBlockers(supabase, userId, tasks),
+    // The checklist only adds partial credit, so a failed read must not take the page down:
+    // log it and fall back to whole-task percentages (no partial credit), as before checklists counted.
+    loadChecklistProgress(supabase, userId).catch((error: unknown) => {
+      console.error("[portfolio] failed to load checklist progress; showing whole-task percentages:", error);
+      return {} as Record<string, ChecklistProgress>;
+    }),
   ]);
   if (implementations.error) throw implementations.error;
   if (projects.error) throw projects.error;
@@ -83,5 +119,6 @@ export async function loadPortfolioInput(supabase: SupabaseClient, userId: strin
     projects: projects.data ?? [],
     sections: sections.data ?? [],
     blockers,
+    checklist,
   };
 }

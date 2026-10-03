@@ -75,6 +75,12 @@ export interface PortfolioSectionRow {
   planned_end?: string | null;
 }
 
+/** A task's checklist: items ticked and items in all. */
+export interface ChecklistProgress {
+  done: number;
+  total: number;
+}
+
 export interface PortfolioInput {
   tasks: PortfolioTaskRow[];
   implementations: PortfolioImplementationRow[];
@@ -85,12 +91,27 @@ export interface PortfolioInput {
    * Brent's open tasks need it: a task still waiting on another isn't his to act on yet.
    */
   blockers?: Record<string, string[]>;
+  /**
+   * Checklist items per task id (ticked / all), for tasks that have any. They only
+   * give a task that is not Done partial credit toward the percent and the timeline
+   * fill; a missing entry means no checklist (so no partial credit).
+   */
+  checklist?: Record<string, ChecklistProgress>;
 }
 
 export interface TaskCounts {
+  /** Whole tasks that are Done. The "6 of 9 done" counts stay whole tasks. */
   done: number;
   total: number;
-  /** Rounded percent done, or null when there are no tasks. Never 100 unless all done, never 0 once any are. */
+  /**
+   * Task credit behind `pct`: each Done task is 1, every other task is its ticked share of its
+   * checklist (3 of 14 items is 0.21), and a task with no checklist is 0. So 0 ≤ done ≤ credit ≤ total.
+   */
+  credit: number;
+  /**
+   * Rounded percent done (credit ÷ tasks), or null when there are no tasks. Never 100 unless every
+   * task is Done, never 0 once there is any progress, partial included.
+   */
   pct: number | null;
   open: number;
   /**
@@ -122,15 +143,18 @@ export interface TimelineLane {
   label: string;
   /** The project name, shown when an app has more than one project on the timeline. */
   project: string | null;
-  /** "6 of 9 done · 2 in progress", or "Planned" when there are no tasks. */
+  /** "6 of 9 done · 2 in progress", "0 of 4 done + partial" when ticked checklist items add to the fill, or "Planned" when there are no tasks. */
   sub: string;
   hasBrent: boolean;
   /** The planned window (inclusive ET dates). */
   start: string;
   end: string;
+  /** Whole tasks that are Done. */
   done: number;
   total: number;
-  /** done ÷ total, 0–1 (0 when there are no tasks): the fill. */
+  /** Task credit: Done tasks plus the ticked share of every other task's checklist (see `taskCredit`). */
+  credit: number;
+  /** credit ÷ total, 0–1 (0 when there are no tasks): the fill. */
   share: number;
   health: LaneHealth;
 }
@@ -166,6 +190,8 @@ export interface TimelineSummary {
   line: string;
   done: number;
   total: number;
+  /** Task credit behind the fill: Done tasks plus partly ticked checklists. */
+  credit: number;
 }
 
 export interface Timeline {
@@ -245,15 +271,39 @@ export function isOpenTask(task: Pick<PortfolioTaskRow, "status">): boolean {
 }
 
 /**
- * done ÷ all tasks, as a whole percent. Rounding never claims 100% while
- * something is left, or 0% once something is done.
+ * Credit for one task toward % done (Brent, 10/3: every task is worth an equal slice, and a
+ * task's checklist items split that slice equally). Done is 1, even with items left unticked.
+ * Anything else is its ticked share of its checklist (3 of 14 is 3/14), and 0 with no checklist.
+ * A fully ticked task that isn't Done yet earns its whole slice here but is still open.
  */
-export function percentDone(done: number, total: number): number | null {
+export function taskCredit(
+  task: Pick<PortfolioTaskRow, "id" | "status">,
+  checklist: PortfolioInput["checklist"] = {}
+): number {
+  if (task.status === "Done") return 1;
+  const items = checklist[task.id];
+  if (!items || !Number.isFinite(items.total) || items.total <= 0) return 0;
+  return Math.min(Math.max(items.done, 0), items.total) / items.total;
+}
+
+/** The credit of a group of tasks: the sum of `taskCredit`. */
+export function sumCredit(tasks: Array<Pick<PortfolioTaskRow, "id" | "status">>, checklist: PortfolioInput["checklist"] = {}): number {
+  return tasks.reduce((sum, task) => sum + taskCredit(task, checklist), 0);
+}
+
+/**
+ * Progress ÷ all tasks, as a whole percent. `done` is the number of tasks that are Done; `progress`
+ * is the credit (Done tasks plus partly ticked checklists) and defaults to `done`. Rounding never
+ * claims 100% unless every task is Done (a fully ticked but open task doesn't finish a row), or 0%
+ * once there is any progress, partial included.
+ */
+export function percentDone(done: number, total: number, progress: number = done): number | null {
   if (!Number.isFinite(total) || total <= 0) return null;
   const safeDone = Math.min(Math.max(done, 0), total);
-  const pct = Math.round((safeDone / total) * 100);
+  const safeProgress = Math.min(Math.max(progress, safeDone), total);
+  const pct = Math.round((safeProgress / total) * 100);
   if (safeDone < total && pct === 100) return 99;
-  if (safeDone > 0 && pct === 0) return 1;
+  if (safeProgress > 0 && pct === 0) return 1;
   return pct;
 }
 
@@ -269,7 +319,11 @@ export function isBlockedForBrent(
   return task.status === "Blocked/Waiting" || (blockers[task.id]?.length ?? 0) > 0;
 }
 
-export function countTasks(tasks: PortfolioTaskRow[], blockers: PortfolioInput["blockers"] = {}): TaskCounts {
+export function countTasks(
+  tasks: PortfolioTaskRow[],
+  blockers: PortfolioInput["blockers"] = {},
+  checklist: PortfolioInput["checklist"] = {}
+): TaskCounts {
   let done = 0;
   let open = 0;
   let brentOpen = 0;
@@ -285,7 +339,8 @@ export function countTasks(tasks: PortfolioTaskRow[], blockers: PortfolioInput["
       else brentOpen += 1;
     }
   }
-  return { done, total: tasks.length, pct: percentDone(done, tasks.length), open, brentOpen, brentLater, agentOpen };
+  const credit = sumCredit(tasks, checklist);
+  return { done, total: tasks.length, credit, pct: percentDone(done, tasks.length, credit), open, brentOpen, brentLater, agentOpen };
 }
 
 
@@ -333,6 +388,11 @@ const EPSILON = 1e-9;
 export interface LaneHealthInput {
   done: number;
   total: number;
+  /**
+   * Task credit (Done tasks plus partly ticked checklists), at least `done`. The behind/ahead
+   * judgment uses it, so ticking a checklist item moves a lane. Defaults to `done`.
+   */
+  credit?: number;
   /** Tasks still open. Defaults to total − done (Parked and Missed are closed, not done). */
   open?: number;
   /** The planned window, inclusive ET dates. */
@@ -348,7 +408,8 @@ export interface LaneHealthInput {
  * both end days, and today counts as half a day in), clamped 0–1.
  *   No tasks yet → grey · Done → green · before the start → grey "Starts M/D"
  *   after the end with work open → red "Late · due M/D"
- *   done share + 25% < expected → amber "Behind" · done share ≥ expected + 15% → green "Ahead"
+ *   progress share + 25% < expected → amber "Behind" · progress share ≥ expected + 15% → green "Ahead"
+ *   (progress share = credit ÷ tasks: partly ticked checklists count, see `taskCredit`)
  *   otherwise → green "On track"
  */
 export function laneHealth(input: LaneHealthInput): LaneHealth {
@@ -360,7 +421,7 @@ export function laneHealth(input: LaneHealthInput): LaneHealth {
   if (today > end) return { kind: "late", label: `Late · due ${formatTick(end)}` };
   const windowDays = daysBetween(start, end) + 1;
   const expected = Math.min(1, Math.max(0, (daysBetween(start, today) + 0.5) / windowDays));
-  const share = Math.min(Math.max(done, 0), total) / total;
+  const share = Math.min(Math.max(input.credit ?? done, 0), total) / total;
   // EPSILON keeps the exact-margin cases (0.55 + 0.15 is 0.7000000000000001) on the right side.
   if (share + BEHIND_MARGIN < expected - EPSILON) return { kind: "behind", label: "Behind" };
   if (share >= expected + AHEAD_MARGIN - EPSILON) return { kind: "ahead", label: "Ahead" };
@@ -382,6 +443,8 @@ interface LaneSummaryData {
   project: string | null;
   done: number;
   total: number;
+  /** Done tasks plus the ticked share of every other task's checklist. */
+  credit: number;
   open: number;
   hasBrent: boolean;
   inProgress: number;
@@ -400,10 +463,12 @@ function summarizeLane(
   project: string | null,
   tasks: PortfolioTaskRow[],
   today: string,
-  plan: PlannedWindow
+  plan: PlannedWindow,
+  checklist: PortfolioInput["checklist"] = {}
 ): LaneSummaryData {
   const open = tasks.filter(isOpenTask);
   const done = tasks.filter((task) => task.status === "Done").length;
+  const credit = sumCredit(tasks, checklist);
   const scheduled = Boolean(plan.start && plan.end);
   const start = plan.start ?? today;
   const end = plan.end ?? today;
@@ -413,6 +478,7 @@ function summarizeLane(
     project,
     done,
     total: tasks.length,
+    credit,
     open: open.length,
     // Hobby tasks are Brent's by default, so they don't light the "You" marker.
     hasBrent: open.some((task) => task.owner === "brent" && !isHobbyTaskOrProject(task)),
@@ -429,13 +495,21 @@ function summarizeLane(
     scheduled,
     start,
     end,
-    health: scheduled ? laneHealth({ done, total: tasks.length, open: open.length, start, end, today }) : null,
+    health: scheduled ? laneHealth({ done, credit, total: tasks.length, open: open.length, start, end, today }) : null,
   };
+}
+
+/** Ticked checklist items add to the fill beyond the whole tasks done (ignores float dust). */
+const PARTIAL_EPSILON = 1e-6;
+export function hasPartialCredit(done: number, credit: number): boolean {
+  return credit - done > PARTIAL_EPSILON;
 }
 
 function laneSub(lane: LaneSummaryData): string {
   if (lane.total === 0) return "Planned";
-  return `${lane.done} of ${lane.total} done${lane.inProgress > 0 ? ` · ${lane.inProgress} in progress` : ""}`;
+  // "0 of 4 done + partial" keeps the whole-task count honest next to a fill that includes ticked items.
+  const partial = hasPartialCredit(lane.done, lane.credit) ? " + partial" : "";
+  return `${lane.done} of ${lane.total} done${partial}${lane.inProgress > 0 ? ` · ${lane.inProgress} in progress` : ""}`;
 }
 
 function earlierText(lane: LaneSummaryData): string {
@@ -470,7 +544,8 @@ function pickTarget(dates: string[], today: string): string | null {
 
 /**
  * One chart row per project section that has planned dates (both start and
- * end), drawn as its planned window and filled by tasks done ÷ tasks. Finished
+ * end), drawn as its planned window and filled by task credit ÷ tasks (Done tasks
+ * plus the ticked share of every other task's checklist, `taskCredit`). Finished
  * sections, sections with no planned window (including each project's "Other
  * tasks") and sections whose window ended long ago go in `earlier`, a list under
  * the chart: no more guessed bars. The project's target date is the marker.
@@ -479,7 +554,8 @@ export function buildTimeline(
   tasks: PortfolioTaskRow[],
   projects: PortfolioProjectRow[],
   sections: PortfolioSectionRow[],
-  today: string
+  today: string,
+  checklist: PortfolioInput["checklist"] = {}
 ): Timeline {
   const projectById = new Map(projects.map((project) => [project.id, project]));
   const sectionById = new Map(sections.map((section) => [section.id, section]));
@@ -548,7 +624,8 @@ export function buildTimeline(
         showProject && (!isProjectLane || leftovers) ? projectName : null,
         group.tasks,
         today,
-        plan
+        plan,
+        checklist
       );
     });
 
@@ -565,7 +642,8 @@ export function buildTimeline(
     end: lane.end,
     done: lane.done,
     total: lane.total,
-    share: lane.total > 0 ? Math.min(lane.done / lane.total, 1) : 0,
+    credit: lane.credit,
+    share: lane.total > 0 ? Math.min(lane.credit / lane.total, 1) : 0,
     health: lane.health!,
   }));
   const earlier: EarlierLane[] = summaries
@@ -611,10 +689,11 @@ export function buildTimeline(
   if (targetDate || lanes.length > 0) {
     const done = lanes.reduce((sum, lane) => sum + lane.done, 0);
     const total = lanes.reduce((sum, lane) => sum + lane.total, 0);
+    const credit = lanes.reduce((sum, lane) => sum + lane.credit, 0);
     const parts: string[] = [];
     if (targetDate) parts.push(`Target ${formatTick(targetDate)}`);
-    if (total > 0) parts.push(`${done} of ${total} tasks done`);
-    summary = { health: appHealth(lanes), targetDate, line: parts.join(" · "), done, total };
+    if (total > 0) parts.push(`${done} of ${total} tasks done${hasPartialCredit(done, credit) ? " + partial" : ""}`);
+    summary = { health: appHealth(lanes), targetDate, line: parts.join(" · "), done, total, credit };
   }
 
   return { start, end, today, ticks, lanes, earlier, target, summary };
@@ -687,6 +766,7 @@ export function buildPortfolio(
   );
   const implementationById = new Map(input.implementations.map((impl) => [impl.id, impl]));
   const blockers = input.blockers ?? {};
+  const checklist = input.checklist ?? {};
   const appName = (task: PortfolioTaskRow) =>
     task.implementation_id ? implementationById.get(task.implementation_id)?.name ?? null : null;
 
@@ -714,7 +794,7 @@ export function buildPortfolio(
         kind: "app",
         name: impl.name,
         phase: impl.phase,
-        counts: countTasks(appTasks, blockers),
+        counts: countTasks(appTasks, blockers, checklist),
         stand,
         next,
         agentLabels: distinctLabels(appTasks),
@@ -722,7 +802,8 @@ export function buildPortfolio(
           appTasks,
           input.projects.filter((project) => project.implementation_id === id),
           input.sections,
-          today
+          today,
+          checklist
         ),
       };
       return { app, rank: impl.portfolio_rank };
@@ -760,7 +841,7 @@ export function buildPortfolio(
         kind: "project",
         name: projectLaneName(project.name),
         phase: project.stage,
-        counts: countTasks(laneTasks, blockers),
+        counts: countTasks(laneTasks, blockers, checklist),
         stand: latestStatusLine(open),
         next: nextTask ? nextTask.title : null,
         agentLabels: distinctLabels(laneTasks),
@@ -768,14 +849,15 @@ export function buildPortfolio(
           laneTasks,
           [project],
           input.sections.filter((section) => section.project_id === project.id),
-          today
+          today,
+          checklist
         ),
       });
     }
   }
 
   // The totals count every drawn lane, project lanes included (Brent wants to see personal progress).
-  const overall = countTasks([...[...byApp.values()].flat(), ...projectLaneTasks], blockers);
+  const overall = countTasks([...[...byApp.values()].flat(), ...projectLaneTasks], blockers, checklist);
   const openTasks = tasks.filter(isOpenTask);
   // Hobby tasks count toward lanes and progress, but nobody is waiting on Brent for them.
   const brentTasks = openTasks.filter((task) => task.owner === "brent" && !isHobbyTaskOrProject(task));

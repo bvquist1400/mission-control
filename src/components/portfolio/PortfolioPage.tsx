@@ -1,10 +1,12 @@
 import Link from "next/link";
 import {
   formatTick,
+  hasPartialCredit,
   timelinePosition,
   type LaneHealth,
   type PortfolioApp,
   type PortfolioView,
+  type TaskCounts,
   type Timeline,
 } from "@/lib/portfolio";
 import type { TaskScope } from "@/lib/personal-exclusion";
@@ -34,6 +36,17 @@ function OwnerChip({ who, label }: { who: "brent" | "agent"; label: string }) {
       {label}
     </span>
   );
+}
+
+/** "3 of 20 tasks done", plus what the percent also counts when ticked checklist items add to it. */
+function progressLabel(counts: TaskCounts, noun: string): string {
+  const partial = hasPartial(counts) ? "; the percent also counts ticked checklist items" : "";
+  return `${counts.done} of ${counts.total} ${noun} done${partial}`;
+}
+
+/** Ticked checklist items add to the percent beyond the whole tasks done. */
+function hasPartial(counts: TaskCounts): boolean {
+  return hasPartialCredit(counts.done, counts.credit);
 }
 
 function Progress({ pct, label }: { pct: number | null; label: string }) {
@@ -128,7 +141,7 @@ function TimelineChart({ timeline, appId }: { timeline: Timeline; appId: string 
           const right = timelinePosition(timeline, lane.end, 1);
           const range = dateRange(lane.start, lane.end);
           const name = lane.project ? `${lane.project} · ${lane.label}` : lane.label;
-          const summary = `${name}: ${lane.health.label}, ${lane.done} of ${lane.total} done, planned ${range}`;
+          const summary = `${name}: ${lane.health.label}, ${lane.done} of ${lane.total} done${hasPartialCredit(lane.done, lane.credit) ? " plus partly ticked checklists" : ""}, planned ${range}`;
           return (
             <div className="pf-lane-row" key={`${appId}-${lane.key}`}>
               <div className="pf-lbl">
@@ -184,13 +197,14 @@ function AppRow({ app, open }: { app: PortfolioApp; open: boolean }) {
           <span className="pf-ph">{app.phase}</span>
         </div>
         <div className="pf-pc">
-          <Progress pct={counts.pct} label={`${counts.done} of ${counts.total} tasks done`} />
+          <Progress pct={counts.pct} label={progressLabel(counts, "tasks")} />
           <div className="pf-pl">
             <span>
               <b>{counts.pct ?? 0}%</b> done
             </span>
-            <span className="mono">
+            <span className="mono" title={hasPartial(counts) ? "Whole tasks done. The percent also counts ticked checklist items." : undefined}>
               {counts.done} / {counts.total}
+              {hasPartial(counts) ? " + partial" : ""}
             </span>
           </div>
         </div>
@@ -264,13 +278,14 @@ export function PortfolioPage({ view }: { view: PortfolioView }) {
                     : "Nothing is open with the agents either."}
               </span>
             </h1>
-            <Progress pct={overall.pct} label={`${overall.done} of ${overall.total} tasks done`} />
+            <Progress pct={overall.pct} label={progressLabel(overall, "tasks")} />
             <div className="pf-pl hero-pl">
               <span>
                 <b>{overall.pct ?? 0}%</b> of all tasks done
               </span>
-              <span className="mono">
+              <span className="mono" title={hasPartial(overall) ? "Whole tasks done. The percent also counts ticked checklist items." : undefined}>
                 {overall.done} / {overall.total}
+                {hasPartial(overall) ? " + partial" : ""}
               </span>
             </div>
             {view.apps.length > 0 ? (
@@ -332,15 +347,16 @@ export function PortfolioPage({ view }: { view: PortfolioView }) {
             <p className="tile-p">No apps or projects have tasks in this view.</p>
           )}
           <div className="pf-legend" aria-hidden="true">
-            <span><i className="st-fill" />Planned window, filled by tasks done</span>
+            <span><i className="st-fill" />Planned window, filled by progress</span>
             <span><i className="st-today" />Today</span>
             <span><i className="st-target" />Target date</span>
           </div>
         </section>
 
         <p className="pf-fine">
-          Percent done counts every task in the app equally: done ÷ all tasks. Each bar is a section&apos;s planned window,
-          filled by its tasks done ÷ its tasks. Green is on track or ahead, amber is behind (done share more than a quarter
+          Percent done counts every task in the app equally: a done task is its whole share, and a task not done yet is
+          its ticked checklist items ÷ its items (3 of 14 ticked is 3/14 of that task; no checklist, nothing yet). The
+          &quot;done&quot; counts stay whole tasks. Each bar is a section&apos;s planned window, filled the same way. Green is on track or ahead, amber is behind (progress more than a quarter
           short of the share of the window that has passed), red is past its planned end with work open, and grey has not
           started. Finished sections and sections with no planned dates are listed under the chart.
         </p>
