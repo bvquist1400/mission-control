@@ -1239,4 +1239,45 @@ await testAsync("loadPortfolioInput carries the checklist numbers into the model
   assert.equal(client.calls.filter((call) => call.table === "task_checklist_items").length, 1, "one checklist query");
 });
 
+await testAsync("a failing checklist read still produces a PortfolioInput, and the % is the whole-task %", async () => {
+  const tasks = [
+    task({ id: "e1", status: "Done" }),
+    task({ id: "e2", status: "In Progress" }),
+    task({ id: "e3", status: "Backlog" }),
+    task({ id: "e4", status: "Backlog" }),
+  ];
+  const failing = mockSupabase({ tasks, implementations: IMPLS, projects: PROJECTS, project_sections: [] });
+  const baseFrom = failing.from.bind(failing);
+  failing.from = (table) => {
+    const builder = baseFrom(table);
+    if (table === "task_checklist_items") {
+      builder.then = (resolve) => resolve({ data: null, error: new Error("boom") });
+    }
+    return builder;
+  };
+  const logged = [];
+  const originalError = console.error;
+  console.error = (...args) => logged.push(args);
+  let input;
+  try {
+    input = await loadPortfolioInput(failing, "user-1");
+  } finally {
+    console.error = originalError;
+  }
+  assert.deepEqual(input.checklist, {}, "falls back to an empty checklist map");
+  assert.equal(input.tasks.length, 4);
+  assert.equal(logged.length, 1, "the failure is logged once");
+  const row = buildPortfolio(input, { scope: "personal", now: NOW }).apps.find((app) => app.id === "app-a");
+  assert.equal(row.counts.pct, 25, "1 of 4 done = the whole-task %, exactly as before this branch");
+  assert.equal(row.counts.credit, 1);
+  // A failing main query is still fatal.
+  const brokenTasks = mockSupabase({});
+  brokenTasks.from = (table) => {
+    const builder = mockSupabase({}).from(table);
+    if (table === "tasks") builder.then = (resolve) => resolve({ data: null, error: new Error("tasks down") });
+    return builder;
+  };
+  await assert.rejects(() => loadPortfolioInput(brokenTasks, "user-1"), /tasks down/);
+});
+
 console.log(`\n${passed} passed`);

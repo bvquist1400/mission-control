@@ -102,7 +102,12 @@ export async function loadPortfolioInput(supabase: SupabaseClient, userId: strin
       .select("id, project_id, name, sort_order, planned_start, planned_end")
       .eq("user_id", userId),
     loadBrentBlockers(supabase, userId, tasks),
-    loadChecklistProgress(supabase, userId),
+    // The checklist only adds partial credit, so a failed read must not take the page down:
+    // log it and fall back to whole-task percentages (no partial credit), as before checklists counted.
+    loadChecklistProgress(supabase, userId).catch((error: unknown) => {
+      console.error("[portfolio] failed to load checklist progress; showing whole-task percentages:", error);
+      return {} as Record<string, ChecklistProgress>;
+    }),
   ]);
   if (implementations.error) throw implementations.error;
   if (projects.error) throw projects.error;
