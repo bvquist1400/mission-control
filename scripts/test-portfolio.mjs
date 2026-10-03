@@ -13,15 +13,23 @@ const {
   buildPortfolio,
   buildTimeline,
   laneHealth,
+  taskCredit,
   timelinePosition,
   toEtDate,
 } = await import("../src/lib/portfolio.ts");
+const { loadChecklistProgress, loadPortfolioInput } = await import("../src/lib/portfolio-queries.ts");
 const { parseTaskOwnerFields, normalizeTaskOwner } = await import("../src/lib/task-owner.ts");
 const { parseMarkdown, parseInline, safeHref } = await import("../src/lib/markdown.ts");
 
 let passed = 0;
 function test(name, fn) {
   fn();
+  passed += 1;
+  console.log(`ok - ${name}`);
+}
+
+async function testAsync(name, fn) {
+  await fn();
   passed += 1;
   console.log(`ok - ${name}`);
 }
@@ -101,7 +109,7 @@ test("countTasks: Parked and Missed are closed but not done; owners count open t
     task({ status: "Blocked/Waiting" }),
     task({ status: "Backlog" }),
   ]);
-  assert.deepEqual(counts, { done: 2, total: 7, pct: 29, open: 3, brentOpen: 1, brentLater: 0, agentOpen: 2 });
+  assert.deepEqual(counts, { done: 2, total: 7, credit: 2, pct: 29, open: 3, brentOpen: 1, brentLater: 0, agentOpen: 2 });
 });
 
 test("countTasks: Brent's blocked tasks (Blocked/Waiting or an open dependency) count as later, not open for him", () => {
@@ -114,7 +122,7 @@ test("countTasks: Brent's blocked tasks (Blocked/Waiting or an open dependency) 
     ],
     { c3: ["Release 3.1"] }
   );
-  assert.deepEqual(counts, { done: 0, total: 4, pct: 0, open: 4, brentOpen: 1, brentLater: 2, agentOpen: 1 });
+  assert.deepEqual(counts, { done: 0, total: 4, credit: 0, pct: 0, open: 4, brentOpen: 1, brentLater: 2, agentOpen: 1 });
 });
 
 // ── buildPortfolio ────────────────────────────────────────────────────────
@@ -985,6 +993,250 @@ test("markdown: empty and pathological input", () => {
   const stars = "*".repeat(5000) + "a" + "_".repeat(5000);
   parseInline(stars);
   assert.ok(Date.now() - started < 2000, "parser stays fast on hostile input");
+});
+
+// ── Partial credit from checklist items (Brent, 10/3) ─────────────────────
+// Each task is an equal slice of the row; a task's checklist items split its slice equally.
+// Done = 1, a task not Done = ticked ÷ items (0 with no checklist). Counts stay whole tasks.
+const cl = (done, total) => ({ done, total });
+
+test("taskCredit: Done is 1 whatever its checklist; open is ticked ÷ items; no checklist is 0", () => {
+  assert.equal(taskCredit({ id: "x", status: "Done" }, { x: cl(0, 5) }), 1, "a Done task with unticked items still counts 1");
+  assert.equal(taskCredit({ id: "x", status: "Done" }), 1);
+  assert.equal(taskCredit({ id: "x", status: "In Progress" }, { x: cl(3, 14) }), 3 / 14);
+  assert.equal(taskCredit({ id: "x", status: "Backlog" }, { x: cl(0, 14) }), 0, "an unticked checklist earns nothing");
+  assert.equal(taskCredit({ id: "x", status: "Backlog" }, { x: cl(4, 4) }), 1, "a fully ticked open task earns its whole slice");
+  assert.equal(taskCredit({ id: "x", status: "Backlog" }, {}), 0, "no checklist, no credit");
+  assert.equal(taskCredit({ id: "x", status: "Backlog" }, { x: cl(0, 0) }), 0, "an empty checklist is no checklist");
+  assert.equal(taskCredit({ id: "x", status: "Backlog" }, { x: cl(9, 4) }), 1, "ticked is clamped to the items");
+  assert.equal(taskCredit({ id: "x", status: "Parked" }, { x: cl(1, 2) }), 0.5, "Parked/Missed keep what was ticked, and stay in the denominator");
+});
+
+test("percentDone with partial credit: never 100 unless every task is Done, never 0 with any progress", () => {
+  assert.equal(percentDone(2, 23, 2 + 3 / 14), 10);
+  assert.equal(percentDone(0, 4, 0.5), 13);
+  assert.equal(percentDone(0, 300, 1 / 14), 1, "partial progress alone never rounds down to 0");
+  assert.equal(percentDone(3, 4, 4), 99, "all credit but one task still open is 99, not 100");
+  assert.equal(percentDone(199, 200, 200), 99);
+  assert.equal(percentDone(4, 4, 4), 100);
+  assert.equal(percentDone(2, 5, 1), 40, "progress below done is lifted to done");
+  assert.equal(percentDone(0, 5, 9), 99, "progress above the total is clamped, and 100 still needs every task Done");
+  assert.equal(percentDone(2, 5), 40, "two arguments behave as before");
+});
+
+// The real blanket row (10/3 5:23 PM ET): 23 tasks, Steps 1 and 2 Done, Step 3 has 14 items with 3 ticked.
+const NOW_103 = new Date("2026-10-03T21:23:00Z");
+function realBlanket() {
+  const tasks = [
+    blanketTask({ id: "st1", status: "Done" }),
+    blanketTask({ id: "st2", status: "Done" }),
+    blanketTask({ id: "st3", status: "In Progress" }),
+    ...Array.from({ length: 20 }, (_, i) => blanketTask({ id: `st${i + 4}`, status: "Backlog" })),
+  ];
+  return {
+    implementations: [],
+    projects: [BLANKET],
+    sections: [],
+    tasks,
+    // Some open tasks have checklists with nothing ticked; Step 3 has 3 of 14.
+    checklist: { st3: cl(3, 14), st4: cl(0, 6), st5: cl(0, 3), st6: cl(0, 8), st1: cl(0, 2) },
+  };
+}
+
+test("the real blanket row: Steps 1-2 Done and 3 of 14 ticked on Step 3 reads 10%, not 9%", () => {
+  const input = realBlanket();
+  assert.equal(input.tasks.length, 23);
+  const withChecklist = buildPortfolio(input, { scope: "personal", now: NOW_103 });
+  const lane = blanketLane(withChecklist);
+  assert.equal(lane.counts.total, 23);
+  assert.equal(lane.counts.done, 2, "the count stays whole tasks");
+  assert.ok(Math.abs(lane.counts.credit - (2 + 3 / 14)) < 1e-9);
+  assert.equal(lane.counts.pct, 10); // (1 + 1 + 3/14) / 23 = 9.66 → 10
+  assert.equal(withChecklist.overall.pct, 10, "the hero's overall % uses the same credit");
+  assert.equal(withChecklist.overall.done, 2);
+  const before = blanketLane(buildPortfolio({ ...input, checklist: undefined }, { scope: "personal", now: NOW_103 }));
+  assert.equal(before.counts.pct, 9, "without the checklist data it is today's 2 ÷ 23 = 9");
+  assert.equal(before.counts.credit, 2);
+});
+
+test("a Done task with unticked items counts 1; an open task with every item ticked counts 1 but never finishes the row", () => {
+  const input = {
+    implementations: [],
+    projects: [BLANKET],
+    sections: [],
+    tasks: [blanketTask({ id: "d1", status: "Done" }), blanketTask({ id: "o1", status: "In Progress" })],
+    checklist: { d1: cl(0, 5), o1: cl(4, 4) },
+  };
+  const view = buildPortfolio(input, { scope: "personal", now: NOW_103 });
+  const lane = blanketLane(view);
+  assert.equal(lane.counts.credit, 2, "1 for the Done task whatever its items, 1 for the fully ticked one");
+  assert.equal(lane.counts.done, 1);
+  assert.equal(lane.counts.open, 1, "the fully ticked task is still open");
+  assert.equal(lane.counts.pct, 99, "not 100 until it is Done");
+  assert.equal(view.overall.pct, 99);
+  // With the task marked Done, the row is 100.
+  input.tasks[1] = blanketTask({ id: "o1", status: "Done" });
+  assert.equal(blanketLane(buildPortfolio(input, { scope: "personal", now: NOW_103 })).counts.pct, 100);
+});
+
+test("a work app row with no checklists is unchanged; with checklists it earns partial credit too", () => {
+  const plain = buildPortfolio(sampleInput(), { scope: "work", now: NOW });
+  assert.equal(plain.apps[0].counts.pct, 50);
+  assert.equal(plain.apps[0].counts.credit, 1);
+  const empty = buildPortfolio({ ...sampleInput(), checklist: {} }, { scope: "work", now: NOW });
+  assert.deepEqual(empty, plain, "an empty checklist map changes nothing");
+  // w2 (open) has 1 of 2 items ticked: (1 + .5) ÷ 2 = 75%.
+  const partly = buildPortfolio({ ...sampleInput(), checklist: { w2: cl(1, 2) } }, { scope: "work", now: NOW });
+  assert.equal(partly.apps[0].counts.pct, 75);
+  assert.deepEqual([partly.apps[0].counts.done, partly.apps[0].counts.total, partly.apps[0].counts.open], [1, 2, 1]);
+  assert.equal(partly.overall.pct, 75);
+  // And in every scope: a personal app row moves too (a2 half ticked: (1 + .5) ÷ 5 = 30%).
+  const personal = buildPortfolio({ ...sampleInput(), checklist: { a2: cl(2, 4) } }, { scope: "personal", now: NOW });
+  assert.equal(personal.apps.find((app) => app.name === "Stock & Stir").counts.pct, 30);
+});
+
+test("whole-task counts, owner counts and labels do not change with partial credit", () => {
+  const plain = buildPortfolio(sampleInput(), { scope: "all", now: NOW });
+  const partly = buildPortfolio({ ...sampleInput(), checklist: { a2: cl(2, 4), a3: cl(1, 3), w2: cl(1, 2) } }, { scope: "all", now: NOW });
+  const strip = (app) => ({ ...app.counts, pct: 0, credit: 0 });
+  assert.deepEqual(partly.apps.map(strip), plain.apps.map(strip));
+  for (const key of ["brentOpen", "brentLater", "agentOpen", "agentInProgress", "assigned", "comingLater"]) {
+    assert.deepEqual(partly[key], plain[key], key);
+  }
+  assert.equal(partly.overall.done, plain.overall.done);
+  assert.equal(partly.overall.open, plain.overall.open);
+});
+
+// A 10-day section window 10/1–10/10; on 10/6 the expected share is 0.55, so Behind is a share under .30 and Ahead from .70.
+function windowTimeline(checklist) {
+  const tasks = [
+    ...Array.from({ length: 2 }, (_, i) => task({ id: `ph-d${i}`, status: "Done", section_id: "sec-w" })),
+    task({ id: "ph-x", status: "In Progress", section_id: "sec-w" }),
+    ...Array.from({ length: 7 }, (_, i) => task({ id: `ph-o${i}`, status: "Backlog", section_id: "sec-w" })),
+  ];
+  const sections = [{ id: "sec-w", project_id: "proj-a", name: "Window", sort_order: 0, planned_start: "2026-10-01", planned_end: "2026-10-10" }];
+  return buildTimeline(tasks, [PROJECTS[0]], sections, "2026-10-06", checklist).lanes[0];
+}
+
+test("laneHealth: partial credit moves the judgment (credit defaults to done)", () => {
+  const h = (done, credit) => laneHealth({ done, credit, total: 10, start: "2026-10-01", end: "2026-10-10", today: "2026-10-06" }).kind;
+  assert.equal(h(2, undefined), "behind", "no credit given: done share .2 is behind");
+  assert.equal(h(2, 2.5), "behind"); // .25 + .25 < .55
+  assert.equal(h(2, 3), "ok"); // .30 + .25 = .55, not below it
+  assert.equal(h(2, 6.9), "ok");
+  assert.equal(h(2, 7), "ahead"); // .70 ≥ .55 + .15
+  assert.equal(h(2, 1), "behind", "credit below done never lowers the share below done");
+  assert.equal(laneHealth({ done: 9, credit: 10, total: 10, open: 1, start: "2026-10-01", end: "2026-10-10", today: "2026-10-06" }).kind, "ahead");
+  assert.equal(laneHealth({ done: 2, credit: 4, total: 4, open: 0, start: "2026-10-01", end: "2026-10-10", today: "2026-10-06" }).kind, "done", "open tasks decide Done, never credit");
+});
+
+test("timeline: the fill and Behind/On track follow partly ticked checklists", () => {
+  const none = windowTimeline({});
+  assert.deepEqual([none.done, none.total, none.credit, none.share, none.health.kind], [2, 10, 2, 0.2, "behind"]);
+  assert.equal(none.sub, "2 of 10 done · 1 in progress");
+  // 5 of 10 items on the In Progress task: credit 2.5, still Behind, and the fill moves.
+  const half = windowTimeline({ "ph-x": cl(5, 10) });
+  assert.equal(half.credit, 2.5);
+  assert.equal(half.share, 0.25);
+  assert.equal(half.health.kind, "behind");
+  assert.equal(half.sub, "2 of 10 done + partial · 1 in progress", "whole-task count stays; '+ partial' explains the fill");
+  assert.equal(half.done, 2);
+  // Every item ticked: credit 3 → share .30 crosses the threshold, Behind → On track.
+  const all = windowTimeline({ "ph-x": cl(10, 10) });
+  assert.equal(all.share, 0.3);
+  assert.deepEqual([all.health.kind, all.health.label], ["ok", "On track"]);
+  assert.equal(all.done, 2, "a fully ticked open task is not counted as done");
+  // Items spread over several open tasks add up the same way: 7 tasks × 1/2 + ... credit 2 + .5×2 = 3.
+  const spread = windowTimeline({ "ph-o0": cl(1, 2), "ph-o1": cl(2, 4) });
+  assert.equal(spread.credit, 3);
+  assert.equal(spread.health.kind, "ok");
+});
+
+test("timeline summary line: whole-task count, '+ partial' only when partly ticked items add to it", () => {
+  const tasks = [task({ id: "s1", status: "Done", section_id: "sec-w" }), task({ id: "s2", status: "Backlog", section_id: "sec-w" })];
+  const sections = [{ id: "sec-w", project_id: "proj-a", name: "Window", sort_order: 0, planned_start: "2026-10-01", planned_end: "2026-10-10" }];
+  const run = (checklist) => buildTimeline(tasks, [PROJECTS[0]], sections, "2026-10-06", checklist).summary;
+  assert.equal(run({}).line, "1 of 2 tasks done");
+  assert.equal(run({ s1: cl(0, 3) }).line, "1 of 2 tasks done", "a Done task's unticked items add nothing");
+  const partly = run({ s2: cl(1, 2) });
+  assert.equal(partly.line, "1 of 2 tasks done + partial");
+  assert.deepEqual([partly.done, partly.total, partly.credit], [1, 2, 1.5]);
+});
+
+test("buildPortfolio feeds the checklist through to the app rows' timelines", () => {
+  const input = blanketInput({ checklist: { bl4: cl(1, 2) } });
+  const lane = blanketLane(buildPortfolio(input, { scope: "personal", now: NOW }));
+  const yarn = lane.timeline.lanes.find((l) => l.label === "2. Yarn");
+  assert.deepEqual([yarn.done, yarn.total, yarn.credit, yarn.share], [0, 2, 0.5, 0.25]);
+  assert.equal(yarn.sub, "0 of 2 done + partial · 1 in progress");
+  assert.equal(lane.counts.pct, Math.round(((2 + 0.5) / 7) * 100));
+});
+
+// ── Loading the checklist numbers: one paged read, not one query per task ───
+function mockSupabase(rowsByTable) {
+  const calls = [];
+  return {
+    calls,
+    from(table) {
+      const call = { table, filters: [], range: null };
+      calls.push(call);
+      const builder = {
+        select(columns) {
+          call.columns = columns;
+          return builder;
+        },
+        eq(column, value) {
+          call.filters.push([column, value]);
+          return builder;
+        },
+        order() {
+          return builder;
+        },
+        range(from, to) {
+          call.range = [from, to];
+          return builder;
+        },
+        then(resolve) {
+          const rows = rowsByTable[table] ?? [];
+          resolve({ data: call.range ? rows.slice(call.range[0], call.range[1] + 1) : rows, error: null });
+        },
+      };
+      return builder;
+    },
+  };
+}
+
+await testAsync("loadChecklistProgress: ticked ÷ items per task from one paged, user-scoped read", async () => {
+  const rows = [];
+  for (let i = 0; i < 2300; i += 1) rows.push({ task_id: `t${i % 50}`, is_done: i % 3 === 0 });
+  const client = mockSupabase({ task_checklist_items: rows });
+  const progress = await loadChecklistProgress(client, "user-1");
+  // 2,300 rows are 3 pages of up to 1,000; never a query per task (50 tasks).
+  assert.equal(client.calls.length, 3);
+  assert.ok(client.calls.every((call) => call.table === "task_checklist_items"));
+  assert.ok(client.calls.every((call) => call.filters.some(([c, v]) => c === "user_id" && v === "user-1")), "scoped by user_id");
+  assert.equal(client.calls[0].columns, "task_id, is_done", "only the two columns it needs");
+  assert.equal(Object.keys(progress).length, 50);
+  const totals = Object.values(progress).reduce((sum, p) => [sum[0] + p.done, sum[1] + p.total], [0, 0]);
+  assert.deepEqual(totals, [rows.filter((r) => r.is_done).length, 2300]);
+  assert.deepEqual(progress.t0, { done: rows.filter((r, i) => i % 50 === 0 && r.is_done).length, total: 46 });
+  assert.deepEqual(await loadChecklistProgress(mockSupabase({}), "user-1"), {}, "no items: no entries (no partial credit)");
+});
+
+await testAsync("loadPortfolioInput carries the checklist numbers into the model input", async () => {
+  const client = mockSupabase({
+    tasks: [],
+    implementations: [],
+    projects: [],
+    project_sections: [],
+    task_checklist_items: [
+      { task_id: "z1", is_done: true },
+      { task_id: "z1", is_done: false },
+    ],
+  });
+  const input = await loadPortfolioInput(client, "user-1");
+  assert.deepEqual(input.checklist, { z1: { done: 1, total: 2 } });
+  assert.equal(client.calls.filter((call) => call.table === "task_checklist_items").length, 1, "one checklist query");
 });
 
 console.log(`\n${passed} passed`);
