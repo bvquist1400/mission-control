@@ -5,6 +5,7 @@ import {
   upsertReviewSnapshot,
 } from "@/lib/briefing/review-snapshots";
 import { normalizeDateOnly } from "@/lib/date-only";
+import { excludePersonalProjectUpdates } from "@/lib/personal-exclusion";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
 import { buildCanonicalMetadata, buildFreshness } from "./metadata";
 import { asRecord, buildReviewPeriodWindow, getMonthStartDate, getRagSeverity, getSingleRelation, getTodayDateOnlyInTimezone, latestIso, listWeekStartDates, summarizeRagTrend, type StoredReviewSnapshotRow } from "./review-support";
@@ -754,7 +755,7 @@ export async function workMonthlyReviewRead(input: WorkMonthlyReviewReadInput): 
       .order("period_end", { ascending: true }),
     input.supabase
       .from("project_status_updates")
-      .select("id, project_id, captured_for_date, summary, rag, changes_today, blockers, next_step, needs_decision, project:projects(id, name, stage, rag)")
+      .select("id, project_id, captured_for_date, summary, rag, changes_today, blockers, next_step, needs_decision, project:projects(id, name, stage, rag, tags)")
       .eq("user_id", input.userId)
       .gte("captured_for_date", monthStart)
       .lte("captured_for_date", anchorDate)
@@ -772,7 +773,7 @@ export async function workMonthlyReviewRead(input: WorkMonthlyReviewReadInput): 
   const weeklyReviews = ((weeklySnapshotResult.data || []) as StoredReviewSnapshotRow<Record<string, unknown>>[])
     .map(normalizeStoredWeeklyReview)
     .filter((review): review is NormalizedStoredWeeklyReview => review !== null);
-  const projectUpdates = (projectUpdateResult.data || []) as ProjectStatusUpdateRow[];
+  const projectUpdates = excludePersonalProjectUpdates((projectUpdateResult.data || []) as ProjectStatusUpdateRow[]);
   const projectRollups = buildMonthlyProjectRollups(projectUpdates);
   const review = buildWorkMonthlyReview({
     monthStart,

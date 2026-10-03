@@ -699,6 +699,180 @@ test("a planned end in the past is Late on the timeline only (open work), and Do
 });
 
 // ── Owner fields ──────────────────────────────────────────────────────────
+// ── Personal projects without an application ─────────────────────────────
+const BLANKET = {
+  id: "proj-blanket",
+  name: "Personal — Christmas Tree Blanket",
+  implementation_id: null,
+  stage: "In Progress",
+  portfolio_rank: 5,
+  tags: ["personal", "crochet", "hobby"],
+};
+const BLANKET_SECTIONS = [
+  { id: "bs-swatch", project_id: "proj-blanket", name: "1. Swatch", sort_order: 0, planned_start: "2026-09-21", planned_end: "2026-09-27" },
+  { id: "bs-yarn", project_id: "proj-blanket", name: "2. Yarn", sort_order: 1, planned_start: "2026-09-28", planned_end: "2026-10-11" },
+  { id: "bs-body", project_id: "proj-blanket", name: "3. Blanket body", sort_order: 2, planned_start: "2026-10-12", planned_end: "2026-11-22" },
+  { id: "bs-finish", project_id: "proj-blanket", name: "4. Finishing", sort_order: 3, planned_start: "2026-11-23", planned_end: "2026-12-10" },
+];
+function blanketTask(overrides = {}) {
+  return task({
+    owner: "brent",
+    implementation_id: null,
+    project_id: "proj-blanket",
+    tags: ["personal", "crochet"],
+    project: { tags: BLANKET.tags },
+    ...overrides,
+  });
+}
+function blanketInput(extra = {}) {
+  const input = sampleInput();
+  input.projects = [...PROJECTS, BLANKET];
+  input.sections = [...SECTIONS, ...BLANKET_SECTIONS];
+  input.tasks = [
+    ...input.tasks,
+    blanketTask({ id: "bl1", status: "Done", section_id: "bs-swatch" }),
+    blanketTask({ id: "bl2", status: "Done", section_id: "bs-swatch" }),
+    blanketTask({ id: "bl3", status: "In Progress", section_id: "bs-yarn", status_line: "Yarn is on order.", priority_score: 70 }),
+    blanketTask({ id: "bl4", status: "Backlog", section_id: "bs-yarn" }),
+    blanketTask({ id: "bl5", status: "Backlog", section_id: "bs-body" }),
+    blanketTask({ id: "bl6", status: "Blocked/Waiting", section_id: "bs-body" }),
+    blanketTask({ id: "bl7", status: "Backlog", section_id: "bs-finish", owner: "agent", owner_label: "PM" }),
+  ];
+  Object.assign(input, extra);
+  return input;
+}
+const blanketLane = (view) => view.apps.find((app) => app.kind === "project");
+
+test("a personal project with no application gets its own lane, after the app lanes, without the 'Personal — ' prefix", () => {
+  const view = buildPortfolio(blanketInput(), { scope: "personal", now: NOW });
+  assert.deepEqual(view.apps.map((app) => app.name), ["FamCal", "Stock & Stir", "Christmas Tree Blanket"]);
+  const lane = blanketLane(view);
+  assert.equal(lane.id, "project:proj-blanket", "never collides with an application id");
+  assert.equal(lane.kind, "project");
+  assert.equal(lane.phase, "In Progress");
+  assert.deepEqual(view.apps.filter((app) => app.kind === "app").map((app) => app.id), ["app-b", "app-a"]);
+});
+
+test("a project lane has the same counts, status line and next as an app lane", () => {
+  const lane = blanketLane(buildPortfolio(blanketInput(), { scope: "personal", now: NOW }));
+  assert.deepEqual([lane.counts.done, lane.counts.total, lane.counts.pct, lane.counts.open], [2, 7, 29, 5]);
+  assert.equal(lane.stand, "Yarn is on order.");
+  assert.equal(lane.next, "Task bl3", "no due dates: the highest-priority open task");
+  assert.deepEqual(lane.agentLabels, ["PM"]);
+});
+
+test("a project lane's timeline is drawn from its sections' planned dates", () => {
+  const lane = blanketLane(buildPortfolio(blanketInput(), { scope: "personal", now: NOW }));
+  assert.deepEqual(
+    lane.timeline.lanes.map((l) => [l.label, l.start, l.end, l.done, l.total]),
+    [
+      ["2. Yarn", "2026-09-28", "2026-10-11", 0, 2],
+      ["3. Blanket body", "2026-10-12", "2026-11-22", 0, 2],
+      ["4. Finishing", "2026-11-23", "2026-12-10", 0, 1],
+    ]
+  );
+  assert.deepEqual(lane.timeline.earlier.map((l) => [l.label, l.text]), [["1. Swatch", "2 of 2 done"]]);
+  assert.equal(lane.timeline.summary.line, "0 of 5 tasks done");
+  assert.equal(lane.timeline.lanes.every((l) => l.project === null), true, "one project: no project prefix on the rows");
+});
+
+test("project lanes appear in the personal and all scopes, never in work scope (and Brent's work lane is untouched)", () => {
+  const input = blanketInput();
+  for (const scope of ["personal", "all"]) {
+    assert.ok(blanketLane(buildPortfolio(input, { scope, now: NOW })), `${scope} shows the lane`);
+  }
+  const work = buildPortfolio(input, { scope: "work", now: NOW });
+  assert.equal(work.apps.some((app) => app.kind === "project"), false);
+  assert.deepEqual(work.apps.map((app) => app.name), ["OnCore"]);
+  const sans = buildPortfolio(sampleInput(), { scope: "work", now: NOW });
+  assert.deepEqual(work.overall, sans.overall);
+  assert.deepEqual(work.assigned, sans.assigned);
+});
+
+test("a task tagged only 'work' in a non-personal project never makes a lane, even with no application", () => {
+  const input = blanketInput();
+  input.projects = input.projects.map((p) => (p.id === "proj-blanket" ? { ...p, tags: ["crochet"] } : p));
+  input.tasks = input.tasks.map((t) => (t.project_id === "proj-blanket" ? { ...t, tags: ["crochet"], project: { tags: ["crochet"] } } : t));
+  assert.equal(blanketLane(buildPortfolio(input, { scope: "all", now: NOW })), undefined, "needs the personal tag on the project");
+  assert.equal(blanketLane(buildPortfolio(input, { scope: "personal", now: NOW })), undefined);
+});
+
+test("a project lane needs in-scope tasks, and cancelled or app-owned projects get none", () => {
+  const empty = blanketInput();
+  empty.tasks = empty.tasks.filter((t) => t.project_id !== "proj-blanket");
+  assert.equal(blanketLane(buildPortfolio(empty, { scope: "personal", now: NOW })), undefined);
+  const cancelled = blanketInput();
+  cancelled.projects = cancelled.projects.map((p) => (p.id === "proj-blanket" ? { ...p, stage: "Cancelled" } : p));
+  assert.equal(blanketLane(buildPortfolio(cancelled, { scope: "personal", now: NOW })), undefined);
+  const withApp = blanketInput();
+  withApp.projects = withApp.projects.map((p) => (p.id === "proj-blanket" ? { ...p, implementation_id: "app-a" } : p));
+  assert.equal(blanketLane(buildPortfolio(withApp, { scope: "personal", now: NOW })), undefined, "projects with an application ride that app's lane");
+});
+
+test("project lanes sort by project rank, and a task already in an app lane is never counted twice", () => {
+  const input = blanketInput();
+  input.projects.push({ ...BLANKET, id: "proj-two", name: "Personal - Garden beds", portfolio_rank: 2 });
+  input.tasks.push(blanketTask({ id: "g1", project_id: "proj-two", status: "Backlog" }));
+  // A blanket task that carries an application id of its own counts in that app's lane only.
+  input.tasks.push(blanketTask({ id: "stray", implementation_id: "app-a", status: "Backlog" }));
+  const view = buildPortfolio(input, { scope: "personal", now: NOW });
+  assert.deepEqual(view.apps.filter((a) => a.kind === "project").map((a) => a.name), ["Garden beds", "Christmas Tree Blanket"]);
+  assert.equal(blanketLane(view) && view.apps.find((a) => a.name === "Christmas Tree Blanket").counts.total, 7);
+  assert.equal(view.apps.find((a) => a.name === "Stock & Stir").counts.total, 6);
+});
+
+test("overall totals include project lanes in personal and all scope (chosen: Brent wants to see personal progress)", () => {
+  const plain = buildPortfolio(sampleInput(), { scope: "personal", now: NOW });
+  const view = buildPortfolio(blanketInput(), { scope: "personal", now: NOW });
+  assert.equal(view.overall.total, plain.overall.total + 7);
+  assert.equal(view.overall.done, plain.overall.done + 2);
+  assert.equal(buildPortfolio(blanketInput(), { scope: "all", now: NOW }).overall.total, buildPortfolio(sampleInput(), { scope: "all", now: NOW }).overall.total + 7);
+});
+
+// ── The hobby tag ─────────────────────────────────────────────────────────
+test("hobby tasks stay out of Assigned to you, Coming to you later and Brent's counts, but not the lane's progress", () => {
+  const view = buildPortfolio(blanketInput(), { scope: "personal", now: NOW });
+  assert.equal(view.assigned.some((t) => t.id.startsWith("bl")), false, "no hobby task in Assigned");
+  assert.equal(view.comingLater.some((t) => t.id.startsWith("bl")), false, "no hobby task in Coming later (bl6 is blocked)");
+  const lane = blanketLane(view);
+  assert.deepEqual([lane.counts.done, lane.counts.total, lane.counts.open], [2, 7, 5]);
+  assert.deepEqual([lane.counts.brentOpen, lane.counts.brentLater, lane.counts.agentOpen], [0, 0, 1], "agent counts unchanged");
+  const plain = buildPortfolio(sampleInput(), { scope: "personal", now: NOW });
+  assert.deepEqual(view.assigned, plain.assigned, "the hero list is exactly what it was without the blanket");
+  assert.deepEqual(view.comingLater, plain.comingLater);
+  assert.equal(view.brentOpen, plain.brentOpen);
+  assert.equal(view.brentLater, plain.brentLater);
+  assert.equal(view.overall.brentOpen, plain.overall.brentOpen);
+  assert.equal(view.overall.brentLater, plain.overall.brentLater);
+});
+
+test("hobby tasks light no 'You' marker on the timeline", () => {
+  const lane = blanketLane(buildPortfolio(blanketInput(), { scope: "personal", now: NOW }));
+  assert.equal(lane.timeline.lanes.some((l) => l.hasBrent), false);
+});
+
+test("a personal task under an application (no hobby tag) still lands in Assigned to you", () => {
+  const input = blanketInput();
+  input.tasks.push(task({ id: "ss-brent", status: "In Progress", owner: "brent", project_id: "proj-a" }));
+  const view = buildPortfolio(input, { scope: "personal", now: NOW });
+  const row = view.assigned.find((t) => t.id === "ss-brent");
+  assert.ok(row, "Stock & Stir style tasks are not hobby tasks");
+  assert.equal(row.app, "Stock & Stir");
+});
+
+test("the hobby tag works on the task itself, and anywhere (an app lane's hobby task also leaves Assigned)", () => {
+  const input = sampleInput();
+  input.tasks.push(
+    task({ id: "own-hobby", status: "In Progress", owner: "brent", tags: ["personal", "hobby"] }),
+    task({ id: "not-hobby", status: "In Progress", owner: "brent", tags: ["personal"] })
+  );
+  const view = buildPortfolio(input, { scope: "personal", now: NOW });
+  assert.equal(view.assigned.some((t) => t.id === "own-hobby"), false);
+  assert.equal(view.assigned.some((t) => t.id === "not-hobby"), true);
+  const ss = view.apps.find((app) => app.name === "Stock & Stir");
+  assert.equal(ss.counts.total, 7, "both still count toward the app's progress");
+});
+
 test("parseTaskOwnerFields: absent keys change nothing (old callers)", () => {
   assert.deepEqual(parseTaskOwnerFields({ title: "x" }), { ok: true, value: {} });
   assert.deepEqual(parseTaskOwnerFields({ owner: undefined }), { ok: true, value: {} });

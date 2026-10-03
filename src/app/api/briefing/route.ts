@@ -48,7 +48,7 @@ import {
   type SectionAwareTaskLike,
 } from "@/lib/project-sections";
 import { requireAuthenticatedRoute } from "@/lib/supabase/route-auth";
-import { excludePersonalTasks } from "@/lib/personal-exclusion";
+import { excludePersonalCommitments, excludePersonalTasks } from "@/lib/personal-exclusion";
 import {
   normalizeTaskWithRelationsList,
   TASK_WITH_RELATIONS_SELECT,
@@ -275,7 +275,7 @@ async function fetchOpenCommitments(
   const { data, error } = await supabase
     .from("commitments")
     .select(
-      "id, title, direction, status, due_at, created_at, stakeholder:stakeholders(id, name), task:tasks(id, title, status, implementation_id)"
+      "id, title, direction, status, due_at, created_at, stakeholder:stakeholders(id, name), task:tasks(id, title, status, implementation_id, tags, project:projects(tags))"
     )
     .eq("user_id", userId)
     .eq("status", "Open");
@@ -285,7 +285,7 @@ async function fetchOpenCommitments(
     return [];
   }
 
-  return normalizeCommitmentRows((data || []) as unknown[]);
+  return normalizeCommitmentRows(excludePersonalCommitments((data || []) as Array<{ task?: unknown }>) as unknown[]);
 }
 
 async function fetchStakeholders(
