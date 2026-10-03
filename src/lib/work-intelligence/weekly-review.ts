@@ -12,6 +12,12 @@ import {
 } from "@/lib/briefing/intelligence";
 import { computeImplementationHealthScores, persistImplementationHealthSnapshots } from "@/lib/health-scores";
 import { normalizeDateOnly } from "@/lib/date-only";
+import {
+  excludePersonalCommitments,
+  excludePersonalProjectUpdates,
+  excludePersonalTasks,
+  isPersonalTaskOrProject,
+} from "@/lib/personal-exclusion";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
 import { buildCanonicalMetadata, buildFreshness } from "./metadata";
 import type { WorkIntelligenceMetadata } from "./types";
@@ -387,6 +393,30 @@ function normalizeStoredEodReview(snapshot: StoredReviewSnapshotRow<Record<strin
     requestedDate,
     generatedAt,
     review: reviewRecord as unknown as WorkEodReviewRead,
+  };
+}
+
+/**
+ * EOD snapshots saved before personal tasks were excluded can still name them. Drop those task
+ * rows by id so an old snapshot can't bring a personal task back into the weekly review.
+ */
+export function stripPersonalFromStoredEodReview<T extends { review: WorkEodReviewRead }>(
+  stored: T,
+  personalTaskIds: ReadonlySet<string>
+): T {
+  if (personalTaskIds.size === 0) return stored;
+  const keep = <I extends { taskId: string }>(items: I[] | undefined): I[] =>
+    Array.isArray(items) ? items.filter((item) => !personalTaskIds.has(item.taskId)) : [];
+  const { review } = stored;
+  return {
+    ...stored,
+    review: {
+      ...review,
+      completedToday: keep(review.completedToday),
+      rolledForward: keep(review.rolledForward),
+      openBlockers: keep(review.openBlockers),
+      tomorrowFirstThings: keep(review.tomorrowFirstThings),
+    },
   };
 }
 
@@ -1024,12 +1054,12 @@ export async function workWeeklyReviewRead(input: WorkWeeklyReviewReadInput): Pr
   const [taskResult, commitmentResult, implementationResult, projectStatusResult, eodSnapshotResult] = await Promise.all([
     input.supabase
       .from("tasks")
-      .select("*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag), sprint:sprints(id, name, start_date, end_date)")
+      .select("*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag, tags), sprint:sprints(id, name, start_date, end_date)")
       .eq("user_id", input.userId)
       .order("updated_at", { ascending: false }),
     input.supabase
       .from("commitments")
-      .select("id, title, direction, status, due_at, created_at, updated_at, stakeholder:stakeholders(id, name), task:tasks(id, title, status, implementation_id)")
+      .select("id, title, direction, status, due_at, created_at, updated_at, stakeholder:stakeholders(id, name), task:tasks(id, title, status, implementation_id, tags, project:projects(tags))")
       .eq("user_id", input.userId)
       .eq("status", "Open"),
     input.supabase
@@ -1040,7 +1070,7 @@ export async function workWeeklyReviewRead(input: WorkWeeklyReviewReadInput): Pr
     input.supabase
       .from("project_status_updates")
       .select(
-        "id, project_id, captured_for_date, summary, rag, changes_today, blockers, next_step, needs_decision, project:projects(id, name, stage, rag), implementation:implementations(id, name, phase, rag, portfolio_rank)"
+        "id, project_id, captured_for_date, summary, rag, changes_today, blockers, next_step, needs_decision, project:projects(id, name, stage, rag, tags), implementation:implementations(id, name, phase, rag, portfolio_rank)"
       )
       .eq("user_id", input.userId)
       .gte("captured_for_date", startDate)
@@ -1073,14 +1103,20 @@ export async function workWeeklyReviewRead(input: WorkWeeklyReviewReadInput): Pr
     throw eodSnapshotResult.error;
   }
 
-  const allTasks = (taskResult.data || []) as TaskWithImplementation[];
-  const commitmentRows = (commitmentResult.data || []) as CommitmentFreshnessRow[];
+  // Personal tasks (tagged, or in a personal project) never reach a work review.
+  const everyTask = (taskResult.data || []) as TaskWithImplementation[];
+  const personalTaskIds = new Set(
+    everyTask.filter((task) => isPersonalTaskOrProject(task)).map((task) => task.id)
+  );
+  const allTasks = excludePersonalTasks(everyTask);
+  const commitmentRows = excludePersonalCommitments((commitmentResult.data || []) as CommitmentFreshnessRow[]);
   const openCommitments = normalizeCommitmentRows(commitmentRows as unknown[]) as IntelligenceCommitment[];
   const implementations = (implementationResult.data || []) as IntelligenceImplementation[];
-  const projectUpdates = (projectStatusResult.data || []) as ProjectStatusUpdateRow[];
+  const projectUpdates = excludePersonalProjectUpdates((projectStatusResult.data || []) as ProjectStatusUpdateRow[]);
   const storedDailyReviews = ((eodSnapshotResult.data || []) as StoredReviewSnapshotRow<Record<string, unknown>>[])
     .map(normalizeStoredEodReview)
-    .filter((review): review is NormalizedStoredEodReview => review !== null);
+    .filter((review): review is NormalizedStoredEodReview => review !== null)
+    .map((review) => stripPersonalFromStoredEodReview(review, personalTaskIds));
 
   const shipped = allTasks
     .filter((task) => task.status === "Done" && task.updated_at >= `${startDate}T00:00:00.000Z` && task.updated_at <= referenceIso)

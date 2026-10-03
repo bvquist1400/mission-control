@@ -14,6 +14,7 @@ import { buildListTotals, groupByIdenticalTitle, isoRange, type ListTotals } fro
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
 import { buildCanonicalMetadata, buildFreshness } from "./metadata";
 import { workExecutionStateRead } from "./execution-state";
+import { excludePersonalCommitments, excludePersonalTasks } from "@/lib/personal-exclusion";
 import { workPriorityStackRead } from "./priority-stack";
 import {
   readStatusUpdateRecommendations,
@@ -39,7 +40,7 @@ import { addDateOnlyDays } from "@/lib/date-only";
 
 const ET_TIMEZONE = DEFAULT_WORKDAY_CONFIG.timezone;
 const TASK_SELECT =
-  "*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag), sprint:sprints(id, name, start_date, end_date, theme)";
+  "*, implementation:implementations(id, name, phase, rag), project:projects(id, name, stage, rag, tags), sprint:sprints(id, name, start_date, end_date, theme)";
 
 interface CalendarEventRow {
   source: "local" | "ical" | "graph";
@@ -302,13 +303,14 @@ async function fetchTasks(supabase: SupabaseClient, userId: string): Promise<Wor
     throw error;
   }
 
-  return (data || []) as WorkIntelligenceTask[];
+  // Personal tasks (tagged, or in a personal project) never reach a work review.
+  return excludePersonalTasks((data || []) as WorkIntelligenceTask[]);
 }
 
 async function fetchOpenCommitments(supabase: SupabaseClient, userId: string): Promise<OpenCommitmentRow[]> {
   const { data, error } = await supabase
     .from("commitments")
-    .select("id, title, direction, status, due_at, notes, created_at, updated_at, stakeholder:stakeholders(id, name), task:tasks(id, title, status)")
+    .select("id, title, direction, status, due_at, notes, created_at, updated_at, stakeholder:stakeholders(id, name), task:tasks(id, title, status, tags, project:projects(tags))")
     .eq("user_id", userId)
     .eq("status", "Open")
     .order("due_at", { ascending: true, nullsFirst: false });
@@ -317,7 +319,7 @@ async function fetchOpenCommitments(supabase: SupabaseClient, userId: string): P
     throw error;
   }
 
-  return ((data || []) as Array<Record<string, unknown>>)
+  return excludePersonalCommitments((data || []) as Array<Record<string, unknown>>)
     .map((row) => ({
       id: String(row.id),
       title: String(row.title),

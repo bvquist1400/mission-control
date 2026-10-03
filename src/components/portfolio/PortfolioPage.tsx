@@ -169,6 +169,8 @@ function TimelineChart({ timeline, appId }: { timeline: Timeline; appId: string 
 
 function AppRow({ app, open }: { app: PortfolioApp; open: boolean }) {
   const { counts } = app;
+  // Open hobby tasks are Brent's, but nobody waits on him for them: not "You", not "Later".
+  const hobbyOpen = Math.max(counts.open - counts.brentOpen - counts.brentLater - counts.agentOpen, 0);
   return (
     <details className="pf-app" open={open}>
       <summary>
@@ -206,6 +208,7 @@ function AppRow({ app, open }: { app: PortfolioApp; open: boolean }) {
           {counts.brentOpen > 0 ? <OwnerChip who="brent" label={`You · ${counts.brentOpen}`} /> : null}
           {counts.brentLater > 0 ? <span className="pf-own quiet">Later · {counts.brentLater}</span> : null}
           {counts.agentOpen > 0 ? <OwnerChip who="agent" label={`Agents · ${counts.agentOpen}`} /> : null}
+          {hobbyOpen > 0 ? <span className="pf-own quiet">Hobby · {hobbyOpen}</span> : null}
           {counts.open === 0 ? <span className="pf-own agent quiet">Nothing open</span> : null}
         </div>
       </summary>
@@ -219,6 +222,8 @@ function AppRow({ app, open }: { app: PortfolioApp; open: boolean }) {
 export function PortfolioPage({ view }: { view: PortfolioView }) {
   const { overall } = view;
   const needs = view.brentOpen;
+  const appLanes = view.apps.filter((app) => app.kind === "app");
+  const projectLanes = view.apps.filter((app) => app.kind === "project");
   return (
     <TaskEditorLayer>
       <div className="page pf-portfolio">
@@ -244,7 +249,10 @@ export function PortfolioPage({ view }: { view: PortfolioView }) {
             <div className="eyebrow">
               <span className="code">PORTFOLIO</span>
               <span>{weekdayLabel(view.today)}</span>
-              <span>{plural(view.apps.length, "app")}</span>
+              <span>
+                {plural(appLanes.length, "app")}
+                {projectLanes.length > 0 ? ` · ${plural(projectLanes.length, "project")}` : ""}
+              </span>
             </div>
             <h1>
               {needs === 0 ? "Nothing needs you" : `${needs} ${needs === 1 ? "thing needs" : "things need"} you`}
@@ -311,7 +319,7 @@ export function PortfolioPage({ view }: { view: PortfolioView }) {
 
         <section className="sec" aria-labelledby="pf-apps-h">
           <div className="sec-h pf-sec-h">
-            <h2 id="pf-apps-h">Apps</h2>
+            <h2 id="pf-apps-h">{projectLanes.length > 0 ? "Apps and projects" : "Apps"}</h2>
             <span className="hint">Tap a row for its timeline</span>
           </div>
           {view.apps.length > 0 ? (
@@ -321,7 +329,7 @@ export function PortfolioPage({ view }: { view: PortfolioView }) {
               ))}
             </div>
           ) : (
-            <p className="tile-p">No apps have tasks in this view.</p>
+            <p className="tile-p">No apps or projects have tasks in this view.</p>
           )}
           <div className="pf-legend" aria-hidden="true">
             <span><i className="st-fill" />Planned window, filled by tasks done</span>

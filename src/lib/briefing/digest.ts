@@ -65,7 +65,7 @@ import type {
   WorkSprintSummary,
 } from "@/lib/work-intelligence/types";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
-import { excludePersonalTasks } from "@/lib/personal-exclusion";
+import { excludePersonalCommitments, excludePersonalTasks } from "@/lib/personal-exclusion";
 import type { CommitmentDirection, NoteWithDetails, TaskStatus } from "@/types/database";
 
 const ET_TIMEZONE = DEFAULT_WORKDAY_CONFIG.timezone;
@@ -1619,7 +1619,7 @@ async function fetchMeetingNotesByEntity(
 async function fetchOpenCommitments(supabase: SupabaseClient, userId: string): Promise<OpenCommitmentRow[]> {
   const { data, error } = await supabase
     .from("commitments")
-    .select("id, title, direction, status, due_at, notes, created_at, updated_at, stakeholder:stakeholders(id, name), task:tasks(id, title, status)")
+    .select("id, title, direction, status, due_at, notes, created_at, updated_at, stakeholder:stakeholders(id, name), task:tasks(id, title, status, tags, project:projects(tags))")
     .eq("user_id", userId)
     .eq("status", "Open")
     .order("due_at", { ascending: true, nullsFirst: false });
@@ -1628,7 +1628,7 @@ async function fetchOpenCommitments(supabase: SupabaseClient, userId: string): P
     throw error;
   }
 
-  return ((data || []) as Array<Record<string, unknown>>).map((row) => ({
+  return excludePersonalCommitments((data || []) as Array<Record<string, unknown>>).map((row) => ({
     id: String(row.id),
     title: String(row.title),
     direction: row.direction as CommitmentDirection,

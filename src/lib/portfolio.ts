@@ -1,5 +1,10 @@
 import { addDateOnlyDays, getDateOnlyInTimeZone, toUtcDateMs } from "@/lib/date-only";
-import { matchesTaskScope, type TaskScope } from "@/lib/personal-exclusion";
+import {
+  hasPersonalTag,
+  isHobbyTaskOrProject,
+  matchesTaskScope,
+  type TaskScope,
+} from "@/lib/personal-exclusion";
 import { isDecisionTask } from "@/lib/task-handoff";
 import type { TaskOwner, TaskStatus } from "@/types/database";
 
@@ -56,6 +61,8 @@ export interface PortfolioProjectRow {
   portfolio_rank: number;
   /** The project's target date (YYYY-MM-DD): the purple diamond on the timeline. */
   target_date?: string | null;
+  /** Project tags: a `personal` project with no application gets its own lane. */
+  tags?: string[] | null;
 }
 
 export interface PortfolioSectionRow {
@@ -86,7 +93,10 @@ export interface TaskCounts {
   /** Rounded percent done, or null when there are no tasks. Never 100 unless all done, never 0 once any are. */
   pct: number | null;
   open: number;
-  /** Brent's open tasks he can act on now (not Blocked/Waiting, no unfinished dependency). */
+  /**
+   * Brent's open tasks he can act on now (not Blocked/Waiting, no unfinished dependency).
+   * Hobby tasks are in neither this nor `brentLater`: they count as open, nothing more.
+   */
   brentOpen: number;
   /** Brent's open tasks that are blocked: they come to him later. */
   brentLater: number;
@@ -202,7 +212,10 @@ export interface LaterTask {
 }
 
 export interface PortfolioApp {
+  /** An application id, or `project:<id>` for a personal project without an application (never collides). */
   id: string;
+  /** "app" lanes are applications; "project" lanes are personal projects with no application. */
+  kind: "app" | "project";
   name: string;
   phase: string;
   counts: TaskCounts;
@@ -267,6 +280,7 @@ export function countTasks(tasks: PortfolioTaskRow[], blockers: PortfolioInput["
     if (isOpenTask(task)) {
       open += 1;
       if (task.owner !== "brent") agentOpen += 1;
+      else if (isHobbyTaskOrProject(task)) continue;
       else if (isBlockedForBrent(task, blockers)) brentLater += 1;
       else brentOpen += 1;
     }
@@ -400,7 +414,8 @@ function summarizeLane(
     done,
     total: tasks.length,
     open: open.length,
-    hasBrent: open.some((task) => task.owner === "brent"),
+    // Hobby tasks are Brent's by default, so they don't light the "You" marker.
+    hasBrent: open.some((task) => task.owner === "brent" && !isHobbyTaskOrProject(task)),
     inProgress: open.filter((task) => task.status === "In Progress").length,
     overdueSince: open
       .map((task) => toEtDate(task.due_at))
@@ -641,6 +656,26 @@ function distinctLabels(tasks: PortfolioTaskRow[]): string[] {
   return [...labels].sort((a, b) => a.localeCompare(b));
 }
 
+/** "Personal — Christmas Tree Blanket" → "Christmas Tree Blanket" (the scope toggle already says personal). */
+export function projectLaneName(name: string): string {
+  const stripped = name.replace(/^\s*personal\s*[—–-]\s*/i, "").trim();
+  return stripped || name;
+}
+
+/** The newest status line among open tasks. */
+function latestStatusLine(open: PortfolioTaskRow[]): string | null {
+  return [...open].filter((task) => task.status_line).sort(byMostRecent)[0]?.status_line ?? null;
+}
+
+/** Next: the soonest upcoming due date; otherwise the highest priority. */
+function nextOpenTask(open: PortfolioTaskRow[], today: string): PortfolioTaskRow | undefined {
+  const upcoming = open
+    .map((task) => ({ task, due: toEtDate(task.due_at) }))
+    .filter((entry): entry is { task: PortfolioTaskRow; due: string } => Boolean(entry.due && entry.due >= today))
+    .sort((a, b) => a.due.localeCompare(b.due) || byPriority(a.task, b.task));
+  return upcoming[0]?.task ?? [...open].sort(byPriority)[0];
+}
+
 export function buildPortfolio(
   input: PortfolioInput,
   options: { scope: TaskScope; now?: Date }
@@ -667,14 +702,8 @@ export function buildPortfolio(
     .map(([id, appTasks]) => {
       const impl = implementationById.get(id)!;
       const open = appTasks.filter(isOpenTask);
-      const latestLine = [...open].filter((task) => task.status_line).sort(byMostRecent)[0]?.status_line ?? null;
-      const stand = latestLine ?? firstSentence(impl.status_summary);
-      // Next: the soonest upcoming due date; otherwise the highest priority.
-      const upcoming = open
-        .map((task) => ({ task, due: toEtDate(task.due_at) }))
-        .filter((entry): entry is { task: PortfolioTaskRow; due: string } => Boolean(entry.due && entry.due >= today))
-        .sort((a, b) => a.due.localeCompare(b.due) || byPriority(a.task, b.task));
-      const nextTask = upcoming[0]?.task ?? [...open].sort(byPriority)[0];
+      const stand = latestStatusLine(open) ?? firstSentence(impl.status_summary);
+      const nextTask = nextOpenTask(open, today);
       const next = impl.next_milestone?.trim()
         ? `${impl.next_milestone.trim()}${impl.next_milestone_date ? ` (${formatShortDate(impl.next_milestone_date)})` : ""}`
         : nextTask
@@ -682,6 +711,7 @@ export function buildPortfolio(
           : null;
       const app: PortfolioApp = {
         id,
+        kind: "app",
         name: impl.name,
         phase: impl.phase,
         counts: countTasks(appTasks, blockers),
@@ -700,10 +730,55 @@ export function buildPortfolio(
     .sort((a, b) => a.rank - b.rank || a.app.name.localeCompare(b.app.name))
     .map(({ app }) => app);
 
-  const appTasks = [...byApp.values()].flat();
-  const overall = countTasks(appTasks, blockers);
+  // A personal project with no application has no app lane, so it gets one of its own:
+  // the same counts, next and section timeline, after the app lanes. Work scope never
+  // reaches this (matchesTaskScope already dropped every personal task above).
+  const projectLanes: PortfolioApp[] = [];
+  const projectLaneTasks: PortfolioTaskRow[] = [];
+  if (options.scope !== "work") {
+    const laneProjects = input.projects
+      .filter(
+        (project) =>
+          hasPersonalTag(project) &&
+          !project.implementation_id &&
+          project.stage !== "Cancelled"
+      )
+      .sort((a, b) => a.portfolio_rank - b.portfolio_rank || a.name.localeCompare(b.name));
+    for (const project of laneProjects) {
+      // Tasks that already sit in an app lane (their own implementation_id) are never counted twice.
+      const laneTasks = tasks.filter(
+        (task) =>
+          task.project_id === project.id &&
+          !(task.implementation_id && implementationById.has(task.implementation_id))
+      );
+      if (laneTasks.length === 0) continue;
+      projectLaneTasks.push(...laneTasks);
+      const open = laneTasks.filter(isOpenTask);
+      const nextTask = nextOpenTask(open, today);
+      projectLanes.push({
+        id: `project:${project.id}`,
+        kind: "project",
+        name: projectLaneName(project.name),
+        phase: project.stage,
+        counts: countTasks(laneTasks, blockers),
+        stand: latestStatusLine(open),
+        next: nextTask ? nextTask.title : null,
+        agentLabels: distinctLabels(laneTasks),
+        timeline: buildTimeline(
+          laneTasks,
+          [project],
+          input.sections.filter((section) => section.project_id === project.id),
+          today
+        ),
+      });
+    }
+  }
+
+  // The totals count every drawn lane, project lanes included (Brent wants to see personal progress).
+  const overall = countTasks([...[...byApp.values()].flat(), ...projectLaneTasks], blockers);
   const openTasks = tasks.filter(isOpenTask);
-  const brentTasks = openTasks.filter((task) => task.owner === "brent");
+  // Hobby tasks count toward lanes and progress, but nobody is waiting on Brent for them.
+  const brentTasks = openTasks.filter((task) => task.owner === "brent" && !isHobbyTaskOrProject(task));
   const assigned = brentTasks
     .filter((task) => !isBlockedForBrent(task, blockers))
     .map((task) => {
@@ -765,7 +840,7 @@ export function buildPortfolio(
     agentLabels: distinctLabels(openTasks),
     assigned,
     comingLater,
-    apps,
+    apps: [...apps, ...projectLanes],
   };
 }
 

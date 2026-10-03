@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { excludePersonalTasks } from "@/lib/personal-exclusion";
 import type { IntelligenceV1ContractType } from "@/lib/intelligence-layer";
 import type { BriefingOpenReviewItem } from "@/lib/briefing/contracts";
 import {
@@ -20,6 +21,8 @@ interface OpenReviewArtifactRow {
 interface OpenReviewTaskRow {
   id: string;
   title: string;
+  tags?: string[] | null;
+  project?: unknown;
 }
 
 const SEVERITY_ORDER: Record<OpenReviewArtifactRow["severity"], number> = {
@@ -144,7 +147,7 @@ export async function readBriefingOpenReviewItems(
 
   const { data: taskData, error: taskError } = await supabase
     .from("tasks")
-    .select("id, title")
+    .select("id, title, tags, project:projects(tags)")
     .eq("user_id", userId)
     .in("id", taskIds);
 
@@ -154,7 +157,8 @@ export async function readBriefingOpenReviewItems(
   }
 
   const taskById = new Map<string, OpenReviewTaskRow>(
-    ((taskData || []) as OpenReviewTaskRow[]).map((task) => [task.id, task])
+    // A review artifact about a personal task never reaches a work briefing.
+    excludePersonalTasks((taskData || []) as OpenReviewTaskRow[]).map((task) => [task.id, task])
   );
 
   return buildBriefingOpenReviewItems(artifactRows, taskById);
