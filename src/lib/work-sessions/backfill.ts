@@ -9,7 +9,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { PaceInput, PaceSettings } from "@/lib/pace";
-import { etLocalToUtcIso, itemRowNumber, matchRows, parseClockTime, parseRowsSpec } from "@/lib/work-sessions/parse";
+import { etDateOf, etLocalToUtcIso, itemRowNumber, matchRows, parseClockTime, parseRowsSpec } from "@/lib/work-sessions/parse";
 
 export const BLANKET_PROJECT_ID = "5c09c4cd-086d-47bc-a971-77772a1d9f37";
 export const BLANKET_UNIT_LABEL = "stitches";
@@ -198,7 +198,7 @@ export function parseTimelogComment(content: string): ParsedLog | { error: strin
   };
 }
 
-/** `Session · Oct 5 · 7:40–8:42 PM · 62 min · rows 11–12 · learning · note: …` (year from the comment's date, ET). */
+/** `Session · Oct 5 · 7:40–8:42 PM · 62 min · rows 11–12 · learning · note: …` (year: the one putting the date on or before the comment, ET). */
 export function parseSessionComment(content: string, createdAt: string): ParsedLog | { error: string } | null {
   const trimmed = content.trim();
   if (!/^session\s*·/i.test(trimmed)) return null;
@@ -218,7 +218,11 @@ export function parseSessionComment(content: string, createdAt: string): ParsedL
     const minutesMatch = /^(\d+)\s*min(ute)?s?$/i.exec(part);
     if (dateMatch && MONTHS.includes(dateMatch[1].toLowerCase())) {
       const month = MONTHS.indexOf(dateMatch[1].toLowerCase()) + 1;
-      date = `${etYearOf(createdAt)}-${String(month).padStart(2, "0")}-${String(Number(dateMatch[2])).padStart(2, "0")}`;
+      const monthDay = `${String(month).padStart(2, "0")}-${String(Number(dateMatch[2])).padStart(2, "0")}`;
+      // The year that puts the sitting on or before the day the comment was written
+      // (a Jan 2 comment about "Dec 30" means last year's Dec 30).
+      const year = etYearOf(createdAt);
+      date = `${year}-${monthDay}` <= etDateOf(createdAt) ? `${year}-${monthDay}` : `${year - 1}-${monthDay}`;
     } else if (timeMatch) {
       const endMeridiem = timeMatch[4] ?? null;
       const startMeridiem = timeMatch[2] ?? endMeridiem;
@@ -567,10 +571,10 @@ export async function applyBackfillPlan(supabase: SupabaseClient, userId: string
       result.sessions_skipped += 1;
       continue;
     }
-    const { data: inserted, error } = await supabase
-      .from("work_sessions")
-      .insert({
-        user_id: userId,
+    // One RPC per session: the session and its links commit together (no ticks: rows keep their state).
+    const { error } = await supabase.rpc("work_session_create", {
+      p_user_id: userId,
+      p_session: {
         project_id: plan.project.id,
         task_id: session.task_id,
         session_date: session.session_date,
@@ -582,21 +586,12 @@ export async function applyBackfillPlan(supabase: SupabaseClient, userId: string
         note: session.note,
         source: "backfill",
         source_ref: session.source_ref,
-      })
-      .select("id")
-      .single();
+      },
+      p_item_ids: session.item_ids,
+      p_mark_done: false,
+    });
     check(error);
-    const sessionId = (inserted as { id: string }).id;
-    if (session.item_ids.length > 0) {
-      const { error: linkError } = await supabase
-        .from("work_session_items")
-        .insert(session.item_ids.map((id) => ({ session_id: sessionId, checklist_item_id: id, user_id: userId })));
-      if (linkError) {
-        await supabase.from("work_sessions").delete().eq("id", sessionId).eq("user_id", userId);
-        throw linkError;
-      }
-      result.links_created += session.item_ids.length;
-    }
+    result.links_created += session.item_ids.length;
     result.sessions_created += 1;
   }
 

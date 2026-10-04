@@ -28,6 +28,7 @@ import {
   isDateOnly,
   matchRows,
   parseRowsSpec,
+  reanchorInstant,
   resolveSessionTiming,
 } from "@/lib/work-sessions/parse";
 import type { WorkSession } from "@/types/database";
@@ -346,7 +347,8 @@ export async function getPaceRates(
   userId: string,
   params: { unit_label: string | null; work_type?: string | null }
 ) {
-  const unitLabel = params.unit_label?.trim();
+  // Stored lowercased (projects PATCH), so match "Stitches" too.
+  const unitLabel = params.unit_label?.trim().toLowerCase();
   if (!unitLabel) bad("unit_label is required (e.g. stitches)");
   const workType = normalizeWorkType(params.work_type ?? null);
   if (!workType.ok) bad(workType.error);
@@ -491,34 +493,24 @@ function parseSessionFlags(body: Record<string, unknown>, partial: boolean) {
   return out;
 }
 
-async function markItemsDone(
-  supabase: SupabaseClient,
-  userId: string,
-  itemIds: string[],
-  completedAt: string | null
-): Promise<number> {
-  if (itemIds.length === 0) return 0;
-  let marked = 0;
-  for (const ids of chunks(itemIds)) {
-    const { data, error } = await supabase
-      .from("task_checklist_items")
-      .update(completedAt ? { is_done: true, completed_at: completedAt } : { is_done: true })
-      .eq("user_id", userId)
-      .eq("is_done", false)
-      .in("id", ids)
-      .select("id");
-    if (error) throw error;
-    marked += (data ?? []).length;
-  }
-  return marked;
-}
-
-async function linkItems(supabase: SupabaseClient, userId: string, sessionId: string, itemIds: string[]) {
-  for (const ids of chunks(itemIds)) {
-    const { error } = await supabase
-      .from("work_session_items")
-      .insert(ids.map((id) => ({ session_id: sessionId, checklist_item_id: id, user_id: userId })));
-    if (error) throw error;
+/** Maps an error from a session RPC (migration 059) to a caller-facing error. */
+function rpcError(error: { code?: string; message?: string; details?: string | null }): WorkSessionServiceError {
+  const message = error.message ?? "Database error";
+  switch (error.code) {
+    case "P0002":
+      return new WorkSessionServiceError(404, "Work session not found");
+    case "23503":
+    case "23514":
+    case "22023":
+    case "22P02":
+    case "23502":
+      return new WorkSessionServiceError(400, message);
+    case "23505":
+      return new WorkSessionServiceError(409, "A session with this source_ref already exists");
+    case "42501":
+      return new WorkSessionServiceError(403, message);
+    default:
+      return Object.assign(new Error(message), error) as unknown as WorkSessionServiceError;
   }
 }
 
@@ -528,6 +520,17 @@ async function readSession(supabase: SupabaseClient, userId: string, id: string)
   if (!data) throw new WorkSessionServiceError(404, "Work session not found");
   const links = await loadSessionItemIds(supabase, userId, [id]);
   return { ...normalizeSessionRow(data as Record<string, unknown>), item_ids: links.get(id) ?? [] };
+}
+
+async function findBySourceRef(supabase: SupabaseClient, userId: string, sourceRef: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("work_sessions")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("source_ref", sourceRef)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as { id: string } | null)?.id ?? null;
 }
 
 /** The type with the most units among a session's linked rows / extra units (for the summary line). */
@@ -567,10 +570,43 @@ async function focusTypeFor(
 export interface LogWorkSessionResult {
   session: WorkSessionView;
   marked_done: number;
+  /** True when an idempotency_key matched an earlier call: nothing new was written. */
+  duplicate: boolean;
   forecast_line: string;
   forecast: PaceForecast;
 }
 
+/** Client idempotency keys share the source_ref column, namespaced so they can't collide with backfill refs. */
+export function idempotencySourceRef(key: unknown): string | null {
+  if (key === undefined || key === null) return null;
+  if (typeof key !== "string" || !key.trim() || key.trim().length > 190) {
+    bad("idempotency_key must be a non-empty string of at most 190 characters");
+  }
+  return `client:${(key as string).trim()}`;
+}
+
+async function sessionResult(
+  supabase: SupabaseClient,
+  userId: string,
+  sessionId: string,
+  projectId: string,
+  task: TaskRow | null,
+  markedDone: number,
+  duplicate: boolean,
+  now?: Date
+): Promise<LogWorkSessionResult> {
+  const session = await readSession(supabase, userId, sessionId);
+  const focusType = await focusTypeFor(supabase, userId, session, task);
+  const forecast = await getProjectForecast(supabase, userId, projectId, { now, focusType });
+  return { session, marked_done: markedDone, duplicate, forecast_line: forecast.line, forecast: forecast.forecast };
+}
+
+/**
+ * Logs one sitting. Inputs are parsed and resolved here (rows → item ids,
+ * times); the write itself is one RPC (`work_session_create`): the session,
+ * its links and the row ticks commit together or not at all, and the RPC
+ * re-checks that every row is in the project.
+ */
 export async function logWorkSession(
   supabase: SupabaseClient,
   userId: string,
@@ -590,27 +626,34 @@ export async function logWorkSession(
   );
   if (!timing.ok) bad(timing.error);
   if (body.mark_items_done !== undefined && typeof body.mark_items_done !== "boolean") bad("mark_items_done must be true or false");
+  const idempotencyRef = idempotencySourceRef(body.idempotency_key);
+  if (idempotencyRef && body.source_ref !== undefined) bad("Give idempotency_key or source_ref, not both");
+  const { idempotency_key: _ignored, ...rest } = body;
+  void _ignored;
   const flags = parseSessionFlags(
-    body.source === undefined && options.defaultSource ? { ...body, source: options.defaultSource } : body,
+    {
+      ...rest,
+      ...(rest.source === undefined && options.defaultSource ? { source: options.defaultSource } : {}),
+      ...(idempotencyRef ? { source_ref: idempotencyRef } : {}),
+    },
     false
   );
+
+  // A retried call with the same idempotency key returns the first session.
+  if (idempotencyRef) {
+    const existing = await findBySourceRef(supabase, userId, idempotencyRef);
+    if (existing) return sessionResult(supabase, userId, existing, target.projectId, target.task, 0, true, options.now);
+  }
   const itemIds = await resolveItemIds(supabase, userId, target, body.item_ids, body.rows);
 
-  if (flags.source_ref) {
-    const { data: existing, error } = await supabase
-      .from("work_sessions")
-      .select("id")
-      .eq("user_id", userId)
-      .eq("source_ref", flags.source_ref as string)
-      .maybeSingle();
-    if (error) throw error;
-    if (existing) throw new WorkSessionServiceError(409, "A session with this source_ref already exists", { session_id: (existing as { id: string }).id });
+  if (flags.source_ref && !idempotencyRef) {
+    const existing = await findBySourceRef(supabase, userId, flags.source_ref as string);
+    if (existing) throw new WorkSessionServiceError(409, "A session with this source_ref already exists", { session_id: existing });
   }
 
-  const { data, error } = await supabase
-    .from("work_sessions")
-    .insert({
-      user_id: userId,
+  const { data, error } = await supabase.rpc("work_session_create", {
+    p_user_id: userId,
+    p_session: {
       project_id: target.projectId,
       task_id: target.task?.id ?? null,
       session_date: timing.value.session_date,
@@ -618,27 +661,20 @@ export async function logWorkSession(
       ended_at: timing.value.ended_at,
       minutes: timing.value.minutes,
       ...flags,
-    })
-    .select("*")
-    .single();
-  if (error) throw error;
-  const sessionId = (data as { id: string }).id;
-
-  try {
-    await linkItems(supabase, userId, sessionId, itemIds);
-  } catch (linkError) {
-    // No partial session: drop it (links cascade) and report.
-    await supabase.from("work_sessions").delete().eq("id", sessionId).eq("user_id", userId);
-    throw linkError;
+    },
+    p_item_ids: itemIds,
+    p_mark_done: body.mark_items_done !== false,
+  });
+  if (error) {
+    // Two identical retries racing: the loser returns the winner's session.
+    if (error.code === "23505" && idempotencyRef) {
+      const existing = await findBySourceRef(supabase, userId, idempotencyRef);
+      if (existing) return sessionResult(supabase, userId, existing, target.projectId, target.task, 0, true, options.now);
+    }
+    throw rpcError(error);
   }
-
-  const markDone = body.mark_items_done !== false;
-  const markedDone = markDone ? await markItemsDone(supabase, userId, itemIds, timing.value.ended_at) : 0;
-
-  const session = await readSession(supabase, userId, sessionId);
-  const focusType = await focusTypeFor(supabase, userId, session, target.task);
-  const forecast = await getProjectForecast(supabase, userId, target.projectId, { now: options.now, focusType });
-  return { session, marked_done: markedDone, forecast_line: forecast.line, forecast: forecast.forecast };
+  const created = data as { session_id: string; marked_done: number };
+  return sessionResult(supabase, userId, created.session_id, target.projectId, target.task, created.marked_done, false, options.now);
 }
 
 export async function listWorkSessions(
@@ -660,6 +696,12 @@ export async function listWorkSessions(
   return sessions.map((session) => ({ ...session, item_ids: links.get(session.id) ?? [] }));
 }
 
+/**
+ * Changes a session in one RPC (`work_session_update`): the fields and, when
+ * item_ids/rows are given, the replacement links commit together or not at all.
+ * Changing only the date moves the stored start/end to that day at the same ET
+ * clock time; an ISO start/end must fall on the session's date.
+ */
 export async function updateWorkSession(
   supabase: SupabaseClient,
   userId: string,
@@ -678,25 +720,30 @@ export async function updateWorkSession(
   if (Object.keys(body).length === 0) bad("No fields to update");
 
   const current = await readSession(supabase, userId, id);
-  const updates: Record<string, unknown> = parseSessionFlags(body, true);
+  const changes: Record<string, unknown> = parseSessionFlags(body, true);
 
   let target: ResolvedTarget = { projectId: current.project_id, task: null };
   if ("task_id" in body) {
     if (body.task_id === null) {
-      updates.task_id = null;
+      changes.task_id = null;
     } else {
       target = await resolveTarget(supabase, userId, body.task_id, current.project_id);
-      updates.task_id = target.task!.id;
+      changes.task_id = target.task!.id;
     }
   } else if (current.task_id) {
     target = await resolveTarget(supabase, userId, current.task_id, current.project_id);
   }
 
   if (["date", "start", "end", "minutes"].some((key) => key in body)) {
+    const newDate = "date" in body ? (body.date === null ? null : String(body.date)) : current.session_date;
+    if (!newDate || !isDateOnly(newDate)) bad("date must be YYYY-MM-DD (ET)");
+    const moveStored = (stored: string | null) =>
+      stored && newDate !== current.session_date ? reanchorInstant(stored, current.session_date, newDate as string) : stored;
     const timingInput = {
-      date: "date" in body ? (body.date === null ? null : String(body.date)) : current.session_date,
-      start: "start" in body ? (body.start === null ? null : String(body.start)) : current.started_at,
-      end: "end" in body ? (body.end === null ? null : String(body.end)) : current.ended_at,
+      date: newDate,
+      // Untouched stored times follow a date change, keeping their ET clock time.
+      start: "start" in body ? (body.start === null ? null : String(body.start)) : moveStored(current.started_at),
+      end: "end" in body ? (body.end === null ? null : String(body.end)) : moveStored(current.ended_at),
       // A new start/end without new minutes recomputes minutes from them.
       minutes: "minutes" in body
         ? (body.minutes as number | null)
@@ -704,32 +751,29 @@ export async function updateWorkSession(
     };
     const timing = resolveSessionTiming(timingInput, options.now);
     if (!timing.ok) bad(timing.error);
-    Object.assign(updates, timing.value);
+    Object.assign(changes, timing.value);
   }
 
   const replaceItems = "item_ids" in body || "rows" in body;
-  const itemIds = replaceItems ? await resolveItemIds(supabase, userId, target, body.item_ids, body.rows) : [];
+  const itemIds = replaceItems ? await resolveItemIds(supabase, userId, target, body.item_ids, body.rows) : null;
 
-  if (Object.keys(updates).length > 0) {
-    const { error } = await supabase.from("work_sessions").update(updates).eq("id", id).eq("user_id", userId);
-    if (error) throw error;
-  }
-  if (replaceItems) {
-    const { error } = await supabase.from("work_session_items").delete().eq("session_id", id).eq("user_id", userId);
-    if (error) throw error;
-    await linkItems(supabase, userId, id, itemIds);
-  }
+  const { error } = await supabase.rpc("work_session_update", {
+    p_user_id: userId,
+    p_session_id: id,
+    p_changes: changes,
+    p_item_ids: itemIds,
+  });
+  if (error) throw rpcError(error);
   const session = await readSession(supabase, userId, id);
   const forecast = await getProjectForecast(supabase, userId, session.project_id, { now: options.now });
   return { session, forecast_line: forecast.line };
 }
 
-/** Deletes a session and its links. Checklist rows it ticked stay ticked. */
+/** Deletes a session and its links in one RPC. Checklist rows it ticked stay ticked. */
 export async function deleteWorkSession(supabase: SupabaseClient, userId: string, id: string) {
   requireUuid(id, "id");
-  const { data, error } = await supabase.from("work_sessions").delete().eq("id", id).eq("user_id", userId).select("id, project_id");
-  if (error) throw error;
-  if (!data || data.length === 0) throw new WorkSessionServiceError(404, "Work session not found");
-  return { deleted: true, id, project_id: (data[0] as { project_id: string }).project_id, note: "Checklist rows it ticked stay ticked." };
+  const { data, error } = await supabase.rpc("work_session_delete", { p_user_id: userId, p_session_id: id });
+  if (error) throw rpcError(error);
+  const result = data as { project_id: string };
+  return { deleted: true, id, project_id: result.project_id, note: "Checklist rows it ticked stay ticked." };
 }
-

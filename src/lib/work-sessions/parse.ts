@@ -44,6 +44,32 @@ export function etDateOf(instant: Date | string | number): string {
   return `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
 }
 
+/** Minutes since ET midnight of an instant. */
+export function etMinutesOf(instant: Date | string | number): number {
+  const p = etParts(new Date(instant).getTime());
+  return p.hour * 60 + p.minute;
+}
+
+function addDateDays(date: string, days: number): string {
+  const ms = Date.UTC(Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1, Number(date.slice(8, 10)));
+  return new Date(ms + days * 86400000).toISOString().slice(0, 10);
+}
+
+function dateDiffDays(from: string, to: string): number {
+  const ms = (d: string) => Date.UTC(Number(d.slice(0, 4)), Number(d.slice(5, 7)) - 1, Number(d.slice(8, 10)));
+  return Math.round((ms(to) - ms(from)) / 86400000);
+}
+
+/**
+ * Moves a stored instant from session date `fromDate` to `toDate`, keeping its
+ * ET clock time (so 1:38 PM stays 1:38 PM across a DST change). An end time
+ * past midnight keeps its one-day offset from the session date.
+ */
+export function reanchorInstant(iso: string, fromDate: string, toDate: string): string {
+  const shift = dateDiffDays(fromDate, toDate);
+  return etLocalToUtcIso(addDateDays(etDateOf(iso), shift), etMinutesOf(iso));
+}
+
 /** UTC ISO string for an ET wall-clock time on an ET date. */
 export function etLocalToUtcIso(date: string, minutesOfDay: number): string {
   const naive = Date.UTC(Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1, Number(date.slice(8, 10))) + minutesOfDay * 60000;
@@ -131,12 +157,23 @@ export function resolveSessionTiming(input: SessionTimingInput, now: Date = new 
   if (startedAt && endedAt && Date.parse(endedAt) <= Date.parse(startedAt)) {
     return { ok: false, error: "end must be after start" };
   }
+  // A full timestamp must fall on the session's ET date: the start (an end may
+  // run past midnight), or the end when there is no start.
+  const anchor = startedAt ?? endedAt;
+  if (anchor && etDateOf(anchor) !== date) {
+    return {
+      ok: false,
+      error: `${startedAt ? "start" : "end"} is on ${etDateOf(anchor)} (ET) but date is ${date}; give matching values, or clock times like "13:38"`,
+    };
+  }
 
   const span = startedAt && endedAt ? (Date.parse(endedAt) - Date.parse(startedAt)) / 60000 : null;
   let minutes: number;
   if (input.minutes !== undefined && input.minutes !== null) {
-    if (typeof input.minutes !== "number" || !Number.isFinite(input.minutes)) return { ok: false, error: "minutes must be a number" };
-    minutes = Math.round(input.minutes);
+    if (typeof input.minutes !== "number" || !Number.isInteger(input.minutes)) {
+      return { ok: false, error: "minutes must be a whole number" };
+    }
+    minutes = input.minutes;
     if (span !== null && Math.abs(span - input.minutes) > 1) {
       return {
         ok: false,

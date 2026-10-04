@@ -996,6 +996,7 @@ function createMcpServer(): McpServer {
       note: z.string().max(2000).optional().describe('Free note'),
       exclude_from_stats: z.boolean().optional().describe('True = real time, but not a fair measure of speed'),
       exclude_reason: z.string().max(200).optional().describe('Why it is excluded: learning, reading-instructions, interrupted, frogged …'),
+      idempotency_key: z.string().min(1).max(190).optional().describe('Optional key unique to this sitting (e.g. the chat message id). Retrying with the same key returns the first session instead of logging it twice (duplicate: true).'),
     },
     async (args) => {
       const res = await fetch('https://mission-control-orpin-chi.vercel.app/api/work-sessions', {

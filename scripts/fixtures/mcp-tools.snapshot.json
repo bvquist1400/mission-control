@@ -2042,6 +2042,12 @@
           "description": "Why it is excluded: learning, reading-instructions, interrupted, frogged …",
           "type": "string",
           "maxLength": 200
+        },
+        "idempotency_key": {
+          "description": "Optional key unique to this sitting (e.g. the chat message id). Retrying with the same key returns the first session instead of logging it twice (duplicate: true).",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 190
         }
       }
     }

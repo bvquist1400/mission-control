@@ -3,6 +3,8 @@ import { isPostgrestNotFound } from '@/lib/supabase/errors';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import { normalizeUnitCount, normalizeWorkType } from '@/lib/pace';
 
+const CHECKLIST_ITEM_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // GET /api/tasks/[id]/checklist - Get checklist items for a task
 export async function GET(
   request: NextRequest,
@@ -137,6 +139,10 @@ export async function PATCH(
       const itemId = item && typeof item.id === 'string' && item.id.trim() ? item.id.trim() : null;
       if (!itemId) {
         invalid.push({ index, id: null, error: 'id is required' });
+        return;
+      }
+      if (!CHECKLIST_ITEM_ID.test(itemId)) {
+        invalid.push({ index, id: itemId, error: 'id must be a checklist item UUID' });
         return;
       }
 
