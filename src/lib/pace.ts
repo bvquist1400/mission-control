@@ -27,6 +27,7 @@ export const SAMPLE_SPEED_LABEL =
 /** Tasks whose remaining units are not work left: finished, missed or set aside. */
 const INACTIVE_TASK_STATUSES = new Set(["Missed", "Parked"]);
 const DAY_MS = 24 * 60 * 60 * 1000;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type PaceScope = "main" | "sample";
 export type SpeedSource = "measured" | "measured_sample" | "other_projects" | "plan_x_ratio" | "plan" | "none";
@@ -49,6 +50,29 @@ export interface PaceSizeSettings {
   unit: string;
   /** Work types whose units scale with the size. */
   work_types: string[];
+  /**
+   * Units on these tasks (and their rows) scale with the perimeter instead of linearly:
+   * (w + side) ÷ (current + side). `side` is the side edge in size units, e.g. a blanket's
+   * border runs 2 × (width + side). Such units are left out of the linear scaling even when
+   * their work type is in `work_types`.
+   */
+  perimeter?: PacePerimeterSettings;
+  /** Stitches per length, e.g. 18 stitches per 4 in; with it set, each width also returns its length. */
+  gauge?: PaceGaugeSettings;
+}
+
+export interface PacePerimeterSettings {
+  task_ids: string[];
+  side: number;
+}
+
+export type GaugeLengthUnit = "in" | "cm";
+export const GAUGE_LENGTH_UNITS: readonly GaugeLengthUnit[] = ["in", "cm"];
+
+export interface PaceGaugeSettings {
+  units: number;
+  length: number;
+  length_unit: GaugeLengthUnit;
 }
 
 export interface PaceSettings {
@@ -59,6 +83,49 @@ export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string
 
 function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function isPositiveNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function parsePerimeter(value: unknown): ParseResult<PacePerimeterSettings> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return { ok: false, error: "pace_settings.size.perimeter must be an object { task_ids, side }" };
+  }
+  const record = value as Record<string, unknown>;
+  const extra = Object.keys(record).filter((key) => key !== "task_ids" && key !== "side");
+  if (extra.length > 0) return { ok: false, error: `pace_settings.size.perimeter has unknown keys: ${extra.join(", ")}` };
+  if (
+    !Array.isArray(record.task_ids)
+    || record.task_ids.length === 0
+    || record.task_ids.some((id) => typeof id !== "string" || !UUID_PATTERN.test(id))
+  ) {
+    return { ok: false, error: "pace_settings.size.perimeter.task_ids must be a non-empty list of task uuids" };
+  }
+  if (!isPositiveNumber(record.side)) {
+    return { ok: false, error: "pace_settings.size.perimeter.side must be a positive number (the side edge, in size units)" };
+  }
+  return { ok: true, value: { task_ids: [...new Set((record.task_ids as string[]).map((id) => id.toLowerCase()))], side: record.side } };
+}
+
+function parseGauge(value: unknown): ParseResult<PaceGaugeSettings> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return { ok: false, error: "pace_settings.size.gauge must be an object { units, length, length_unit }" };
+  }
+  const record = value as Record<string, unknown>;
+  const extra = Object.keys(record).filter((key) => !["units", "length", "length_unit"].includes(key));
+  if (extra.length > 0) return { ok: false, error: `pace_settings.size.gauge has unknown keys: ${extra.join(", ")}` };
+  if (!isPositiveNumber(record.units)) {
+    return { ok: false, error: "pace_settings.size.gauge.units must be a positive number (e.g. 18 stitches)" };
+  }
+  if (!isPositiveNumber(record.length)) {
+    return { ok: false, error: "pace_settings.size.gauge.length must be a positive number (e.g. 4 in)" };
+  }
+  if (!GAUGE_LENGTH_UNITS.includes(record.length_unit as GaugeLengthUnit)) {
+    return { ok: false, error: `pace_settings.size.gauge.length_unit must be one of ${GAUGE_LENGTH_UNITS.join(", ")}` };
+  }
+  return { ok: true, value: { units: record.units, length: record.length, length_unit: record.length_unit as GaugeLengthUnit } };
 }
 
 /** Validates `projects.pace_settings` (null clears it). Unknown keys are rejected so a typo can't pass silently. */
@@ -78,7 +145,7 @@ export function parsePaceSettings(value: unknown): ParseResult<PaceSettings | nu
     return { ok: false, error: "pace_settings.size must be an object" };
   }
   const s = size as Record<string, unknown>;
-  const allowed = ["label", "current", "step", "offset", "min", "unit", "work_types"];
+  const allowed = ["label", "current", "step", "offset", "min", "unit", "work_types", "perimeter", "gauge"];
   const extra = Object.keys(s).filter((key) => !allowed.includes(key));
   if (extra.length > 0) return { ok: false, error: `pace_settings.size has unknown keys: ${extra.join(", ")}` };
   if (typeof s.label !== "string" || !s.label.trim() || s.label.length > 40) {
@@ -107,6 +174,18 @@ export function parsePaceSettings(value: unknown): ParseResult<PaceSettings | nu
   ) {
     return { ok: false, error: "pace_settings.size.work_types must be a non-empty list of work type slugs" };
   }
+  let perimeter: PacePerimeterSettings | undefined;
+  if (s.perimeter !== undefined && s.perimeter !== null) {
+    const parsed = parsePerimeter(s.perimeter);
+    if (!parsed.ok) return parsed;
+    perimeter = parsed.value;
+  }
+  let gauge: PaceGaugeSettings | undefined;
+  if (s.gauge !== undefined && s.gauge !== null) {
+    const parsed = parseGauge(s.gauge);
+    if (!parsed.ok) return parsed;
+    gauge = parsed.value;
+  }
   return {
     ok: true,
     value: {
@@ -118,6 +197,8 @@ export function parsePaceSettings(value: unknown): ParseResult<PaceSettings | nu
         min: s.min,
         unit: s.unit.trim(),
         work_types: [...new Set(s.work_types as string[])],
+        ...(perimeter ? { perimeter } : {}),
+        ...(gauge ? { gauge } : {}),
       },
     },
   };
@@ -154,6 +235,8 @@ export interface PaceProjectInput {
 export interface PaceSectionInput {
   id: string;
   planned_start: string | null;
+  /** Needed for the lane projection's health (projected end vs planned end). */
+  planned_end?: string | null;
 }
 
 export interface PaceTaskInput {
@@ -584,6 +667,17 @@ export interface SizeFitCadence {
   source: "measured" | "fixed";
   /** The widest size that fits by the target date at this cadence; null when not even `min` fits. */
   widest: number | null;
+  /** `widest` in the gauge's length unit (1 decimal); null without a gauge or when none fits. */
+  widest_length: number | null;
+}
+
+export interface SizeFitWidth {
+  size: number;
+  minutes_left: number;
+  needed_minutes_per_day: number;
+  /** Only with a gauge: size ÷ units × length (1 decimal), in `length_unit`. */
+  length?: number;
+  length_unit?: GaugeLengthUnit;
 }
 
 export interface SizeFit {
@@ -592,10 +686,51 @@ export interface SizeFit {
   current: number;
   /** Minutes per day needed at the current size (same as needed_minutes_per_day). */
   needed_minutes_per_day_at_current: number;
+  /** Minutes left that scale linearly with the size. */
   scaled_minutes_left: number;
+  /** Minutes left that scale with the perimeter (the tasks in `pace_settings.size.perimeter`). */
+  perimeter_minutes_left: number;
   fixed_minutes_left: number;
   fits: SizeFitCadence[];
-  widths: Array<{ size: number; minutes_left: number; needed_minutes_per_day: number }>;
+  widths: SizeFitWidth[];
+  /** The current size in the gauge's length unit; null without a gauge. */
+  current_length: number | null;
+  length_unit: GaugeLengthUnit | null;
+}
+
+/** One work type in the speed table: all its units (done, left), with the speed that prices what is left. */
+export interface WorkTypeSummary {
+  work_type: string;
+  units_total: number;
+  units_done: number;
+  units_left: number;
+  seconds_per_unit: number | null;
+  source: SpeedSource;
+  n_sessions: number;
+  label: string | null;
+  hours_left: number | null;
+}
+
+export type SectionHealthBasis = "time" | "rows";
+
+/**
+ * One planned section's projection: the running clock walks sections in planned_start order,
+ * so a section starts when the work before it is done or on its planned start, whichever is later.
+ */
+export interface SectionProjection {
+  section_id: string;
+  planned_start: string | null;
+  planned_end: string | null;
+  /** Units still to do in the section (not done, not parked or missed). */
+  units_left: number;
+  /** Unit work at its speeds plus unit-less tasks' estimates; null while any unfinished type has no speed. */
+  work_left_minutes: number | null;
+  /** Null for a section with no unit work left, with cadence 0, or while a type is unpriced. */
+  projected_end: string | null;
+  /** Null unless `health_basis` is "time" (or `unknown` for unpriced units, with enough sittings). */
+  health: "on_track" | "behind" | "unknown" | null;
+  /** "time": the Portfolio chip follows `health`. "rows": it keeps the row-count chip. */
+  health_basis: SectionHealthBasis;
 }
 
 export interface PaceForecast {
@@ -608,6 +743,8 @@ export interface PaceForecast {
   measured_speeds: MeasuredSpeed[];
   plan_ratio: PlanRatio | null;
   work_left: WorkLeftByType[];
+  /** Every work type with units (finished ones too), for the speed table. */
+  work_types: WorkTypeSummary[];
   /** Open tasks without units: estimate × (1 − ticked share of its checklist). */
   unitless_minutes_left: number;
   /** Types with units left but no speed at all (source none). */
@@ -622,6 +759,8 @@ export interface PaceForecast {
   /** Minutes per day over the last 14 days, including excluded sessions (it is real time). */
   cadence_minutes_per_day: number;
   sessions_in_cadence_window: number;
+  /** Session minutes in the last 14 days (cadence × 14, unrounded). */
+  minutes_in_cadence_window: number;
   /** Work left at plan speeds ÷ available days: the plan's own pace. */
   plan_cadence_minutes_per_day: number | null;
   available_from: string | null;
@@ -632,11 +771,18 @@ export interface PaceForecast {
   health: PaceHealth;
   size_fit: SizeFit | null;
   size_fit_reason: "not_configured" | "locked" | "unpriced_units" | "no_target" | "no_days_left" | null;
+  /** Lane (section) projections, in planned_start order. */
+  sections: SectionProjection[];
 }
 
 export function round(value: number, places = 1): number {
   const factor = 10 ** places;
   return Math.round(value * factor) / factor;
+}
+
+/** Whole days of work at a cadence; the epsilon keeps an exact multiple (60 min ÷ 6 a day) from rounding up on float dust. */
+function daysOfWork(minutes: number, cadence: number): number {
+  return Math.max(0, Math.ceil(minutes / cadence - 1e-9));
 }
 
 export function computeForecast(input: PaceInput): PaceForecast {
@@ -658,7 +804,7 @@ export function computeForecast(input: PaceInput): PaceForecast {
   }
 
   const workLeft: WorkLeftByType[] = [];
-  const minutesByTypeScope = new Map<string, number>();
+  const secondsByType = new Map<string, number>();
   let planUnitMinutes = 0;
   const unpriced: string[] = [];
   for (const [type, acc] of [...leftByType].sort(([a], [b]) => a.localeCompare(b))) {
@@ -666,10 +812,7 @@ export function computeForecast(input: PaceInput): PaceForecast {
     const units = acc.main + acc.sample;
     const minutes = speed.seconds_per_unit === null ? null : (units * speed.seconds_per_unit) / 60;
     if (speed.seconds_per_unit === null) unpriced.push(type);
-    else {
-      minutesByTypeScope.set(`${type}\u0000main`, (acc.main * speed.seconds_per_unit) / 60);
-      minutesByTypeScope.set(`${type}\u0000sample`, (acc.sample * speed.seconds_per_unit) / 60);
-    }
+    else secondsByType.set(type, speed.seconds_per_unit);
     const plan = planSpeeds.get(type);
     if (plan !== undefined) planUnitMinutes += (units * plan) / 60;
     workLeft.push({
@@ -687,7 +830,14 @@ export function computeForecast(input: PaceInput): PaceForecast {
     });
   }
 
-  // Open tasks without units: estimate × (1 − ticked share).
+  // The minutes of one unit entry that is still to do (null while its type has no speed).
+  const entryMinutes = (entry: UnitEntry): number | null => {
+    const seconds = secondsByType.get(entry.work_type);
+    return seconds === undefined ? null : (entry.units * seconds) / 60;
+  };
+  const leftEntries = entries.filter((entry) => !entry.done && !entry.inactive);
+
+  // Open tasks without units: estimate × (1 − ticked share). Also kept per section for the lane projections.
   const taskHasUnits = new Set(entries.map((entry) => entry.task_id));
   const itemsByTask = new Map<string, PaceItemInput[]>();
   for (const item of items) {
@@ -696,14 +846,17 @@ export function computeForecast(input: PaceInput): PaceForecast {
     itemsByTask.set(item.task_id, list);
   }
   let unitlessMinutes = 0;
+  const unitlessBySection = new Map<string, number>();
   for (const task of tasks) {
     if (isClosed(task) || taskHasUnits.has(task.id)) continue;
     const checklist = itemsByTask.get(task.id) ?? [];
     const tickedShare = checklist.length > 0 ? checklist.filter((item) => item.is_done).length / checklist.length : 0;
-    unitlessMinutes += positive(task.estimated_minutes) * (1 - tickedShare);
+    const minutes = positive(task.estimated_minutes) * (1 - tickedShare);
+    unitlessMinutes += minutes;
+    if (task.section_id) unitlessBySection.set(task.section_id, (unitlessBySection.get(task.section_id) ?? 0) + minutes);
   }
 
-  const unitMinutes = [...minutesByTypeScope.values()].reduce((sum, value) => sum + value, 0);
+  const unitMinutes = leftEntries.reduce((sum, entry) => sum + (entryMinutes(entry) ?? 0), 0);
   const pricedWorkLeftMinutes = unitMinutes + unitlessMinutes;
   // While any unfinished type has no speed, the total (and everything built on
   // it) is unknown: pricing those units at 0 would claim a false finish.
@@ -712,15 +865,44 @@ export function computeForecast(input: PaceInput): PaceForecast {
     .map((row) => ({ work_type: row.work_type, units_left: row.units_left }));
   const workLeftMinutes: number | null = unpricedUnits.length > 0 ? null : pricedWorkLeftMinutes;
 
+  // Every work type with units, finished ones too, for the speed table.
+  const totals = new Map<string, { total: number; done: number }>();
+  for (const entry of entries) {
+    const acc = totals.get(entry.work_type) ?? { total: 0, done: 0 };
+    acc.total += entry.units;
+    if (entry.done) acc.done += entry.units;
+    totals.set(entry.work_type, acc);
+  }
+  const workTypes: WorkTypeSummary[] = [...totals]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([type, acc]) => {
+      const speed = resolveSpeed(type, measured, otherProjects, planSpeeds, planRatio);
+      const left = leftByType.get(type);
+      const unitsLeft = left ? left.main + left.sample : 0;
+      const hours = unitsLeft <= 0 ? 0 : speed.seconds_per_unit === null ? null : (unitsLeft * speed.seconds_per_unit) / 3600;
+      return {
+        work_type: type,
+        units_total: acc.total,
+        units_done: acc.done,
+        units_left: unitsLeft,
+        seconds_per_unit: speed.seconds_per_unit === null ? null : round(speed.seconds_per_unit, 2),
+        source: speed.source,
+        n_sessions: speed.n_sessions,
+        label: speed.label,
+        hours_left: hours === null ? null : round(hours, 1),
+      };
+    });
+
   // Cadence: every session minute in the last 14 days (today included) ÷ 14.
   const windowStart = addDays(today, -(CADENCE_WINDOW_DAYS - 1));
   const windowSessions = sessions.filter((session) => session.session_date >= windowStart && session.session_date <= today);
-  const cadence = windowSessions.reduce((sum, session) => sum + session.minutes, 0) / CADENCE_WINDOW_DAYS;
+  const windowMinutes = windowSessions.reduce((sum, session) => sum + session.minutes, 0);
+  const cadence = windowMinutes / CADENCE_WINDOW_DAYS;
 
   // Available days: from max(today, earliest planned start of a section that
   // still has unit work left) to the target date, inclusive.
   const sectionsWithWork = new Set(
-    entries.filter((entry) => !entry.done && !entry.inactive && entry.section_id).map((entry) => entry.section_id)
+    leftEntries.filter((entry) => entry.section_id).map((entry) => entry.section_id)
   );
   const starts = input.sections
     .filter((section) => sectionsWithWork.has(section.id) && section.planned_start)
@@ -739,7 +921,7 @@ export function computeForecast(input: PaceInput): PaceForecast {
     : workLeftMinutes <= 0
       ? today
       : cadence > 0
-        ? addDays(today, Math.ceil(workLeftMinutes / cadence))
+        ? addDays(today, daysOfWork(workLeftMinutes, cadence))
         : null;
   const slack = target && projectedFinish ? daysBetween(projectedFinish, target) : null;
 
@@ -749,6 +931,17 @@ export function computeForecast(input: PaceInput): PaceForecast {
   else if (!target) health = "no_target";
   else if (workLeftMinutes === null) health = "unknown";
   else health = projectedFinish !== null && projectedFinish <= target ? "on_track" : "behind";
+
+  // Lane (section) projections: a running clock from today walks the sections in
+  // planned_start order. A section with unit work left starts at max(clock, its
+  // planned start) and ends ceil(work ÷ cadence) days later; the clock moves to that end.
+  const sectionProjections = projectSections(
+    input.sections,
+    leftEntries,
+    entryMinutes,
+    unitlessBySection,
+    { today, cadence, countedSessions, anyUnpriced: unpricedUnits.length > 0 }
+  );
 
   // Size fit.
   const settings = parsePaceSettings(project.pace_settings ?? null);
@@ -762,11 +955,21 @@ export function computeForecast(input: PaceInput): PaceForecast {
   else if (availableDays === null) sizeFitReason = "no_target";
   else if (availableDays <= 0) sizeFitReason = "no_days_left";
   else {
+    const perimeterTasks = new Set((size.perimeter?.task_ids ?? []).map((id) => id.toLowerCase()));
+    const side = size.perimeter?.side ?? 0;
     let scaled = 0;
-    for (const type of size.work_types) scaled += minutesByTypeScope.get(`${type}\u0000main`) ?? 0;
+    let perimeter = 0;
+    for (const entry of leftEntries) {
+      const minutes = entryMinutes(entry) ?? 0;
+      if (perimeterTasks.has(entry.task_id.toLowerCase())) perimeter += minutes;
+      else if (entry.scope === "main" && size.work_types.includes(entry.work_type)) scaled += minutes;
+    }
     // Reached only when nothing is unpriced, so the priced total is the total.
-    const fixed = pricedWorkLeftMinutes - scaled;
-    const minutesAt = (width: number) => fixed + (scaled * width) / size.current;
+    const fixed = pricedWorkLeftMinutes - scaled - perimeter;
+    const minutesAt = (width: number) =>
+      fixed + (scaled * width) / size.current + (perimeter * (width + side)) / (size.current + side);
+    const gauge = size.gauge;
+    const lengthOf = (width: number) => (gauge ? round((width / gauge.units) * gauge.length, 1) : null);
     const candidates: number[] = [];
     for (let width = size.offset; width <= size.current; width += size.step) {
       if (width >= size.min) candidates.push(width);
@@ -777,10 +980,12 @@ export function computeForecast(input: PaceInput): PaceForecast {
     const fits = cadences.map(({ minutes_per_day, source }) => {
       const budget = minutes_per_day * availableDays;
       const fitting = candidates.filter((width) => minutesAt(width) <= budget + 1e-9);
+      const widest = fitting.length > 0 ? fitting[fitting.length - 1] : null;
       return {
         minutes_per_day: round(minutes_per_day, 1),
         source,
-        widest: fitting.length > 0 ? fitting[fitting.length - 1] : null,
+        widest,
+        widest_length: widest === null ? null : lengthOf(widest),
       };
     });
     sizeFit = {
@@ -789,13 +994,17 @@ export function computeForecast(input: PaceInput): PaceForecast {
       current: size.current,
       needed_minutes_per_day_at_current: round(pricedWorkLeftMinutes / availableDays, 1),
       scaled_minutes_left: round(scaled, 1),
+      perimeter_minutes_left: round(perimeter, 1),
       fixed_minutes_left: round(fixed, 1),
       fits,
       widths: candidates.map((width) => ({
         size: width,
         minutes_left: round(minutesAt(width), 0),
         needed_minutes_per_day: round(minutesAt(width) / availableDays, 1),
+        ...(gauge ? { length: lengthOf(width) as number, length_unit: gauge.length_unit } : {}),
       })),
+      current_length: lengthOf(size.current),
+      length_unit: gauge ? gauge.length_unit : null,
     };
   }
 
@@ -815,6 +1024,7 @@ export function computeForecast(input: PaceInput): PaceForecast {
     })),
     plan_ratio: planRatio ? { ...planRatio, ratio: round(planRatio.ratio, 2) } : null,
     work_left: workLeft,
+    work_types: workTypes,
     unitless_minutes_left: round(unitlessMinutes, 1),
     unpriced_types: unpriced,
     unpriced_units: unpricedUnits,
@@ -823,6 +1033,7 @@ export function computeForecast(input: PaceInput): PaceForecast {
     priced_work_left_minutes: round(pricedWorkLeftMinutes, 0),
     cadence_minutes_per_day: round(cadence, 1),
     sessions_in_cadence_window: windowSessions.length,
+    minutes_in_cadence_window: windowMinutes,
     plan_cadence_minutes_per_day: planCadence === null ? null : round(planCadence, 1),
     available_from: target ? availableFrom : null,
     available_days: availableDays,
@@ -832,7 +1043,55 @@ export function computeForecast(input: PaceInput): PaceForecast {
     health,
     size_fit: sizeFit,
     size_fit_reason: sizeFitReason,
+    sections: sectionProjections,
   };
+}
+
+function projectSections(
+  sections: PaceSectionInput[],
+  leftEntries: UnitEntry[],
+  entryMinutes: (entry: UnitEntry) => number | null,
+  unitlessBySection: Map<string, number>,
+  context: { today: string; cadence: number; countedSessions: number; anyUnpriced: boolean }
+): SectionProjection[] {
+  const { today, cadence, countedSessions, anyUnpriced } = context;
+  const enoughSittings = countedSessions >= MIN_COUNTED_SESSIONS_FOR_HEALTH;
+  const ordered = [...sections].sort((a, b) => {
+    const aStart = a.planned_start ?? "9999-12-31";
+    const bStart = b.planned_start ?? "9999-12-31";
+    return aStart < bStart ? -1 : aStart > bStart ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
+  let clock = today;
+  let clockKnown = true;
+  return ordered.map((section) => {
+    const here = leftEntries.filter((entry) => entry.section_id === section.id);
+    const unitsLeft = here.reduce((sum, entry) => sum + entry.units, 0);
+    const unitless = unitlessBySection.get(section.id) ?? 0;
+    const plannedStart = section.planned_start ?? null;
+    const plannedEnd = section.planned_end ?? null;
+    const base = { section_id: section.id, planned_start: plannedStart, planned_end: plannedEnd, units_left: unitsLeft };
+    if (unitsLeft <= 0) {
+      return { ...base, work_left_minutes: round(unitless, 0), projected_end: null, health: null, health_basis: "rows" as const };
+    }
+    if (anyUnpriced) {
+      // While any unfinished type has no speed no lane can be timed (slice 1's rule for the project).
+      return { ...base, work_left_minutes: null, projected_end: null, health: enoughSittings ? ("unknown" as const) : null, health_basis: "rows" as const };
+    }
+    const minutes = here.reduce((sum, entry) => sum + (entryMinutes(entry) ?? 0), 0) + unitless;
+    let projectedEnd: string | null = null;
+    if (clockKnown && cadence > 0) {
+      const start = plannedStart && plannedStart > clock ? plannedStart : clock;
+      projectedEnd = addDays(start, daysOfWork(minutes, cadence));
+      clock = projectedEnd;
+    } else {
+      clockKnown = false;
+    }
+    if (enoughSittings && plannedEnd) {
+      const late = projectedEnd === null || projectedEnd > plannedEnd;
+      return { ...base, work_left_minutes: round(minutes, 0), projected_end: projectedEnd, health: late ? ("behind" as const) : ("on_track" as const), health_basis: "time" as const };
+    }
+    return { ...base, work_left_minutes: round(minutes, 0), projected_end: projectedEnd, health: null, health_basis: "rows" as const };
+  });
 }
 
 /**

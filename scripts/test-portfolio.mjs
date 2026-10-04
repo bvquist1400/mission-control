@@ -1280,4 +1280,223 @@ await testAsync("a failing checklist read still produces a PortfolioInput, and t
   await assert.rejects(() => loadPortfolioInput(brokenTasks, "user-1"), /tasks down/);
 });
 
+// ── Pace tracking (slice 2): pace line, lane chips, projected-finish marker, overrun tails ──
+const PACE_NOW = new Date("2026-10-04T22:00:00Z"); // 6 PM ET Oct 4
+const PACE_PROJECT = { ...BLANKET, unit_label: "stitches", target_date: "2026-12-05" };
+const PACE_SECTIONS = [
+  { id: "ps-swatch", project_id: "proj-blanket", name: "1. Swatch", sort_order: 0, planned_start: "2026-10-03", planned_end: "2026-10-10" },
+  { id: "ps-yarn", project_id: "proj-blanket", name: "2. Yarn", sort_order: 1, planned_start: "2026-10-10", planned_end: "2026-10-18" },
+  { id: "ps-body", project_id: "proj-blanket", name: "3. Blanket body", sort_order: 2, planned_start: "2026-10-19", planned_end: "2026-11-29" },
+  { id: "ps-finish", project_id: "proj-blanket", name: "4. Finishing", sort_order: 3, planned_start: "2026-11-30", planned_end: "2026-12-05" },
+];
+function paceForecast(overrides = {}, sectionOverrides = {}) {
+  const section = (id, start, end, extra) => ({
+    section_id: id, planned_start: start, planned_end: end, units_left: 0, work_left_minutes: 0, projected_end: null, health: null, health_basis: "rows", ...extra,
+  });
+  return {
+    today: "2026-10-04",
+    unit_label: "stitches",
+    target_date: "2026-12-05",
+    counted_sessions: 3,
+    excluded_sessions: 2,
+    plan_ratio: { ratio: 3.09, basis: "sample", sample_based: true, n_sessions: 3, label: "x" },
+    cadence_minutes_per_day: 31.1,
+    needed_minutes_per_day: 249.2,
+    available_from: "2026-10-19",
+    available_days: 48,
+    work_left_minutes: 11950,
+    work_left_hours: 199.2,
+    projected_finish: "2027-10-24",
+    health: "behind",
+    unpriced_units: [],
+    size_fit_reason: null,
+    size_fit: {
+      label: "width", unit: "stitches", current: 195, needed_minutes_per_day_at_current: 249.2, scaled_minutes_left: 1, fixed_minutes_left: 1, perimeter_minutes_left: 0,
+      fits: [
+        { minutes_per_day: 31.1, source: "measured", widest: null, widest_length: null },
+        { minutes_per_day: 60, source: "fixed", widest: 39, widest_length: null },
+        { minutes_per_day: 90, source: "fixed", widest: 63, widest_length: null },
+        { minutes_per_day: 120, source: "fixed", widest: 87, widest_length: null },
+      ],
+      widths: [{ size: 27, minutes_left: 2000, needed_minutes_per_day: 41.7 }],
+      current_length: null,
+      length_unit: null,
+    },
+    sections: [
+      section("ps-swatch", "2026-10-03", "2026-10-10", {}),
+      section("ps-yarn", "2026-10-10", "2026-10-18", {}),
+      section("ps-body", "2026-10-19", "2026-11-29", { units_left: 30000, work_left_minutes: 11000, projected_end: "2027-10-01", health: "behind", health_basis: "time", ...sectionOverrides.body }),
+      section("ps-finish", "2026-11-30", "2026-12-05", { units_left: 2000, work_left_minutes: 700, projected_end: "2027-10-24", health: "behind", health_basis: "time", ...sectionOverrides.finish }),
+    ],
+    ...overrides,
+  };
+}
+function paceInput(forecastOverrides = {}, sectionOverrides = {}, paceKey = "proj-blanket") {
+  const input = sampleInput();
+  input.projects = [...PROJECTS, PACE_PROJECT];
+  input.sections = [...SECTIONS, ...PACE_SECTIONS];
+  input.tasks = [
+    ...input.tasks,
+    blanketTask({ id: "pl1", status: "Done", section_id: "ps-swatch" }),
+    blanketTask({ id: "pl2", status: "In Progress", section_id: "ps-swatch" }),
+    blanketTask({ id: "pl3", status: "Backlog", section_id: "ps-yarn" }),
+    blanketTask({ id: "pl4", status: "Backlog", section_id: "ps-body" }),
+    blanketTask({ id: "pl5", status: "Backlog", section_id: "ps-finish" }),
+  ];
+  input.pace = { [paceKey]: paceForecast(forecastOverrides, sectionOverrides) };
+  return input;
+}
+const paceLane = (input, scope = "personal") => blanketLane(buildPortfolio(input, { scope, now: PACE_NOW }));
+const chipOf = (lane, label) => lane.timeline.lanes.find((l) => l.label === label);
+
+test("pace line: only a project with a unit_label and a forecast gets one; the lane is otherwise unchanged", () => {
+  const lane = paceLane(paceInput());
+  assert.ok(lane.pace, "paced project lane has a pace line");
+  assert.equal(lane.pace.chip.label, "Behind");
+  assert.equal(lane.pace.chip.kind, "behind");
+  assert.match(lane.pace.text, /^Swatch speeds are 3\.1× the plan · 195 wide needs 249 min a day from Oct 19 · at 90 min a day, 63 stitches wide fits$/);
+  // No unit_label on the project: no pace line, even if a forecast is handed in.
+  const noLabel = paceInput();
+  noLabel.projects = noLabel.projects.map((p) => (p.id === "proj-blanket" ? { ...p, unit_label: null } : p));
+  assert.equal(paceLane(noLabel).pace, null);
+  // No forecast: no pace line.
+  const none = paceInput();
+  delete none.pace;
+  assert.equal(paceLane(none).pace, null);
+  // App lanes and other lanes never get one.
+  const view = buildPortfolio(paceInput(), { scope: "personal", now: PACE_NOW });
+  assert.deepEqual(view.apps.filter((app) => app.kind === "app").map((app) => app.pace), [null, null]);
+  // Without any pace input the whole view is the same as before.
+  const before = buildPortfolio(blanketInput(), { scope: "personal", now: NOW });
+  assert.equal(blanketLane(before).pace, null);
+});
+
+test("lane chips: sections with a time basis show On track / Behind from the forecast; the rest keep the row-count chip", () => {
+  const lane = paceLane(paceInput());
+  const [swatch, yarn, body, finish] = ["1. Swatch", "2. Yarn", "3. Blanket body", "4. Finishing"].map((name) => chipOf(lane, name));
+  assert.deepEqual(swatch.health, { kind: "ahead", label: "Ahead" }, "no stitches left: the row count");
+  assert.deepEqual(yarn.health, { kind: "plan", label: "Starts 10/10" });
+  assert.deepEqual(body.health, { kind: "behind", label: "Behind" }, "projected Oct 2027 vs planned Nov 29");
+  assert.deepEqual(finish.health, { kind: "behind", label: "Behind" });
+  assert.match(body.sub, /starts 10\/19/, "a time-based lane that hasn't started keeps its start in the sub-line");
+  assert.doesNotMatch(swatch.sub, /starts/);
+  const on = paceLane(paceInput({}, { body: { health: "on_track", projected_end: "2026-11-20" } }));
+  assert.deepEqual(chipOf(on, "3. Blanket body").health, { kind: "ok", label: "On track" });
+  // The same section with a rows basis (fewer than 3 counted sittings) keeps today's chip.
+  const rows = paceLane(paceInput({}, { body: { health: null, health_basis: "rows", projected_end: "2027-10-01" } }));
+  assert.deepEqual(chipOf(rows, "3. Blanket body").health, { kind: "plan", label: "Starts 10/19" });
+  assert.equal(chipOf(rows, "3. Blanket body").pace, null, "and no overrun tail either");
+  assert.doesNotMatch(chipOf(rows, "3. Blanket body").sub, /starts/);
+  // The track colour follows the chip.
+  assert.equal(body.health.kind, "behind");
+});
+
+test("project health on the Portfolio follows the forecast once it says on_track or behind; otherwise today's rule", () => {
+  const rowChip = buildPortfolio(paceInput({ health: "insufficient_data", counted_sessions: 1 }, { body: { health: null, health_basis: "rows" }, finish: { health: null, health_basis: "rows" } }), { scope: "personal", now: PACE_NOW });
+  // Today's rule: lanes that have started — Swatch is "Ahead" (green) → "On track".
+  assert.deepEqual(blanketLane(rowChip).timeline.summary.health, { kind: "ok", label: "On track" });
+  const behind = paceLane(paceInput({ health: "behind" })).timeline.summary.health;
+  assert.deepEqual(behind, { kind: "behind", label: "Behind" });
+  const onTrack = paceLane(paceInput({ health: "on_track" }, { body: { health: "behind" } })).timeline.summary.health;
+  assert.deepEqual(onTrack, { kind: "ok", label: "On track" }, "the project's forecast wins over a lane's");
+  for (const health of ["insufficient_data", "unknown", "no_target"]) {
+    const kept = paceLane(paceInput({ health }, { body: { health: null, health_basis: "rows" }, finish: { health: null, health_basis: "rows" } })).timeline.summary.health;
+    assert.deepEqual(kept, { kind: "ok", label: "On track" }, `${health} keeps the row-count rule`);
+  }
+  // A late lane (row rule) is overridden by a forecast that says on_track.
+  const late = paceInput({ health: "on_track" });
+  late.tasks = late.tasks.map((t) => (t.id === "pl2" ? { ...t, status: "Backlog" } : t));
+  const lateView = buildPortfolio({ ...late, sections: late.sections.map((sec) => (sec.id === "ps-swatch" ? { ...sec, planned_end: "2026-10-02", planned_start: "2026-09-28" } : sec)) }, { scope: "personal", now: PACE_NOW });
+  assert.equal(blanketLane(lateView).timeline.summary.health.kind, "ok");
+});
+
+test("the projected-finish marker sits at its date inside the window, and is pinned to the edge with an arrow past it; the window never stretches", () => {
+  const plain = paceLane(paceInput({ projected_finish: null })).timeline;
+  assert.equal(plain.projected, null, "no projected finish: no marker");
+  const inside = paceLane(paceInput({ projected_finish: "2026-11-15" })).timeline;
+  assert.equal(inside.projected.offEdge, false);
+  assert.equal(inside.projected.label, "Projected Nov 15");
+  assert.equal(inside.projected.date, "2026-11-15");
+  const span = Math.round((Date.parse(`${inside.end}T00:00:00Z`) - Date.parse(`${inside.start}T00:00:00Z`)) / 86400000);
+  const days = Math.round((Date.parse("2026-11-15T00:00:00Z") - Date.parse(`${inside.start}T00:00:00Z`)) / 86400000);
+  assert.ok(Math.abs(inside.projected.left - ((days + 0.5) / span) * 100) < 1e-9, "same 0.5-day centring as the Today and Target markers");
+  const off = paceLane(paceInput({ projected_finish: "2027-09-14" })).timeline;
+  assert.equal(off.projected.offEdge, true);
+  assert.equal(off.projected.left, 100);
+  assert.equal(off.projected.label, "Projected Sep 2027 →");
+  assert.deepEqual([off.start, off.end], [plain.start, plain.end], "the window never stretches for a far projection");
+  assert.deepEqual(off.ticks, plain.ticks);
+  // The last day of the window is still inside.
+  const lastDay = paceLane(paceInput({ projected_finish: plain.end })).timeline;
+  assert.equal(lastDay.projected.offEdge, false);
+  assert.equal(paceLane(paceInput({ projected_finish: "2026-12-09" })).timeline.projected.offEdge, true, "one day past the end is off the edge");
+});
+
+test("overrun tail: from the planned end to the projected end, cut at the chart edge; none when the lane is on time", () => {
+  const timeline = (body) => paceLane(paceInput({}, { body })).timeline;
+  const base = timeline({ projected_end: "2026-12-03" });
+  const bodyLane = chipOf({ timeline: base }, "3. Blanket body");
+  const span = Math.round((Date.parse(`${base.end}T00:00:00Z`) - Date.parse(`${base.start}T00:00:00Z`)) / 86400000);
+  const pos = (date, offset) => (Math.round((Date.parse(`${date}T00:00:00Z`) - Date.parse(`${base.start}T00:00:00Z`)) / 86400000) + offset) / span * 100;
+  assert.ok(Math.abs(bodyLane.pace.tail.left - pos("2026-11-29", 1)) < 1e-9, "starts at the end of the planned end day");
+  assert.ok(Math.abs(bodyLane.pace.tail.width - (pos("2026-12-03", 1) - pos("2026-11-29", 1))) < 1e-9);
+  assert.equal(bodyLane.pace.tail.cut, false);
+  assert.equal(bodyLane.pace.projectedEnd, "2026-12-03");
+  // Past the chart edge: ends at 100% and is marked as cut.
+  const far = chipOf({ timeline: timeline({ projected_end: "2027-10-01" }) }, "3. Blanket body");
+  assert.equal(far.pace.tail.cut, true);
+  assert.ok(Math.abs(far.pace.tail.left + far.pace.tail.width - 100) < 1e-9);
+  // Projected on the last day of the window is not cut; one day later is.
+  const lastDay = chipOf({ timeline: timeline({ projected_end: base.end }) }, "3. Blanket body");
+  assert.equal(lastDay.pace.tail.cut, false);
+  assert.equal(chipOf({ timeline: timeline({ projected_end: "2026-12-09" }) }, "3. Blanket body").pace.tail.cut, true);
+  // On time (projected on or before the planned end): no tail.
+  assert.equal(chipOf({ timeline: timeline({ health: "on_track", projected_end: "2026-11-29" }) }, "3. Blanket body").pace.tail, null);
+  assert.equal(chipOf({ timeline: timeline({ health: "on_track", projected_end: "2026-11-20" }) }, "3. Blanket body").pace.tail, null);
+  // Cadence 0 (no projected end, behind): chip says Behind, nothing to draw.
+  const idle = chipOf({ timeline: timeline({ projected_end: null }) }, "3. Blanket body");
+  assert.equal(idle.health.label, "Behind");
+  assert.equal(idle.pace.tail, null);
+  // A lane without a time basis never gets a tail.
+  assert.equal(chipOf({ timeline: base }, "1. Swatch").pace, null);
+});
+
+test("a forecast for a project with no timeline lanes adds nothing; the pace never changes counts or percentages", () => {
+  const withPace = buildPortfolio(paceInput(), { scope: "personal", now: PACE_NOW });
+  const withoutPace = paceInput();
+  delete withoutPace.pace;
+  const base = buildPortfolio(withoutPace, { scope: "personal", now: PACE_NOW });
+  assert.deepEqual(withPace.overall, base.overall);
+  assert.deepEqual(withPace.assigned, base.assigned);
+  assert.deepEqual(blanketLane(withPace).counts, blanketLane(base).counts);
+  assert.deepEqual(blanketLane(withPace).timeline.start, blanketLane(base).timeline.start);
+});
+
+await testAsync("loadPortfolioInput: paced projects get a forecast (one call each); a failing forecast is logged and the page still loads without a pace line", async () => {
+  const rows = {
+    tasks: [],
+    projects: [{ id: "p1", name: "Blanket", unit_label: "stitches", implementation_id: null, stage: "In Progress", portfolio_rank: 1, target_date: null, tags: ["personal"] }, { id: "p2", name: "Plain", unit_label: null }],
+  };
+  const calls = [];
+  const input = await loadPortfolioInput(mockSupabase(rows), "user-1", {
+    getForecast: async (_client, userId, projectId) => {
+      calls.push([userId, projectId]);
+      return { forecast: { marker: projectId } };
+    },
+  });
+  assert.deepEqual(calls, [["user-1", "p1"]], "only the project with a unit_label");
+  assert.deepEqual(input.pace, { p1: { marker: "p1" } });
+  const logged = [];
+  const originalError = console.error;
+  console.error = (...args) => logged.push(args);
+  let failed;
+  try {
+    failed = await loadPortfolioInput(mockSupabase(rows), "user-1", { getForecast: async () => { throw new Error("forecast down"); } });
+  } finally {
+    console.error = originalError;
+  }
+  assert.deepEqual(failed.pace, {}, "no pace, no crash");
+  assert.equal(logged.length, 1);
+});
+
 console.log(`\n${passed} passed`);

@@ -722,5 +722,455 @@ test("timing: fractional minutes are rejected; date and an ISO start must agree;
   );
 });
 
+// ── Slice 2: perimeter, gauge, lane projections ─────────────────────────────
+
+const BORDER_ID = "00000000-0000-4000-8000-0000000000b1";
+const BORDER2_ID = "00000000-0000-4000-8000-0000000000b2";
+const SIZE_BASE = { label: "width", current: 195, step: 12, offset: 3, min: 27, unit: "stitches", work_types: ["waffle", "sc"] };
+
+/**
+ * A blanket-shaped project priced entirely by plan speed (6 s per unit), so the
+ * arithmetic is exact: body 100 min (waffle, scales with width), row 157 20 min
+ * (sc, scales with width), border 100 min (sc, scales with the perimeter).
+ * Today Oct 4, target Dec 5 → 63 available days.
+ */
+function perimeterProject(sizeExtra = {}, projectExtra = {}) {
+  return input({
+    project: {
+      unit_label: "stitches",
+      target_date: "2026-12-05",
+      pace_settings: { size: { ...SIZE_BASE, perimeter: { task_ids: [BORDER_ID], side: 300 }, ...sizeExtra } },
+      ...projectExtra,
+    },
+    tasks: [
+      task("body", { unit_count: 1000, work_type: "waffle", estimated_minutes: 100 }),
+      task("row157", { unit_count: 200, work_type: "sc", estimated_minutes: 20 }),
+      task(BORDER_ID, { unit_count: 1000, work_type: "sc", estimated_minutes: 100 }),
+    ],
+  });
+}
+
+test("perimeter: border units scale by (w+side)/(current+side) and stay out of the linear scaling; row 157 sc stays linear", () => {
+  const forecast = computeForecast(perimeterProject());
+  const fit = forecast.size_fit;
+  assert.notEqual(fit, null);
+  near(fit.scaled_minutes_left, 120, 0.1, "waffle 100 + row 157 sc 20 scale linearly (sc is in work_types but the border is not)");
+  near(fit.perimeter_minutes_left, 100, 0.1, "the border task's minutes");
+  near(fit.fixed_minutes_left, 0, 0.1);
+  const at = (size) => fit.widths.find((entry) => entry.size === size);
+  // 120 × 27/195 + 100 × (27+300)/(195+300) = 16.6 + 66.1
+  near(at(27).minutes_left, 83, 0.6, "27 wide: border barely shrinks (the sides stay), plain linear scaling would say 30");
+  near(at(195).minutes_left, 220, 0.6, "full width is the whole plan");
+  near(at(99).minutes_left, 120 * 99 / 195 + 100 * 399 / 495, 0.6);
+  near(at(27).needed_minutes_per_day, 83 / 63, 0.05, "needed per day at 27 wide");
+  // Without the perimeter the same project scales everything linearly: 220 × 27/195 = 30.5.
+  const linear = computeForecast(perimeterProject({ perimeter: undefined })).size_fit;
+  near(linear.widths.find((entry) => entry.size === 27).minutes_left, 30, 0.6, "no perimeter → linear, as in slice 1");
+  assert.equal(linear.perimeter_minutes_left, 0);
+});
+
+test("perimeter: every row of a perimeter task is excluded from the linear scaling, whatever its type", () => {
+  const base = perimeterProject();
+  const tasks = [
+    ...base.tasks.filter((entry) => entry.id !== BORDER_ID),
+    task(BORDER_ID, { estimated_minutes: 100 }),
+    task(BORDER2_ID, { unit_count: 500, work_type: "sc", estimated_minutes: 50 }),
+  ];
+  const items = [item("b-r1", BORDER_ID, 600, "waffle"), item("b-r2", BORDER_ID, 400, "sc")];
+  const project = {
+    ...base.project,
+    pace_settings: { size: { ...SIZE_BASE, perimeter: { task_ids: [BORDER_ID, BORDER2_ID], side: 300 } } },
+  };
+  const fit = computeForecast({ ...base, tasks, items, project }).size_fit;
+  near(fit.perimeter_minutes_left, 150, 0.1, "rows of the border task and the second border task");
+  near(fit.scaled_minutes_left, 120, 0.1);
+});
+
+test("perimeter and gauge settings: shapes are validated, with a reason", () => {
+  const ok = parsePaceSettings({ size: { ...SIZE_BASE, perimeter: { task_ids: [BORDER_ID], side: 318 }, gauge: { units: 13, length: 4, length_unit: "in" } } });
+  assert.equal(ok.ok, true);
+  assert.deepEqual(ok.value.size.perimeter, { task_ids: [BORDER_ID], side: 318 });
+  assert.deepEqual(ok.value.size.gauge, { units: 13, length: 4, length_unit: "in" });
+  const plain = parsePaceSettings({ size: SIZE_BASE });
+  assert.equal(plain.ok, true);
+  assert.equal(plain.value.size.perimeter, undefined, "both are optional");
+  assert.equal(plain.value.size.gauge, undefined);
+  const bad = (size, pattern) => {
+    const result = parsePaceSettings({ size: { ...SIZE_BASE, ...size } });
+    assert.equal(result.ok, false, JSON.stringify(size));
+    if (pattern) assert.match(result.error, pattern);
+  };
+  bad({ perimeter: { task_ids: ["not-a-uuid"], side: 300 } }, /task_ids.*uuid/i);
+  bad({ perimeter: { task_ids: [], side: 300 } }, /task_ids/);
+  bad({ perimeter: { task_ids: [BORDER_ID], side: 0 } }, /side.*positive/);
+  bad({ perimeter: { task_ids: [BORDER_ID], side: -5 } }, /side/);
+  bad({ perimeter: { task_ids: [BORDER_ID], side: "318" } }, /side/);
+  bad({ perimeter: { task_ids: [BORDER_ID] } }, /side/);
+  bad({ perimeter: { task_ids: [BORDER_ID], side: 300, extra: 1 } }, /unknown/);
+  bad({ perimeter: [BORDER_ID] }, /perimeter/);
+  bad({ gauge: { units: 0, length: 4, length_unit: "in" } }, /gauge\.units/);
+  bad({ gauge: { units: 18, length: 0, length_unit: "in" } }, /gauge\.length/);
+  bad({ gauge: { units: 18, length: 4, length_unit: "ft" } }, /length_unit/);
+  bad({ gauge: { units: 18, length: 4 } }, /length_unit/);
+  bad({ gauge: { units: 18, length: 4, length_unit: "in", extra: 1 } }, /unknown/);
+});
+
+test("gauge: each width returns its length (w ÷ units × length, 1 decimal) with the unit; no gauge, no length", () => {
+  const withGauge = computeForecast(perimeterProject({ gauge: { units: 18, length: 4, length_unit: "in" } })).size_fit;
+  const at = (size) => withGauge.widths.find((entry) => entry.size === size);
+  assert.equal(at(195).length, 43.3, "195 ÷ 18 × 4");
+  assert.equal(at(27).length, 6);
+  assert.equal(at(27).length_unit, "in");
+  assert.equal(at(39).length, 8.7);
+  const metric = computeForecast(perimeterProject({ gauge: { units: 20, length: 10, length_unit: "cm" } })).size_fit;
+  assert.equal(metric.widths.find((entry) => entry.size === 195).length, 97.5);
+  assert.equal(metric.widths.find((entry) => entry.size === 195).length_unit, "cm");
+  // The widest-fitting width of each cadence carries its length too, and so does the plan's full width.
+  const fits90 = withGauge.fits.find((fit) => fit.source === "fixed" && fit.minutes_per_day === 90);
+  assert.equal(fits90.widest_length, Math.round((fits90.widest / 18) * 4 * 10) / 10);
+  assert.equal(withGauge.current_length, 43.3);
+  assert.equal(withGauge.length_unit, "in");
+  const none = computeForecast(perimeterProject()).size_fit;
+  assert.equal("length" in none.widths[0], false, "no gauge → no length key");
+  assert.equal("length_unit" in none.widths[0], false);
+  assert.equal(none.current_length, null);
+  assert.equal(none.length_unit, null);
+  assert.equal(none.fits[0].widest_length, null);
+});
+
+/** Four lanes priced by plan speed (6 s per unit) with three counted sittings at 6 min a day. */
+function lanes(extra = {}) {
+  const sessions = [1, 2, 3].map((n) => session({ id: `ls${n}`, session_date: "2026-10-04", minutes: 28 }));
+  return input({
+    project: { unit_label: "stitches", target_date: "2026-12-05", pace_settings: null },
+    sections: [
+      { id: "sec-c", planned_start: "2026-11-30", planned_end: "2026-12-05" },
+      { id: "sec-a", planned_start: "2026-10-04", planned_end: "2026-10-10" },
+      { id: "sec-b", planned_start: "2026-10-19", planned_end: "2026-11-29" },
+      { id: "sec-d", planned_start: "2026-12-06", planned_end: "2026-12-10" },
+    ],
+    tasks: [
+      task("tA", { unit_count: 600, work_type: "sc", estimated_minutes: 60, section_id: "sec-a" }),
+      task("tB", { unit_count: 300, work_type: "sc", estimated_minutes: 30, section_id: "sec-b" }),
+      task("tC", { unit_count: 60, work_type: "sc", estimated_minutes: 6, section_id: "sec-c" }),
+      task("tU", { estimated_minutes: 6, section_id: "sec-c" }),
+      task("tD", { estimated_minutes: 20, section_id: "sec-d" }),
+    ],
+    sessions,
+    ...extra,
+  });
+}
+const laneOf = (forecast, id) => forecast.sections.find((entry) => entry.section_id === id);
+
+test("sections: a running clock walks planned_start order, leaves gaps between sections, and ceil(work ÷ cadence) days each", () => {
+  const forecast = computeForecast(lanes());
+  assert.equal(forecast.cadence_minutes_per_day, 6, "84 min ÷ 14 days");
+  assert.deepEqual(forecast.sections.map((entry) => entry.section_id), ["sec-a", "sec-b", "sec-c", "sec-d"], "planned_start order");
+  const a = laneOf(forecast, "sec-a");
+  assert.deepEqual(
+    [a.planned_start, a.planned_end, a.units_left, a.work_left_minutes, a.projected_end, a.health, a.health_basis],
+    ["2026-10-04", "2026-10-10", 600, 60, "2026-10-14", "behind", "time"],
+    "starts today, 60 min ÷ 6 = 10 days → Oct 14, past Oct 10"
+  );
+  const b = laneOf(forecast, "sec-b");
+  assert.deepEqual([b.projected_end, b.health, b.health_basis], ["2026-10-24", "on_track", "time"], "the clock is Oct 14 but B starts at its planned Oct 19: 5 more days");
+  const c = laneOf(forecast, "sec-c");
+  assert.equal(c.work_left_minutes, 12, "its unit work 6 min plus the unit-less task's estimate 6 min");
+  assert.deepEqual([c.units_left, c.projected_end, c.health], [60, "2026-12-02", "on_track"], "starts Nov 30 (gap), 12 ÷ 6 = 2 days");
+  const d = laneOf(forecast, "sec-d");
+  assert.deepEqual([d.units_left, d.projected_end, d.health, d.health_basis], [0, null, null, "rows"], "no unit work left → row count, and it doesn't move the clock");
+});
+
+test("sections: cadence 0 → behind with no projected end; fewer than 3 counted sittings → row-count basis; unpriced units → unknown", () => {
+  const old = [1, 2, 3].map((n) => session({ id: `old${n}`, session_date: "2026-08-01", minutes: 30 }));
+  const idle = computeForecast(lanes({ sessions: old }));
+  assert.equal(idle.cadence_minutes_per_day, 0);
+  const idleA = laneOf(idle, "sec-a");
+  assert.deepEqual([idleA.projected_end, idleA.health, idleA.health_basis], [null, "behind", "time"], "cadence 0 is behind");
+  assert.equal(laneOf(idle, "sec-c").projected_end, null);
+  assert.equal(laneOf(idle, "sec-d").health, null);
+
+  const few = computeForecast(lanes({ sessions: [session({ id: "only", session_date: "2026-10-04", minutes: 60 })] }));
+  const fewA = laneOf(few, "sec-a");
+  assert.deepEqual([fewA.health, fewA.health_basis], [null, "rows"], "1 counted sitting: not enough for a time call");
+  assert.equal(fewA.projected_end, "2026-10-18", "the projection is still returned (60 min ÷ 4.3 a day = 14 days)");
+  const excluded = computeForecast(lanes({ sessions: [1, 2, 3].map((n) => session({ id: `x${n}`, session_date: "2026-10-04", minutes: 28, exclude_from_stats: true })) }));
+  assert.equal(laneOf(excluded, "sec-a").health_basis, "rows", "excluded sittings are not counted");
+
+  const base = lanes();
+  const unpriced = computeForecast({
+    ...base,
+    tasks: [...base.tasks, task("tZ", { unit_count: 40, work_type: "mystery", section_id: "sec-b" })],
+  });
+  const z = laneOf(unpriced, "sec-b");
+  assert.deepEqual([z.work_left_minutes, z.projected_end, z.health, z.health_basis], [null, null, "unknown", "rows"], "a lane with unpriced units keeps the row count");
+  assert.equal(laneOf(unpriced, "sec-a").health, "unknown", "while any unfinished type has no speed, every lane with unit work is unknown (slice 1's rule)");
+  assert.equal(laneOf(unpriced, "sec-a").health_basis, "rows");
+});
+
+test("sections: finished lanes, lanes without a planned end, and sections with no tasks", () => {
+  const base = lanes();
+  const forecast = computeForecast({
+    ...base,
+    sections: [...base.sections, { id: "sec-open", planned_start: "2026-10-01", planned_end: null }, { id: "sec-empty", planned_start: "2026-10-02", planned_end: "2026-10-03" }],
+    tasks: [
+      ...base.tasks.map((entry) => (entry.id === "tA" ? { ...entry, status: "Done" } : entry)),
+      task("tOpen", { unit_count: 60, work_type: "sc", estimated_minutes: 6, section_id: "sec-open" }),
+    ],
+  });
+  const a = laneOf(forecast, "sec-a");
+  assert.deepEqual([a.units_left, a.work_left_minutes, a.projected_end, a.health, a.health_basis], [0, 0, null, null, "rows"], "a done lane has no unit work left");
+  const open = laneOf(forecast, "sec-open");
+  assert.deepEqual([open.health, open.health_basis], [null, "rows"], "no planned end → nothing to compare against");
+  assert.deepEqual([laneOf(forecast, "sec-empty").units_left, laneOf(forecast, "sec-empty").health_basis], [0, "rows"]);
+  assert.equal(laneOf(forecast, "sec-b").projected_end, "2026-10-24", "a finished lane doesn't hold the clock back");
+});
+
+test("no target: needed, available days and size fit are null, health reads no_target, lanes still project", () => {
+  const forecast = computeForecast(lanes({ project: { unit_label: "stitches", target_date: null, pace_settings: null } }));
+  assert.equal(forecast.target_date, null);
+  assert.equal(forecast.available_days, null);
+  assert.equal(forecast.available_from, null);
+  assert.equal(forecast.needed_minutes_per_day, null);
+  assert.equal(forecast.slack_days, null);
+  assert.equal(forecast.health, "no_target");
+  assert.ok(forecast.projected_finish, "a projected finish still comes from your pace");
+  assert.equal(laneOf(forecast, "sec-b").health, "on_track", "lane health compares with each lane's own planned end");
+  assert.equal(forecast.plan_cadence_minutes_per_day, null);
+  const sized = computeForecast(perimeterProject({}, { target_date: null }));
+  assert.equal(sized.size_fit, null);
+  assert.equal(sized.size_fit_reason, "no_target");
+});
+
+test("forecast carries every work type with total, done and left (for the speed table) and the 14-day minutes", () => {
+  const tasks = [task("t1", { work_type: "sc", estimated_minutes: 10 }), task("t2", { status: "Done", unit_count: 50, work_type: "waffle" })];
+  const items = [item("a", "t1", 60, null, { is_done: true }), item("b", "t1", 40, null)];
+  const sessions = [session({ task_id: "t1", minutes: 20, item_ids: ["a"] }), session({ session_date: "2026-09-01", minutes: 99 })];
+  const forecast = computeForecast(input({ tasks, items, sessions }));
+  const byType = Object.fromEntries(forecast.work_types.map((row) => [row.work_type, row]));
+  assert.deepEqual([byType.sc.units_total, byType.sc.units_done, byType.sc.units_left], [100, 60, 40]);
+  assert.deepEqual([byType.waffle.units_total, byType.waffle.units_done, byType.waffle.units_left], [50, 50, 0], "a finished type is still listed");
+  assert.equal(byType.sc.source, "measured");
+  assert.equal(byType.sc.seconds_per_unit, 20, "20 min × 60 ÷ 60 units");
+  assert.equal(byType.sc.hours_left, 0.2);
+  assert.equal(forecast.minutes_in_cadence_window, 20, "the old sitting is outside the 14 days");
+});
+
+// ── Slice 2: the words and numbers on the Portfolio pace line and the Pace section ──
+
+const view = await import("../src/lib/pace-view.ts");
+
+function stubForecast(overrides = {}) {
+  return {
+    today: "2026-10-04",
+    unit_label: "stitches",
+    target_date: "2026-12-05",
+    counted_sessions: 3,
+    excluded_sessions: 2,
+    minutes_in_cadence_window: 436,
+    plan_ratio: { ratio: 3.09, basis: "sample", sample_based: true, n_sessions: 3, label: "x" },
+    measured_speeds: [{ work_type: "waffle", scope: "sample", seconds_per_unit: 20, n_sessions: 1, units: 1, minutes: 1, label: "x" }],
+    cadence_minutes_per_day: 31.1,
+    needed_minutes_per_day: 249.2,
+    plan_cadence_minutes_per_day: 120,
+    available_from: "2026-10-19",
+    available_days: 48,
+    work_left_minutes: 11950,
+    work_left_hours: 199.2,
+    unitless_minutes_left: 204,
+    unpriced_units: [],
+    projected_finish: "2027-10-24",
+    slack_days: -323,
+    health: "behind",
+    size_fit_reason: null,
+    size_fit: {
+      label: "width", unit: "stitches", current: 195, needed_minutes_per_day_at_current: 229.4, scaled_minutes_left: 1, fixed_minutes_left: 1, perimeter_minutes_left: 0,
+      fits: [
+        { minutes_per_day: 31.1, source: "measured", widest: null, widest_length: null },
+        { minutes_per_day: 60, source: "fixed", widest: 39, widest_length: null },
+        { minutes_per_day: 90, source: "fixed", widest: 63, widest_length: null },
+        { minutes_per_day: 120, source: "fixed", widest: 87, widest_length: null },
+      ],
+      widths: [{ size: 27, minutes_left: 2000, needed_minutes_per_day: 41.7 }],
+      current_length: null,
+      length_unit: null,
+    },
+    work_types: [],
+    ...overrides,
+  };
+}
+
+test("pace line: chip, plan ratio, needed at the current width from the first available day, widest width at 90 min a day", () => {
+  const line = view.buildPaceLine(stubForecast());
+  assert.deepEqual(line.chip, { kind: "behind", label: "Behind" });
+  assert.equal(line.text, "Swatch speeds are 3.1× the plan · 195 wide needs 229 min a day from Oct 19 · at 90 min a day, 63 stitches wide fits");
+  assert.equal(line.separator, false);
+  const onTrack = view.buildPaceLine(stubForecast({ health: "on_track", plan_ratio: { ratio: 1.4, basis: "main", sample_based: false, n_sessions: 4, label: null } }));
+  assert.deepEqual(onTrack.chip, { kind: "ok", label: "On track" });
+  assert.match(onTrack.text, /^Body speeds are 1\.4× the plan · /, "main-based ratio says Body");
+});
+
+test("pace line: width locked → the width part reads \"you're at N min a day\" (no width fit)", () => {
+  const line = view.buildPaceLine(stubForecast({ size_fit: null, size_fit_reason: "locked", plan_ratio: { ratio: 1.4, basis: "main", sample_based: false, n_sessions: 4, label: null } }));
+  assert.equal(line.text, "Body speeds are 1.4× the plan · you're at 31 min a day");
+});
+
+test("pace line: no target → 'No target' chip and 'projected <Mon YYYY> at N min a day'", () => {
+  const line = view.buildPaceLine(stubForecast({ target_date: null, health: "no_target", needed_minutes_per_day: null, available_from: null, available_days: null, size_fit: null, size_fit_reason: "no_target", projected_finish: "2026-12-29", cadence_minutes_per_day: 41 }));
+  assert.deepEqual(line.chip, { kind: "none", label: "No target" });
+  assert.equal(line.text, "projected Dec 2026 at 41 min a day");
+  assert.equal(line.separator, true, "the page puts a dot between the chip and this sentence");
+  const noCadence = view.buildPaceLine(stubForecast({ target_date: null, health: "no_target", projected_finish: null, cadence_minutes_per_day: 0, size_fit: null, size_fit_reason: "no_target" }));
+  assert.equal(noCadence.text, "log a sitting to get a projection");
+});
+
+test("pace line: fewer than 3 counted sittings reads 'Measuring · n of 3 sittings'; unpriced units say so; none-fit and no-ratio cases", () => {
+  assert.deepEqual(view.buildPaceLine(stubForecast({ health: "insufficient_data", counted_sessions: 1 })).chip, { kind: "measuring", label: "Measuring · 1 of 3 sittings" });
+  const unknown = view.buildPaceLine(stubForecast({
+    health: "unknown", plan_ratio: null, size_fit: null, size_fit_reason: "unpriced_units", needed_minutes_per_day: null, available_from: "2026-10-19",
+    unpriced_units: [{ work_type: "mystery", units_left: 40 }],
+  }));
+  assert.deepEqual(unknown.chip, { kind: "none", label: "No speed yet" });
+  assert.equal(unknown.text, "40 mystery stitches have no speed yet");
+  const noFit = stubForecast();
+  noFit.size_fit.fits = noFit.size_fit.fits.map((fit) => (fit.minutes_per_day === 90 ? { ...fit, widest: null } : fit));
+  noFit.size_fit.widths = [{ size: 27, minutes_left: 1, needed_minutes_per_day: 1 }];
+  assert.match(view.buildPaceLine(noFit).text, /at 90 min a day, not even 27 stitches wide fits$/);
+  const noRatio = view.buildPaceLine(stubForecast({ plan_ratio: null }));
+  assert.doesNotMatch(noRatio.text, /plan/, "no ratio, no plan part");
+  assert.match(noRatio.text, /^195 wide needs 229 min a day from Oct 19 · /);
+  const noSize = view.buildPaceLine(stubForecast({ size_fit: null, size_fit_reason: "not_configured" }));
+  assert.equal(noSize.text, "Swatch speeds are 3.1× the plan · needs 249 min a day from Oct 19");
+});
+
+test("source labels are short, name their tone, and explain themselves (swatch uses slice 1's narrower-rows wording)", () => {
+  const ratio = { ratio: 3.09 };
+  const label = (source, n) => view.sourceLabel({ source, n_sessions: n }, ratio);
+  assert.deepEqual([label("measured", 4).text, label("measured", 4).tone], ["Body · 4 sittings", "body"]);
+  assert.equal(label("measured", 1).text, "Body · 1 sitting");
+  assert.deepEqual([label("measured_sample", 2).text, label("measured_sample", 2).tone], ["Swatch · 2 sittings", "swatch"]);
+  assert.equal(label("other_projects", 3).text, "Other projects · 3 sittings");
+  assert.deepEqual([label("plan_x_ratio", 3).text, label("plan_x_ratio", 3).tone], ["Plan × 3.1", "plan"]);
+  assert.deepEqual([label("plan", 0).text, label("plan", 0).tone], ["Plan", "plan"]);
+  assert.deepEqual([label("none", 0).text, label("none", 0).tone], ["No speed yet", "none"]);
+  assert.ok(label("measured_sample", 2).title.includes("rows are narrower"), "the swatch tooltip has the narrower-rows wording");
+  for (const source of ["measured", "measured_sample", "other_projects", "plan_x_ratio", "plan", "none"]) {
+    assert.ok(label(source, 1).title.length > 20, `${source} has an explanation`);
+  }
+});
+
+test("tiles: four of them; Needed goes amber above your pace; no target swaps Needed for Speed vs plan", () => {
+  const tiles = view.buildTiles(stubForecast());
+  assert.deepEqual(tiles.map((tile) => tile.label), ["Work left", "Your pace", "Needed", "Projected finish"]);
+  assert.deepEqual(tiles.map((tile) => tile.value), ["≈ 199 h", "31 min/day", "249 min/day", "Oct 2027"]);
+  assert.equal(tiles[2].sub, "Oct 19 – Dec 5, at 195 wide");
+  assert.deepEqual(tiles.map((tile) => tile.tone), ["", "", "warn", "warn"], "needed > pace, and the finish is after the target");
+  const fine = view.buildTiles(stubForecast({ needed_minutes_per_day: 20, projected_finish: "2026-12-01" }));
+  assert.deepEqual(fine.map((tile) => tile.tone), ["", "", "", ""]);
+  assert.equal(fine[3].value, "Dec 1", "this year: month and day");
+  const none = view.buildTiles(stubForecast({ target_date: null, health: "no_target", needed_minutes_per_day: null, available_from: null, size_fit: null, projected_finish: "2026-12-29" }));
+  assert.deepEqual(none.map((tile) => tile.label), ["Work left", "Your pace", "Speed vs plan", "Projected finish"]);
+  assert.equal(none[2].value, "3.1×");
+  assert.equal(none[3].tone, "");
+  const unpriced = view.buildTiles(stubForecast({ work_left_minutes: null, work_left_hours: null, needed_minutes_per_day: null, projected_finish: null, unpriced_units: [{ work_type: "x", units_left: 3 }] }));
+  assert.equal(unpriced[0].value, "—");
+  assert.equal(unpriced[3].value, "—");
+});
+
+test("speed table: one row per type with the short source, plus a 'no units' row for work priced by estimate", () => {
+  const forecast = stubForecast({
+    work_types: [
+      { work_type: "waffle", units_total: 14592, units_done: 162, units_left: 14430, seconds_per_unit: 20, source: "measured_sample", n_sessions: 1, label: "x", hours_left: 80.2 },
+      { work_type: "sc", units_total: 2477, units_done: 27, units_left: 2450, seconds_per_unit: 17.04, source: "plan_x_ratio", n_sessions: 3, label: "x", hours_left: 11.6 },
+      { work_type: "mystery", units_total: 10, units_done: 0, units_left: 10, seconds_per_unit: null, source: "none", n_sessions: 0, label: "x", hours_left: null },
+    ],
+  });
+  const rows = view.buildSpeedRows(forecast);
+  assert.deepEqual(rows.map((row) => row.work_type), ["waffle", "sc", "mystery", null]);
+  assert.deepEqual([rows[0].source.text, rows[0].speed, rows[0].hours_left], ["Swatch · 1 sitting", "20.0 s", "80.2"]);
+  assert.deepEqual([rows[1].source.text, rows[1].speed], ["Plan × 3.1", "17.0 s"]);
+  assert.deepEqual([rows[2].source.text, rows[2].speed, rows[2].hours_left], ["No speed yet", "—", "—"]);
+  assert.deepEqual([rows[3].label, rows[3].hours_left, rows[3].source.text], ["no units", "3.4", "Plan"]);
+  assert.equal(view.buildSpeedRows(stubForecast({ work_types: [], unitless_minutes_left: 0 })).length, 0);
+});
+
+test("width table: your 14-day pace, 60/90/120 and full width; 'None' when nothing fits; inches only with a gauge; hidden with no target or once locked", () => {
+  const fit = view.buildFitView(stubForecast());
+  assert.deepEqual(fit.rows.map((row) => [row.label, row.minutes_per_day, row.width, row.none]), [
+    ["Your 14-day pace", 31.1, null, true],
+    ["", 60, 39, false],
+    ["", 90, 63, false],
+    ["", 120, 87, false],
+    ["Full width", 229.4, 195, false],
+  ]);
+  assert.equal(fit.hasGauge, false);
+  assert.equal(fit.gaugeNote, "Add your gauge after measuring the swatch (step 5) to see inches");
+  assert.equal(fit.rows[0].length, null);
+  const withGauge = stubForecast();
+  withGauge.size_fit.length_unit = "in";
+  withGauge.size_fit.current_length = 60.2;
+  withGauge.size_fit.fits = withGauge.size_fit.fits.map((entry) => ({ ...entry, widest_length: entry.widest ? Math.round((entry.widest / 3.25) * 10) / 10 : null }));
+  const gauged = view.buildFitView(withGauge);
+  assert.equal(gauged.hasGauge, true);
+  assert.equal(gauged.gaugeNote, null);
+  assert.deepEqual([gauged.rows[2].length, gauged.rows[4].length, gauged.rows[2].lengthUnit], [19.4, 60.2, "in"]);
+  assert.equal(view.buildFitView(stubForecast({ size_fit: null, size_fit_reason: "no_target" })), null);
+  assert.equal(view.buildFitView(stubForecast({ size_fit: null, size_fit_reason: "locked" })), null);
+});
+
+test("sittings list: newest first, task + rows, s/unit when one work type, excluded ones say why; a project-level sitting has no single task", () => {
+  const tasks = [
+    { id: "t3", title: "Step 3: Swatch rows 7–19", status: "Planned", section_id: null, work_type: null, unit_count: null },
+    { id: "t4", title: "Step 4: Swatch rows 20–22", status: "Planned", section_id: null, work_type: null, unit_count: null },
+  ];
+  const rowsOf = (task_id, from, to, units, type) =>
+    Array.from({ length: to - from + 1 }, (_, n) => ({ id: `${task_id}-${from + n}`, task_id, text: `Row ${from + n}: x`, is_done: true, unit_count: units, work_type: type }));
+  const items = [...rowsOf("t3", 10, 15, 27, "colorwork-dc"), ...rowsOf("t4", 20, 22, 27, "waffle")];
+  const base = { note: null, exclude_from_stats: false, exclude_reason: null, extra_units: null, extra_work_type: null, started_at: null, ended_at: null };
+  const rows = view.buildSessionRows(
+    [
+      { ...base, id: "a", task_id: "t3", session_date: "2026-10-04", minutes: 13, exclude_from_stats: true, exclude_reason: "reading-instructions", item_ids: ["t3-10"], started_at: "2026-10-04T17:20:00Z", ended_at: "2026-10-04T17:33:00Z" },
+      { ...base, id: "b", task_id: "t3", session_date: "2026-10-04", minutes: 61, item_ids: [11, 12, 13, 14, 15].map((n) => `t3-${n}`), note: "wall-clock", started_at: "2026-10-04T17:38:00Z", ended_at: "2026-10-04T18:39:00Z" },
+      { ...base, id: "c", task_id: null, session_date: "2026-10-03", minutes: 300, exclude_from_stats: true, exclude_reason: "learning", item_ids: [] },
+      { ...base, id: "d", task_id: "t4", session_date: "2026-10-04", minutes: 28, item_ids: ["t4-20", "t4-21", "t4-22"], started_at: "2026-10-04T20:58:00Z", ended_at: "2026-10-04T21:26:00Z" },
+    ],
+    tasks, items, "stitches"
+  );
+  assert.deepEqual(rows.map((row) => row.id), ["d", "b", "a", "c"], "newest first (by end time within a day)");
+  const [d, b, a, c] = rows;
+  assert.deepEqual([d.when, d.what, d.rows, d.minutes], ["Oct 4", "Step 4: Swatch rows 20–22", "rows 20–22", 28]);
+  assert.equal(d.detail, "81 waffle · 20.7 s/stitch · 4:58–5:26 PM", "one type: minutes × 60 ÷ units");
+  assert.equal(b.rows, "rows 11–15");
+  assert.equal(b.detail, "135 colorwork-dc · 27.1 s/stitch · 1:38–2:39 PM");
+  assert.equal(b.note, "wall-clock");
+  assert.deepEqual([a.excluded, a.rows, a.detail], [true, "row 10", "Not counted: included reading the instructions · 1:20–1:33 PM"]);
+  assert.deepEqual([c.what, c.rows, c.detail, c.excluded], ["Several tasks (no single task)", "", "Not counted: learning, not counted toward speed", true]);
+  assert.equal(view.formatRowNumbers([11, 12, 13, 15, 17, 18]), "rows 11–13, 15, 17–18");
+  assert.equal(view.formatRowNumbers([10]), "row 10");
+});
+
+test("the Log-a-sitting form defaults to the task holding the lowest undone row", () => {
+  const tasks = [
+    { id: "done", title: "Done", status: "Done", section_id: null, work_type: null, unit_count: null },
+    { id: "t9", title: "Step 9", status: "Backlog", section_id: null, work_type: null, unit_count: null },
+    { id: "t10", title: "Step 10", status: "Backlog", section_id: null, work_type: null, unit_count: null },
+  ];
+  const item = (id, task_id, text, is_done) => ({ id, task_id, text, is_done, unit_count: null, work_type: null });
+  const items = [item("a", "done", "Row 1", false), item("b", "t10", "Row 2: x", false), item("c", "t9", "Row 1: x", true), item("d", "t9", "Row 7: x", false), item("e", "t9", "Count", false)];
+  assert.equal(view.defaultSittingTask(tasks, items), "t10", "row 2 is the lowest undone row of an open task");
+  assert.equal(view.defaultSittingTask(tasks, [item("c", "t9", "Row 1: x", true)]), null);
+});
+
+test("the Pace section's source line: sittings, counted, minutes in the last 14 days, and where the speeds come from", () => {
+  const types = (...sources) => sources.map((source, index) => ({ work_type: `t${index}`, units_total: 10, units_done: 0, units_left: 10, seconds_per_unit: 5, source, n_sessions: 1, label: null, hours_left: 1 }));
+  const line = (forecast, sessionTotal) => view.buildSourceLine(forecast, sessionTotal);
+  assert.equal(line(stubForecast({ work_types: types("measured_sample", "plan_x_ratio") }), 5), "5 sittings logged (3 counted) · 436 min in the last 14 days · speeds from the swatch");
+  assert.match(line(stubForecast({ work_types: types("measured", "measured_sample") }), 5), /speeds from your body rows and the swatch$/);
+  assert.match(line(stubForecast({ work_types: types("other_projects") }), 5), /speeds from your other projects$/);
+  assert.match(line(stubForecast({ work_types: types("plan_x_ratio", "plan") }), 5), /no speeds measured yet \(plan times\)$/);
+  assert.equal(line(stubForecast({ counted_sessions: 0, excluded_sessions: 0, minutes_in_cadence_window: 0, work_types: types("plan") }), 0), "No sittings logged yet");
+  assert.match(line(stubForecast({ counted_sessions: 1, excluded_sessions: 0, work_types: types("measured") }), 1), /^1 sitting logged \(1 counted\) · /);
+});
+
 console.log(`\n${passed} passed${failures.length ? `, ${failures.length} failed` : ""}`);
 if (failures.length) process.exit(1);

@@ -166,6 +166,15 @@ Controls with behaviour (Button, Input) are components; pure-styling primitives 
 - Backfill: `scripts/pace-backfill.mjs` (dry run by default, `--snapshot <file>` or `PACE_BACKFILL_SUPABASE_URL` + `PACE_BACKFILL_SERVICE_ROLE_KEY`; `--apply` to a non-local host needs `--confirm-host`); logic in `src/lib/work-sessions/backfill.ts`.
 - Tests: `npm run test:pace` (pure) and `test:pace-db` (local stack + `PACE_TEST_DB_CONTAINER`; optional `PACE_TEST_SNAPSHOT` runs the backfill acceptance check).
 
+### Pace tracking (slice 2: Portfolio pace line and the project page's Pace section)
+
+- No migration. `pace_settings.size` (validated by `parsePaceSettings()`) gained two optional keys: `perimeter = { task_ids: uuid[], side }` (units on those tasks and rows scale by `(w + side) ÷ (current + side)` and are left out of the linear scaling even when their type is in `work_types`; row 157's sc stays linear) and `gauge = { units, length, length_unit: "in" | "cm" }` (each width and each fit returns its length, 1 decimal; no gauge, no length keys). `update_project` accepts both.
+- `computeForecast()` also returns `sections` (lane projections: a running clock from today walks sections in `planned_start` order, a section with unit work left starts at max(clock, planned_start) and ends `ceil(work ÷ cadence)` days later; `health_basis` is "time" with ≥ 3 counted sittings, else "rows" with `health` null; any unpriced type makes every lane `unknown`/rows; cadence 0 is `behind` with no projected end), `work_types` (every type with total/done/left for the speed table) and `minutes_in_cadence_window`.
+- Words and numbers are pure in `src/lib/pace-view.ts` (`buildPaceLine`, `sourceLabel`, `buildTiles`, `buildSpeedRows`, `buildFitView`, `buildSessionRows`, `buildSourceLine`), pinned by `test:pace`.
+- Portfolio: `loadPortfolioInput` adds `pace` (a forecast per project with a `unit_label`, one service call each; a failure is logged and that project just has no pace line). `buildPortfolio` gives a paced project's lane a `pace` line (chip + sentence), lane chips from the forecast where `health_basis` is "time" (others keep the row-count chip), the project chip from `forecast.health` when it is on_track or behind, `timeline.projected` (dashed tag in the window, or pinned right with "Projected Sep 2027 →"; the window never stretches) and per-lane overrun `tail`s (planned end → projected end, cut at the right edge). Pace never changes counts or percentages.
+- Project page: `ProjectDetail` shows `PaceSection` (`src/components/projects/pace/`) between the header card and the tasks, only when `unit_label` is set. It reads `GET /api/projects/[id]/pace` (`getProjectPace()` in the work-sessions service: forecast, sittings with task + rows, the form's tasks and a default task; UI only, not an MCP route) and writes through `/api/work-sessions` (POST with an `idempotency_key` per form open, PATCH `exclude_from_stats`, DELETE with an inline confirm). Width-that-fits is shown while `size_fit` exists (until the first body row is done). Time and row fixes stay in chat.
+- A PATCH with a new date and no new start/end moves the stored start to that date at the same ET clock time and sets end = start + the (new or old) minutes, so a DST night keeps its length.
+
 ### Local DB test stack
 
 - The DB suites (`test:pace-db`, `test:portfolio-db`, `test:task-owner-db`, `test:briefs*-db`) need a disposable LOCAL Supabase stack. Use the private one checked in at `scripts/test-stack/` (project `mc-pace`, API 58321, DB 58322, migrations symlinked to `supabase/migrations`): `bash scripts/test-stack/up.sh` starts it with only images the installed CLI already has (realtime, studio, storage, mail, edge runtime, analytics and the pooler are off), applies every migration, grants the pre-055 tables to the API roles (a fresh stack doesn't; production does) and writes `scripts/test-stack/.env.local` (git-ignored; never print it). `bash scripts/test-stack/down.sh` stops it and deletes its volumes.
@@ -212,7 +221,8 @@ Controls with behaviour (Button, Input) are components; pure-styling primitives 
 | Task owner fields | `src/lib/task-owner.ts`, `supabase/migrations/056_add_task_owner.sql` |
 | Task page (`/r/task/*`) | `src/components/portfolio/TaskRecordPage.tsx`, `src/lib/task-page.ts` |
 | Section planned dates | `src/lib/project-sections.ts` (`normalizeProjectSectionPlannedDates`), `supabase/migrations/057_add_section_planned_dates.sql` |
-| Pace forecast (pure) | `src/lib/pace.ts` |
+| Pace forecast (pure) | `src/lib/pace.ts`, `src/lib/pace-view.ts` |
+| Pace section (project page) | `src/components/projects/pace/` |
 | Work sessions service / backfill | `src/lib/work-sessions/`, `supabase/migrations/059_add_work_sessions_and_units.sql` |
 | EOD routine prompt | `docs/routines/eod.md` |
 

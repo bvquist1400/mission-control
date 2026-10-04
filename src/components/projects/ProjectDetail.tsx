@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ProjectTaskSectionsPanel } from "@/components/projects/ProjectTaskSectionsPanel";
+import { PaceSection } from "@/components/projects/pace/PaceSection";
 import { DEFAULT_PROJECT_STAGE, normalizeProjectStage } from "@/lib/project-stage";
 import { dateOnlyToInputValue, formatDateOnly } from "@/components/utils/dates";
 import { ProjectStageBadge } from "@/components/ui/ProjectStageBadge";
@@ -360,6 +361,9 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
           )}
         </div>
       </section>
+
+      {/* ── Pace Section: only for a project that counts units (e.g. stitches) ── */}
+      {project.unit_label ? <PaceSection projectId={id} /> : null}
 
       {/* ── Tasks Section ── */}
       <section className={cardClasses()}>

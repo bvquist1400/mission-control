@@ -1,6 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { isOpenTask, type ChecklistProgress, type PortfolioInput, type PortfolioTaskRow } from "@/lib/portfolio";
+import type { PaceForecast } from "@/lib/pace";
 import { fetchTaskDependencySummaries } from "@/lib/task-dependencies";
+import { getProjectForecast } from "@/lib/work-sessions/service";
 
 const TASK_COLUMNS =
   "id, title, status, owner, owner_label, status_line, due_at, created_at, updated_at, priority_score, implementation_id, project_id, section_id, is_recurring_template, tags, waiting_on, blocked_reason, follow_up_at, project:projects(tags)";
@@ -70,7 +72,43 @@ function single<T>(value: T | T[] | null | undefined): T | null {
   return value ?? null;
 }
 
-export async function loadPortfolioInput(supabase: SupabaseClient, userId: string): Promise<PortfolioInput> {
+export interface PortfolioQueryDeps {
+  /** The forecast for one project (default: the work-sessions service). Injected in tests. */
+  getForecast?: (
+    supabase: SupabaseClient,
+    userId: string,
+    projectId: string
+  ) => Promise<{ forecast: PaceForecast }>;
+}
+
+/**
+ * Forecasts for the projects that count units (`unit_label`), one service call each. Pace only adds to the
+ * page, so a failing forecast is logged and that project simply has no pace line.
+ */
+export async function loadPortfolioPace(
+  supabase: SupabaseClient,
+  userId: string,
+  projects: Array<{ id: string; unit_label?: string | null }>,
+  deps: PortfolioQueryDeps = {}
+): Promise<Record<string, PaceForecast>> {
+  const getForecast = deps.getForecast ?? ((client, user, projectId) => getProjectForecast(client, user, projectId));
+  const pace: Record<string, PaceForecast> = {};
+  for (const project of projects) {
+    if (!project.unit_label) continue;
+    try {
+      pace[project.id] = (await getForecast(supabase, userId, project.id)).forecast;
+    } catch (error) {
+      console.error(`[portfolio] failed to load the pace forecast for project ${project.id}; showing it without pace:`, error);
+    }
+  }
+  return pace;
+}
+
+export async function loadPortfolioInput(
+  supabase: SupabaseClient,
+  userId: string,
+  deps: PortfolioQueryDeps = {}
+): Promise<PortfolioInput> {
   const tasks: PortfolioTaskRow[] = [];
   for (let page = 0; page < MAX_PAGES; page += 1) {
     const from = page * PAGE_SIZE;
@@ -95,7 +133,7 @@ export async function loadPortfolioInput(supabase: SupabaseClient, userId: strin
       .eq("user_id", userId),
     supabase
       .from("projects")
-      .select("id, name, implementation_id, stage, portfolio_rank, target_date, tags")
+      .select("id, name, implementation_id, stage, portfolio_rank, target_date, tags, unit_label")
       .eq("user_id", userId),
     supabase
       .from("project_sections")
@@ -113,12 +151,14 @@ export async function loadPortfolioInput(supabase: SupabaseClient, userId: strin
   if (projects.error) throw projects.error;
   if (sections.error) throw sections.error;
 
+  const projectRows = projects.data ?? [];
   return {
     tasks,
     implementations: implementations.data ?? [],
-    projects: projects.data ?? [],
+    projects: projectRows,
     sections: sections.data ?? [],
     blockers,
     checklist,
+    pace: await loadPortfolioPace(supabase, userId, projectRows, deps),
   };
 }

@@ -3088,6 +3088,72 @@
                             "type": "string"
                           },
                           "description": "Work types whose units scale with the size"
+                        },
+                        "perimeter": {
+                          "description": "Scale the border by the perimeter instead of by width alone; null clears",
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "task_ids": {
+                                  "minItems": 1,
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "description": "Task UUIDs whose units (and rows) scale with the perimeter, e.g. the border rounds"
+                                },
+                                "side": {
+                                  "type": "number",
+                                  "exclusiveMinimum": 0,
+                                  "description": "The side edge in size units: those tasks scale by (width + side) ÷ (current + side) instead of linearly, e.g. 318 for a blanket whose border is about 2 × (195 + 318)"
+                                }
+                              },
+                              "required": [
+                                "task_ids",
+                                "side"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "gauge": {
+                          "description": "Stitch gauge from the swatch (e.g. 18 stitches per 4 in): with it set, each width also returns its length; null clears",
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "units": {
+                                  "type": "number",
+                                  "exclusiveMinimum": 0,
+                                  "description": "Stitches (or other units) in the gauge square, e.g. 18"
+                                },
+                                "length": {
+                                  "type": "number",
+                                  "exclusiveMinimum": 0,
+                                  "description": "The length they measure, e.g. 4"
+                                },
+                                "length_unit": {
+                                  "type": "string",
+                                  "enum": [
+                                    "in",
+                                    "cm"
+                                  ],
+                                  "description": "\"in\" or \"cm\""
+                                }
+                              },
+                              "required": [
+                                "units",
+                                "length",
+                                "length_unit"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [

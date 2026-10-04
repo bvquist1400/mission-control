@@ -6,6 +6,8 @@ import {
   type TaskScope,
 } from "@/lib/personal-exclusion";
 import { isDecisionTask } from "@/lib/task-handoff";
+import type { PaceForecast } from "@/lib/pace";
+import { buildPaceLine, formatMonthYear, type PaceChip } from "@/lib/pace-view";
 import type { TaskOwner, TaskStatus } from "@/types/database";
 
 /**
@@ -63,6 +65,8 @@ export interface PortfolioProjectRow {
   target_date?: string | null;
   /** Project tags: a `personal` project with no application gets its own lane. */
   tags?: string[] | null;
+  /** Pace tracking (migration 059): what the project counts, e.g. "stitches". Only these projects get a pace line. */
+  unit_label?: string | null;
 }
 
 export interface PortfolioSectionRow {
@@ -97,6 +101,12 @@ export interface PortfolioInput {
    * fill; a missing entry means no checklist (so no partial credit).
    */
   checklist?: Record<string, ChecklistProgress>;
+  /**
+   * Pace forecasts by project id, for projects with a `unit_label` (src/lib/pace.ts). They add a pace line,
+   * time-based chips for lanes with stitch work left, the projected-finish marker and overrun tails, and
+   * they set the project's health once it has enough counted sittings. They never change counts or percentages.
+   */
+  pace?: Record<string, PaceForecast>;
 }
 
 export interface TaskCounts {
@@ -157,6 +167,33 @@ export interface TimelineLane {
   /** credit ÷ total, 0–1 (0 when there are no tasks): the fill. */
   share: number;
   health: LaneHealth;
+  /** Set when the chip comes from the pace forecast (time basis) instead of the row count. */
+  pace: LanePace | null;
+}
+
+/** Overrun tail, in percent of the chart: from the lane's planned end to its projected end. */
+export interface LaneTail {
+  left: number;
+  width: number;
+  /** The projected end is past the chart's right edge, so the tail stops there with an arrow. */
+  cut: boolean;
+}
+
+export interface LanePace {
+  /** ET date the lane is projected to finish at the current pace; null with no pace at all. */
+  projectedEnd: string | null;
+  /** Null when the lane is projected to finish on time. */
+  tail: LaneTail | null;
+}
+
+/** The projected-finish tag on the axis: at its date, or pinned to the right edge with an arrow. */
+export interface TimelineProjected {
+  date: string;
+  /** "Projected Nov 15", or "Projected Sep 2027 →" past the edge. */
+  label: string;
+  /** 0–100; 100 when it is off the edge. */
+  left: number;
+  offEdge: boolean;
 }
 
 /** A section kept off the chart: finished, or with no planned window. Listed under the chart. */
@@ -205,6 +242,8 @@ export interface Timeline {
   earlier: EarlierLane[];
   /** The target marker, only when its date falls inside the chart window. */
   target: TimelineTarget | null;
+  /** The projected-finish tag from the pace forecast; the window never stretches to hold it. */
+  projected: TimelineProjected | null;
   /** null when the app has no target date and no planned section. */
   summary: TimelineSummary | null;
 }
@@ -249,6 +288,15 @@ export interface PortfolioApp {
   next: string | null;
   agentLabels: string[];
   timeline: Timeline;
+  /** The strip under the status line, for a lane whose project counts units; null otherwise. */
+  pace: PortfolioPaceLine | null;
+}
+
+export interface PortfolioPaceLine {
+  projectId: string;
+  chip: PaceChip;
+  text: string;
+  separator: boolean;
 }
 
 export interface PortfolioView {
@@ -455,6 +503,9 @@ interface LaneSummaryData {
   start: string;
   end: string;
   health: LaneHealth | null;
+  /** The project and section it was built from (for the pace overlay). */
+  projectId: string | null;
+  sectionId: string | null;
 }
 
 function summarizeLane(
@@ -464,7 +515,8 @@ function summarizeLane(
   tasks: PortfolioTaskRow[],
   today: string,
   plan: PlannedWindow,
-  checklist: PortfolioInput["checklist"] = {}
+  checklist: PortfolioInput["checklist"] = {},
+  origin: { projectId: string | null; sectionId: string | null } = { projectId: null, sectionId: null }
 ): LaneSummaryData {
   const open = tasks.filter(isOpenTask);
   const done = tasks.filter((task) => task.status === "Done").length;
@@ -496,6 +548,8 @@ function summarizeLane(
     start,
     end,
     health: scheduled ? laneHealth({ done, credit, total: tasks.length, open: open.length, start, end, today }) : null,
+    projectId: origin.projectId,
+    sectionId: origin.sectionId,
   };
 }
 
@@ -555,7 +609,8 @@ export function buildTimeline(
   projects: PortfolioProjectRow[],
   sections: PortfolioSectionRow[],
   today: string,
-  checklist: PortfolioInput["checklist"] = {}
+  checklist: PortfolioInput["checklist"] = {},
+  pace: Record<string, PaceForecast> = {}
 ): Timeline {
   const projectById = new Map(projects.map((project) => [project.id, project]));
   const sectionById = new Map(sections.map((section) => [section.id, section]));
@@ -625,7 +680,8 @@ export function buildTimeline(
         group.tasks,
         today,
         plan,
-        checklist
+        checklist,
+        { projectId: group.projectId, sectionId: section?.id ?? null }
       );
     });
 
@@ -645,7 +701,20 @@ export function buildTimeline(
     credit: lane.credit,
     share: lane.total > 0 ? Math.min(lane.credit / lane.total, 1) : 0,
     health: lane.health!,
+    pace: null,
   }));
+  // Lanes with stitch work left take their chip from the forecast once the project has enough counted
+  // sittings (the section's health_basis is "time"); every other lane keeps the row-count chip.
+  const timedProjection = new Map<string, NonNullable<ReturnType<typeof findProjection>>>();
+  summaries.filter(onChart).forEach((summary, index) => {
+    const projection = findProjection(pace, summary.projectId, summary.sectionId);
+    if (!projection) return;
+    const lane = lanes[index];
+    timedProjection.set(lane.key, projection);
+    lane.health = projection.health === "behind" ? { kind: "behind", label: "Behind" } : { kind: "ok", label: "On track" };
+    // The "Starts 10/19" chip is replaced, so a lane that hasn't started says so in its sub-line.
+    if (lane.start > today) lane.sub = `${lane.sub} · starts ${formatTick(lane.start)}`;
+  });
   const earlier: EarlierLane[] = summaries
     .filter((lane) => !onChart(lane))
     .map((lane) => ({
@@ -694,9 +763,58 @@ export function buildTimeline(
     if (targetDate) parts.push(`Target ${formatTick(targetDate)}`);
     if (total > 0) parts.push(`${done} of ${total} tasks done${hasPartialCredit(done, credit) ? " + partial" : ""}`);
     summary = { health: appHealth(lanes), targetDate, line: parts.join(" · "), done, total, credit };
+    // The project's health follows its forecast once it has enough counted sittings (on_track or behind).
+    const forecasts = [...projectIds].map((id) => (id ? pace[id] : undefined)).filter((forecast): forecast is PaceForecast => Boolean(forecast));
+    const decided = forecasts.filter((forecast) => forecast.health === "on_track" || forecast.health === "behind");
+    if (decided.length > 0) {
+      summary.health = decided.some((forecast) => forecast.health === "behind")
+        ? { kind: "behind", label: "Behind" }
+        : { kind: "ok", label: "On track" };
+    }
   }
 
-  return { start, end, today, ticks, lanes, earlier, target, summary };
+  const chartWindow = { start, end };
+  // Overrun tails: from each timed lane's planned end to its projected end, cut at the chart's right edge.
+  for (const lane of lanes) {
+    const projection = timedProjection.get(lane.key);
+    if (!projection) continue;
+    let tail: LaneTail | null = null;
+    if (projection.projected_end && projection.projected_end > lane.end) {
+      const left = timelinePosition(chartWindow, lane.end, 1);
+      const cut = projection.projected_end > end;
+      const right = cut ? 100 : timelinePosition(chartWindow, projection.projected_end, 1);
+      tail = { left, width: Math.max(right - left, 0), cut };
+    }
+    lane.pace = { projectedEnd: projection.projected_end, tail };
+  }
+
+  // The projected-finish tag (a paced project's forecast): at its date, or pinned to the edge with an arrow.
+  let projected: TimelineProjected | null = null;
+  if (lanes.length > 0) {
+    const finish = [...projectIds]
+      .map((id) => (id ? pace[id]?.projected_finish ?? null : null))
+      .find((date): date is string => Boolean(date));
+    if (finish) {
+      const offEdge = finish > end;
+      projected = {
+        date: finish,
+        label: offEdge ? `Projected ${formatMonthYear(finish)} →` : `Projected ${formatShortDate(finish)}`,
+        left: offEdge ? 100 : timelinePosition(chartWindow, finish, 0.5),
+        offEdge,
+      };
+    }
+  }
+
+  return { start, end, today, ticks, lanes, earlier, target, projected, summary };
+}
+
+/** A section's projection from the forecast, when its chip should follow the forecast (time basis, on_track or behind). */
+function findProjection(pace: Record<string, PaceForecast>, projectId: string | null, sectionId: string | null) {
+  if (!projectId || !sectionId) return null;
+  const projection = pace[projectId]?.sections?.find((entry) => entry.section_id === sectionId);
+  if (!projection || projection.health_basis !== "time") return null;
+  if (projection.health !== "on_track" && projection.health !== "behind") return null;
+  return projection;
 }
 
 /**
@@ -767,6 +885,17 @@ export function buildPortfolio(
   const implementationById = new Map(input.implementations.map((impl) => [impl.id, impl]));
   const blockers = input.blockers ?? {};
   const checklist = input.checklist ?? {};
+  // Only projects that count units get pace: a forecast for any other project is ignored.
+  const pace: Record<string, PaceForecast> = {};
+  for (const project of input.projects) {
+    const forecast = input.pace?.[project.id];
+    if (project.unit_label && forecast) pace[project.id] = forecast;
+  }
+  const paceLineFor = (projects: PortfolioProjectRow[]): PortfolioPaceLine | null => {
+    const project = projects.find((entry) => pace[entry.id]);
+    if (!project) return null;
+    return { projectId: project.id, ...buildPaceLine(pace[project.id]) };
+  };
   const appName = (task: PortfolioTaskRow) =>
     task.implementation_id ? implementationById.get(task.implementation_id)?.name ?? null : null;
 
@@ -803,8 +932,10 @@ export function buildPortfolio(
           input.projects.filter((project) => project.implementation_id === id),
           input.sections,
           today,
-          checklist
+          checklist,
+          pace
         ),
+        pace: null,
       };
       return { app, rank: impl.portfolio_rank };
     })
@@ -850,8 +981,10 @@ export function buildPortfolio(
           [project],
           input.sections.filter((section) => section.project_id === project.id),
           today,
-          checklist
+          checklist,
+          pace
         ),
+        pace: paceLineFor([project]),
       });
     }
   }

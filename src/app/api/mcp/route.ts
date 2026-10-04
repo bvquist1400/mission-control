@@ -1076,7 +1076,7 @@ function createMcpServer(): McpServer {
 
   mcp.tool(
     'get_project_forecast',
-    'Get the pace forecast for a project that tracks units (e.g. stitches): speed per work type with where it came from (measured, measured_sample = from a swatch, other projects, plan × your pace, plan), time left, cadence (minutes per day over the last 14 days), minutes per day needed to hit the target date, projected finish, health, and (when the project has a size setting and the main piece is not started) the widest size that fits by the target date at several minutes per day. Use it for "am I on pace?" or "how wide can I make it?".',
+    'Get the pace forecast for a project that tracks units (e.g. stitches): speed per work type with where it came from (measured, measured_sample = from a swatch, other projects, plan × your pace, plan), time left, cadence (minutes per day over the last 14 days), minutes per day needed to hit the target date, projected finish, health, and (when the project has a size setting and the main piece is not started) the widest size that fits by the target date at several minutes per day (with a gauge set, also its length in inches or centimetres), and a projection per planned section (`sections`: projected end and on_track/behind against its planned end, from three counted sittings). Use it for "am I on pace?" or "how wide can I make it?".',
     {
       project_id: z.string().describe('Project UUID'),
       today: z.string().optional().describe('ET date to compute as of (YYYY-MM-DD); default today'),
@@ -1543,6 +1543,15 @@ function createMcpServer(): McpServer {
           min: z.number().int().positive().describe('Smallest size worth considering, e.g. 27'),
           unit: z.string().describe('The size unit, e.g. "stitches"'),
           work_types: z.array(z.string()).min(1).describe('Work types whose units scale with the size'),
+          perimeter: z.object({
+            task_ids: z.array(z.string()).min(1).describe('Task UUIDs whose units (and rows) scale with the perimeter, e.g. the border rounds'),
+            side: z.number().positive().describe('The side edge in size units: those tasks scale by (width + side) ÷ (current + side) instead of linearly, e.g. 318 for a blanket whose border is about 2 × (195 + 318)'),
+          }).nullable().optional().describe('Scale the border by the perimeter instead of by width alone; null clears'),
+          gauge: z.object({
+            units: z.number().positive().describe('Stitches (or other units) in the gauge square, e.g. 18'),
+            length: z.number().positive().describe('The length they measure, e.g. 4'),
+            length_unit: z.enum(['in', 'cm']).describe('"in" or "cm"'),
+          }).nullable().optional().describe('Stitch gauge from the swatch (e.g. 18 stitches per 4 in): with it set, each width also returns its length; null clears'),
         }).nullable().optional(),
       }).nullable().optional().describe('Pace tracking settings; null clears'),
     },

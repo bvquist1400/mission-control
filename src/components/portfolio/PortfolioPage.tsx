@@ -5,6 +5,7 @@ import {
   timelinePosition,
   type LaneHealth,
   type PortfolioApp,
+  type PortfolioPaceLine,
   type PortfolioView,
   type TaskCounts,
   type Timeline,
@@ -61,12 +62,23 @@ function HealthChip({ health }: { health: LaneHealth }) {
   return <span className={`pf-hc ${health.kind}`}>{health.label}</span>;
 }
 
+/** The strip under a lane's status line: the health chip, then one sentence about speed and what the plan needs. */
+function PaceLine({ pace }: { pace: PortfolioPaceLine }) {
+  return (
+    <span className="pf-pace" data-testid="pace-line">
+      <span className={`pf-hc ${pace.chip.kind}`}>{pace.chip.label}</span>
+      {pace.separator ? <span aria-hidden="true">·</span> : null}
+      <span>{pace.text}</span>
+    </span>
+  );
+}
+
 function dateRange(start: string, end: string): string {
   return start === end ? formatTick(start) : `${formatTick(start)} – ${formatTick(end)}`;
 }
 
 function TimelineChart({ timeline, appId }: { timeline: Timeline; appId: string }) {
-  const { lanes, earlier, target } = timeline;
+  const { lanes, earlier, target, projected } = timeline;
   // With nothing drawn, the list is all there is to see, so it starts open.
   const earlierList =
     earlier.length > 0 ? (
@@ -108,7 +120,7 @@ function TimelineChart({ timeline, appId }: { timeline: Timeline; appId: string 
       <div className="pf-chart" role="group" aria-label="Timeline">
         <div className="pf-lane-row pf-axis-row" aria-hidden="true">
           <div className="pf-lbl-gap" />
-          <div className="pf-axis">
+          <div className={`pf-axis${projected ? " has-proj" : ""}`}>
             {target && targetLeft !== null ? (
               <span className={`pf-ms target${edge(targetLeft)}`} style={{ left: `${targetLeft}%` }}>
                 <b />
@@ -119,6 +131,19 @@ function TimelineChart({ timeline, appId }: { timeline: Timeline; appId: string 
               <b />
               <em>Today</em>
             </span>
+            {projected ? (
+              <span
+                className={`pf-ms proj${projected.offEdge ? " off" : edge(projected.left)}`}
+                style={projected.offEdge ? undefined : { left: `${projected.left}%` }}
+                title={
+                  projected.offEdge
+                    ? `Projected finish ${formatTick(projected.date)} at your pace, past the right edge of the chart`
+                    : `Projected finish ${formatTick(projected.date)} at your pace`
+                }
+              >
+                <em>{projected.label}</em>
+              </span>
+            ) : null}
             <div className="pf-ticks">
               {timeline.ticks.map((tick, index) => {
                 const left = timelinePosition(timeline, tick);
@@ -141,7 +166,12 @@ function TimelineChart({ timeline, appId }: { timeline: Timeline; appId: string 
           const right = timelinePosition(timeline, lane.end, 1);
           const range = dateRange(lane.start, lane.end);
           const name = lane.project ? `${lane.project} · ${lane.label}` : lane.label;
-          const summary = `${name}: ${lane.health.label}, ${lane.done} of ${lane.total} done${hasPartialCredit(lane.done, lane.credit) ? " plus partly ticked checklists" : ""}, planned ${range}`;
+          const projectedNote = lane.pace?.projectedEnd
+            ? `, projected to finish ${formatTick(lane.pace.projectedEnd)} at your pace`
+            : lane.pace
+              ? ", no pace yet"
+              : "";
+          const summary = `${name}: ${lane.health.label}, ${lane.done} of ${lane.total} done${hasPartialCredit(lane.done, lane.credit) ? " plus partly ticked checklists" : ""}, planned ${range}${projectedNote}`;
           return (
             <div className="pf-lane-row" key={`${appId}-${lane.key}`}>
               <div className="pf-lbl">
@@ -169,6 +199,14 @@ function TimelineChart({ timeline, appId }: { timeline: Timeline; appId: string 
                 >
                   <span className="pf-fill" style={{ width: `${lane.share * 100}%` }} />
                 </span>
+                {lane.pace?.tail ? (
+                  <span
+                    className={`pf-tail${lane.pace.tail.cut ? " cut" : ""}`}
+                    style={{ left: `${lane.pace.tail.left}%`, width: `${lane.pace.tail.width}%` }}
+                    title={`Projected end ${lane.pace.projectedEnd ? formatTick(lane.pace.projectedEnd) : ""} at your pace${lane.pace.tail.cut ? " (past the right edge of the chart)" : ""}`}
+                    aria-hidden="true"
+                  />
+                ) : null}
                 <span className="pf-today" style={{ left: `${todayLeft}%` }} aria-hidden="true" />
               </div>
             </div>
@@ -211,6 +249,7 @@ function AppRow({ app, open }: { app: PortfolioApp; open: boolean }) {
         <div className="pf-stand">
           {app.stand ?? <span className="pf-muted">No status yet.</span>}
           {app.next ? <span className="pf-next">Next: {app.next}</span> : null}
+          {app.pace ? <PaceLine pace={app.pace} /> : null}
           {app.timeline.summary ? (
             <span className="pf-hline">
               {app.timeline.summary.health ? <HealthChip health={app.timeline.summary.health} /> : null}
@@ -236,6 +275,7 @@ function AppRow({ app, open }: { app: PortfolioApp; open: boolean }) {
 export function PortfolioPage({ view }: { view: PortfolioView }) {
   const { overall } = view;
   const needs = view.brentOpen;
+  const showPaceLegend = view.apps.some((app) => app.timeline.projected || app.timeline.lanes.some((lane) => lane.pace?.tail));
   const appLanes = view.apps.filter((app) => app.kind === "app");
   const projectLanes = view.apps.filter((app) => app.kind === "project");
   return (
@@ -350,6 +390,8 @@ export function PortfolioPage({ view }: { view: PortfolioView }) {
             <span><i className="st-fill" />Planned window, filled by progress</span>
             <span><i className="st-today" />Today</span>
             <span><i className="st-target" />Target date</span>
+            {showPaceLegend ? <span><i className="st-proj" />Projected finish at your pace</span> : null}
+            {showPaceLegend ? <span><i className="st-tail" />Running past its planned end</span> : null}
           </div>
         </section>
 
@@ -358,7 +400,10 @@ export function PortfolioPage({ view }: { view: PortfolioView }) {
           its ticked checklist items ÷ its items (3 of 14 ticked is 3/14 of that task; no checklist, nothing yet). The
           &quot;done&quot; counts stay whole tasks. Each bar is a section&apos;s planned window, filled the same way. Green is on track or ahead, amber is behind (progress more than a quarter
           short of the share of the window that has passed), red is past its planned end with work open, and grey has not
-          started. Finished sections and sections with no planned dates are listed under the chart.
+          started. Finished sections and sections with no planned dates are listed under the chart. For a project that counts
+          stitches (or other units), a lane with units left shows On track or Behind from your logged pace once there are
+          three counted sittings: its projected end against its planned end. A dashed amber tail shows a lane running past
+          its planned end, cut at the chart edge with an arrow when it runs off the chart.
         </p>
       </div>
     </TaskEditorLayer>
