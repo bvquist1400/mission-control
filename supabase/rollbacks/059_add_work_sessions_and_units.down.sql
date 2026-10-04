@@ -1,6 +1,19 @@
--- Rolls back 059. Drops every session (and its links) and the unit columns.
--- tasks.actual_minutes keeps whatever the rollup last wrote.
+-- Rolls back 059. Drops every session (and its links), the session functions,
+-- the triggers and the unit columns.
+--
+-- Contract (decided in fix round 1, not a bug): tasks.actual_minutes KEEPS the
+-- value the session rollup last wrote. The value a task had before its first
+-- session is not stored anywhere, so it is not restored; re-applying 059 does
+-- not recompute it either. test:pace-db pins this ("rollback after sessions exist").
 BEGIN;
+
+DROP TRIGGER IF EXISTS trg_tasks_guard_project_move ON tasks;
+DROP FUNCTION IF EXISTS tasks_guard_project_move_with_sessions();
+DROP FUNCTION IF EXISTS work_session_create(UUID, JSONB, UUID[], BOOLEAN);
+DROP FUNCTION IF EXISTS work_session_update(UUID, UUID, JSONB, UUID[]);
+DROP FUNCTION IF EXISTS work_session_delete(UUID, UUID);
+DROP FUNCTION IF EXISTS work_sessions_out_of_scope_items(UUID, UUID, UUID[]);
+DROP FUNCTION IF EXISTS work_sessions_assert_caller(UUID);
 
 DROP TABLE IF EXISTS work_session_items;
 DROP TABLE IF EXISTS work_sessions;

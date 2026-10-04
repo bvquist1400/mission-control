@@ -2644,6 +2644,36 @@ export type Database = {
           template_id: string
         }[]
       }
+      work_session_create: {
+        Args: {
+          p_item_ids?: string[]
+          p_mark_done?: boolean
+          p_session: Json
+          p_user_id: string
+        }
+        Returns: Json
+      }
+      work_session_delete: {
+        Args: { p_session_id: string; p_user_id: string }
+        Returns: Json
+      }
+      work_session_update: {
+        Args: {
+          p_changes: Json
+          p_item_ids?: string[]
+          p_session_id: string
+          p_user_id: string
+        }
+        Returns: Json
+      }
+      work_sessions_assert_caller: {
+        Args: { p_user_id: string }
+        Returns: undefined
+      }
+      work_sessions_out_of_scope_items: {
+        Args: { p_item_ids: string[]; p_project_id: string; p_user_id: string }
+        Returns: string[]
+      }
     }
     Enums: {
       blocked_reason:

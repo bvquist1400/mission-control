@@ -8,8 +8,11 @@
 -- migration only stores the facts.
 --
 -- Additive only: every new column is nullable or has a default, so existing
--- rows and every existing insert are unchanged. Nothing outside the new pace
--- routes / MCP tools reads sessions; tasks.actual_minutes (rolled up from
+-- rows and every existing insert are unchanged. One new rule on existing data:
+-- a task with logged sessions can't change project (trg_tasks_guard_project_move).
+-- Rollback contract: the down file keeps tasks.actual_minutes as last rolled up
+-- from sessions (the earlier value is not recoverable and is not restored).
+-- Nothing outside the new pace routes / MCP tools reads sessions; tasks.actual_minutes (rolled up from
 -- sessions below) was already read by the capacity estimate, whose callers all
 -- filter out personal tasks.
 
@@ -192,27 +195,42 @@ CREATE TRIGGER trg_work_session_items_project
 -- tasks.actual_minutes = the sum of its sessions' minutes (NULL once it has
 -- none left). Sessions with task_id NULL don't roll up. Only writes when the
 -- value changes, so an unrelated session edit doesn't touch the task row.
+--
+-- Concurrency: the affected task rows are locked first, in id order, and only
+-- then summed. Two transactions logging time for the same task serialise on
+-- that lock, and because each SUM is a new statement (READ COMMITTED, the
+-- PostgREST default) it sees every session committed before the lock was
+-- granted, so neither total loses the other's minutes. NO KEY UPDATE doesn't
+-- conflict with the KEY SHARE lock a session insert's foreign key check takes.
 CREATE OR REPLACE FUNCTION work_sessions_rollup_actual_minutes()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 SET search_path = public
 AS $$
 DECLARE
-  affected UUID;
+  affected UUID[];
+  task_ref UUID;
   total INTEGER;
 BEGIN
-  FOR affected IN
-    SELECT DISTINCT task_ref FROM (
-      SELECT CASE WHEN TG_OP IN ('INSERT', 'UPDATE') THEN NEW.task_id END AS task_ref
-      UNION ALL
-      SELECT CASE WHEN TG_OP IN ('UPDATE', 'DELETE') THEN OLD.task_id END
-    ) refs
-    WHERE task_ref IS NOT NULL
-  LOOP
-    SELECT SUM(minutes)::INTEGER INTO total FROM work_sessions WHERE task_id = affected;
+  SELECT array_agg(DISTINCT ref ORDER BY ref) INTO affected
+  FROM (
+    SELECT CASE WHEN TG_OP IN ('INSERT', 'UPDATE') THEN NEW.task_id END AS ref
+    UNION ALL
+    SELECT CASE WHEN TG_OP IN ('UPDATE', 'DELETE') THEN OLD.task_id END
+  ) refs
+  WHERE ref IS NOT NULL;
+
+  IF affected IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  PERFORM 1 FROM tasks WHERE id = ANY (affected) ORDER BY id FOR NO KEY UPDATE;
+
+  FOREACH task_ref IN ARRAY affected LOOP
+    SELECT SUM(minutes)::INTEGER INTO total FROM work_sessions WHERE task_id = task_ref;
     UPDATE tasks
       SET actual_minutes = total
-      WHERE id = affected
+      WHERE id = task_ref
         AND actual_minutes IS DISTINCT FROM total;
   END LOOP;
 
@@ -229,6 +247,234 @@ DROP TRIGGER IF EXISTS trg_work_sessions_updated ON work_sessions;
 CREATE TRIGGER trg_work_sessions_updated
   BEFORE UPDATE ON work_sessions
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+
+-- A task whose sessions or linked rows live in its project can't move to
+-- another project (or out of it): the stored sessions would point across
+-- projects. Delete or move those sessions first. A project being deleted
+-- (ON DELETE SET NULL on tasks.project_id) is allowed: its sessions go with it.
+CREATE OR REPLACE FUNCTION tasks_guard_project_move_with_sessions()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+BEGIN
+  IF NEW.project_id IS NOT DISTINCT FROM OLD.project_id THEN
+    RETURN NEW;
+  END IF;
+  IF NEW.project_id IS NULL AND NOT EXISTS (SELECT 1 FROM projects WHERE id = OLD.project_id) THEN
+    RETURN NEW;
+  END IF;
+  IF EXISTS (SELECT 1 FROM work_sessions WHERE task_id = OLD.id)
+     OR EXISTS (
+       SELECT 1
+       FROM work_session_items wsi
+       JOIN task_checklist_items i ON i.id = wsi.checklist_item_id
+       WHERE i.task_id = OLD.id
+     ) THEN
+    RAISE EXCEPTION 'This task has logged work sessions in its project; delete or move those sessions before moving the task to another project'
+      USING ERRCODE = '55006';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_tasks_guard_project_move ON tasks;
+CREATE TRIGGER trg_tasks_guard_project_move
+  BEFORE UPDATE OF project_id ON tasks
+  FOR EACH ROW EXECUTE FUNCTION tasks_guard_project_move_with_sessions();
+
+-- ── Session writes: one function per operation, so a failure anywhere (a
+-- row out of scope, a lost race, a constraint) leaves the previous state.
+-- SECURITY INVOKER: RLS applies to user clients; service-role callers are
+-- scoped by p_user_id. The triggers above still run inside each call.
+
+CREATE OR REPLACE FUNCTION work_sessions_assert_caller(p_user_id UUID)
+RETURNS VOID
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+BEGIN
+  IF p_user_id IS NULL THEN
+    RAISE EXCEPTION 'user id is required' USING ERRCODE = '22023';
+  END IF;
+  IF auth.uid() IS NOT NULL AND auth.uid() <> p_user_id THEN
+    RAISE EXCEPTION 'cannot write work sessions for another user' USING ERRCODE = '42501';
+  END IF;
+END;
+$$;
+
+-- Checklist rows that are not the user's or not in a task of the project.
+CREATE OR REPLACE FUNCTION work_sessions_out_of_scope_items(p_user_id UUID, p_project_id UUID, p_item_ids UUID[])
+RETURNS UUID[]
+LANGUAGE sql
+STABLE
+SET search_path = public
+AS $$
+  SELECT COALESCE(array_agg(x.id), '{}'::uuid[])
+  FROM unnest(COALESCE(p_item_ids, '{}'::uuid[])) AS x(id)
+  WHERE NOT EXISTS (
+    SELECT 1
+    FROM task_checklist_items i
+    JOIN tasks t ON t.id = i.task_id
+    WHERE i.id = x.id
+      AND i.user_id = p_user_id
+      AND t.user_id = p_user_id
+      AND t.project_id = p_project_id
+  );
+$$;
+
+-- Insert a session, link its rows and (optionally) tick them, all or nothing.
+-- p_session keys: project_id, task_id, session_date, started_at, ended_at,
+-- minutes, extra_units, extra_work_type, note, exclude_from_stats,
+-- exclude_reason, source, source_ref. Ticked rows get completed_at = ended_at
+-- (or now() when the session has no end time).
+CREATE OR REPLACE FUNCTION work_session_create(
+  p_user_id UUID,
+  p_session JSONB,
+  p_item_ids UUID[] DEFAULT '{}',
+  p_mark_done BOOLEAN DEFAULT true
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+DECLARE
+  v work_sessions%ROWTYPE;
+  v_id UUID;
+  v_bad UUID[];
+  v_marked INTEGER := 0;
+BEGIN
+  PERFORM work_sessions_assert_caller(p_user_id);
+  IF EXISTS (
+    SELECT 1 FROM jsonb_object_keys(COALESCE(p_session, '{}'::jsonb)) AS k(key)
+    WHERE k.key NOT IN ('project_id', 'task_id', 'session_date', 'started_at', 'ended_at', 'minutes', 'extra_units',
+                        'extra_work_type', 'note', 'exclude_from_stats', 'exclude_reason', 'source', 'source_ref')
+  ) THEN
+    RAISE EXCEPTION 'unknown work session field' USING ERRCODE = '22023';
+  END IF;
+  v := jsonb_populate_record(NULL::work_sessions, p_session);
+
+  v_bad := work_sessions_out_of_scope_items(p_user_id, v.project_id, p_item_ids);
+  IF cardinality(v_bad) > 0 THEN
+    RAISE EXCEPTION 'checklist items not in this project: %', array_to_string(v_bad, ', ')
+      USING ERRCODE = '23503';
+  END IF;
+
+  INSERT INTO work_sessions (
+    user_id, project_id, task_id, session_date, started_at, ended_at, minutes, extra_units, extra_work_type,
+    note, exclude_from_stats, exclude_reason, source, source_ref
+  ) VALUES (
+    p_user_id, v.project_id, v.task_id, v.session_date, v.started_at, v.ended_at, v.minutes, v.extra_units, v.extra_work_type,
+    v.note, COALESCE(v.exclude_from_stats, false), v.exclude_reason, COALESCE(v.source, 'manual'), v.source_ref
+  )
+  RETURNING id INTO v_id;
+
+  INSERT INTO work_session_items (session_id, checklist_item_id, user_id)
+  SELECT DISTINCT v_id, item_id, p_user_id FROM unnest(COALESCE(p_item_ids, '{}'::uuid[])) AS item_id;
+
+  IF p_mark_done THEN
+    UPDATE task_checklist_items
+      SET is_done = true, completed_at = v.ended_at
+      WHERE id = ANY (COALESCE(p_item_ids, '{}'::uuid[]))
+        AND user_id = p_user_id
+        AND NOT is_done;
+    GET DIAGNOSTICS v_marked = ROW_COUNT;
+  END IF;
+
+  RETURN jsonb_build_object('session_id', v_id, 'marked_done', v_marked);
+END;
+$$;
+
+-- Change a session; p_changes holds only the keys to change (a key with null
+-- clears that field). A non-null p_item_ids replaces the linked rows
+-- (ticks are never undone). All or nothing.
+CREATE OR REPLACE FUNCTION work_session_update(
+  p_user_id UUID,
+  p_session_id UUID,
+  p_changes JSONB,
+  p_item_ids UUID[] DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+DECLARE
+  cur work_sessions%ROWTYPE;
+  nxt work_sessions%ROWTYPE;
+  v_bad UUID[];
+BEGIN
+  PERFORM work_sessions_assert_caller(p_user_id);
+  IF EXISTS (
+    SELECT 1 FROM jsonb_object_keys(COALESCE(p_changes, '{}'::jsonb)) AS k(key)
+    WHERE k.key NOT IN ('task_id', 'session_date', 'started_at', 'ended_at', 'minutes', 'extra_units', 'extra_work_type',
+                        'note', 'exclude_from_stats', 'exclude_reason')
+  ) THEN
+    RAISE EXCEPTION 'unknown or read-only work session field' USING ERRCODE = '22023';
+  END IF;
+
+  SELECT * INTO cur FROM work_sessions WHERE id = p_session_id AND user_id = p_user_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'work session % not found', p_session_id USING ERRCODE = 'P0002';
+  END IF;
+  nxt := jsonb_populate_record(cur, COALESCE(p_changes, '{}'::jsonb));
+
+  UPDATE work_sessions SET
+    task_id = nxt.task_id,
+    session_date = nxt.session_date,
+    started_at = nxt.started_at,
+    ended_at = nxt.ended_at,
+    minutes = nxt.minutes,
+    extra_units = nxt.extra_units,
+    extra_work_type = nxt.extra_work_type,
+    note = nxt.note,
+    exclude_from_stats = nxt.exclude_from_stats,
+    exclude_reason = nxt.exclude_reason
+  WHERE id = p_session_id AND user_id = p_user_id;
+
+  IF p_item_ids IS NOT NULL THEN
+    v_bad := work_sessions_out_of_scope_items(p_user_id, cur.project_id, p_item_ids);
+    IF cardinality(v_bad) > 0 THEN
+      RAISE EXCEPTION 'checklist items not in this project: %', array_to_string(v_bad, ', ')
+        USING ERRCODE = '23503';
+    END IF;
+    DELETE FROM work_session_items WHERE session_id = p_session_id AND user_id = p_user_id;
+    INSERT INTO work_session_items (session_id, checklist_item_id, user_id)
+    SELECT DISTINCT p_session_id, item_id, p_user_id FROM unnest(p_item_ids) AS item_id;
+  END IF;
+
+  RETURN jsonb_build_object('session_id', p_session_id, 'project_id', cur.project_id);
+END;
+$$;
+
+-- Delete a session and its links (rows it ticked stay ticked); the rollup runs.
+CREATE OR REPLACE FUNCTION work_session_delete(p_user_id UUID, p_session_id UUID)
+RETURNS JSONB
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+DECLARE
+  v_project UUID;
+BEGIN
+  PERFORM work_sessions_assert_caller(p_user_id);
+  DELETE FROM work_sessions WHERE id = p_session_id AND user_id = p_user_id RETURNING project_id INTO v_project;
+  IF v_project IS NULL THEN
+    RAISE EXCEPTION 'work session % not found', p_session_id USING ERRCODE = 'P0002';
+  END IF;
+  RETURN jsonb_build_object('session_id', p_session_id, 'project_id', v_project);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION work_sessions_assert_caller(UUID) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION work_sessions_out_of_scope_items(UUID, UUID, UUID[]) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION work_session_create(UUID, JSONB, UUID[], BOOLEAN) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION work_session_update(UUID, UUID, JSONB, UUID[]) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION work_session_delete(UUID, UUID) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION work_sessions_assert_caller(UUID) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION work_sessions_out_of_scope_items(UUID, UUID, UUID[]) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION work_session_create(UUID, JSONB, UUID[], BOOLEAN) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION work_session_update(UUID, UUID, JSONB, UUID[]) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION work_session_delete(UUID, UUID) TO authenticated, service_role;
 
 -- Explicit, because newer Supabase projects no longer auto-grant new public
 -- tables to the API roles. RLS below still scopes every row to its owner.
