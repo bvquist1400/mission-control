@@ -519,6 +519,28 @@
 .brief-page .pf-ms.today em {
   color: var(--accent);
 }
+/* Projected finish (pace forecast): a dashed tag under Today/Target, or pinned to the right edge past it. */
+.brief-page .pf-axis.has-proj {
+  height: 58px;
+}
+.brief-page .pf-ms.proj {
+  top: 23px;
+}
+.brief-page .pf-ms.proj em {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--warn);
+  background: var(--warn-soft);
+  border: 1px dashed var(--warn);
+  border-radius: 4px;
+  padding: 0 6px;
+}
+.brief-page .pf-ms.proj.off {
+  left: auto;
+  right: 0;
+  transform: none;
+  align-items: flex-end;
+}
 .brief-page .pf-ms.edge-r {
   transform: translateX(-85%);
 }
@@ -606,6 +628,24 @@
   color: var(--danger);
   background: var(--pf-danger-soft);
 }
+/* The pace line under a lane's status line. */
+.brief-page .pf-pace {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 6px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 12.5px;
+  color: var(--ink);
+}
+.brief-page .pf-hc.measuring,
+.brief-page .pf-hc.none {
+  color: var(--muted);
+  background: var(--pf-plan-soft);
+}
 .brief-page .pf-hline {
   display: flex;
   flex-wrap: wrap;
@@ -662,6 +702,30 @@
 .brief-page .pf-track.empty {
   background: transparent;
   border-style: dashed;
+}
+/* Overrun tail: planned end → projected end; cut at the chart edge. */
+.brief-page .pf-tail {
+  position: absolute;
+  top: 3px;
+  height: 16px;
+  border: 1px dashed var(--warn);
+  border-left: 0;
+  border-radius: 0 6px 6px 0;
+  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--warn) 22%, transparent) 0 5px, transparent 5px 10px);
+}
+.brief-page .pf-tail.cut {
+  border-radius: 0;
+  border-right: 0;
+}
+.brief-page .pf-tail.cut::after {
+  content: "›";
+  position: absolute;
+  right: 1px;
+  top: -3px;
+  color: var(--warn);
+  font-size: 15px;
+  line-height: 16px;
+  font-weight: 700;
 }
 .brief-page .pf-today {
   position: absolute;
@@ -741,6 +805,21 @@
   border-radius: 1px;
   background: var(--g2);
   transform: rotate(45deg);
+}
+.brief-page .pf-legend i.st-proj {
+  width: 14px;
+  height: 9px;
+  border: 1px dashed var(--warn);
+  background: var(--warn-soft);
+  border-radius: 3px;
+}
+.brief-page .pf-legend i.st-tail {
+  width: 16px;
+  height: 8px;
+  border: 1px dashed var(--warn);
+  border-left: 0;
+  border-radius: 0;
+  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--warn) 25%, transparent) 0 4px, transparent 4px 8px);
 }
 .brief-page .pf-fine {
   margin: 0;

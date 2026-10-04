@@ -262,6 +262,25 @@ export function buildTiles(forecast: PaceForecast): PaceTile[] {
   return [workLeft, pace, third, finishTile];
 }
 
+/** "5 sittings logged (3 counted) · 436 min in the last 14 days · speeds from the swatch". */
+export function buildSourceLine(forecast: PaceForecast, sessionTotal: number): string {
+  if (sessionTotal <= 0) return "No sittings logged yet";
+  const sources = new Set(forecast.work_types.map((row) => row.source));
+  const body = sources.has("measured");
+  const swatch = sources.has("measured_sample");
+  let speeds: string;
+  if (body && swatch) speeds = "speeds from your body rows and the swatch";
+  else if (body) speeds = "speeds from your body rows";
+  else if (swatch) speeds = "speeds from the swatch";
+  else if (sources.has("other_projects")) speeds = "speeds from your other projects";
+  else speeds = "no speeds measured yet (plan times)";
+  return [
+    `${sessionTotal} ${sessionTotal === 1 ? "sitting" : "sittings"} logged (${forecast.counted_sessions} counted)`,
+    `${forecast.minutes_in_cadence_window} min in the last 14 days`,
+    speeds,
+  ].join(" · ");
+}
+
 // ── Speed table ─────────────────────────────────────────────────────────────
 
 const WORK_TYPE_COLORS: Record<string, string> = {
@@ -349,6 +368,8 @@ export interface FitView {
   hasGauge: boolean;
   /** Shown instead of inches when no gauge is set. */
   gaugeNote: string | null;
+  /** When it shows and why the widths read low. */
+  note: string;
 }
 
 export const GAUGE_NOTE = "Add your gauge after measuring the swatch (step 5) to see inches";
@@ -392,6 +413,15 @@ export function buildFitView(forecast: PaceForecast): FitView | null {
     rows,
     hasGauge,
     gaugeNote: hasGauge ? null : GAUGE_NOTE,
+    note: [
+      "Shown until the first body row is ticked, then off for good, because the width is locked then.",
+      forecast.work_types.some((row) => row.source === "measured_sample")
+        ? "Speeds come from the swatch, where narrower rows make each stitch look slower, so body rows will likely be faster and these widths are on the low side."
+        : null,
+      fit.perimeter_minutes_left > 0 ? "The border scales with the perimeter (2 × (width + side)), not just the width." : null,
+    ]
+      .filter(Boolean)
+      .join(" "),
   };
 }
 
