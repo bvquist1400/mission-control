@@ -101,6 +101,7 @@ delete process.env.MISSION_CONTROL_ACTIONS_API_KEY;
 const workSessionsRoute = await import("../src/app/api/work-sessions/route.ts");
 const workSessionRoute = await import("../src/app/api/work-sessions/[id]/route.ts");
 const forecastRoute = await import("../src/app/api/projects/[id]/forecast/route.ts");
+const paceRoute = await import("../src/app/api/projects/[id]/pace/route.ts");
 const paceRatesRoute = await import("../src/app/api/pace-rates/route.ts");
 const checklistRoute = await import("../src/app/api/tasks/[id]/checklist/route.ts");
 const taskRoute = await import("../src/app/api/tasks/[id]/route.ts");
@@ -541,57 +542,6 @@ try {
     assert.match(bad.data.error, /offset \+ step/);
   });
 
-  await test("slice 2: update_project accepts perimeter + gauge; the forecast (MCP and API) returns lane sections and inch lengths", async () => {
-    const lanesProject = await makeProject(userA, "Pace DB lanes", { target_date: "2026-12-05" });
-    const mkSection = async (name, order, start, end) =>
-      insert("project_sections", { user_id: userA, project_id: lanesProject.id, name, sort_order: order, planned_start: start, planned_end: end });
-    const bodySection = await mkSection("Body", 1, "2026-10-19", "2026-11-29");
-    const finishSection = await mkSection("Finishing", 2, "2026-11-30", "2026-12-05");
-    const bodyTask = await makeTask(userA, lanesProject.id, "Body rows", { estimated_minutes: 100, unit_count: 1000, work_type: "waffle", section_id: bodySection.id });
-    const borderTask = await makeTask(userA, lanesProject.id, "Border", { estimated_minutes: 100, unit_count: 1000, work_type: "sc", section_id: finishSection.id });
-    const size = { label: "width", current: 195, step: 12, offset: 3, min: 27, unit: "stitches", work_types: ["waffle", "sc"] };
-    const bad = await callTool("update_project", {
-      project_id: lanesProject.id, unit_label: "stitches",
-      pace_settings: { size: { ...size, perimeter: { task_ids: ["nope"], side: 300 }, gauge: { units: 18, length: 4, length_unit: "in" } } },
-    });
-    assert.equal(bad.isError, true, "a non-uuid perimeter task id is rejected");
-    const settings = { size: { ...size, perimeter: { task_ids: [borderTask.id], side: 300 }, gauge: { units: 18, length: 4, length_unit: "in" } } };
-    const ok = await callTool("update_project", { project_id: lanesProject.id, unit_label: "stitches", pace_settings: settings });
-    assert.equal(ok.isError, false, JSON.stringify(ok.data));
-    assert.deepEqual(ok.data.pace_settings, settings, "perimeter and gauge are stored, not stripped");
-    for (let n = 0; n < 3; n += 1) {
-      const logged = await callTool("log_work_session", { task_id: bodyTask.id, date: "2026-10-04", minutes: 28 });
-      assert.equal(logged.isError, false, JSON.stringify(logged.data));
-    }
-    const forecast = await callTool("get_project_forecast", { project_id: lanesProject.id, today: "2026-10-04" });
-    assert.equal(forecast.isError, false, JSON.stringify(forecast.data));
-    const f = forecast.data.forecast;
-    assert.deepEqual(f.sections.map((entry) => entry.section_id), [bodySection.id, finishSection.id]);
-    const body = f.sections[0];
-    assert.deepEqual([body.planned_start, body.planned_end, body.units_left, body.health_basis], ["2026-10-19", "2026-11-29", 1000, "time"]);
-    assert.ok(["on_track", "behind"].includes(body.health));
-    assert.ok(body.projected_end > body.planned_end, "6 min a day against 100 min of work runs past Nov 29");
-    assert.equal(body.health, "behind");
-    const widths = f.size_fit.widths;
-    assert.equal(widths.at(-1).size, 195);
-    assert.equal(widths.at(-1).length, 43.3, "195 ÷ 18 × 4 in");
-    assert.equal(widths.at(-1).length_unit, "in");
-    assert.ok(f.size_fit.perimeter_minutes_left > 0);
-    assert.equal(f.size_fit.current_length, 43.3);
-    // The same through the HTTP route.
-    const response = await forecastRoute.GET(
-      new NextRequest(`http://localhost/api/projects/${lanesProject.id}/forecast?today=2026-10-04`, { headers: { "x-mission-control-key": process.env.MISSION_CONTROL_API_KEY } }),
-      { params: Promise.resolve({ id: lanesProject.id }) }
-    );
-    assert.equal(response.status, 200);
-    const viaApi = await response.json();
-    assert.equal(viaApi.forecast.sections.length, 2);
-    assert.equal(viaApi.forecast.size_fit.widths.at(-1).length, 43.3);
-    // The border (perimeter) shrinks less than linear: 27 wide leaves more than 27/195 of the work.
-    const at27 = widths.find((entry) => entry.size === 27);
-    assert.ok(at27.minutes_left > (200 * 27) / 195 + 10, "perimeter scaling, not linear");
-  });
-
   await test("MCP update_task_checklist: units + work type; invalid → nothing written; missing row → reported, not skipped", async () => {
     const ok = await callTool("update_task_checklist", {
       task_id: swatch.id,
@@ -932,6 +882,103 @@ try {
     }
     const { data } = await admin.from("work_sessions").select("minutes").eq("id", s.session.id).single();
     assert.equal(data.minutes, 5);
+  });
+
+  // Slice 2 tests run last so their projects (same unit label) don't change the pooled rates the tests above read.
+  await test("slice 2: update_project accepts perimeter + gauge; the forecast (MCP and API) returns lane sections and inch lengths", async () => {
+    const lanesProject = await makeProject(userA, "Pace DB lanes", { target_date: "2026-12-05" });
+    const mkSection = async (name, order, start, end) =>
+      insert("project_sections", { user_id: userA, project_id: lanesProject.id, name, sort_order: order, planned_start: start, planned_end: end });
+    const bodySection = await mkSection("Body", 1, "2026-10-19", "2026-11-29");
+    const finishSection = await mkSection("Finishing", 2, "2026-11-30", "2026-12-05");
+    const bodyTask = await makeTask(userA, lanesProject.id, "Body rows", { estimated_minutes: 100, unit_count: 1000, work_type: "waffle", section_id: bodySection.id });
+    const borderTask = await makeTask(userA, lanesProject.id, "Border", { estimated_minutes: 100, unit_count: 1000, work_type: "sc", section_id: finishSection.id });
+    const size = { label: "width", current: 195, step: 12, offset: 3, min: 27, unit: "stitches", work_types: ["waffle", "sc"] };
+    const bad = await callTool("update_project", {
+      project_id: lanesProject.id, unit_label: "sts",
+      pace_settings: { size: { ...size, perimeter: { task_ids: ["nope"], side: 300 }, gauge: { units: 18, length: 4, length_unit: "in" } } },
+    });
+    assert.equal(bad.isError, true, "a non-uuid perimeter task id is rejected");
+    const settings = { size: { ...size, perimeter: { task_ids: [borderTask.id], side: 300 }, gauge: { units: 18, length: 4, length_unit: "in" } } };
+    const ok = await callTool("update_project", { project_id: lanesProject.id, unit_label: "sts", pace_settings: settings }); // its own unit label: other projects' speeds must not price it
+    assert.equal(ok.isError, false, JSON.stringify(ok.data));
+    assert.deepEqual(ok.data.pace_settings, settings, "perimeter and gauge are stored, not stripped");
+    for (let n = 0; n < 3; n += 1) {
+      const logged = await callTool("log_work_session", { task_id: bodyTask.id, date: "2026-10-04", minutes: 28 });
+      assert.equal(logged.isError, false, JSON.stringify(logged.data));
+    }
+    const forecast = await callTool("get_project_forecast", { project_id: lanesProject.id, today: "2026-10-04" });
+    assert.equal(forecast.isError, false, JSON.stringify(forecast.data));
+    const f = forecast.data.forecast;
+    if (process.env.PACE_DEBUG) console.log(JSON.stringify({ cadence: f.cadence_minutes_per_day, work: f.work_left, sections: f.sections }, null, 1));
+    assert.deepEqual(f.sections.map((entry) => entry.section_id), [bodySection.id, finishSection.id]);
+    const body = f.sections[0];
+    assert.deepEqual([body.planned_start, body.planned_end, body.units_left, body.health_basis], ["2026-10-19", "2026-11-29", 1000, "time"]);
+    // 3 × 28 min ÷ 14 days = 6 min a day: body (100 min) starts at its planned Oct 19 and takes 17 days;
+    // finishing (100 min) starts at its planned Nov 30 and takes 17 days, past Dec 5.
+    assert.deepEqual([body.projected_end, body.health], ["2026-11-05", "on_track"]);
+    const finishing = f.sections[1];
+    assert.deepEqual([finishing.projected_end, finishing.health, finishing.health_basis], ["2026-12-17", "behind", "time"]);
+    const widths = f.size_fit.widths;
+    assert.equal(widths.at(-1).size, 195);
+    assert.equal(widths.at(-1).length, 43.3, "195 ÷ 18 × 4 in");
+    assert.equal(widths.at(-1).length_unit, "in");
+    assert.ok(f.size_fit.perimeter_minutes_left > 0);
+    assert.equal(f.size_fit.current_length, 43.3);
+    // The same through the HTTP route.
+    const response = await forecastRoute.GET(
+      new NextRequest(`http://localhost/api/projects/${lanesProject.id}/forecast?today=2026-10-04`, { headers: { "x-mission-control-key": process.env.MISSION_CONTROL_API_KEY } }),
+      { params: Promise.resolve({ id: lanesProject.id }) }
+    );
+    assert.equal(response.status, 200);
+    const viaApi = await response.json();
+    assert.equal(viaApi.forecast.sections.length, 2);
+    assert.equal(viaApi.forecast.size_fit.widths.at(-1).length, 43.3);
+    // The border (perimeter) shrinks less than linear: 27 wide leaves more than 27/195 of the work.
+    const at27 = widths.find((entry) => entry.size === 27);
+    assert.ok(at27.minutes_left > (200 * 27) / 195 + 10, "perimeter scaling, not linear");
+  });
+
+  await test("slice 2: GET /api/projects/[id]/pace returns the forecast, sittings with task + rows, the form's tasks and a default task; not for another user or a project without a unit", async () => {
+    const paceProjectRow = await makeProject(userA, "Pace DB panel", { target_date: "2026-12-05", unit_label: "rows" });
+    const step = await makeTask(userA, paceProjectRow.id, "Step 3: Swatch rows", { estimated_minutes: 60, work_type: "waffle" });
+    const stepRows = [];
+    for (let row = 1; row <= 4; row += 1) stepRows.push(await makeItem(userA, step.id, `Row ${row}: waffle`, { sort_order: row, unit_count: 27, work_type: "waffle" }));
+    const later = await makeTask(userA, paceProjectRow.id, "Step 9: Later", { estimated_minutes: 30 });
+    await makeItem(userA, later.id, "Row 7: later", { sort_order: 1 });
+    const logged = await callTool("log_work_session", { task_id: step.id, date: "2026-10-04", start: "13:38", end: "14:39", rows: "1-2" });
+    assert.equal(logged.isError, false, JSON.stringify(logged.data));
+    await callTool("log_work_session", { project_id: paceProjectRow.id, date: "2026-10-03", minutes: 300, exclude_from_stats: true, exclude_reason: "learning" });
+    const call = async (id) => {
+      const response = await paceRoute.GET(
+        new NextRequest(`http://localhost/api/projects/${id}/pace?today=2026-10-04`, { headers: { "x-mission-control-key": process.env.MISSION_CONTROL_API_KEY } }),
+        { params: Promise.resolve({ id }) }
+      );
+      return { status: response.status, body: await response.json() };
+    };
+    const ok = await call(paceProjectRow.id);
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    assert.equal(ok.body.project.unit_label, "rows");
+    assert.equal(ok.body.forecast.counted_sessions, 1);
+    assert.equal(ok.body.forecast.work_types.find((row) => row.work_type === "waffle").units_done, 54, "two rows ticked by the sitting");
+    assert.deepEqual(ok.body.tasks.map((entry) => [entry.title, entry.lowest_undone_row]), [["Step 3: Swatch rows", 3], ["Step 9: Later", 7]]);
+    assert.equal(ok.body.default_task_id, step.id, "the task holding the lowest undone row");
+    assert.equal(ok.body.session_total, 2);
+    const [newest, learning] = ok.body.sessions;
+    assert.deepEqual([newest.what, newest.rows, newest.minutes, newest.excluded], ["Step 3: Swatch rows", "rows 1–2", 61, false]);
+    assert.match(newest.detail, /^54 waffle · 67\.8 s\/row · 1:38–2:39 PM$/);
+    assert.deepEqual([learning.what, learning.excluded, learning.detail], ["Several tasks (no single task)", true, "Not counted: learning, not counted toward speed"]);
+    assert.equal(ok.body.unitless_note, "Later");
+    assert.ok(typeof ok.body.line === "string");
+    // No unit label: 400. Another user's project: 404.
+    const plain = await makeProject(userA, "Pace DB plain");
+    assert.equal((await call(plain.id)).status, 400);
+    process.env.MISSION_CONTROL_USER_ID = userB;
+    try {
+      assert.equal((await call(paceProjectRow.id)).status, 404);
+    } finally {
+      process.env.MISSION_CONTROL_USER_ID = userA;
+    }
   });
 
   // ── Part 3: the blanket snapshot through the backfill CLI ───────────────

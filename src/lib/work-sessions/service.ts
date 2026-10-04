@@ -24,8 +24,14 @@ import {
   type PaceTaskInput,
 } from "@/lib/pace";
 import {
+  buildSessionRows,
+  defaultSittingTask,
+  type SessionRow,
+} from "@/lib/pace-view";
+import {
   etDateOf,
   isDateOnly,
+  itemRowNumber,
   matchRows,
   parseRowsSpec,
   reanchorInstant,
@@ -304,7 +310,7 @@ export function etToday(now: Date = new Date()): string {
 function paceInputFrom(data: LoadedProject, today: string, otherProjectRates: CrossProjectRate[]): PaceInput {
   return {
     project: { unit_label: data.project.unit_label, target_date: data.project.target_date, pace_settings: data.project.pace_settings },
-    sections: data.sections.map((section) => ({ id: section.id, planned_start: section.planned_start })),
+    sections: data.sections.map((section) => ({ id: section.id, planned_start: section.planned_start, planned_end: section.planned_end })),
     tasks: data.tasks,
     items: data.items,
     sessions: data.sessions.map(toPaceSession),
@@ -340,6 +346,97 @@ export async function getProjectForecast(
     },
     line: formatForecastLine(forecast, options.focusType ?? null),
     forecast,
+  };
+}
+
+/** A task offered by the "Log a sitting" form. */
+export interface PaceTaskOption {
+  id: string;
+  title: string;
+  status: string;
+  /** The lowest-numbered "Row N" item not ticked yet; null when none. */
+  lowest_undone_row: number | null;
+}
+
+export interface ProjectPaceResult {
+  project: { id: string; name: string; unit_label: string; target_date: string | null };
+  line: string;
+  forecast: PaceForecast;
+  /** Open tasks for the form, lowest undone row first. */
+  tasks: PaceTaskOption[];
+  default_task_id: string | null;
+  /** Sittings, newest first (at most 100). */
+  sessions: SessionRow[];
+  session_total: number;
+  /** Which open tasks are priced by their estimate ("no units" row), shortened for the speed table. */
+  unitless_note: string | null;
+}
+
+const MAX_PANEL_SESSIONS = 100;
+const CLOSED_TASK_STATUSES = new Set(["Done", "Parked", "Missed"]);
+
+/**
+ * Everything the project page's Pace section reads, in one call (computed, never stored): the forecast,
+ * the sittings with their task and rows, and the tasks the "Log a sitting" form offers. The UI logs and
+ * edits sittings through `/api/work-sessions` (the same service as `log_work_session`).
+ */
+export async function getProjectPace(
+  supabase: SupabaseClient,
+  userId: string,
+  projectId: string,
+  options: { today?: string; now?: Date } = {}
+): Promise<ProjectPaceResult> {
+  requireUuid(projectId, "project_id");
+  const today = options.today ?? etToday(options.now);
+  if (!isDateOnly(today)) bad("today must be YYYY-MM-DD");
+  const data = await loadProjectData(supabase, userId, projectId);
+  if (!data.project.unit_label) bad("This project doesn't count units (no unit_label), so it has no pace section");
+  const otherRates = await loadOtherProjectRates(supabase, userId, data.project.unit_label, projectId);
+  const input = paceInputFrom(data, today, otherRates);
+  const forecast = computeForecast(input);
+
+  const openTasks = data.tasks.filter((task) => !CLOSED_TASK_STATUSES.has(task.status));
+  const lowestUndone = new Map<string, number>();
+  for (const item of data.items) {
+    if (item.is_done) continue;
+    const row = itemRowNumber(item.text);
+    if (row === null) continue;
+    const known = lowestUndone.get(item.task_id);
+    if (known === undefined || row < known) lowestUndone.set(item.task_id, row);
+  }
+  const tasks: PaceTaskOption[] = openTasks
+    .map((task) => ({ id: task.id, title: task.title, status: task.status, lowest_undone_row: lowestUndone.get(task.id) ?? null }))
+    .sort((a, b) => {
+      if (a.lowest_undone_row !== b.lowest_undone_row) {
+        if (a.lowest_undone_row === null) return 1;
+        if (b.lowest_undone_row === null) return -1;
+        return a.lowest_undone_row - b.lowest_undone_row;
+      }
+      return a.title.localeCompare(b.title);
+    });
+
+  const withUnits = new Set<string>();
+  for (const task of data.tasks) if ((task.unit_count ?? 0) > 0) withUnits.add(task.id);
+  for (const item of data.items) if ((item.unit_count ?? 0) > 0) withUnits.add(item.task_id);
+  const unitless = openTasks.filter((task) => !withUnits.has(task.id) && (task.estimated_minutes ?? 0) > 0);
+  const shown = unitless.slice(0, 3).map((task) => task.title.replace(/^step\s+\d+\s*:\s*/i, "").trim() || task.title);
+  const unitlessNote = unitless.length === 0 ? null : `${shown.join(", ")}${unitless.length > 3 ? ` and ${unitless.length - 3} more` : ""}`;
+
+  const rows = buildSessionRows(data.sessions, data.tasks, data.items, data.project.unit_label);
+  return {
+    project: {
+      id: data.project.id,
+      name: data.project.name,
+      unit_label: data.project.unit_label,
+      target_date: data.project.target_date,
+    },
+    line: formatForecastLine(forecast, null),
+    forecast,
+    tasks,
+    default_task_id: defaultSittingTask(openTasks, data.items),
+    sessions: rows.slice(0, MAX_PANEL_SESSIONS),
+    session_total: rows.length,
+    unitless_note: unitlessNote,
   };
 }
 
@@ -761,10 +858,17 @@ export async function updateWorkSession(
   if (["date", "start", "end", "minutes"].some((key) => key in body)) {
     const newDate = "date" in body ? (body.date === null ? null : String(body.date)) : current.session_date;
     if (!newDate || !isDateOnly(newDate)) bad("date must be YYYY-MM-DD (ET)");
-    // Only the date changed: move the stored times to that day (start keeps its
-    // ET clock time, end = start + minutes, so a DST night keeps its length).
-    const dateOnly = !("start" in body) && !("end" in body) && !("minutes" in body) && newDate !== current.session_date;
-    const moved = dateOnly ? reanchorSession(current, current.session_date, newDate as string) : null;
+    // A new date with no new start/end (minutes or not): move the stored times to that day. The start
+    // keeps its ET clock time and the end = start + the minutes (the new ones when given), so a DST
+    // night keeps its length instead of the two clock times disagreeing with the minutes.
+    const dateMoved = !("start" in body) && !("end" in body) && newDate !== current.session_date;
+    const moved = dateMoved
+      ? reanchorSession(
+          { ...current, minutes: "minutes" in body && typeof body.minutes === "number" ? body.minutes : current.minutes },
+          current.session_date,
+          newDate as string
+        )
+      : null;
     const moveStored = (stored: string | null) =>
       stored && newDate !== current.session_date ? reanchorInstant(stored, current.session_date, newDate as string) : stored;
     const timingInput = {
