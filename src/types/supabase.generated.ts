@@ -2670,6 +2670,14 @@ export type Database = {
         Args: { p_user_id: string }
         Returns: undefined
       }
+      work_sessions_item_tasks: {
+        Args: { p_item_ids: string[]; p_user_id: string }
+        Returns: string[]
+      }
+      work_sessions_lock_tasks: {
+        Args: { p_task_ids: string[]; p_user_id: string }
+        Returns: undefined
+      }
       work_sessions_out_of_scope_items: {
         Args: { p_item_ids: string[]; p_project_id: string; p_user_id: string }
         Returns: string[]

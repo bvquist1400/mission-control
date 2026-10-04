@@ -13,6 +13,8 @@ DROP FUNCTION IF EXISTS work_session_create(UUID, JSONB, UUID[], BOOLEAN);
 DROP FUNCTION IF EXISTS work_session_update(UUID, UUID, JSONB, UUID[]);
 DROP FUNCTION IF EXISTS work_session_delete(UUID, UUID);
 DROP FUNCTION IF EXISTS work_sessions_out_of_scope_items(UUID, UUID, UUID[]);
+DROP FUNCTION IF EXISTS work_sessions_lock_tasks(UUID, UUID[]);
+DROP FUNCTION IF EXISTS work_sessions_item_tasks(UUID, UUID[]);
 DROP FUNCTION IF EXISTS work_sessions_assert_caller(UUID);
 
 DROP TABLE IF EXISTS work_session_items;

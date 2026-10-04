@@ -132,23 +132,43 @@ CREATE INDEX IF NOT EXISTS idx_work_session_items_item ON work_session_items(che
 -- task must be in the session's project. Enforced here as well as in the
 -- service, because the service runs with the service-role client on API-key
 -- and MCP paths.
+--
+-- Task locks (one rule for every pace write, so a task move can't race a
+-- session or link): before reading a task's project, a session/link write
+-- locks that task row FOR NO KEY UPDATE, the same lock a task UPDATE (the
+-- move) takes. Whoever locks first wins; the other waits, then re-reads the
+-- committed row: a session after a move sees the new project and is rejected;
+-- a move after a session runs its guard (below) after its own lock, sees the
+-- committed session and is rejected. Never both.
+-- Deadlock-free: the session RPCs lock every task they will touch in one
+-- statement, ordered by id, before any other write (work_sessions_lock_tasks),
+-- so the trigger locks below and the rollup's are re-acquisitions; a move
+-- locks one task row and then only reads. Writers that bypass the RPCs still
+-- get the same exclusion; at worst Postgres aborts one of two such writers.
 CREATE OR REPLACE FUNCTION work_sessions_check_ownership()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 SET search_path = public
 AS $$
+DECLARE
+  task_project UUID;
+  task_user UUID;
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM projects p WHERE p.id = NEW.project_id AND p.user_id = NEW.user_id) THEN
     RAISE EXCEPTION 'work session project % is not owned by the user', NEW.project_id
       USING ERRCODE = '23503';
   END IF;
 
-  IF NEW.task_id IS NOT NULL AND NOT EXISTS (
-    SELECT 1 FROM tasks t
-    WHERE t.id = NEW.task_id AND t.user_id = NEW.user_id AND t.project_id = NEW.project_id
-  ) THEN
-    RAISE EXCEPTION 'work session task % is not in project % for this user', NEW.task_id, NEW.project_id
-      USING ERRCODE = '23503';
+  IF NEW.task_id IS NOT NULL THEN
+    -- Lock, then read: a concurrent move either finished (we see its project) or waits for us.
+    SELECT t.project_id, t.user_id INTO task_project, task_user
+    FROM tasks t
+    WHERE t.id = NEW.task_id
+    FOR NO KEY UPDATE;
+    IF task_user IS DISTINCT FROM NEW.user_id OR task_project IS DISTINCT FROM NEW.project_id THEN
+      RAISE EXCEPTION 'work session task % is not in project % for this user', NEW.task_id, NEW.project_id
+        USING ERRCODE = '23503';
+    END IF;
   END IF;
 
   RETURN NEW;
@@ -167,7 +187,15 @@ RETURNS TRIGGER
 LANGUAGE plpgsql
 SET search_path = public
 AS $$
+DECLARE
+  item_task UUID;
 BEGIN
+  -- Lock the row's task first (see "Task locks" above), then check against its committed project.
+  SELECT i.task_id INTO item_task FROM task_checklist_items i WHERE i.id = NEW.checklist_item_id AND i.user_id = NEW.user_id;
+  IF item_task IS NOT NULL THEN
+    PERFORM 1 FROM tasks WHERE id = item_task FOR NO KEY UPDATE;
+  END IF;
+
   IF NOT EXISTS (
     SELECT 1
     FROM work_sessions s
@@ -251,7 +279,10 @@ CREATE TRIGGER trg_work_sessions_updated
 
 -- A task whose sessions or linked rows live in its project can't move to
 -- another project (or out of it): the stored sessions would point across
--- projects. Delete or move those sessions first. A project being deleted
+-- projects. Delete or move those sessions first. This BEFORE ROW trigger runs
+-- after the UPDATE has locked the task row, and each query in it reads the
+-- latest committed state, so a session/link committed while the move waited
+-- is seen here (see "Task locks" above). A project being deleted
 -- (ON DELETE SET NULL on tasks.project_id) is allowed: its sessions go with it.
 CREATE OR REPLACE FUNCTION tasks_guard_project_move_with_sessions()
 RETURNS TRIGGER
@@ -304,6 +335,37 @@ BEGIN
 END;
 $$;
 
+-- Locks the given task rows FOR NO KEY UPDATE in id order (one statement):
+-- every session RPC calls this first, so concurrent pace writes and task
+-- moves always acquire task locks in the same order.
+CREATE OR REPLACE FUNCTION work_sessions_lock_tasks(p_user_id UUID, p_task_ids UUID[])
+RETURNS VOID
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+BEGIN
+  PERFORM 1
+  FROM tasks
+  WHERE id = ANY (COALESCE(p_task_ids, '{}'::uuid[]))
+    AND user_id = p_user_id
+  ORDER BY id
+  FOR NO KEY UPDATE;
+END;
+$$;
+
+-- The tasks of the given checklist rows (to lock them before linking).
+CREATE OR REPLACE FUNCTION work_sessions_item_tasks(p_user_id UUID, p_item_ids UUID[])
+RETURNS UUID[]
+LANGUAGE sql
+STABLE
+SET search_path = public
+AS $$
+  SELECT COALESCE(array_agg(DISTINCT i.task_id), '{}'::uuid[])
+  FROM task_checklist_items i
+  WHERE i.id = ANY (COALESCE(p_item_ids, '{}'::uuid[]))
+    AND i.user_id = p_user_id;
+$$;
+
 -- Checklist rows that are not the user's or not in a task of the project.
 CREATE OR REPLACE FUNCTION work_sessions_out_of_scope_items(p_user_id UUID, p_project_id UUID, p_item_ids UUID[])
 RETURNS UUID[]
@@ -354,6 +416,12 @@ BEGIN
     RAISE EXCEPTION 'unknown work session field' USING ERRCODE = '22023';
   END IF;
   v := jsonb_populate_record(NULL::work_sessions, p_session);
+
+  -- Lock every task this write touches, in id order, before checking anything.
+  PERFORM work_sessions_lock_tasks(
+    p_user_id,
+    work_sessions_item_tasks(p_user_id, p_item_ids) || CASE WHEN v.task_id IS NULL THEN '{}'::uuid[] ELSE ARRAY[v.task_id] END
+  );
 
   v_bad := work_sessions_out_of_scope_items(p_user_id, v.project_id, p_item_ids);
   IF cardinality(v_bad) > 0 THEN
@@ -419,6 +487,14 @@ BEGIN
   END IF;
   nxt := jsonb_populate_record(cur, COALESCE(p_changes, '{}'::jsonb));
 
+  -- Lock the old and new task and the replacement rows' tasks, in id order, before any write.
+  PERFORM work_sessions_lock_tasks(
+    p_user_id,
+    work_sessions_item_tasks(p_user_id, p_item_ids)
+      || CASE WHEN cur.task_id IS NULL THEN '{}'::uuid[] ELSE ARRAY[cur.task_id] END
+      || CASE WHEN nxt.task_id IS NULL THEN '{}'::uuid[] ELSE ARRAY[nxt.task_id] END
+  );
+
   UPDATE work_sessions SET
     task_id = nxt.task_id,
     session_date = nxt.session_date,
@@ -467,11 +543,15 @@ $$;
 
 REVOKE ALL ON FUNCTION work_sessions_assert_caller(UUID) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION work_sessions_out_of_scope_items(UUID, UUID, UUID[]) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION work_sessions_lock_tasks(UUID, UUID[]) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION work_sessions_item_tasks(UUID, UUID[]) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION work_session_create(UUID, JSONB, UUID[], BOOLEAN) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION work_session_update(UUID, UUID, JSONB, UUID[]) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION work_session_delete(UUID, UUID) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION work_sessions_assert_caller(UUID) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION work_sessions_out_of_scope_items(UUID, UUID, UUID[]) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION work_sessions_lock_tasks(UUID, UUID[]) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION work_sessions_item_tasks(UUID, UUID[]) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION work_session_create(UUID, JSONB, UUID[], BOOLEAN) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION work_session_update(UUID, UUID, JSONB, UUID[]) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION work_session_delete(UUID, UUID) TO authenticated, service_role;
