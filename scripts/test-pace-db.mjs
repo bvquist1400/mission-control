@@ -20,7 +20,7 @@
 // Each test reports and the run continues; throwaway users are deleted at the end.
 
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
@@ -200,6 +200,33 @@ async function actualMinutes(taskId) {
   return data.actual_minutes;
 }
 const errCode = (result) => result.error?.code;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** An interactive psql connection we can feed statement by statement (for overlap tests). */
+function psqlConnection(label) {
+  const child = spawn("docker", ["exec", "-i", dbContainer, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"], {
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stdout.on("data", (chunk) => { output += chunk; });
+  child.stderr.on("data", (chunk) => { output += chunk; });
+  const closed = new Promise((resolve) => child.on("close", resolve));
+  return {
+    send: (sql) => child.stdin.write(`${sql}\n`),
+    output: () => output,
+    async waitFor(marker, ms = 10000) {
+      for (let waited = 0; waited < ms; waited += 50) {
+        if (output.includes(marker)) return;
+        await sleep(50);
+      }
+      throw new Error(`${label}: never printed ${marker}; output: ${output}`);
+    },
+    async end() {
+      child.stdin.end();
+      await closed;
+    },
+  };
+}
 
 try {
   // ── Part 1: migration 059 ──────────────────────────────────────────────
@@ -210,7 +237,7 @@ try {
       (table_name='tasks' AND column_name IN ('unit_count','work_type','is_sample')) OR
       (table_name='task_checklist_items' AND column_name IN ('unit_count','work_type','completed_at','created_at')) OR
       (table_name='projects' AND column_name IN ('unit_label','pace_settings')));`), "0");
-    assert.equal(psql("SELECT count(*) FROM pg_proc WHERE proname IN ('work_sessions_rollup_actual_minutes','work_sessions_check_ownership','work_session_items_check_project','task_checklist_items_set_completed_at');"), "0");
+    assert.equal(psql("SELECT count(*) FROM pg_proc WHERE proname IN ('work_sessions_rollup_actual_minutes','work_sessions_check_ownership','work_session_items_check_project','task_checklist_items_set_completed_at','tasks_guard_project_move_with_sessions','work_session_create','work_session_update','work_session_delete','work_sessions_out_of_scope_items','work_sessions_assert_caller');"), "0");
     await waitForSchema(false);
     psql(MIGRATION + "\nNOTIFY pgrst, 'reload schema';");
     psql(MIGRATION); // idempotent: a second apply is a no-op
@@ -349,6 +376,42 @@ try {
     assert.equal(await actualMinutes(t.id), 7, "A's rollup unchanged");
     const { count } = await admin.from("work_sessions").select("id", { count: "exact", head: true }).eq("project_id", project.id).eq("minutes", 999);
     assert.equal(count, 0);
+  });
+
+
+  await test("059 rollup under concurrency: two overlapping transactions logging sessions for one task keep both minutes", async () => {
+    const t = await makeTask(userA, project.id, "Race task");
+    const insertSql = (minutes) =>
+      `INSERT INTO work_sessions (user_id, project_id, task_id, session_date, minutes) VALUES ('${userA}', '${project.id}', '${t.id}', '2026-10-04', ${minutes});`;
+    const a = psqlConnection("A");
+    const b = psqlConnection("B");
+    try {
+      a.send(`BEGIN; ${insertSql(10)} SELECT 'A-inserted';`);
+      await a.waitFor("A-inserted");
+      b.send(`BEGIN; ${insertSql(20)} COMMIT; SELECT 'B-done';`);
+      await sleep(1500);
+      assert.ok(!b.output().includes("B-done"), "B waits for A's rollup lock");
+      a.send("COMMIT; SELECT 'A-done';");
+      await a.waitFor("A-done");
+      await b.waitFor("B-done");
+    } finally {
+      await a.end();
+      await b.end();
+    }
+    assert.equal(await actualMinutes(t.id), 30, "10 + 20: neither commit lost the other's minutes");
+  });
+
+  await test("059 rollback after sessions exist keeps tasks.actual_minutes as last rolled up (the documented contract)", async () => {
+    const t = await makeTask(userA, project.id, "Rollback task");
+    await insert("work_sessions", { user_id: userA, project_id: project.id, task_id: t.id, session_date: "2026-10-04", minutes: 13 });
+    assert.equal(await actualMinutes(t.id), 13);
+    psql(ROLLBACK + "\nNOTIFY pgrst, 'reload schema';");
+    assert.equal(psql("SELECT to_regclass('public.work_sessions') IS NULL;"), "t");
+    assert.equal(psql(`SELECT actual_minutes FROM tasks WHERE id = '${t.id}';`), "13", "kept, not restored to NULL");
+    await waitForSchema(false);
+    psql(MIGRATION + "\nNOTIFY pgrst, 'reload schema';");
+    await waitForSchema(true);
+    assert.equal(await actualMinutes(t.id), 13, "re-apply doesn't recompute it either");
   });
 
   // ── Part 2: API + MCP ──────────────────────────────────────────────────
@@ -507,6 +570,113 @@ try {
     assert.deepEqual([waffle.source, waffle.seconds_per_unit], ["other_projects", 12]);
     const missing = await callTool("get_pace_rates", { unit_label: "" });
     assert.equal(missing.isError, true);
+  });
+
+
+  // ── Fix round 1 ─────────────────────────────────────────────────────────
+  await test("RPC atomicity: a failing create or update leaves the previous state (no session, links and fields unchanged)", async () => {
+    const t = await makeTask(userA, paceProject.id, "Atomic task");
+    const keep = await makeItem(userA, t.id, "Row 1", { unit_count: 10, work_type: "sc" });
+    const elsewhere = await makeItem(userA, (await makeTask(userA, otherProject.id, "Elsewhere 2")).id, "Row 1");
+    const created = await admin.rpc("work_session_create", {
+      p_user_id: userA,
+      p_session: { project_id: paceProject.id, task_id: t.id, session_date: "2026-10-04", minutes: 15, source: "manual", source_ref: "atomic-1" },
+      p_item_ids: [keep.id, elsewhere.id],
+      p_mark_done: true,
+    });
+    assert.ok(created.error, "an out-of-scope row fails the create");
+    const { count } = await admin.from("work_sessions").select("id", { count: "exact", head: true }).eq("source_ref", "atomic-1");
+    assert.equal(count, 0, "no half-written session");
+    const { data: keepRow } = await admin.from("task_checklist_items").select("is_done").eq("id", keep.id).single();
+    assert.equal(keepRow.is_done, false, "no row ticked");
+    assert.equal(await actualMinutes(t.id), null);
+
+    const ok = await admin.rpc("work_session_create", {
+      p_user_id: userA,
+      p_session: { project_id: paceProject.id, task_id: t.id, session_date: "2026-10-04", minutes: 15, source: "manual" },
+      p_item_ids: [keep.id],
+      p_mark_done: true,
+    });
+    assert.equal(ok.error, null, ok.error?.message);
+    const sessionId = ok.data.session_id;
+    assert.equal(ok.data.marked_done, 1);
+    const bad = await admin.rpc("work_session_update", {
+      p_user_id: userA, p_session_id: sessionId, p_changes: { minutes: 99, note: "changed" }, p_item_ids: [elsewhere.id],
+    });
+    assert.ok(bad.error, "an out-of-scope replacement row fails the update");
+    const { data: after } = await admin.from("work_sessions").select("minutes, note").eq("id", sessionId).single();
+    assert.deepEqual(after, { minutes: 15, note: null }, "fields unchanged");
+    const { data: links } = await admin.from("work_session_items").select("checklist_item_id").eq("session_id", sessionId);
+    assert.deepEqual(links.map((row) => row.checklist_item_id), [keep.id], "old links kept");
+    assert.equal(await actualMinutes(t.id), 15);
+    const otherUser = await admin.rpc("work_session_delete", { p_user_id: userB, p_session_id: sessionId });
+    assert.equal(otherUser.error?.code, "P0002", "another user's session is not found");
+  });
+
+  await test("moving a task with logged sessions or linked rows to another project is rejected (409 API, DB guard); others move", async () => {
+    const withSession = await makeTask(userA, paceProject.id, "Has a session");
+    await logWorkSession(admin, userA, { task_id: withSession.id, minutes: 5, date: "2026-10-04" });
+    const viaApi = await callTool("update_task", { task_id: withSession.id, project_id: otherProject.id });
+    assert.equal(viaApi.isError, true);
+    assert.match(viaApi.data.error, /work session/i);
+    const direct = await admin.from("tasks").update({ project_id: otherProject.id }).eq("id", withSession.id);
+    assert.equal(errCode(direct), "55006", "the DB guard covers every writer");
+    const linkedOnly = await makeTask(userA, paceProject.id, "Only linked by a project-level session");
+    const row = await makeItem(userA, linkedOnly.id, "Row 1");
+    await logWorkSession(admin, userA, { project_id: paceProject.id, minutes: 5, item_ids: [row.id], date: "2026-10-04" });
+    assert.equal(errCode(await admin.from("tasks").update({ project_id: otherProject.id }).eq("id", linkedOnly.id)), "55006");
+    assert.equal(errCode(await admin.from("tasks").update({ project_id: null }).eq("id", linkedOnly.id)), "55006", "unlinking counts as a move");
+    const free = await makeTask(userA, paceProject.id, "No sessions");
+    const moved = await callTool("update_task", { task_id: free.id, project_id: otherProject.id });
+    assert.equal(moved.isError, false, JSON.stringify(moved.data));
+    const sameProject = await callTool("update_task", { task_id: withSession.id, project_id: paceProject.id, title: "Renamed" });
+    assert.equal(sameProject.isError, false, "re-sending the same project is not a move");
+  });
+
+  await test("log_work_session idempotency_key: a retried call returns the first session instead of logging twice", async () => {
+    const t = await makeTask(userA, paceProject.id, "Retry task");
+    const first = await callTool("log_work_session", { task_id: t.id, minutes: 12, date: "2026-10-04", idempotency_key: "chat-msg-42" });
+    assert.equal(first.isError, false, JSON.stringify(first.data));
+    const again = await callTool("log_work_session", { task_id: t.id, minutes: 12, date: "2026-10-04", idempotency_key: "chat-msg-42" });
+    assert.equal(again.isError, false, JSON.stringify(again.data));
+    assert.equal(again.data.duplicate, true);
+    assert.equal(again.data.session.id, first.data.session.id);
+    const { count } = await admin.from("work_sessions").select("id", { count: "exact", head: true }).eq("task_id", t.id);
+    assert.equal(count, 1);
+    assert.equal(await actualMinutes(t.id), 12);
+  });
+
+  await test("dates: date and ISO start must agree; PATCHing only the date moves the stored start/end to that day", async () => {
+    const t = await makeTask(userA, paceProject.id, "Date task");
+    const mismatch = await callTool("log_work_session", { task_id: t.id, date: "2026-10-03", start: "2026-10-04T17:38:00Z", end: "2026-10-04T18:39:00Z" });
+    assert.equal(mismatch.isError, true);
+    const logged = await callTool("log_work_session", { task_id: t.id, date: "2026-10-04", start: "13:38", end: "14:39" });
+    assert.equal(logged.isError, false, JSON.stringify(logged.data));
+    const moved = await callTool("update_work_session", { session_id: logged.data.session.id, date: "2026-10-03" });
+    assert.equal(moved.isError, false, JSON.stringify(moved.data));
+    const s = moved.data.session;
+    assert.deepEqual([s.session_date, new Date(s.started_at).toISOString(), new Date(s.ended_at).toISOString(), s.minutes],
+      ["2026-10-03", "2026-10-03T17:38:00.000Z", "2026-10-03T18:39:00.000Z", 61]);
+    const badStart = await callTool("update_work_session", { session_id: s.id, start: "2026-10-05T17:00:00Z" });
+    assert.equal(badStart.isError, true, "an ISO start on another day than the stored date");
+  });
+
+  await test("input edges: fractional minutes → 400; non-UUID checklist id → 400; get_pace_rates matches 'Stitches'", async () => {
+    const t = await makeTask(userA, paceProject.id, "Edges task");
+    const request = new NextRequest("http://localhost/api/work-sessions", {
+      method: "POST",
+      headers: { "x-mission-control-key": process.env.MISSION_CONTROL_API_KEY, "content-type": "application/json" },
+      body: JSON.stringify({ task_id: t.id, minutes: 0.6 }),
+    });
+    const response = await workSessionsRoute.POST(request);
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, /whole number/);
+    const badId = await callTool("update_task_checklist", { task_id: t.id, items: [{ id: "not-a-uuid", is_done: true }] });
+    assert.equal(badId.isError, true);
+    assert.match(badId.data.failed[0].error, /UUID/);
+    const rates = await callTool("get_pace_rates", { unit_label: "Stitches" });
+    assert.equal(rates.isError, false);
+    assert.ok(rates.data.rates.length > 0, "unit_label is matched case-insensitively");
   });
 
   await test("another user's ids: forecast, log, list, update and delete all fail without leaking", async () => {

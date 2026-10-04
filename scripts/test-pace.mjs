@@ -21,10 +21,17 @@ const {
 } = pace;
 
 let passed = 0;
+const failures = [];
+// Every test runs even if an earlier one fails, so one run shows everything that's broken.
 function test(name, fn) {
-  fn();
-  passed += 1;
-  console.log(`ok - ${name}`);
+  try {
+    fn();
+    passed += 1;
+    console.log(`ok - ${name}`);
+  } catch (error) {
+    failures.push(name);
+    console.log(`not ok - ${name}\n    ${String(error?.message ?? error).split("\n").slice(0, 4).join("\n    ")}`);
+  }
 }
 const near = (actual, expected, tolerance, message) =>
   assert.ok(Math.abs(actual - expected) <= tolerance, `${message ?? ""} expected ≈${expected}, got ${actual}`);
@@ -635,4 +642,76 @@ test("backfill plan: tags, Oct 3 session, comment sessions, completed_at, unmatc
   assert.equal(completed["t3-5"], undefined, "not done → no completed_at");
 });
 
-console.log(`\n${passed} passed`);
+// ── Fix round 1 ─────────────────────────────────────────────────────────────
+
+test("unpriced units: no speed for an unfinished type → time, finish, needed, size fit and on-track health are unknown, never 'no work left'", () => {
+  const project = {
+    unit_label: "stitches",
+    target_date: "2026-12-05",
+    pace_settings: { size: { label: "width", current: 195, step: 12, offset: 3, min: 27, unit: "stitches", work_types: ["sc"] } },
+  };
+  const tasks = [task("border", { unit_count: 100, work_type: "sc" }), task("other", { estimated_minutes: 30 })];
+  const items = ["o1", "o2", "o3", "o4"].map((id) => item(id, "other", 10, "waffle", { is_done: id !== "o4" }));
+  const sessions = ["o1", "o2", "o3"].map((id) => session({ task_id: "other", minutes: 5, item_ids: [id] }));
+  const forecast = computeForecast(input({ project, tasks, items, sessions }));
+  assert.deepEqual(forecast.unpriced_units, [{ work_type: "sc", units_left: 100 }]);
+  assert.deepEqual(forecast.unpriced_types, ["sc"]);
+  assert.equal(forecast.work_left_minutes, null);
+  assert.equal(forecast.work_left_hours, null);
+  assert.equal(forecast.projected_finish, null);
+  assert.equal(forecast.slack_days, null);
+  assert.equal(forecast.needed_minutes_per_day, null);
+  assert.equal(forecast.plan_cadence_minutes_per_day, null);
+  assert.equal(forecast.size_fit, null);
+  assert.equal(forecast.size_fit_reason, "unpriced_units");
+  assert.equal(forecast.health, "unknown", "3 counted sessions, but the finish can't be known");
+  assert.equal(forecast.priced_work_left_minutes, 5, "the priced part is still reported: 10 waffle left × 30 s measured");
+  const line = formatForecastLine(forecast);
+  assert.match(line, /100 sc stitches have no speed yet; log a session or set an estimate/);
+  assert.doesNotMatch(line, /no work left|needs \d+ min\/day|on track|behind/);
+  // Under 3 counted sessions it stays insufficient_data.
+  assert.equal(computeForecast(input({ project, tasks, items, sessions: sessions.slice(0, 2) })).health, "insufficient_data");
+});
+
+test("Missed and Parked tasks don't count as work left (task-level or row units), and don't lock the size", () => {
+  const tasks = [
+    task("missed", { status: "Missed", unit_count: 500, work_type: "sc", estimated_minutes: 50 }),
+    task("parked", { status: "Parked", estimated_minutes: 50 }),
+    task("parkedNoUnits", { status: "Parked", estimated_minutes: 40 }),
+    task("open", { estimated_minutes: 10 }),
+  ];
+  const items = [item("p1", "parked", 100, "sc"), item("x1", "open", 10, "sc")];
+  const project = { unit_label: "stitches", target_date: "2026-10-13", pace_settings: { size: { label: "width", current: 100, step: 10, offset: 0, min: 20, unit: "stitches", work_types: ["sc"] } } };
+  const forecast = computeForecast(input({ tasks, items, project }));
+  assert.deepEqual(forecast.work_left.map((row) => [row.work_type, row.units_left]), [["sc", 10]]);
+  assert.equal(forecast.unitless_minutes_left, 0, "a parked task without units adds nothing");
+  assert.notEqual(forecast.size_fit, null, "parked/missed units are not 'done', so they don't lock the size");
+});
+
+test("Session-comment year: the year that puts the date on or before the comment", () => {
+  const dec30 = backfill.parseSessionComment("Session · Dec 30 · 20 min · row 1", "2027-01-02T15:00:00Z");
+  assert.equal(dec30.date, "2026-12-30");
+  const same = backfill.parseSessionComment("Session · Oct 5 · 20 min · row 1", "2026-10-06T01:00:00Z");
+  assert.equal(same.date, "2026-10-05", "Oct 5 8 PM ET comment on Oct 5");
+  const sameDay = backfill.parseSessionComment("Session · Jan 2 · 20 min · row 1", "2027-01-02T15:00:00Z");
+  assert.equal(sameDay.date, "2027-01-02");
+});
+
+test("timing: fractional minutes are rejected; date and an ISO start must agree; re-anchoring keeps the ET clock time", () => {
+  assert.equal(parse.resolveSessionTiming({ date: "2026-10-04", minutes: 0.6 }).ok, false);
+  assert.equal(parse.resolveSessionTiming({ date: "2026-10-04", minutes: 1440.4 }).ok, false);
+  assert.equal(parse.resolveSessionTiming({ date: "2026-10-04", minutes: 61 }).ok, true);
+  const mismatch = parse.resolveSessionTiming({ date: "2026-10-03", start: "2026-10-04T17:38:00Z", minutes: 30 });
+  assert.equal(mismatch.ok, false);
+  assert.match(mismatch.error, /2026-10-04.*2026-10-03|date/);
+  const endOnly = parse.resolveSessionTiming({ date: "2026-10-03", end: "2026-10-04T18:39:00Z", minutes: 30 });
+  assert.equal(endOnly.ok, false, "with no start, the end must be on the date");
+  const lateNight = parse.resolveSessionTiming({ date: "2026-10-04", start: "2026-10-05T03:30:00Z", end: "2026-10-05T04:30:00Z" });
+  assert.equal(lateNight.ok, true, "11:30 PM–12:30 AM ET starts on the date");
+  assert.equal(parse.reanchorInstant("2026-10-04T17:38:00.000Z", "2026-10-04", "2026-10-03"), "2026-10-03T17:38:00.000Z");
+  assert.equal(parse.reanchorInstant("2026-11-02T18:38:00.000Z", "2026-11-02", "2026-10-30"), "2026-10-30T17:38:00.000Z", "1:38 PM ET across the DST change");
+  assert.equal(parse.reanchorInstant("2026-10-05T04:30:00.000Z", "2026-10-04", "2026-10-03"), "2026-10-04T04:30:00.000Z", "an end past midnight moves with its day");
+});
+
+console.log(`\n${passed} passed${failures.length ? `, ${failures.length} failed` : ""}`);
+if (failures.length) process.exit(1);
