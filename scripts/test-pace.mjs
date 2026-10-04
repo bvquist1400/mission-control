@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 
 const pace = await import("../src/lib/pace.ts");
 const parse = await import("../src/lib/work-sessions/parse.ts");
+const backfill = await import("../src/lib/work-sessions/backfill.ts");
 const {
   computeForecast,
   computePlanSpeeds,
@@ -551,6 +552,87 @@ test("times: ET clock times convert to UTC across DST; minutes and start–end m
   assert.equal(defaulted.value.session_date, "2026-10-04", "10:30 PM ET is still Oct 4");
   const iso = parse.resolveSessionTiming({ start: "2026-10-05T01:00:00Z", minutes: 30 });
   assert.equal(iso.value.session_date, "2026-10-04", "an ISO start sets the ET date");
+});
+
+// ── Backfill (dry-run plan) ─────────────────────────────────────────────────
+
+test("backfill: TIMELOG comments parse (aliases, clean=no → excluded with the right reason)", () => {
+  const row10 = backfill.parseTimelogComment("TIMELOG | 2026-10-04 | row 10 | type=tree-dc-colorwork | stitches=27 | start=13:20 | end=13:33 | minutes=13 | clean=no | note=upper bound; includes reading instructions for the row");
+  assert.deepEqual([row10.date, row10.rows, row10.start, row10.end, row10.minutes, row10.exclude, row10.excludeReason, row10.workType, row10.stitches],
+    ["2026-10-04", [10], 800, 813, 13, true, "reading-instructions", "colorwork-dc", 27]);
+  const rows = backfill.parseTimelogComment("TIMELOG | 2026-10-04 | rows 11-15 | type=tree-dc-colorwork | stitches=135 | start=13:38 | end=14:39 | minutes=61 | clean=unknown | note=wall-clock");
+  assert.deepEqual([rows.rows, rows.exclude, rows.flags], [[11, 12, 13, 14, 15], false, ["clean=unknown (counted)"]]);
+  assert.equal(backfill.parseTimelogComment("TIMELOG | 2026-10-04 | row 9 | minutes=5 | clean=no | note=dropped a stitch").excludeReason, "unclean");
+  assert.equal(backfill.parseTimelogComment("Brent: nice"), null);
+});
+
+test("backfill: 'Session ·' comments parse (year from the comment, shared PM, optional learning and minutes)", () => {
+  const parsed = backfill.parseSessionComment("Session · Oct 5 · 7:40–8:42 PM · 62 min · rows 11–12 · learning · note: first body rows · slow", "2026-10-06T01:00:00Z");
+  assert.deepEqual([parsed.date, parsed.start, parsed.end, parsed.minutes, parsed.rows, parsed.exclude, parsed.excludeReason, parsed.note],
+    ["2026-10-05", 19 * 60 + 40, 20 * 60 + 42, 62, [11, 12], true, "learning", "first body rows · slow"]);
+  const noon = backfill.parseSessionComment("Session · Oct 6 · 11:30–12:15 PM · row 13", "2026-10-06T18:00:00Z");
+  assert.deepEqual([noon.start, noon.end, noon.minutes, noon.exclude], [11 * 60 + 30, 12 * 60 + 15, null, false]);
+  assert.ok("error" in backfill.parseSessionComment("Session · sometime · 20 min", "2026-10-06T18:00:00Z"));
+});
+
+test("backfill plan: tags, Oct 3 session, comment sessions, completed_at, unmatched lines", () => {
+  const items = (prefix, texts, doneUpTo = -1) => texts.map((text, index) => ({ id: `${prefix}-${index}`, text, is_done: index <= doneUpTo, sort_order: index }));
+  const snapshot = {
+    project: { id: backfill.BLANKET_PROJECT_ID, name: "Blanket", target_date: "2026-12-05" },
+    sections: [
+      { id: "sw", name: "1. Swatch", planned_start: "2026-10-03", planned_end: "2026-10-10" },
+      { id: "body", name: "3. Blanket body", planned_start: "2026-10-19", planned_end: "2026-11-29" },
+      { id: "fin", name: "4. Finishing", planned_start: "2026-11-30", planned_end: "2026-12-05" },
+    ],
+    tasks: [
+      { id: "t1", title: "Step 1: Warm-up on a scrap chain", status: "Done", section_id: "sw", estimated_minutes: 30, checklist: items("t1", ["Chain 15 and work 2 rows of dc"], 0), comments: [] },
+      { id: "t2", title: "Step 2: Swatch rows 1–6", status: "Done", section_id: "sw", estimated_minutes: 60,
+        checklist: items("t2", ["Chain 28", "Row 1: sc across (27 stitches)", "Row 2: waffle setup row, dc across", "Row 3: waffle Row A", "Count the last row: 27 stitches"], 4), comments: [] },
+      { id: "t3", title: "Step 3: Swatch rows 7–19, tree band", status: "Planned", section_id: "sw", estimated_minutes: 150,
+        checklist: items("t3", ["Row 7 (band row 1): dc across in cream", "Row 8 (band row 2): 3-wide trunk row. Join green", "Row 9 (band row 3): 7-wide row", "Row 10 (band row 4): 5-wide row", "Row 11 (band row 5): 3-wide row", "Row 12 (band row 6): 1-wide tip row, shifted", "Row 13: something odd"], 4),
+        comments: [
+          { id: "c1", created_at: "2026-10-04T17:37:43Z", content: "TIMELOG | 2026-10-04 | row 10 | type=tree-dc-colorwork | stitches=27 | start=13:20 | end=13:33 | minutes=13 | clean=no | note=includes reading instructions" },
+          { id: "c2", created_at: "2026-10-04T18:39:31Z", content: "TIMELOG | 2026-10-04 | rows 11-12 | type=tree-dc-colorwork | stitches=60 | start=13:38 | end=14:39 | minutes=61 | clean=unknown | note=x" },
+          { id: "c3", created_at: "2026-10-06T01:00:00Z", content: "Session · Oct 5 · 7:40–8:42 PM · rows 13 · note: odd row" },
+          { id: "c4", created_at: "2026-10-06T01:00:00Z", content: "Session · Oct 5 · 7:40–8:42 PM · rows 40" },
+        ] },
+      { id: "t9", title: "Step 9: Foundation chain and row 1", status: "Backlog", section_id: "body", estimated_minutes: 60,
+        checklist: items("t9", ["Chain 196", "Row 1: sc in the 2nd chain from the hook and across", "Count again", "Place markers at stitch 8"]), comments: [] },
+      { id: "t20", title: "Step 20: Border round 1", status: "Backlog", section_id: "fin", estimated_minutes: 90, checklist: items("t20", ["First corner: 3 sc"]), comments: [] },
+      { id: "t22", title: "Step 22: Weave in the ends", status: "Backlog", section_id: "fin", estimated_minutes: 90, checklist: items("t22", ["Green ends"]), comments: [] },
+    ],
+    existing_source_refs: ["c1"],
+  };
+  const plan = backfill.buildBackfillPlan(snapshot);
+  const tag = (id) => plan.item_tags.find((entry) => entry.item_id === id);
+  assert.deepEqual([tag("t2-0").work_type, tag("t2-0").unit_count], ["chain", 28]);
+  assert.deepEqual([tag("t2-1").work_type, tag("t2-1").unit_count], ["sc", 27]);
+  assert.deepEqual([tag("t2-2").work_type, tag("t3-0").work_type, tag("t3-1").work_type, tag("t3-5").work_type], ["plain-dc", "plain-dc", "colorwork-dc", "colorwork-dc"]);
+  assert.deepEqual([tag("t9-0").unit_count, tag("t9-1").work_type, tag("t9-1").unit_count], [196, "sc", 195]);
+  assert.equal(tag("t1-0"), undefined, "the warm-up has no units");
+  assert.equal(plan.task_updates.find((update) => update.task_id === "t3").is_sample, true);
+  assert.equal(plan.task_updates.find((update) => update.task_id === "t9").is_sample, false);
+  assert.deepEqual(plan.task_updates.find((update) => update.task_id === "t20"), { task_id: "t20", title: "Step 20: Border round 1", is_sample: false, unit_count: 970, work_type: "sc", width: null });
+  assert.equal(plan.task_updates.some((update) => update.task_id === "t22"), false);
+  assert.deepEqual(plan.unmatched.map((entry) => entry.text), ["Row 13: something odd", "Session · Oct 5 · 7:40–8:42 PM · rows 40"]);
+  assert.ok(plan.rules_without_hits.includes("Border round 2 → task sc 980"), "rules that never hit are reported");
+
+  const oct3 = plan.sessions.find((entry) => entry.source_ref === "brent-chat-2026-10-04-oct3");
+  assert.deepEqual([oct3.task_id, oct3.minutes, oct3.exclude_from_stats, oct3.exclude_reason], [null, 300, true, "learning"]);
+  assert.deepEqual(oct3.item_ids.sort(), ["t2-0", "t2-1", "t2-2", "t2-3", "t3-0", "t3-1", "t3-2"].sort(), "step 2 unit rows + step 3 rows 7–9");
+  const c1 = plan.sessions.find((entry) => entry.source_ref === "c1");
+  assert.deepEqual([c1.exclude_from_stats, c1.exclude_reason, c1.already_stored, c1.item_ids], [true, "reading-instructions", true, ["t3-3"]]);
+  const c2 = plan.sessions.find((entry) => entry.source_ref === "c2");
+  assert.deepEqual([c2.minutes, c2.exclude_from_stats, c2.started_at, c2.ended_at], [61, false, "2026-10-04T17:38:00.000Z", "2026-10-04T18:39:00.000Z"]);
+  assert.ok(plan.warnings.some((warning) => /c2: stitches=60 but its rows are tagged 54/.test(warning)), "stitches= is cross-checked");
+  const c3 = plan.sessions.find((entry) => entry.source_ref === "c3");
+  assert.deepEqual([c3.session_date, c3.minutes, c3.exclude_from_stats], ["2026-10-05", 62, false]);
+  assert.ok(plan.warnings.some((warning) => /c3: row "Row 13: something odd" is linked but not ticked/.test(warning)));
+  // Done linked rows get completed_at: the session end, or 23:59 ET for Oct 3.
+  const completed = Object.fromEntries(plan.completed_at_updates.map((entry) => [entry.item_id, entry.completed_at]));
+  assert.equal(completed["t3-4"], "2026-10-04T18:39:00.000Z");
+  assert.equal(completed["t2-0"], "2026-10-04T03:59:00.000Z", "Oct 3 23:59 EDT");
+  assert.equal(completed["t3-5"], undefined, "not done → no completed_at");
 });
 
 console.log(`\n${passed} passed`);
