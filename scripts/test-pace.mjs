@@ -1118,5 +1118,48 @@ test("width table: your 14-day pace, 60/90/120 and full width; 'None' when nothi
   assert.equal(view.buildFitView(stubForecast({ size_fit: null, size_fit_reason: "locked" })), null);
 });
 
+test("sittings list: newest first, task + rows, s/unit when one work type, excluded ones say why; a project-level sitting has no single task", () => {
+  const tasks = [
+    { id: "t3", title: "Step 3: Swatch rows 7–19", status: "Planned", section_id: null, work_type: null, unit_count: null },
+    { id: "t4", title: "Step 4: Swatch rows 20–22", status: "Planned", section_id: null, work_type: null, unit_count: null },
+  ];
+  const rowsOf = (task_id, from, to, units, type) =>
+    Array.from({ length: to - from + 1 }, (_, n) => ({ id: `${task_id}-${from + n}`, task_id, text: `Row ${from + n}: x`, is_done: true, unit_count: units, work_type: type }));
+  const items = [...rowsOf("t3", 10, 15, 27, "colorwork-dc"), ...rowsOf("t4", 20, 22, 27, "waffle")];
+  const base = { note: null, exclude_from_stats: false, exclude_reason: null, extra_units: null, extra_work_type: null, started_at: null, ended_at: null };
+  const rows = view.buildSessionRows(
+    [
+      { ...base, id: "a", task_id: "t3", session_date: "2026-10-04", minutes: 13, exclude_from_stats: true, exclude_reason: "reading-instructions", item_ids: ["t3-10"], started_at: "2026-10-04T17:20:00Z", ended_at: "2026-10-04T17:33:00Z" },
+      { ...base, id: "b", task_id: "t3", session_date: "2026-10-04", minutes: 61, item_ids: [11, 12, 13, 14, 15].map((n) => `t3-${n}`), note: "wall-clock", started_at: "2026-10-04T17:38:00Z", ended_at: "2026-10-04T18:39:00Z" },
+      { ...base, id: "c", task_id: null, session_date: "2026-10-03", minutes: 300, exclude_from_stats: true, exclude_reason: "learning", item_ids: [] },
+      { ...base, id: "d", task_id: "t4", session_date: "2026-10-04", minutes: 28, item_ids: ["t4-20", "t4-21", "t4-22"], started_at: "2026-10-04T20:58:00Z", ended_at: "2026-10-04T21:26:00Z" },
+    ],
+    tasks, items, "stitches"
+  );
+  assert.deepEqual(rows.map((row) => row.id), ["d", "b", "a", "c"], "newest first (by end time within a day)");
+  const [d, b, a, c] = rows;
+  assert.deepEqual([d.when, d.what, d.rows, d.minutes], ["Oct 4", "Step 4: Swatch rows 20–22", "rows 20–22", 28]);
+  assert.equal(d.detail, "81 waffle · 20.7 s/stitch · 4:58–5:26 PM", "one type: minutes × 60 ÷ units");
+  assert.equal(b.rows, "rows 11–15");
+  assert.equal(b.detail, "135 colorwork-dc · 27.1 s/stitch · 1:38–2:39 PM");
+  assert.equal(b.note, "wall-clock");
+  assert.deepEqual([a.excluded, a.rows, a.detail], [true, "row 10", "Not counted: included reading the instructions · 1:20–1:33 PM"]);
+  assert.deepEqual([c.what, c.rows, c.detail, c.excluded], ["Several tasks (no single task)", "", "Not counted: learning, not counted toward speed", true]);
+  assert.equal(view.formatRowNumbers([11, 12, 13, 15, 17, 18]), "rows 11–13, 15, 17–18");
+  assert.equal(view.formatRowNumbers([10]), "row 10");
+});
+
+test("the Log-a-sitting form defaults to the task holding the lowest undone row", () => {
+  const tasks = [
+    { id: "done", title: "Done", status: "Done", section_id: null, work_type: null, unit_count: null },
+    { id: "t9", title: "Step 9", status: "Backlog", section_id: null, work_type: null, unit_count: null },
+    { id: "t10", title: "Step 10", status: "Backlog", section_id: null, work_type: null, unit_count: null },
+  ];
+  const item = (id, task_id, text, is_done) => ({ id, task_id, text, is_done, unit_count: null, work_type: null });
+  const items = [item("a", "done", "Row 1", false), item("b", "t10", "Row 2: x", false), item("c", "t9", "Row 1: x", true), item("d", "t9", "Row 7: x", false), item("e", "t9", "Count", false)];
+  assert.equal(view.defaultSittingTask(tasks, items), "t10", "row 2 is the lowest undone row of an open task");
+  assert.equal(view.defaultSittingTask(tasks, [item("c", "t9", "Row 1: x", true)]), null);
+});
+
 console.log(`\n${passed} passed${failures.length ? `, ${failures.length} failed` : ""}`);
 if (failures.length) process.exit(1);
