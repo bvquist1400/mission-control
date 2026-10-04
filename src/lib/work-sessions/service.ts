@@ -29,6 +29,7 @@ import {
   matchRows,
   parseRowsSpec,
   reanchorInstant,
+  reanchorSession,
   resolveSessionTiming,
 } from "@/lib/work-sessions/parse";
 import type { WorkSession } from "@/types/database";
@@ -602,6 +603,29 @@ async function sessionResult(
 }
 
 /**
+ * A retry with an idempotency key already used. Same target (project + task):
+ * the first session, described from its own project. A different target: 409,
+ * because the key names another sitting and answering with it would mislead.
+ */
+async function duplicateResult(
+  supabase: SupabaseClient,
+  userId: string,
+  existingId: string,
+  target: ResolvedTarget,
+  now?: Date
+): Promise<LogWorkSessionResult> {
+  const existing = await readSession(supabase, userId, existingId);
+  if (existing.project_id !== target.projectId || existing.task_id !== (target.task?.id ?? null)) {
+    throw new WorkSessionServiceError(
+      409,
+      "This idempotency_key was already used for a different sitting (another task or project); use a new key",
+      { session_id: existing.id, project_id: existing.project_id, task_id: existing.task_id }
+    );
+  }
+  return sessionResult(supabase, userId, existing.id, existing.project_id, target.task, 0, true, now);
+}
+
+/**
  * Logs one sitting. Inputs are parsed and resolved here (rows → item ids,
  * times); the write itself is one RPC (`work_session_create`): the session,
  * its links and the row ticks commit together or not at all, and the RPC
@@ -642,7 +666,7 @@ export async function logWorkSession(
   // A retried call with the same idempotency key returns the first session.
   if (idempotencyRef) {
     const existing = await findBySourceRef(supabase, userId, idempotencyRef);
-    if (existing) return sessionResult(supabase, userId, existing, target.projectId, target.task, 0, true, options.now);
+    if (existing) return duplicateResult(supabase, userId, existing, target, options.now);
   }
   const itemIds = await resolveItemIds(supabase, userId, target, body.item_ids, body.rows);
 
@@ -669,7 +693,7 @@ export async function logWorkSession(
     // Two identical retries racing: the loser returns the winner's session.
     if (error.code === "23505" && idempotencyRef) {
       const existing = await findBySourceRef(supabase, userId, idempotencyRef);
-      if (existing) return sessionResult(supabase, userId, existing, target.projectId, target.task, 0, true, options.now);
+      if (existing) return duplicateResult(supabase, userId, existing, target, options.now);
     }
     throw rpcError(error);
   }
@@ -737,13 +761,17 @@ export async function updateWorkSession(
   if (["date", "start", "end", "minutes"].some((key) => key in body)) {
     const newDate = "date" in body ? (body.date === null ? null : String(body.date)) : current.session_date;
     if (!newDate || !isDateOnly(newDate)) bad("date must be YYYY-MM-DD (ET)");
+    // Only the date changed: move the stored times to that day (start keeps its
+    // ET clock time, end = start + minutes, so a DST night keeps its length).
+    const dateOnly = !("start" in body) && !("end" in body) && !("minutes" in body) && newDate !== current.session_date;
+    const moved = dateOnly ? reanchorSession(current, current.session_date, newDate as string) : null;
     const moveStored = (stored: string | null) =>
       stored && newDate !== current.session_date ? reanchorInstant(stored, current.session_date, newDate as string) : stored;
     const timingInput = {
       date: newDate,
       // Untouched stored times follow a date change, keeping their ET clock time.
-      start: "start" in body ? (body.start === null ? null : String(body.start)) : moveStored(current.started_at),
-      end: "end" in body ? (body.end === null ? null : String(body.end)) : moveStored(current.ended_at),
+      start: "start" in body ? (body.start === null ? null : String(body.start)) : moved ? moved.started_at : moveStored(current.started_at),
+      end: "end" in body ? (body.end === null ? null : String(body.end)) : moved ? moved.ended_at : moveStored(current.ended_at),
       // A new start/end without new minutes recomputes minutes from them.
       minutes: "minutes" in body
         ? (body.minutes as number | null)

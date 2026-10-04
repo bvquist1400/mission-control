@@ -70,6 +70,27 @@ export function reanchorInstant(iso: string, fromDate: string, toDate: string): 
   return etLocalToUtcIso(addDateDays(etDateOf(iso), shift), etMinutesOf(iso));
 }
 
+/**
+ * Moves a stored sitting to another date when only the date changes: the start
+ * keeps its ET clock time and the end follows the start by the stored minutes
+ * (so a night that crosses a DST change keeps its length). With no start, the
+ * end keeps its clock time.
+ */
+export function reanchorSession(
+  stored: { started_at: string | null; ended_at: string | null; minutes: number },
+  fromDate: string,
+  toDate: string
+): { started_at: string | null; ended_at: string | null } {
+  if (stored.started_at) {
+    const start = reanchorInstant(stored.started_at, fromDate, toDate);
+    return {
+      started_at: start,
+      ended_at: stored.ended_at ? new Date(Date.parse(start) + stored.minutes * 60000).toISOString() : null,
+    };
+  }
+  return { started_at: null, ended_at: stored.ended_at ? reanchorInstant(stored.ended_at, fromDate, toDate) : null };
+}
+
 /** UTC ISO string for an ET wall-clock time on an ET date. */
 export function etLocalToUtcIso(date: string, minutesOfDay: number): string {
   const naive = Date.UTC(Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1, Number(date.slice(8, 10))) + minutesOfDay * 60000;

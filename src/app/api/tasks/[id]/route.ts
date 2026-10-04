@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   ProjectSectionServiceError,
   resolveTaskProjectSectionState,
@@ -50,36 +49,6 @@ function asStringOrNull(value: unknown): string | null {
 
 const TASK_MOVE_WITH_SESSIONS_ERROR =
   'This task has logged work sessions in its project, so it can\'t move to another project. Delete or move those sessions first (list_work_sessions / delete_work_session).';
-
-/** Work sessions on this task, plus sessions linking any of its checklist rows. */
-async function countTaskSessionUse(
-  supabase: SupabaseClient,
-  userId: string,
-  taskId: string
-): Promise<number> {
-  const { count: sessions, error: sessionError } = await supabase
-    .from('work_sessions')
-    .select('id', { count: 'exact', head: true })
-    .eq('user_id', userId)
-    .eq('task_id', taskId);
-  if (sessionError) throw sessionError;
-  if (sessions) return sessions;
-  const { data: items, error: itemError } = await supabase
-    .from('task_checklist_items')
-    .select('id')
-    .eq('user_id', userId)
-    .eq('task_id', taskId);
-  if (itemError) throw itemError;
-  const itemIds = (items ?? []).map((item: { id: string }) => item.id);
-  if (itemIds.length === 0) return 0;
-  const { count: links, error: linkError } = await supabase
-    .from('work_session_items')
-    .select('session_id', { count: 'exact', head: true })
-    .eq('user_id', userId)
-    .in('checklist_item_id', itemIds);
-  if (linkError) throw linkError;
-  return links ?? 0;
-}
 
 // GET /api/tasks/[id] - Get a single task
 export async function GET(
@@ -433,17 +402,6 @@ export async function PATCH(
       }
     }
 
-    // Pace tracking (migration 059): a task whose logged work sessions or
-    // linked rows live in its project can't change project. The DB guard
-    // (trg_tasks_guard_project_move) enforces the same rule for every writer.
-    const currentProjectId = typeof currentTask?.project_id === 'string' ? currentTask.project_id : null;
-    if ('project_id' in updates && currentTask && (updates.project_id ?? null) !== currentProjectId) {
-      const sessionUse = await countTaskSessionUse(supabase, userId, id);
-      if (sessionUse > 0) {
-        return NextResponse.json({ error: TASK_MOVE_WITH_SESSIONS_ERROR }, { status: 409 });
-      }
-    }
-
     const sprintId = updates.sprint_id;
     if (typeof sprintId === 'string') {
       const { data: sprint, error: sprintError } = await supabase
@@ -483,6 +441,10 @@ export async function PATCH(
       .single();
 
     if (error) {
+      // Pace tracking (migration 059): the DB guard trg_tasks_guard_project_move
+      // rejects moving a task whose sessions or linked rows live in its project.
+      // It runs under the task's row lock, so it also covers a session logged at
+      // the same moment; no pre-check here (it would race and build long URLs).
       if (error.code === '55006') {
         return NextResponse.json({ error: TASK_MOVE_WITH_SESSIONS_ERROR }, { status: 409 });
       }
