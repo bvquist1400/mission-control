@@ -50,7 +50,7 @@ External task identities are stored as the nullable pair `external_source_system
 
 - RLS: 4-policy pattern (SELECT, INSERT, UPDATE, DELETE) on every table
 - `updated_at` triggers: reuse `set_updated_at()` function
-- Migrations: `supabase/migrations/` (latest: 057); rollbacks in `supabase/rollbacks/`
+- Migrations: `supabase/migrations/` (latest: 059); rollbacks in `supabase/rollbacks/`
 - New tables get explicit `GRANT ... TO authenticated, service_role` (see 055): newer Supabase stacks, including a fresh `supabase start`, no longer auto-grant public tables to the API roles
 
 ### Schema Types
@@ -152,6 +152,16 @@ Controls with behaviour (Button, Input) are components; pure-styling primitives 
 - `/r/task/[id]` is the redesigned task page (`TaskRecordPage`, model `buildTaskPageView()` in `src/lib/task-page.ts`, data `loadTaskPageInput()` in `src/lib/task-page-queries.ts`): "Where this stands" (the status line, else a sentence built from owner/status/blockers/checklist) with the owner chip and status; Brent's answer box open when he owns it; the checklist beside the activity (stacked under 720 px); one-line comment gists that unfold to the full Markdown. Gists are computed in code, never by an LLM: `commentGist()` = the first sentence of the first paragraph, else the first ~140 characters. Comments have no author column, so `commentAuthor()` reads the house prefixes ("Brent…:", "PM 9/28 …:", "HANDOFF", "REVIEW", "Claimed by"); comments typed on the page are saved as "Brent: …". Other record kinds keep the plain reader.
 - Tests: `npm run test:portfolio`, `test:task-handoff` and `test:task-page` (pure), `test:task-owner-db` (local Supabase stack; drives the MCP tools and a hand-back through the real API handlers), `test:portfolio-db` (local stack + `PORTFOLIO_TEST_DB_CONTAINER`: 057 checks, rollback/re-apply, the MCP section tools, and a before/after proof that planned dates leave tasks, priority, the AM/EOD digest and the Portfolio outside the timeline unchanged).
 
+### Pace tracking (slice 1: data + MCP tools, no UI)
+
+- Migration 059: `projects.unit_label` (NULL = no pace tracking) + `pace_settings` (JSONB, validated by `parsePaceSettings()` in `src/lib/pace.ts`); `tasks.unit_count` / `work_type` / `is_sample` (a swatch or test piece: its speeds are always labelled "sample"); checklist rows get `unit_count`, `work_type` (overrides the task's), `completed_at` (trigger: set on tick unless supplied, cleared on untick) and `created_at`. Work types are lowercase slugs (`normalizeWorkType`).
+- `work_sessions` = one sitting (ET `session_date`, optional start/end, `minutes`, `exclude_from_stats` + reason, `source` manual/agent/backfill, `source_ref` unique per user for idempotent backfills); `task_id` NULL = a multi-task sitting. `work_session_items` links the rows it covered. Triggers enforce ownership and that linked rows are in the session's project, and roll `tasks.actual_minutes` up from sessions (NULL when none are left; task-less sessions don't roll up).
+- The forecast is computed, never stored: `computeForecast()` in `src/lib/pace.ts` (pure, `npm run test:pace`). Speeds are a ratio of sums over the last 8 counted sessions per (type, main/sample); excluded sessions count toward the 14-day cadence but never speed; speed tiers measured → measured_sample → other_projects → plan_x_ratio → plan → none, each returned with its source and session count.
+- One service path: `src/lib/work-sessions/service.ts` behind `/api/work-sessions`, `/api/work-sessions/[id]`, `/api/projects/[id]/forecast`, `/api/pace-rates` and the MCP tools `log_work_session`, `list_work_sessions`, `update_work_session`, `delete_work_session`, `get_project_forecast`, `get_pace_rates`. Rows shorthand ("11-15", "row 10") matches items starting "Row N" and never guesses (`src/lib/work-sessions/parse.ts`). `PATCH /api/tasks/[id]/checklist` validates every item first and reports failed rows (207/404) instead of skipping them.
+- Sessions are only read by these routes/tools. The rolled-up `actual_minutes` feeds `calculateCapacity`'s estimation accuracy, whose callers all drop personal tasks first (`test:personal-work-reviews` pins it).
+- Backfill: `scripts/pace-backfill.mjs` (dry run by default, `--snapshot <file>` or `PACE_BACKFILL_SUPABASE_URL` + `PACE_BACKFILL_SERVICE_ROLE_KEY`; `--apply` to a non-local host needs `--confirm-host`); logic in `src/lib/work-sessions/backfill.ts`.
+- Tests: `npm run test:pace` (pure) and `test:pace-db` (local stack + `PACE_TEST_DB_CONTAINER`; optional `PACE_TEST_SNAPSHOT` runs the backfill acceptance check).
+
 ## Key Files
 
 | Purpose | Path |
@@ -192,6 +202,8 @@ Controls with behaviour (Button, Input) are components; pure-styling primitives 
 | Task owner fields | `src/lib/task-owner.ts`, `supabase/migrations/056_add_task_owner.sql` |
 | Task page (`/r/task/*`) | `src/components/portfolio/TaskRecordPage.tsx`, `src/lib/task-page.ts` |
 | Section planned dates | `src/lib/project-sections.ts` (`normalizeProjectSectionPlannedDates`), `supabase/migrations/057_add_section_planned_dates.sql` |
+| Pace forecast (pure) | `src/lib/pace.ts` |
+| Work sessions service / backfill | `src/lib/work-sessions/`, `supabase/migrations/059_add_work_sessions_and_units.sql` |
 | EOD routine prompt | `docs/routines/eod.md` |
 
 ## Briefing Model Note
