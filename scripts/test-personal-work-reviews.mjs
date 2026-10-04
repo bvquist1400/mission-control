@@ -18,7 +18,8 @@ const { workWeeklyReviewRead, stripPersonalFromStoredEodReview } = await load("s
 const { workMonthlyReviewRead } = await load("src/lib/work-intelligence/monthly-review.ts");
 const { readBriefingOpenReviewItems } = await load("src/lib/briefing/open-review-items.ts");
 const { buildDailyBriefDigest } = await load("src/lib/briefing/digest.ts");
-const { excludePersonalCommitments, excludePersonalProjectUpdates } = await load("src/lib/personal-exclusion.ts");
+const { excludePersonalCommitments, excludePersonalProjectUpdates, excludePersonalTasks } = await load("src/lib/personal-exclusion.ts");
+const { calculateCapacity } = await load("src/lib/capacity.ts");
 
 /** A chainable, thenable stand-in for the Supabase query builder. Honors `.in()`; ignores everything else. */
 function makeSupabase(tables) {
@@ -307,6 +308,42 @@ await test("briefing digest: personal tasks, their commitments and their review 
   const digest = await buildDailyBriefDigest({ supabase: makeSupabase(tables), userId: "user-1", mode: "morning", date: DAY });
   assertNoPersonal(digest, "briefing digest");
   assert.ok(JSON.stringify(digest).includes("w-open"), "the work task is still in the digest");
+});
+
+// Pace tracking (migration 059) rolls work-session minutes into tasks.actual_minutes,
+// which feeds the capacity estimate's estimation accuracy. A hobby project's
+// sessions must never move the work numbers.
+await test("capacity: a personal task's session-rolled actual_minutes never changes work estimation accuracy or capacity", async () => {
+  const work = makeTask("w-acc", { status: "Done", estimated_minutes: 60, actual_minutes: 60 });
+  const personal = makeTask("p-acc-proj", {
+    status: "Done", estimated_minutes: 60, actual_minutes: 374,
+    project_id: PERSONAL_PROJECT.id, project: PERSONAL_PROJECT, implementation_id: null, implementation: null,
+  });
+  const unfiltered = calculateCapacity([work, personal], new Set(), 0);
+  assert.notEqual(unfiltered.breakdown.estimation_accuracy, 1, "sensitivity: unfiltered, the personal actual would move it");
+  const filtered = calculateCapacity(excludePersonalTasks([work, personal]), new Set(), 0);
+  assert.equal(filtered.breakdown.estimation_accuracy, 1, "work only: 60 actual / 60 estimated");
+  assert.deepEqual(filtered, calculateCapacity([work], new Set(), 0));
+
+  // The briefing digest's capacity numbers are identical whether or not the
+  // personal tasks (with big session-rolled actuals) are in the database.
+  const withActuals = (tasks) => tasks.map((task) => (task.id.startsWith("p-") ? { ...task, actual_minutes: 374 } : task));
+  // An open personal task due today (capacity reads "today" from the clock) with a big estimate:
+  // if it leaked, required minutes and the RAG would change.
+  const personalDueToday = makeTask("p-due-today-proj", {
+    status: "In Progress", estimated_minutes: 480, actual_minutes: 374, due_at: new Date().toISOString(),
+    project_id: PERSONAL_PROJECT.id, project: PERSONAL_PROJECT, implementation_id: null, implementation: null,
+  });
+  const digestWith = await buildDailyBriefDigest({
+    supabase: makeSupabase(allTables({ tasks: withActuals([...taskSet(), work, personal, personalDueToday]) })), userId: "user-1", mode: "morning", date: DAY,
+  });
+  const digestWithout = await buildDailyBriefDigest({
+    supabase: makeSupabase(allTables({ tasks: [...taskSet(), work].filter((task) => !task.id.startsWith("p-")) })), userId: "user-1", mode: "morning", date: DAY,
+  });
+  const capacityOf = (digest) => ({
+    rag: digest.signals.capacity_rag, available: digest.signals.available_minutes, required: digest.signals.required_minutes,
+  });
+  assert.deepEqual(capacityOf(digestWith), capacityOf(digestWithout));
 });
 
 await test("excludePersonalCommitments and excludePersonalProjectUpdates (object and array relations)", () => {
