@@ -24,12 +24,14 @@ export const MIN_COUNTED_SESSIONS_FOR_HEALTH = 3;
 export const SIZE_FIT_FIXED_CADENCES = [60, 90, 120] as const;
 export const SAMPLE_SPEED_LABEL =
   "from the swatch/sample — rows are narrower, so per-row overhead makes this slower than the main work";
-const CLOSED_TASK_STATUSES = new Set(["Done", "Missed"]);
+/** Tasks whose remaining units are not work left: finished, missed or set aside. */
+const INACTIVE_TASK_STATUSES = new Set(["Missed", "Parked"]);
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type PaceScope = "main" | "sample";
 export type SpeedSource = "measured" | "measured_sample" | "other_projects" | "plan_x_ratio" | "plan" | "none";
-export type PaceHealth = "insufficient_data" | "on_track" | "behind" | "no_target";
+/** `unknown`: enough sessions, but some unfinished units have no speed, so the finish can't be known. */
+export type PaceHealth = "insufficient_data" | "on_track" | "behind" | "no_target" | "unknown";
 
 // ── Settings ────────────────────────────────────────────────────────────────
 
@@ -217,11 +219,19 @@ export interface UnitEntry {
   work_type: string;
   units: number;
   scope: PaceScope;
+  /** Ticked, or its task is Done. */
   done: boolean;
+  /** Its task is Missed or Parked: not done, but not work left either. */
+  inactive: boolean;
 }
 
+function isInactive(task: PaceTaskInput): boolean {
+  return INACTIVE_TASK_STATUSES.has(task.status);
+}
+
+/** Done, Missed or Parked: no work left on it. */
 function isClosed(task: PaceTaskInput): boolean {
-  return CLOSED_TASK_STATUSES.has(task.status);
+  return task.status === "Done" || isInactive(task);
 }
 
 function positive(value: number | null | undefined): number {
@@ -231,7 +241,8 @@ function positive(value: number | null | undefined): number {
 /**
  * Every unit-bearing thing in the project: checklist rows with units (type =
  * row type ?? task type), or the task itself when none of its rows carry units.
- * Rows of a closed task (Done / Missed) count as done.
+ * Rows of a Done task count as done; units of a Missed or Parked task are
+ * `inactive` (not work left, but not done either).
  */
 export function buildUnitEntries(tasks: PaceTaskInput[], items: PaceItemInput[]): UnitEntry[] {
   const itemsByTask = new Map<string, PaceItemInput[]>();
@@ -243,7 +254,8 @@ export function buildUnitEntries(tasks: PaceTaskInput[], items: PaceItemInput[])
   const entries: UnitEntry[] = [];
   for (const task of tasks) {
     const scope: PaceScope = task.is_sample ? "sample" : "main";
-    const closed = isClosed(task);
+    const finished = task.status === "Done";
+    const inactive = isInactive(task);
     const unitItems = (itemsByTask.get(task.id) ?? []).filter((item) => positive(item.unit_count) > 0);
     if (unitItems.length > 0) {
       for (const item of unitItems) {
@@ -255,7 +267,8 @@ export function buildUnitEntries(tasks: PaceTaskInput[], items: PaceItemInput[])
           work_type: item.work_type ?? task.work_type ?? UNTYPED_WORK_TYPE,
           units: positive(item.unit_count),
           scope,
-          done: closed || item.is_done,
+          done: finished || item.is_done,
+          inactive,
         });
       }
     } else if (positive(task.unit_count) > 0) {
@@ -267,7 +280,8 @@ export function buildUnitEntries(tasks: PaceTaskInput[], items: PaceItemInput[])
         work_type: task.work_type ?? UNTYPED_WORK_TYPE,
         units: positive(task.unit_count),
         scope,
-        done: task.status === "Done",
+        done: finished,
+        inactive,
       });
     }
   }
@@ -596,10 +610,15 @@ export interface PaceForecast {
   work_left: WorkLeftByType[];
   /** Open tasks without units: estimate × (1 − ticked share of its checklist). */
   unitless_minutes_left: number;
-  /** Units left with no speed at all (source none) are listed here and not in work_left_minutes. */
+  /** Types with units left but no speed at all (source none). */
   unpriced_types: string[];
-  work_left_minutes: number;
-  work_left_hours: number;
+  /** The same, with the units left. While non-empty, every time-based output below is null / unknown. */
+  unpriced_units: Array<{ work_type: string; units_left: number }>;
+  /** Null while any unfinished type is unpriced. */
+  work_left_minutes: number | null;
+  work_left_hours: number | null;
+  /** Minutes for the units that do have a speed, plus unit-less tasks (always computed). */
+  priced_work_left_minutes: number;
   /** Minutes per day over the last 14 days, including excluded sessions (it is real time). */
   cadence_minutes_per_day: number;
   sessions_in_cadence_window: number;
@@ -612,7 +631,7 @@ export interface PaceForecast {
   slack_days: number | null;
   health: PaceHealth;
   size_fit: SizeFit | null;
-  size_fit_reason: "not_configured" | "locked" | "no_target" | "no_days_left" | null;
+  size_fit_reason: "not_configured" | "locked" | "unpriced_units" | "no_target" | "no_days_left" | null;
 }
 
 export function round(value: number, places = 1): number {
@@ -632,7 +651,7 @@ export function computeForecast(input: PaceInput): PaceForecast {
   // Units left per type and scope.
   const leftByType = new Map<string, { main: number; sample: number }>();
   for (const entry of entries) {
-    if (entry.done) continue;
+    if (entry.done || entry.inactive) continue;
     const acc = leftByType.get(entry.work_type) ?? { main: 0, sample: 0 };
     acc[entry.scope] += entry.units;
     leftByType.set(entry.work_type, acc);
@@ -685,7 +704,13 @@ export function computeForecast(input: PaceInput): PaceForecast {
   }
 
   const unitMinutes = [...minutesByTypeScope.values()].reduce((sum, value) => sum + value, 0);
-  const workLeftMinutes = unitMinutes + unitlessMinutes;
+  const pricedWorkLeftMinutes = unitMinutes + unitlessMinutes;
+  // While any unfinished type has no speed, the total (and everything built on
+  // it) is unknown: pricing those units at 0 would claim a false finish.
+  const unpricedUnits = workLeft
+    .filter((row) => row.seconds_per_unit === null)
+    .map((row) => ({ work_type: row.work_type, units_left: row.units_left }));
+  const workLeftMinutes: number | null = unpricedUnits.length > 0 ? null : pricedWorkLeftMinutes;
 
   // Cadence: every session minute in the last 14 days (today included) ÷ 14.
   const windowStart = addDays(today, -(CADENCE_WINDOW_DAYS - 1));
@@ -694,7 +719,9 @@ export function computeForecast(input: PaceInput): PaceForecast {
 
   // Available days: from max(today, earliest planned start of a section that
   // still has unit work left) to the target date, inclusive.
-  const sectionsWithWork = new Set(entries.filter((entry) => !entry.done && entry.section_id).map((entry) => entry.section_id));
+  const sectionsWithWork = new Set(
+    entries.filter((entry) => !entry.done && !entry.inactive && entry.section_id).map((entry) => entry.section_id)
+  );
   const starts = input.sections
     .filter((section) => sectionsWithWork.has(section.id) && section.planned_start)
     .map((section) => section.planned_start as string)
@@ -702,20 +729,25 @@ export function computeForecast(input: PaceInput): PaceForecast {
   const availableFrom = starts.length > 0 && starts[0] > today ? starts[0] : today;
   const target = project.target_date ? project.target_date.slice(0, 10) : null;
   const availableDays = target ? Math.max(0, daysBetween(availableFrom, target) + 1) : null;
-  const needed = availableDays && availableDays > 0 ? workLeftMinutes / availableDays : null;
-  const planCadence = availableDays && availableDays > 0 ? (planUnitMinutes + unitlessMinutes) / availableDays : null;
+  const needed = workLeftMinutes !== null && availableDays && availableDays > 0 ? workLeftMinutes / availableDays : null;
+  const planCadence = unpricedUnits.length === 0 && availableDays && availableDays > 0
+    ? (planUnitMinutes + unitlessMinutes) / availableDays
+    : null;
 
-  const projectedFinish = workLeftMinutes <= 0
-    ? today
-    : cadence > 0
-      ? addDays(today, Math.ceil(workLeftMinutes / cadence))
-      : null;
+  const projectedFinish = workLeftMinutes === null
+    ? null
+    : workLeftMinutes <= 0
+      ? today
+      : cadence > 0
+        ? addDays(today, Math.ceil(workLeftMinutes / cadence))
+        : null;
   const slack = target && projectedFinish ? daysBetween(projectedFinish, target) : null;
 
   const countedSessions = sessions.filter((session) => !session.exclude_from_stats).length;
   let health: PaceHealth;
   if (countedSessions < MIN_COUNTED_SESSIONS_FOR_HEALTH) health = "insufficient_data";
   else if (!target) health = "no_target";
+  else if (workLeftMinutes === null) health = "unknown";
   else health = projectedFinish !== null && projectedFinish <= target ? "on_track" : "behind";
 
   // Size fit.
@@ -726,12 +758,14 @@ export function computeForecast(input: PaceInput): PaceForecast {
   if (!size) sizeFitReason = "not_configured";
   else if (entries.some((entry) => entry.scope === "main" && entry.done && size.work_types.includes(entry.work_type))) {
     sizeFitReason = "locked";
-  } else if (availableDays === null) sizeFitReason = "no_target";
+  } else if (workLeftMinutes === null) sizeFitReason = "unpriced_units";
+  else if (availableDays === null) sizeFitReason = "no_target";
   else if (availableDays <= 0) sizeFitReason = "no_days_left";
   else {
     let scaled = 0;
     for (const type of size.work_types) scaled += minutesByTypeScope.get(`${type}\u0000main`) ?? 0;
-    const fixed = workLeftMinutes - scaled;
+    // Reached only when nothing is unpriced, so the priced total is the total.
+    const fixed = pricedWorkLeftMinutes - scaled;
     const minutesAt = (width: number) => fixed + (scaled * width) / size.current;
     const candidates: number[] = [];
     for (let width = size.offset; width <= size.current; width += size.step) {
@@ -753,7 +787,7 @@ export function computeForecast(input: PaceInput): PaceForecast {
       label: size.label,
       unit: size.unit,
       current: size.current,
-      needed_minutes_per_day_at_current: round(workLeftMinutes / availableDays, 1),
+      needed_minutes_per_day_at_current: round(pricedWorkLeftMinutes / availableDays, 1),
       scaled_minutes_left: round(scaled, 1),
       fixed_minutes_left: round(fixed, 1),
       fits,
@@ -783,8 +817,10 @@ export function computeForecast(input: PaceInput): PaceForecast {
     work_left: workLeft,
     unitless_minutes_left: round(unitlessMinutes, 1),
     unpriced_types: unpriced,
-    work_left_minutes: round(workLeftMinutes, 0),
-    work_left_hours: round(workLeftMinutes / 60, 1),
+    unpriced_units: unpricedUnits,
+    work_left_minutes: workLeftMinutes === null ? null : round(workLeftMinutes, 0),
+    work_left_hours: workLeftMinutes === null ? null : round(workLeftMinutes / 60, 1),
+    priced_work_left_minutes: round(pricedWorkLeftMinutes, 0),
     cadence_minutes_per_day: round(cadence, 1),
     sessions_in_cadence_window: windowSessions.length,
     plan_cadence_minutes_per_day: planCadence === null ? null : round(planCadence, 1),
@@ -870,7 +906,12 @@ export function formatForecastLine(forecast: PaceForecast, focusType?: string | 
   } else if (measuredFocus) {
     parts.push(`${formatWorkType(measuredFocus.work_type)} ${measuredFocus.seconds_per_unit.toFixed(1)} s/${unit} (${measuredFocus.scope === "sample" ? "swatch" : "measured"}, ${measuredFocus.n_sessions} session${measuredFocus.n_sessions === 1 ? "" : "s"})`);
   }
-  if (forecast.work_left_minutes <= 0) {
+  if (forecast.unpriced_units.length > 0) {
+    const label = forecast.unit_label?.trim() || "units";
+    const list = forecast.unpriced_units.map((entry) => `${entry.units_left} ${entry.work_type} ${label}`);
+    const joined = list.length > 1 ? `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}` : list[0];
+    parts.push(`${joined} ${list.length === 1 && forecast.unpriced_units[0].units_left === 1 ? "has" : "have"} no speed yet; log a session or set an estimate`);
+  } else if (forecast.work_left_minutes === null || forecast.work_left_minutes <= 0) {
     parts.push("no work left");
   } else if (forecast.needed_minutes_per_day !== null && forecast.target_date) {
     parts.push(`needs ${Math.round(forecast.needed_minutes_per_day)} min/day to finish by ${formatShortDate(forecast.target_date)}`);
