@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isPostgrestNotFound } from '@/lib/supabase/errors';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
+import { normalizeUnitCount, normalizeWorkType } from '@/lib/pace';
 
 // GET /api/tasks/[id]/checklist - Get checklist items for a task
 export async function GET(
@@ -106,6 +107,11 @@ export async function POST(
 }
 
 // PATCH /api/tasks/[id]/checklist - Update checklist items (bulk)
+// Each item needs an id and at least one of is_done, text, sort_order,
+// unit_count, work_type. Every item is validated before any is written (an
+// invalid item → 400, nothing changes). All written → 200 with the updated
+// rows (unchanged contract). Some rows not found / failed → 207
+// { updated, failed }; none written → 404/500 { updated: [], failed }.
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -124,25 +130,61 @@ export async function PATCH(
       return NextResponse.json({ error: 'items array is required' }, { status: 400 });
     }
 
-    const results = [];
+    const planned: Array<{ id: string; updates: Record<string, unknown> }> = [];
+    const invalid: Array<{ index: number; id: string | null; error: string }> = [];
 
-    for (const item of body.items) {
-      const itemId = typeof item.id === 'string' ? item.id : null;
+    body.items.forEach((item, index) => {
+      const itemId = item && typeof item.id === 'string' && item.id.trim() ? item.id.trim() : null;
       if (!itemId) {
-        continue;
+        invalid.push({ index, id: null, error: 'id is required' });
+        return;
       }
 
       const updates: Record<string, unknown> = {};
-      if ('is_done' in item && typeof item.is_done === 'boolean') updates.is_done = item.is_done;
-      if ('text' in item && typeof item.text === 'string' && item.text.trim().length > 0) {
-        updates.text = item.text.trim();
+      const errors: string[] = [];
+      if ('is_done' in item) {
+        if (typeof item.is_done === 'boolean') updates.is_done = item.is_done;
+        else errors.push('is_done must be true or false');
       }
-      if ('sort_order' in item && typeof item.sort_order === 'number') updates.sort_order = item.sort_order;
-
-      if (Object.keys(updates).length === 0) {
-        continue;
+      if ('text' in item) {
+        if (typeof item.text === 'string' && item.text.trim().length > 0) updates.text = item.text.trim();
+        else errors.push('text must be a non-empty string');
+      }
+      if ('sort_order' in item) {
+        if (typeof item.sort_order === 'number' && Number.isFinite(item.sort_order)) updates.sort_order = item.sort_order;
+        else errors.push('sort_order must be a number');
+      }
+      if ('unit_count' in item) {
+        const units = normalizeUnitCount(item.unit_count);
+        if (units.ok) updates.unit_count = units.value;
+        else errors.push(units.error);
+      }
+      if ('work_type' in item) {
+        const workType = normalizeWorkType(item.work_type);
+        if (workType.ok) updates.work_type = workType.value;
+        else errors.push(workType.error);
       }
 
+      if (errors.length > 0) {
+        invalid.push({ index, id: itemId, error: errors.join('; ') });
+      } else if (Object.keys(updates).length === 0) {
+        invalid.push({ index, id: itemId, error: 'give at least one of is_done, text, sort_order, unit_count, work_type' });
+      } else {
+        planned.push({ id: itemId, updates });
+      }
+    });
+
+    if (invalid.length > 0) {
+      return NextResponse.json(
+        { error: 'Some checklist items are invalid; nothing was changed', failed: invalid },
+        { status: 400 }
+      );
+    }
+
+    const results: Array<Record<string, unknown>> = [];
+    const failed: Array<{ id: string; error: string }> = [];
+
+    for (const { id: itemId, updates } of planned) {
       const { data, error } = await supabase
         .from('task_checklist_items')
         .update(updates)
@@ -150,14 +192,24 @@ export async function PATCH(
         .eq('task_id', id)
         .eq('user_id', userId)
         .select()
-        .single();
+        .maybeSingle();
 
-      if (!error && data) {
+      if (error) {
+        console.error('Checklist item update failed:', itemId, error);
+        failed.push({ id: itemId, error: error.message || 'update failed' });
+      } else if (!data) {
+        failed.push({ id: itemId, error: 'not found on this task' });
+      } else {
         results.push(data);
       }
     }
 
-    return NextResponse.json(results);
+    if (failed.length === 0) {
+      return NextResponse.json(results);
+    }
+
+    const status = results.length > 0 ? 207 : failed.every((entry) => entry.error === 'not found on this task') ? 404 : 500;
+    return NextResponse.json({ updated: results, failed }, { status });
   } catch (error) {
     console.error('Error updating checklist items:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
