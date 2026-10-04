@@ -521,10 +521,10 @@
 }
 /* Projected finish (pace forecast): a dashed tag under Today/Target, or pinned to the right edge past it. */
 .brief-page .pf-axis.has-proj {
-  height: 58px;
+  height: 70px;
 }
 .brief-page .pf-ms.proj {
-  top: 23px;
+  top: 30px;
 }
 .brief-page .pf-ms.proj em {
   font-family: var(--mono);

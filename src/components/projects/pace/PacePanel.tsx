@@ -77,7 +77,7 @@ function FitTable({ fit, className }: { fit: FitView; className: string }) {
 function FitRowCells({ row, third }: { row: FitView["rows"][number]; third: string }) {
   const minutes = `${Math.round(row.minutes_per_day)} min/day`;
   return (
-    <>
+    <div className="pace-fit-row">
       <span className="pace-fit-lab">
         {row.label ? (
           <>
@@ -89,7 +89,7 @@ function FitRowCells({ row, third }: { row: FitView["rows"][number]; third: stri
       </span>
       <span className={`pace-fit-w${row.none ? " none" : ""}`}>{row.none ? "None" : `${row.width} stitches`}</span>
       <span className="pace-fit-dim">{third}</span>
-    </>
+    </div>
   );
 }
 
@@ -271,7 +271,7 @@ function LogForm({ data, actions, onDone, onCancel }: { data: PacePanelData; act
   return (
     <form className="pace-form" onSubmit={submit} aria-label="Log a sitting" data-testid="pace-log-form">
       <div className="pace-fields">
-        <div className="pace-field pace-span3">
+        <div className="pace-field pace-span3 pace-f-task">
           <label htmlFor={`${ids}-task`}>Task</label>
           <Select id={`${ids}-task`} size="sm" value={form.task_id} onChange={(event) => set("task_id", event.target.value)}>
             {data.tasks.map((task) => (
@@ -282,11 +282,11 @@ function LogForm({ data, actions, onDone, onCancel }: { data: PacePanelData; act
             <option value="">{NO_TASK_LABEL}</option>
           </Select>
         </div>
-        <div className="pace-field pace-span3">
+        <div className="pace-field pace-span3 pace-f-date">
           <label htmlFor={`${ids}-date`}>Date</label>
           <Input id={`${ids}-date`} size="sm" type="date" value={form.date} onChange={(event) => set("date", event.target.value)} required />
         </div>
-        <div className="pace-field pace-span3">
+        <div className="pace-field pace-span3 pace-f-time">
           <span className="pace-lb">Start – end</span>
           <div className="pace-pair">
             <Input size="sm" type="time" aria-label="Start time" value={form.start} onChange={(event) => set("start", event.target.value)} />
@@ -294,11 +294,11 @@ function LogForm({ data, actions, onDone, onCancel }: { data: PacePanelData; act
             <Input size="sm" type="time" aria-label="End time" value={form.end} onChange={(event) => set("end", event.target.value)} />
           </div>
         </div>
-        <div className="pace-field pace-span3">
+        <div className="pace-field pace-span3 pace-f-min">
           <label htmlFor={`${ids}-min`}>Or minutes</label>
           <Input id={`${ids}-min`} size="sm" type="number" min={1} max={1440} placeholder="e.g. 45" value={form.minutes} onChange={(event) => set("minutes", event.target.value)} />
         </div>
-        <div className="pace-field pace-span2 pace-span-m">
+        <div className="pace-field pace-span2 pace-span-m pace-f-rows">
           <label htmlFor={`${ids}-rows`}>Rows</label>
           <Input id={`${ids}-rows`} size="sm" type="text" placeholder="20–22" value={form.rows} onChange={(event) => set("rows", event.target.value)} />
         </div>
@@ -503,7 +503,7 @@ export function PacePanel({ data, actions, busy = false }: { data: PacePanelData
                     {session.what}
                     {session.rows ? ` · ${session.rows}` : ""}
                     {session.detail || session.note ? (
-                      <small>
+                      <small title={[session.detail, session.note].filter(Boolean).join(" · ")}>
                         {session.detail}
                         {session.detail && session.note ? " · " : ""}
                         {session.note ? `“${session.note}”` : ""}

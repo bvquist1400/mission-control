@@ -89,6 +89,10 @@
   align-items: center;
   gap: 6px;
 }
+.pace-pair > input {
+  min-width: 0;
+  flex: 1 1 0;
+}
 .pace-actions {
   display: flex;
   flex-wrap: wrap;
@@ -221,21 +225,24 @@
   gap: 8px;
 }
 .pace-fit-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.6fr) auto minmax(0, 1.2fr);
   border: 1px solid var(--stroke);
   border-radius: 10px;
   overflow: hidden;
   font-size: 13.5px;
 }
-.pace-fit-grid > span {
+.pace-fit-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) auto minmax(0, 1.2fr);
+  gap: 0 12px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--stroke);
   background: var(--panel);
-  min-width: 0;
 }
-.pace-fit-grid > span:nth-last-child(-n + 3) {
+.pace-fit-row:last-child {
   border-bottom: 0;
+}
+.pace-fit-row > span {
+  min-width: 0;
 }
 .pace-fit-w {
   font-weight: 650;
@@ -250,7 +257,6 @@
   color: var(--muted-foreground);
   font-family: var(--font-mono, ui-monospace, Menlo, monospace);
   font-size: 12.5px;
-  white-space: nowrap;
 }
 .pace-fit-dim {
   color: var(--muted-foreground);
@@ -269,10 +275,11 @@
 
 /* Details fold: always open and headerless on a wide screen */
 .pace-fold {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
   min-width: 0;
+}
+/* The content of <details> is not a flex container in current browsers, so space the children by margin. */
+.pace-fold > :not(summary) + :not(summary) {
+  margin-top: 16px;
 }
 .pace-fold > summary {
   display: none;
@@ -329,7 +336,10 @@
   overflow-wrap: anywhere;
 }
 .pace-sess-what small {
-  display: block;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
   font-size: 12px;
   color: var(--muted-foreground);
 }
@@ -443,8 +453,29 @@
     grid-column: span 1;
   }
   .pace-span6,
-  .pace-span-m {
+  .pace-span-m,
+  .pace-f-task,
+  .pace-f-time {
     grid-column: 1 / -1;
+  }
+  /* Phone: task, then date | minutes, then start–end, rows, note. */
+  .pace-f-task {
+    order: 1;
+  }
+  .pace-f-date {
+    order: 2;
+  }
+  .pace-f-min {
+    order: 3;
+  }
+  .pace-f-time {
+    order: 4;
+  }
+  .pace-f-rows {
+    order: 5;
+  }
+  .pace-span6 {
+    order: 6;
   }
   .pace-fit-phone {
     display: flex;
@@ -455,11 +486,22 @@
   .pace-fold > summary {
     display: block;
   }
-  .pace-fold {
-    gap: 12px;
+  .pace-fold > summary + * {
+    margin-top: 12px;
   }
-  .pace-fit-grid > span {
+  .pace-fit-row {
+    grid-template-columns: minmax(0, 1fr) auto;
     padding: 8px;
+  }
+  .pace-fit-row > .pace-fit-dim {
+    grid-column: 1 / -1;
+    font-size: 12px;
+  }
+  .pace-fit-row > .pace-fit-dim:empty {
+    display: none;
+  }
+  .pace-tile-v {
+    font-size: 17px;
   }
   .pace-sess {
     grid-template-columns: 56px minmax(0, 1fr) auto auto;

@@ -1161,5 +1161,16 @@ test("the Log-a-sitting form defaults to the task holding the lowest undone row"
   assert.equal(view.defaultSittingTask(tasks, [item("c", "t9", "Row 1: x", true)]), null);
 });
 
+test("the Pace section's source line: sittings, counted, minutes in the last 14 days, and where the speeds come from", () => {
+  const types = (...sources) => sources.map((source, index) => ({ work_type: `t${index}`, units_total: 10, units_done: 0, units_left: 10, seconds_per_unit: 5, source, n_sessions: 1, label: null, hours_left: 1 }));
+  const line = (forecast, sessionTotal) => view.buildSourceLine(forecast, sessionTotal);
+  assert.equal(line(stubForecast({ work_types: types("measured_sample", "plan_x_ratio") }), 5), "5 sittings logged (3 counted) · 436 min in the last 14 days · speeds from the swatch");
+  assert.match(line(stubForecast({ work_types: types("measured", "measured_sample") }), 5), /speeds from your body rows and the swatch$/);
+  assert.match(line(stubForecast({ work_types: types("other_projects") }), 5), /speeds from your other projects$/);
+  assert.match(line(stubForecast({ work_types: types("plan_x_ratio", "plan") }), 5), /no speeds measured yet \(plan times\)$/);
+  assert.equal(line(stubForecast({ counted_sessions: 0, excluded_sessions: 0, minutes_in_cadence_window: 0, work_types: types("plan") }), 0), "No sittings logged yet");
+  assert.match(line(stubForecast({ counted_sessions: 1, excluded_sessions: 0, work_types: types("measured") }), 1), /^1 sitting logged \(1 counted\) · /);
+});
+
 console.log(`\n${passed} passed${failures.length ? `, ${failures.length} failed` : ""}`);
 if (failures.length) process.exit(1);
