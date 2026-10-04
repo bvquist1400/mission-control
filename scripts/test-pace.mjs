@@ -711,6 +711,15 @@ test("timing: fractional minutes are rejected; date and an ISO start must agree;
   assert.equal(parse.reanchorInstant("2026-10-04T17:38:00.000Z", "2026-10-04", "2026-10-03"), "2026-10-03T17:38:00.000Z");
   assert.equal(parse.reanchorInstant("2026-11-02T18:38:00.000Z", "2026-11-02", "2026-10-30"), "2026-10-30T17:38:00.000Z", "1:38 PM ET across the DST change");
   assert.equal(parse.reanchorInstant("2026-10-05T04:30:00.000Z", "2026-10-04", "2026-10-03"), "2026-10-04T04:30:00.000Z", "an end past midnight moves with its day");
+  // A date-only move keeps the start's clock time and the minutes (the end follows the start), even across the DST change.
+  assert.deepEqual(
+    parse.reanchorSession({ started_at: "2026-10-31T04:30:00.000Z", ended_at: "2026-10-31T07:30:00.000Z", minutes: 180 }, "2026-10-31", "2026-11-01"),
+    { started_at: "2026-11-01T04:30:00.000Z", ended_at: "2026-11-01T07:30:00.000Z" }
+  );
+  assert.deepEqual(
+    parse.reanchorSession({ started_at: null, ended_at: "2026-10-04T18:39:00.000Z", minutes: 61 }, "2026-10-04", "2026-10-03"),
+    { started_at: null, ended_at: "2026-10-03T18:39:00.000Z" }
+  );
 });
 
 console.log(`\n${passed} passed${failures.length ? `, ${failures.length} failed` : ""}`);

@@ -202,6 +202,32 @@ async function actualMinutes(taskId) {
 const errCode = (result) => result.error?.code;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Two overlapping transactions: `first` runs its statement and holds its
+ * transaction open; `second` runs BEGIN; stmt; COMMIT and must block on it;
+ * then `first` commits. Returns what each connection printed (an ERROR line
+ * means that transaction was rejected).
+ */
+async function overlap(firstSql, secondSql) {
+  const first = psqlConnection("first");
+  const second = psqlConnection("second");
+  let secondBlocked = false;
+  try {
+    first.send(`BEGIN; ${firstSql} SELECT 'first-ready';`);
+    await first.waitFor("first-ready");
+    second.send(`BEGIN; ${secondSql} COMMIT; SELECT 'second-done';`);
+    await sleep(1500);
+    secondBlocked = !second.output().includes("second-done") && !second.output().includes("ERROR");
+    first.send("COMMIT; SELECT 'first-done';");
+    await first.waitFor("first-done");
+    for (let waited = 0; waited < 10000 && !/second-done|ERROR/.test(second.output()); waited += 50) await sleep(50);
+  } finally {
+    await first.end();
+    await second.end();
+  }
+  return { first: first.output(), second: second.output(), secondBlocked };
+}
+
 /** An interactive psql connection we can feed statement by statement (for overlap tests). */
 function psqlConnection(label) {
   const child = spawn("docker", ["exec", "-i", dbContainer, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"], {
@@ -237,7 +263,7 @@ try {
       (table_name='tasks' AND column_name IN ('unit_count','work_type','is_sample')) OR
       (table_name='task_checklist_items' AND column_name IN ('unit_count','work_type','completed_at','created_at')) OR
       (table_name='projects' AND column_name IN ('unit_label','pace_settings')));`), "0");
-    assert.equal(psql("SELECT count(*) FROM pg_proc WHERE proname IN ('work_sessions_rollup_actual_minutes','work_sessions_check_ownership','work_session_items_check_project','task_checklist_items_set_completed_at','tasks_guard_project_move_with_sessions','work_session_create','work_session_update','work_session_delete','work_sessions_out_of_scope_items','work_sessions_assert_caller');"), "0");
+    assert.equal(psql("SELECT count(*) FROM pg_proc WHERE proname IN ('work_sessions_rollup_actual_minutes','work_sessions_check_ownership','work_session_items_check_project','task_checklist_items_set_completed_at','tasks_guard_project_move_with_sessions','work_session_create','work_session_update','work_session_delete','work_sessions_out_of_scope_items','work_sessions_assert_caller','work_sessions_lock_tasks','work_sessions_item_tasks');"), "0");
     await waitForSchema(false);
     psql(MIGRATION + "\nNOTIFY pgrst, 'reload schema';");
     psql(MIGRATION); // idempotent: a second apply is a no-op
@@ -399,6 +425,66 @@ try {
       await b.end();
     }
     assert.equal(await actualMinutes(t.id), 30, "10 + 20: neither commit lost the other's minutes");
+  });
+
+
+  await test("task move vs a new session on it, overlapping (both orders): exactly one wins", async () => {
+    const insertFor = (taskId) =>
+      `INSERT INTO work_sessions (user_id, project_id, task_id, session_date, minutes) VALUES ('${userA}', '${project.id}', '${taskId}', '2026-10-04', 7);`;
+    const moveTo = (taskId) => `UPDATE tasks SET project_id = '${otherProject.id}' WHERE id = '${taskId}';`;
+    // Move first, session second: the session must wait, then be rejected (its task is now elsewhere).
+    const t1 = await makeTask(userA, project.id, "Race move first");
+    const r1 = await overlap(moveTo(t1.id), insertFor(t1.id));
+    assert.ok(r1.secondBlocked, "the session waited for the move");
+    assert.match(r1.second, /ERROR/, "the session is rejected");
+    const { data: m1 } = await admin.from("tasks").select("project_id").eq("id", t1.id).single();
+    assert.equal(m1.project_id, otherProject.id);
+    const { count: c1 } = await admin.from("work_sessions").select("id", { count: "exact", head: true }).eq("task_id", t1.id);
+    assert.equal(c1, 0, "never both committed");
+    // Session first, move second: the move must wait, then be rejected by the guard.
+    const t2 = await makeTask(userA, project.id, "Race session first");
+    const r2 = await overlap(insertFor(t2.id), moveTo(t2.id));
+    assert.ok(r2.secondBlocked, "the move waited for the session");
+    assert.match(r2.second, /ERROR: .*logged work sessions/);
+    const { data: m2 } = await admin.from("tasks").select("project_id").eq("id", t2.id).single();
+    assert.equal(m2.project_id, project.id);
+    assert.equal(await actualMinutes(t2.id), 7);
+  });
+
+  await test("task move vs a project-level session linking its row, overlapping (both orders): exactly one wins", async () => {
+    const linkFor = (itemId) =>
+      `SELECT work_session_create('${userA}', '{"project_id": "${project.id}", "session_date": "2026-10-04", "minutes": 9}'::jsonb, ARRAY['${itemId}']::uuid[], false);`;
+    const moveTo = (taskId) => `UPDATE tasks SET project_id = '${otherProject.id}' WHERE id = '${taskId}';`;
+    const linkCount = async (itemId) => {
+      const { count } = await admin.from("work_session_items").select("session_id", { count: "exact", head: true }).eq("checklist_item_id", itemId);
+      return count;
+    };
+    const t1 = await makeTask(userA, project.id, "Link race move first");
+    const i1 = await makeItem(userA, t1.id, "Row 1");
+    const r1 = await overlap(moveTo(t1.id), linkFor(i1.id));
+    assert.ok(r1.secondBlocked, "the link waited for the move");
+    assert.match(r1.second, /ERROR/);
+    assert.equal(await linkCount(i1.id), 0, "no link to a row now in another project");
+    const t2 = await makeTask(userA, project.id, "Link race link first");
+    const i2 = await makeItem(userA, t2.id, "Row 1");
+    const r2 = await overlap(linkFor(i2.id), moveTo(t2.id));
+    assert.ok(r2.secondBlocked, "the move waited for the link");
+    assert.match(r2.second, /ERROR: .*logged work sessions/);
+    assert.equal(await linkCount(i2.id), 1);
+    const { data: m2 } = await admin.from("tasks").select("project_id").eq("id", t2.id).single();
+    assert.equal(m2.project_id, project.id);
+  });
+
+  await test("session writes on one task still don't deadlock: two RPC sessions + a project-level link overlap cleanly", async () => {
+    const t = await makeTask(userA, project.id, "No deadlock");
+    const i = await makeItem(userA, t.id, "Row 1");
+    const create = (minutes, taskPart, items) =>
+      `SELECT work_session_create('${userA}', '{"project_id": "${project.id}", ${taskPart}"session_date": "2026-10-04", "minutes": ${minutes}}'::jsonb, ${items}, false);`;
+    const r = await overlap(create(10, `"task_id": "${t.id}", `, "'{}'::uuid[]"), create(20, "", `ARRAY['${i.id}']::uuid[]`));
+    assert.doesNotMatch(r.first + r.second, /ERROR|deadlock/);
+    const r2 = await overlap(create(5, `"task_id": "${t.id}", `, `ARRAY['${i.id}']::uuid[]`), create(6, `"task_id": "${t.id}", `, "'{}'::uuid[]"));
+    assert.doesNotMatch(r2.first + r2.second, /ERROR|deadlock/);
+    assert.equal(await actualMinutes(t.id), 21, "10 + 5 + 6 (the project-level one doesn't roll up)");
   });
 
   await test("059 rollback after sessions exist keeps tasks.actual_minutes as last rolled up (the documented contract)", async () => {
@@ -626,6 +712,23 @@ try {
     await logWorkSession(admin, userA, { project_id: paceProject.id, minutes: 5, item_ids: [row.id], date: "2026-10-04" });
     assert.equal(errCode(await admin.from("tasks").update({ project_id: otherProject.id }).eq("id", linkedOnly.id)), "55006");
     assert.equal(errCode(await admin.from("tasks").update({ project_id: null }).eq("id", linkedOnly.id)), "55006", "unlinking counts as a move");
+    const linkedViaApi = await callTool("update_task", { task_id: linkedOnly.id, project_id: otherProject.id });
+    assert.equal(linkedViaApi.isError, true);
+    assert.match(linkedViaApi.data.error, /work session/i, "the DB guard's 55006 comes back as a plain 409");
+    // A task with many rows: the move check must not build an over-long request.
+    const big = await makeTask(userA, paceProject.id, "Many rows");
+    const { data: bigRows, error: bigError } = await admin.from("task_checklist_items")
+      .insert(Array.from({ length: 700 }, (_, n) => ({ user_id: userA, task_id: big.id, text: `Row ${n + 1}`, sort_order: n })))
+      .select("id");
+    if (bigError) throw bigError;
+    await logWorkSession(admin, userA, { project_id: paceProject.id, minutes: 5, item_ids: [bigRows[699].id], date: "2026-10-04" });
+    const bigMove = await callTool("update_task", { task_id: big.id, project_id: otherProject.id });
+    assert.equal(bigMove.isError, true);
+    assert.match(bigMove.data.error, /work session/i, "409, not a 500 from a long URL");
+    const bigFree = await makeTask(userA, paceProject.id, "Many rows, no sessions");
+    await admin.from("task_checklist_items").insert(Array.from({ length: 700 }, (_, n) => ({ user_id: userA, task_id: bigFree.id, text: `Row ${n + 1}`, sort_order: n })));
+    const bigFreeMove = await callTool("update_task", { task_id: bigFree.id, project_id: otherProject.id });
+    assert.equal(bigFreeMove.isError, false, JSON.stringify(bigFreeMove.data).slice(0, 300));
     const free = await makeTask(userA, paceProject.id, "No sessions");
     const moved = await callTool("update_task", { task_id: free.id, project_id: otherProject.id });
     assert.equal(moved.isError, false, JSON.stringify(moved.data));
@@ -644,6 +747,17 @@ try {
     const { count } = await admin.from("work_sessions").select("id", { count: "exact", head: true }).eq("task_id", t.id);
     assert.equal(count, 1);
     assert.equal(await actualMinutes(t.id), 12);
+    assert.equal(again.data.forecast_line, first.data.forecast_line, "the retry describes the same project");
+    // The same key for a different sitting (another task / project) is rejected, not answered with the old session.
+    const otherTask = await makeTask(userA, otherProject.id, "Retry elsewhere");
+    const mismatch = await callTool("log_work_session", { task_id: otherTask.id, minutes: 12, date: "2026-10-04", idempotency_key: "chat-msg-42" });
+    assert.equal(mismatch.isError, true);
+    assert.match(mismatch.data.error, /idempotency_key/);
+    const sameProjectOtherTask = await makeTask(userA, paceProject.id, "Retry sibling");
+    const mismatchTask = await callTool("log_work_session", { task_id: sameProjectOtherTask.id, minutes: 12, date: "2026-10-04", idempotency_key: "chat-msg-42" });
+    assert.equal(mismatchTask.isError, true, "a different task in the same project is a different target too");
+    const { count: total } = await admin.from("work_sessions").select("id", { count: "exact", head: true }).eq("source_ref", "client:chat-msg-42");
+    assert.equal(total, 1);
   });
 
   await test("dates: date and ISO start must agree; PATCHing only the date moves the stored start/end to that day", async () => {
@@ -657,6 +771,13 @@ try {
     const s = moved.data.session;
     assert.deepEqual([s.session_date, new Date(s.started_at).toISOString(), new Date(s.ended_at).toISOString(), s.minutes],
       ["2026-10-03", "2026-10-03T17:38:00.000Z", "2026-10-03T18:39:00.000Z", 61]);
+    // Across the Nov 1 fall-back: 00:30–03:30 ET on Oct 31 is 180 min; moving only the date keeps 180 min.
+    const night = await callTool("log_work_session", { task_id: t.id, date: "2026-10-31", start: "00:30", end: "03:30" });
+    assert.equal(night.isError, false, JSON.stringify(night.data));
+    const dst = await callTool("update_work_session", { session_id: night.data.session.id, date: "2026-11-01" });
+    assert.equal(dst.isError, false, JSON.stringify(dst.data));
+    assert.deepEqual([dst.data.session.session_date, new Date(dst.data.session.started_at).toISOString(), new Date(dst.data.session.ended_at).toISOString(), dst.data.session.minutes],
+      ["2026-11-01", "2026-11-01T04:30:00.000Z", "2026-11-01T07:30:00.000Z", 180]);
     const badStart = await callTool("update_work_session", { session_id: s.id, start: "2026-10-05T17:00:00Z" });
     assert.equal(badStart.isError, true, "an ISO start on another day than the stored date");
   });
