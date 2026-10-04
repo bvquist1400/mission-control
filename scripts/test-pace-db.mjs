@@ -487,6 +487,27 @@ try {
     assert.equal(await actualMinutes(t.id), 21, "10 + 5 + 6 (the project-level one doesn't roll up)");
   });
 
+  await test("two RPC sessions touching the same two tasks in opposite order (A→B vs B→A) overlap without a deadlock, and both totals are right", async () => {
+    const t1 = await makeTask(userA, project.id, "Opposite order 1");
+    const t2 = await makeTask(userA, project.id, "Opposite order 2");
+    const i1 = await makeItem(userA, t1.id, "Row 1");
+    const i2 = await makeItem(userA, t2.id, "Row 1");
+    // Session A is for task 1 and links task 2's row (locks 1 → 2); session B is for task 2 and links task 1's row (locks 2 → 1).
+    const create = (taskId, minutes, itemId) =>
+      `SELECT work_session_create('${userA}', '{"project_id": "${project.id}", "task_id": "${taskId}", "session_date": "2026-10-04", "minutes": ${minutes}}'::jsonb, ARRAY['${itemId}']::uuid[], false);`;
+    const forward = await overlap(create(t1.id, 10, i2.id), create(t2.id, 20, i1.id));
+    assert.ok(forward.secondBlocked, "B waited for A's task locks");
+    assert.doesNotMatch(forward.first + forward.second, /ERROR|deadlock/);
+    assert.equal(await actualMinutes(t1.id), 10);
+    assert.equal(await actualMinutes(t2.id), 20);
+    // And the other way round (B holds, A waits): again no deadlock, totals add up.
+    const backward = await overlap(create(t2.id, 5, i1.id), create(t1.id, 7, i2.id));
+    assert.ok(backward.secondBlocked, "A waited for B's task locks");
+    assert.doesNotMatch(backward.first + backward.second, /ERROR|deadlock/);
+    assert.equal(await actualMinutes(t1.id), 17, "10 + 7");
+    assert.equal(await actualMinutes(t2.id), 25, "20 + 5");
+  });
+
   await test("059 rollback after sessions exist keeps tasks.actual_minutes as last rolled up (the documented contract)", async () => {
     const t = await makeTask(userA, project.id, "Rollback task");
     await insert("work_sessions", { user_id: userA, project_id: project.id, task_id: t.id, session_date: "2026-10-04", minutes: 13 });
@@ -518,6 +539,57 @@ try {
     const bad = await callTool("update_project", { project_id: paceProject.id, pace_settings: { size: { ...settings.size, current: 196 } } });
     assert.equal(bad.isError, true);
     assert.match(bad.data.error, /offset \+ step/);
+  });
+
+  await test("slice 2: update_project accepts perimeter + gauge; the forecast (MCP and API) returns lane sections and inch lengths", async () => {
+    const lanesProject = await makeProject(userA, "Pace DB lanes", { target_date: "2026-12-05" });
+    const mkSection = async (name, order, start, end) =>
+      insert("project_sections", { user_id: userA, project_id: lanesProject.id, name, sort_order: order, planned_start: start, planned_end: end });
+    const bodySection = await mkSection("Body", 1, "2026-10-19", "2026-11-29");
+    const finishSection = await mkSection("Finishing", 2, "2026-11-30", "2026-12-05");
+    const bodyTask = await makeTask(userA, lanesProject.id, "Body rows", { estimated_minutes: 100, unit_count: 1000, work_type: "waffle", section_id: bodySection.id });
+    const borderTask = await makeTask(userA, lanesProject.id, "Border", { estimated_minutes: 100, unit_count: 1000, work_type: "sc", section_id: finishSection.id });
+    const size = { label: "width", current: 195, step: 12, offset: 3, min: 27, unit: "stitches", work_types: ["waffle", "sc"] };
+    const bad = await callTool("update_project", {
+      project_id: lanesProject.id, unit_label: "stitches",
+      pace_settings: { size: { ...size, perimeter: { task_ids: ["nope"], side: 300 }, gauge: { units: 18, length: 4, length_unit: "in" } } },
+    });
+    assert.equal(bad.isError, true, "a non-uuid perimeter task id is rejected");
+    const settings = { size: { ...size, perimeter: { task_ids: [borderTask.id], side: 300 }, gauge: { units: 18, length: 4, length_unit: "in" } } };
+    const ok = await callTool("update_project", { project_id: lanesProject.id, unit_label: "stitches", pace_settings: settings });
+    assert.equal(ok.isError, false, JSON.stringify(ok.data));
+    assert.deepEqual(ok.data.pace_settings, settings, "perimeter and gauge are stored, not stripped");
+    for (let n = 0; n < 3; n += 1) {
+      const logged = await callTool("log_work_session", { task_id: bodyTask.id, date: "2026-10-04", minutes: 28 });
+      assert.equal(logged.isError, false, JSON.stringify(logged.data));
+    }
+    const forecast = await callTool("get_project_forecast", { project_id: lanesProject.id, today: "2026-10-04" });
+    assert.equal(forecast.isError, false, JSON.stringify(forecast.data));
+    const f = forecast.data.forecast;
+    assert.deepEqual(f.sections.map((entry) => entry.section_id), [bodySection.id, finishSection.id]);
+    const body = f.sections[0];
+    assert.deepEqual([body.planned_start, body.planned_end, body.units_left, body.health_basis], ["2026-10-19", "2026-11-29", 1000, "time"]);
+    assert.ok(["on_track", "behind"].includes(body.health));
+    assert.ok(body.projected_end > body.planned_end, "6 min a day against 100 min of work runs past Nov 29");
+    assert.equal(body.health, "behind");
+    const widths = f.size_fit.widths;
+    assert.equal(widths.at(-1).size, 195);
+    assert.equal(widths.at(-1).length, 43.3, "195 ÷ 18 × 4 in");
+    assert.equal(widths.at(-1).length_unit, "in");
+    assert.ok(f.size_fit.perimeter_minutes_left > 0);
+    assert.equal(f.size_fit.current_length, 43.3);
+    // The same through the HTTP route.
+    const response = await forecastRoute.GET(
+      new NextRequest(`http://localhost/api/projects/${lanesProject.id}/forecast?today=2026-10-04`, { headers: { "x-mission-control-key": process.env.MISSION_CONTROL_API_KEY } }),
+      { params: Promise.resolve({ id: lanesProject.id }) }
+    );
+    assert.equal(response.status, 200);
+    const viaApi = await response.json();
+    assert.equal(viaApi.forecast.sections.length, 2);
+    assert.equal(viaApi.forecast.size_fit.widths.at(-1).length, 43.3);
+    // The border (perimeter) shrinks less than linear: 27 wide leaves more than 27/195 of the work.
+    const at27 = widths.find((entry) => entry.size === 27);
+    assert.ok(at27.minutes_left > (200 * 27) / 195 + 10, "perimeter scaling, not linear");
   });
 
   await test("MCP update_task_checklist: units + work type; invalid → nothing written; missing row → reported, not skipped", async () => {
@@ -729,6 +801,29 @@ try {
     await admin.from("task_checklist_items").insert(Array.from({ length: 700 }, (_, n) => ({ user_id: userA, task_id: bigFree.id, text: `Row ${n + 1}`, sort_order: n })));
     const bigFreeMove = await callTool("update_task", { task_id: bigFree.id, project_id: otherProject.id });
     assert.equal(bigFreeMove.isError, false, JSON.stringify(bigFreeMove.data).slice(0, 300));
+    // The route itself answers 409 (not just an error string in the MCP wrapper): a task with a session, and one only linked by a project-level session.
+    const patchTask = async (id, payload) => {
+      const response = await taskRoute.PATCH(
+        new NextRequest(`http://localhost/api/tasks/${id}`, {
+          method: "PATCH",
+          headers: { "x-mission-control-key": process.env.MISSION_CONTROL_API_KEY, "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        }),
+        { params: Promise.resolve({ id }) }
+      );
+      return { status: response.status, body: await response.json() };
+    };
+    const sessionMove = await patchTask(withSession.id, { project_id: otherProject.id });
+    assert.equal(sessionMove.status, 409, "HTTP 409 for a task with a session");
+    assert.match(sessionMove.body.error, /work session/i);
+    const linkedMove = await patchTask(linkedOnly.id, { project_id: otherProject.id });
+    assert.equal(linkedMove.status, 409, "HTTP 409 for a task only linked by a project-level session");
+    const bigMoveHttp = await patchTask(big.id, { project_id: otherProject.id });
+    assert.equal(bigMoveHttp.status, 409, "HTTP 409, not a 500, for a task with 700 rows");
+    const unlinkHttp = await patchTask(withSession.id, { project_id: null });
+    assert.equal(unlinkHttp.status, 409, "unlinking is a move too");
+    const okHttp = await patchTask(bigFree.id, { title: "Renamed, not moved" });
+    assert.equal(okHttp.status, 200);
     const free = await makeTask(userA, paceProject.id, "No sessions");
     const moved = await callTool("update_task", { task_id: free.id, project_id: otherProject.id });
     assert.equal(moved.isError, false, JSON.stringify(moved.data));
@@ -778,6 +873,24 @@ try {
     assert.equal(dst.isError, false, JSON.stringify(dst.data));
     assert.deepEqual([dst.data.session.session_date, new Date(dst.data.session.started_at).toISOString(), new Date(dst.data.session.ended_at).toISOString(), dst.data.session.minutes],
       ["2026-11-01", "2026-11-01T04:30:00.000Z", "2026-11-01T07:30:00.000Z", 180]);
+    // Date AND minutes together, across the same change: start keeps its ET clock time, end = start + the minutes (was a 400).
+    const night2 = await callTool("log_work_session", { task_id: t.id, date: "2026-10-31", start: "00:30", end: "03:30" });
+    const dstMinutes = await callTool("update_work_session", { session_id: night2.data.session.id, date: "2026-11-01", minutes: 180 });
+    assert.equal(dstMinutes.isError, false, JSON.stringify(dstMinutes.data));
+    assert.deepEqual(
+      [dstMinutes.data.session.session_date, new Date(dstMinutes.data.session.started_at).toISOString(), new Date(dstMinutes.data.session.ended_at).toISOString(), dstMinutes.data.session.minutes],
+      ["2026-11-01", "2026-11-01T04:30:00.000Z", "2026-11-01T07:30:00.000Z", 180]
+    );
+    const longer = await callTool("update_work_session", { session_id: night2.data.session.id, date: "2026-11-02", minutes: 90 });
+    assert.equal(longer.isError, false, JSON.stringify(longer.data));
+    assert.deepEqual(
+      [longer.data.session.minutes, new Date(longer.data.session.started_at).toISOString(), new Date(longer.data.session.ended_at).toISOString()],
+      [90, "2026-11-02T05:30:00.000Z", "2026-11-02T07:00:00.000Z"],
+      "a new date and new minutes: start at the same ET clock time (00:30 EST), end = start + 90"
+    );
+    // Explicit start/end in the body still win and must agree with the minutes.
+    const clash = await callTool("update_work_session", { session_id: night2.data.session.id, date: "2026-11-03", start: "01:00", minutes: 30, end: "03:00" });
+    assert.equal(clash.isError, true, "start–end 120 min vs minutes 30 still disagree");
     const badStart = await callTool("update_work_session", { session_id: s.id, start: "2026-10-05T17:00:00Z" });
     assert.equal(badStart.isError, true, "an ISO start on another day than the stored date");
   });
