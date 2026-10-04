@@ -853,6 +853,19 @@
           "type": "string",
           "maxLength": 280
         },
+        "unit_count": {
+          "description": "Pace tracking: units for the whole task when its checklist rows carry none (e.g. 970 stitches for a border round)",
+          "type": "number",
+          "minimum": 0
+        },
+        "work_type": {
+          "description": "Pace tracking work type: a lowercase slug such as \"sc\", \"plain-dc\", \"waffle\", \"colorwork-dc\", \"chain\".",
+          "type": "string"
+        },
+        "is_sample": {
+          "description": "Pace tracking: true for a swatch / test piece / prototype; its speeds are labelled as sample speeds",
+          "type": "boolean"
+        },
         "blocked_by_task_id": {
           "description": "Task UUID this new task should depend on",
           "type": "string"
@@ -1074,6 +1087,22 @@
       },
       "required": [
         "task_id"
+      ]
+    }
+  },
+  {
+    "name": "delete_work_session",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "Work session UUID"
+        }
+      },
+      "required": [
+        "session_id"
       ]
     }
   },
@@ -1359,6 +1388,26 @@
     }
   },
   {
+    "name": "get_pace_rates",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "unit_label": {
+          "type": "string",
+          "description": "The unit, e.g. \"stitches\""
+        },
+        "work_type": {
+          "description": "Pace tracking work type: a lowercase slug such as \"sc\", \"plain-dc\", \"waffle\", \"colorwork-dc\", \"chain\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "unit_label"
+      ]
+    }
+  },
+  {
     "name": "get_plan",
     "inputSchema": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -1375,6 +1424,26 @@
         "project_id": {
           "type": "string",
           "description": "Project UUID"
+        }
+      },
+      "required": [
+        "project_id"
+      ]
+    }
+  },
+  {
+    "name": "get_project_forecast",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "type": "string",
+          "description": "Project UUID"
+        },
+        "today": {
+          "description": "ET date to compute as of (YYYY-MM-DD); default today",
+          "type": "string"
         }
       },
       "required": [
@@ -1879,6 +1948,100 @@
           "type": "number",
           "minimum": 0,
           "maximum": 5000
+        }
+      }
+    }
+  },
+  {
+    "name": "list_work_sessions",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "description": "Project UUID",
+          "type": "string"
+        },
+        "task_id": {
+          "description": "Task UUID",
+          "type": "string"
+        },
+        "since": {
+          "description": "Only sessions on or after this ET date (YYYY-MM-DD)",
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "log_work_session",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "description": "Task UUID the sitting was on",
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Project UUID, for a sitting across several tasks with no split (leave task_id out)",
+          "type": "string"
+        },
+        "date": {
+          "description": "ET calendar date YYYY-MM-DD; default today (ET)",
+          "type": "string"
+        },
+        "start": {
+          "description": "Start time: \"13:38\" / \"1:38 PM\" (ET, on date) or ISO with offset",
+          "type": "string"
+        },
+        "end": {
+          "description": "End time, same formats as start",
+          "type": "string"
+        },
+        "minutes": {
+          "description": "Minutes worked; required unless start and end are both given",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1440
+        },
+        "rows": {
+          "description": "Rows covered, e.g. \"11-15\", \"11, 12\" or \"row 10\"",
+          "type": "string"
+        },
+        "item_ids": {
+          "description": "Checklist item UUIDs covered (in addition to rows)",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mark_items_done": {
+          "description": "Tick the covered rows done (default true)",
+          "type": "boolean"
+        },
+        "extra_units": {
+          "description": "Units done that have no checklist row, e.g. half a row (90 stitches)",
+          "type": "number",
+          "minimum": 0
+        },
+        "extra_work_type": {
+          "description": "Work type of extra_units (default: the task's). Pace tracking work type: a lowercase slug such as \"sc\", \"plain-dc\", \"waffle\", \"colorwork-dc\", \"chain\".",
+          "type": "string"
+        },
+        "note": {
+          "description": "Free note",
+          "type": "string",
+          "maxLength": 2000
+        },
+        "exclude_from_stats": {
+          "description": "True = real time, but not a fair measure of speed",
+          "type": "boolean"
+        },
+        "exclude_reason": {
+          "description": "Why it is excluded: learning, reading-instructions, interrupted, frogged …",
+          "type": "string",
+          "maxLength": 200
         }
       }
     }
@@ -2856,6 +3019,92 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 9007199254740991
+        },
+        "unit_label": {
+          "description": "Pace tracking: the unit this project counts, e.g. \"stitches\"; null turns pace tracking off",
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 40
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pace_settings": {
+          "description": "Pace tracking settings; null clears",
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "size": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "label": {
+                          "type": "string",
+                          "description": "What the size is called, e.g. \"width\""
+                        },
+                        "current": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "description": "Planned size, e.g. 195"
+                        },
+                        "step": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "description": "Size step, e.g. 12"
+                        },
+                        "offset": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991,
+                          "description": "Sizes are offset + step × k, e.g. 3"
+                        },
+                        "min": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "description": "Smallest size worth considering, e.g. 27"
+                        },
+                        "unit": {
+                          "type": "string",
+                          "description": "The size unit, e.g. \"stitches\""
+                        },
+                        "work_types": {
+                          "minItems": 1,
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Work types whose units scale with the size"
+                        }
+                      },
+                      "required": [
+                        "label",
+                        "current",
+                        "step",
+                        "offset",
+                        "min",
+                        "unit",
+                        "work_types"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -3351,6 +3600,33 @@
               "type": "null"
             }
           ]
+        },
+        "unit_count": {
+          "description": "Pace tracking: units for the whole task when its checklist rows carry none; null clears",
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "work_type": {
+          "description": "Pace tracking work type: a lowercase slug such as \"sc\", \"plain-dc\", \"waffle\", \"colorwork-dc\", \"chain\". Null clears.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "is_sample": {
+          "description": "Pace tracking: true for a swatch / test piece / prototype",
+          "type": "boolean"
         }
       },
       "required": [
@@ -3378,13 +3654,35 @@
                 "description": "Checklist item UUID"
               },
               "is_done": {
-                "type": "boolean",
-                "description": "Whether the item is done"
+                "description": "Whether the item is done",
+                "type": "boolean"
+              },
+              "unit_count": {
+                "description": "Units on this row (e.g. stitches); null clears",
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "work_type": {
+                "description": "Pace tracking work type: a lowercase slug such as \"sc\", \"plain-dc\", \"waffle\", \"colorwork-dc\", \"chain\".",
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "required": [
-              "id",
-              "is_done"
+              "id"
             ]
           },
           "description": "Items to update"
@@ -3393,6 +3691,123 @@
       "required": [
         "task_id",
         "items"
+      ]
+    }
+  },
+  {
+    "name": "update_work_session",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "Work session UUID"
+        },
+        "task_id": {
+          "description": "Move to another task in the same project, or null for a multi-task sitting",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "date": {
+          "description": "ET date YYYY-MM-DD",
+          "type": "string"
+        },
+        "start": {
+          "description": "Start time (\"13:38\", \"1:38 PM\", or ISO); null clears",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "end": {
+          "description": "End time; null clears",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "minutes": {
+          "description": "Minutes worked",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1440
+        },
+        "rows": {
+          "description": "Rows covered, e.g. \"11-15\" (replaces the linked rows)",
+          "type": "string"
+        },
+        "item_ids": {
+          "description": "Checklist item UUIDs covered (replaces the linked rows)",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "extra_units": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "extra_work_type": {
+          "description": "Pace tracking work type: a lowercase slug such as \"sc\", \"plain-dc\", \"waffle\", \"colorwork-dc\", \"chain\".",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 2000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exclude_from_stats": {
+          "type": "boolean"
+        },
+        "exclude_reason": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "session_id"
       ]
     }
   }
