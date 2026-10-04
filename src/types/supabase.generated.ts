@@ -1781,6 +1781,7 @@ export type Database = {
           id: string
           implementation_id: string | null
           name: string
+          pace_settings: Json | null
           portfolio_rank: number
           rag: Database["public"]["Enums"]["rag_status"]
           servicenow_spm_id: string | null
@@ -1788,6 +1789,7 @@ export type Database = {
           status_summary: string
           tags: string[]
           target_date: string | null
+          unit_label: string | null
           updated_at: string
           user_id: string
         }
@@ -1797,6 +1799,7 @@ export type Database = {
           id?: string
           implementation_id?: string | null
           name: string
+          pace_settings?: Json | null
           portfolio_rank?: number
           rag?: Database["public"]["Enums"]["rag_status"]
           servicenow_spm_id?: string | null
@@ -1804,6 +1807,7 @@ export type Database = {
           status_summary?: string
           tags?: string[]
           target_date?: string | null
+          unit_label?: string | null
           updated_at?: string
           user_id: string
         }
@@ -1813,6 +1817,7 @@ export type Database = {
           id?: string
           implementation_id?: string | null
           name?: string
+          pace_settings?: Json | null
           portfolio_rank?: number
           rag?: Database["public"]["Enums"]["rag_status"]
           servicenow_spm_id?: string | null
@@ -1820,6 +1825,7 @@ export type Database = {
           status_summary?: string
           tags?: string[]
           target_date?: string | null
+          unit_label?: string | null
           updated_at?: string
           user_id?: string
         }
@@ -2001,28 +2007,40 @@ export type Database = {
       }
       task_checklist_items: {
         Row: {
+          completed_at: string | null
+          created_at: string
           id: string
           is_done: boolean
           sort_order: number
           task_id: string
           text: string
+          unit_count: number | null
           user_id: string
+          work_type: string | null
         }
         Insert: {
+          completed_at?: string | null
+          created_at?: string
           id?: string
           is_done?: boolean
           sort_order?: number
           task_id: string
           text: string
+          unit_count?: number | null
           user_id: string
+          work_type?: string | null
         }
         Update: {
+          completed_at?: string | null
+          created_at?: string
           id?: string
           is_done?: boolean
           sort_order?: number
           task_id?: string
           text?: string
+          unit_count?: number | null
           user_id?: string
+          work_type?: string | null
         }
         Relationships: [
           {
@@ -2183,6 +2201,7 @@ export type Database = {
           implementation_id: string | null
           inbox_item_id: string | null
           is_recurring_template: boolean
+          is_sample: boolean
           last_generated_at: string | null
           latest_instance_id: string | null
           needs_review: boolean
@@ -2204,9 +2223,11 @@ export type Database = {
           tags: string[]
           task_type: Database["public"]["Enums"]["task_type"]
           title: string
+          unit_count: number | null
           updated_at: string
           user_id: string
           waiting_on: string | null
+          work_type: string | null
         }
         Insert: {
           actual_minutes?: number | null
@@ -2225,6 +2246,7 @@ export type Database = {
           implementation_id?: string | null
           inbox_item_id?: string | null
           is_recurring_template?: boolean
+          is_sample?: boolean
           last_generated_at?: string | null
           latest_instance_id?: string | null
           needs_review?: boolean
@@ -2246,9 +2268,11 @@ export type Database = {
           tags?: string[]
           task_type?: Database["public"]["Enums"]["task_type"]
           title: string
+          unit_count?: number | null
           updated_at?: string
           user_id: string
           waiting_on?: string | null
+          work_type?: string | null
         }
         Update: {
           actual_minutes?: number | null
@@ -2267,6 +2291,7 @@ export type Database = {
           implementation_id?: string | null
           inbox_item_id?: string | null
           is_recurring_template?: boolean
+          is_sample?: boolean
           last_generated_at?: string | null
           latest_instance_id?: string | null
           needs_review?: boolean
@@ -2288,9 +2313,11 @@ export type Database = {
           tags?: string[]
           task_type?: Database["public"]["Enums"]["task_type"]
           title?: string
+          unit_count?: number | null
           updated_at?: string
           user_id?: string
           waiting_on?: string | null
+          work_type?: string | null
         }
         Relationships: [
           {
@@ -2379,6 +2406,117 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      work_session_items: {
+        Row: {
+          checklist_item_id: string
+          created_at: string
+          session_id: string
+          user_id: string
+        }
+        Insert: {
+          checklist_item_id: string
+          created_at?: string
+          session_id: string
+          user_id: string
+        }
+        Update: {
+          checklist_item_id?: string
+          created_at?: string
+          session_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "work_session_items_checklist_item_id_fkey"
+            columns: ["checklist_item_id"]
+            isOneToOne: false
+            referencedRelation: "task_checklist_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "work_session_items_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "work_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      work_sessions: {
+        Row: {
+          created_at: string
+          ended_at: string | null
+          exclude_from_stats: boolean
+          exclude_reason: string | null
+          extra_units: number | null
+          extra_work_type: string | null
+          id: string
+          minutes: number
+          note: string | null
+          project_id: string
+          session_date: string
+          source: string
+          source_ref: string | null
+          started_at: string | null
+          task_id: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          ended_at?: string | null
+          exclude_from_stats?: boolean
+          exclude_reason?: string | null
+          extra_units?: number | null
+          extra_work_type?: string | null
+          id?: string
+          minutes: number
+          note?: string | null
+          project_id: string
+          session_date: string
+          source?: string
+          source_ref?: string | null
+          started_at?: string | null
+          task_id?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          ended_at?: string | null
+          exclude_from_stats?: boolean
+          exclude_reason?: string | null
+          extra_units?: number | null
+          extra_work_type?: string | null
+          id?: string
+          minutes?: number
+          note?: string | null
+          project_id?: string
+          session_date?: string
+          source?: string
+          source_ref?: string | null
+          started_at?: string | null
+          task_id?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "work_sessions_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "work_sessions_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Views: {
@@ -2740,3 +2878,4 @@ export const Constants = {
     },
   },
 } as const
+

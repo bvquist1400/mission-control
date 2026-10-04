@@ -1,3 +1,5 @@
+import type { Json } from "./supabase.generated";
+
 export type TaskStatus = "Backlog" | "Planned" | "In Progress" | "Blocked/Waiting" | "Parked" | "Missed" | "Done";
 export type TaskType = "Task" | "Ticket" | "MeetingPrep" | "FollowUp" | "Admin" | "Build";
 /** Who holds a task: "brent" means Brent must act; "agent" means an agent has it (migration 056). */
@@ -106,6 +108,11 @@ export interface Task {
   owner: TaskOwner;
   owner_label: string | null;
   status_line: string | null;
+  /** Pace tracking (migration 059): units when no checklist row carries them. */
+  unit_count: number | null;
+  work_type: string | null;
+  /** A swatch / test piece / prototype: its speeds are labelled "sample". */
+  is_sample: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -147,6 +154,44 @@ export interface TaskChecklistItem {
   text: string;
   is_done: boolean;
   sort_order: number;
+  /** Pace tracking (migration 059): units on this row and its work type (overrides the task's). */
+  unit_count: number | null;
+  work_type: string | null;
+  /** Set when the row is ticked, cleared when unticked (trigger). */
+  completed_at: string | null;
+  created_at: string;
+}
+
+/** One sitting of work on a project (migration 059). */
+export interface WorkSession {
+  id: string;
+  user_id: string;
+  project_id: string;
+  /** NULL = a sitting that spanned several tasks with no per-task split. */
+  task_id: string | null;
+  /** ET calendar day, YYYY-MM-DD. */
+  session_date: string;
+  started_at: string | null;
+  ended_at: string | null;
+  minutes: number;
+  extra_units: number | null;
+  extra_work_type: string | null;
+  note: string | null;
+  exclude_from_stats: boolean;
+  exclude_reason: string | null;
+  source: WorkSessionSource;
+  source_ref: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type WorkSessionSource = "manual" | "agent" | "backfill";
+
+export interface WorkSessionItem {
+  session_id: string;
+  checklist_item_id: string;
+  user_id: string;
+  created_at: string;
 }
 
 export interface TaskComment {
@@ -389,6 +434,10 @@ export interface Project {
   status_summary: string;
   tags: string[];
   portfolio_rank: number;
+  /** Pace tracking (migration 059): the unit counted, e.g. "stitches"; NULL = no pace tracking. */
+  unit_label: string | null;
+  /** Validated in app code (src/lib/pace.ts `parsePaceSettings`). */
+  pace_settings: Json | null;
   created_at: string;
   updated_at: string;
 }
