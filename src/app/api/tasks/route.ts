@@ -31,6 +31,7 @@ import {
 } from '@/lib/task-external-source';
 import type { TaskStatus, TaskType, EstimateSource, BlockedReason } from '@/types/database';
 import { normalizeTaskOwner, parseTaskOwnerFields, TASK_OWNERS } from '@/lib/task-owner';
+import { normalizeUnitCount, normalizeWorkType } from '@/lib/pace';
 
 const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Missed', 'Done'];
 const VALID_TASK_TYPES: TaskType[] = ['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build'];
@@ -337,6 +338,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: ownerFields.error }, { status: 400 });
     }
 
+    // Pace tracking (migration 059): task-level units, work type, sample flag.
+    const unitCount = normalizeUnitCount(body.unit_count);
+    if (!unitCount.ok) {
+      return NextResponse.json({ error: unitCount.error }, { status: 400 });
+    }
+    const workType = normalizeWorkType(body.work_type);
+    if (!workType.ok) {
+      return NextResponse.json({ error: workType.error }, { status: 400 });
+    }
+    if (body.is_sample !== undefined && typeof body.is_sample !== 'boolean') {
+      return NextResponse.json({ error: 'is_sample must be true or false' }, { status: 400 });
+    }
+
     // Validate status if provided
     const statusInput = asStringOrNull(body.status);
     let status: TaskStatus = 'Backlog';
@@ -538,6 +552,9 @@ export async function POST(request: NextRequest) {
         external_source_system: externalSourceSystem,
         external_source_id: externalSourceId,
         pinned_excerpt: asStringOrNull(body.pinned_excerpt),
+        unit_count: unitCount.value,
+        work_type: workType.value,
+        is_sample: body.is_sample === true,
         ...ownerFields.value,
       })
       .select(TASK_WITH_RELATIONS_SELECT)

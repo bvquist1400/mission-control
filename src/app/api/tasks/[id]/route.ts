@@ -21,6 +21,7 @@ import {
 } from '@/lib/task-external-source';
 import type { Task, TaskStatus, TaskType, BlockedReason } from '@/types/database';
 import { parseTaskOwnerFields } from '@/lib/task-owner';
+import { normalizeUnitCount, normalizeWorkType } from '@/lib/pace';
 
 const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Missed', 'Done'];
 const VALID_TASK_TYPES: TaskType[] = ['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build'];
@@ -45,6 +46,9 @@ function asStringOrNull(value: unknown): string | null {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
 }
+
+const TASK_MOVE_WITH_SESSIONS_ERROR =
+  'This task has logged work sessions in its project, so it can\'t move to another project. Delete or move those sessions first (list_work_sessions / delete_work_session).';
 
 // GET /api/tasks/[id] - Get a single task
 export async function GET(
@@ -123,6 +127,9 @@ export async function PATCH(
       'source_url',
       'external_source_system',
       'external_source_id',
+      'unit_count',
+      'work_type',
+      'is_sample',
     ];
 
     // owner / owner_label / status_line are validated together (migration 056).
@@ -171,6 +178,23 @@ export async function PATCH(
           return NextResponse.json({ error: result.error }, { status: 400 });
         }
         updates[field] = result.value;
+      } else if (field === 'unit_count') {
+        const unitCount = normalizeUnitCount(value);
+        if (!unitCount.ok) {
+          return NextResponse.json({ error: unitCount.error }, { status: 400 });
+        }
+        updates[field] = unitCount.value;
+      } else if (field === 'work_type') {
+        const workType = normalizeWorkType(value);
+        if (!workType.ok) {
+          return NextResponse.json({ error: workType.error }, { status: 400 });
+        }
+        updates[field] = workType.value;
+      } else if (field === 'is_sample') {
+        if (typeof value !== 'boolean') {
+          return NextResponse.json({ error: 'is_sample must be true or false' }, { status: 400 });
+        }
+        updates[field] = value;
       } else if (field === 'tags') {
         updates[field] = normalizeTaskTags(value);
       } else if (field === 'stakeholder_mentions') {
@@ -417,6 +441,13 @@ export async function PATCH(
       .single();
 
     if (error) {
+      // Pace tracking (migration 059): the DB guard trg_tasks_guard_project_move
+      // rejects moving a task whose sessions or linked rows live in its project.
+      // It runs under the task's row lock, so it also covers a session logged at
+      // the same moment; no pre-check here (it would race and build long URLs).
+      if (error.code === '55006') {
+        return NextResponse.json({ error: TASK_MOVE_WITH_SESSIONS_ERROR }, { status: 409 });
+      }
       if (isTaskExternalSourceUniqueViolation(error)) {
         const externalSourceSystem = (updates.external_source_system ?? currentTask?.external_source_system) as string | null;
         const externalSourceId = (updates.external_source_id ?? currentTask?.external_source_id) as string | null;

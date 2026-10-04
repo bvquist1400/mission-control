@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { DEFAULT_PROJECT_STAGE, PROJECT_STAGE_VALUES, normalizeProjectStage } from '@/lib/project-stage';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import { normalizeTaskTags } from '@/lib/task-tags';
+import { parsePaceSettings } from '@/lib/pace';
 
 function withNormalizedProjectStage<T extends Record<string, unknown>>(project: T): T & { stage: string } {
   const rest = { ...project } as T & { phase?: unknown };
@@ -107,6 +108,8 @@ export async function PATCH(
       'status_summary',
       'portfolio_rank',
       'tags',
+      'unit_label',
+      'pace_settings',
     ];
 
     if (typeof body.name === 'string' && body.name.trim().length === 0) {
@@ -138,6 +141,21 @@ export async function PATCH(
       }
     }
 
+    // Pace tracking (migration 059).
+    let paceSettings: unknown = undefined;
+    if ('pace_settings' in body) {
+      const parsed = parsePaceSettings(body.pace_settings);
+      if (!parsed.ok) {
+        return NextResponse.json({ error: parsed.error }, { status: 400 });
+      }
+      paceSettings = parsed.value;
+    }
+    if ('unit_label' in body && body.unit_label !== null) {
+      if (typeof body.unit_label !== 'string' || body.unit_label.trim().length > 40) {
+        return NextResponse.json({ error: 'unit_label must be a short name like "stitches" (40 characters max) or null' }, { status: 400 });
+      }
+    }
+
     // Validate implementation_id if being changed
     if ('implementation_id' in body && body.implementation_id !== null) {
       const { data: impl } = await supabase
@@ -164,6 +182,10 @@ export async function PATCH(
         updates[field] = value.trim() || null;
       } else if (field === 'tags') {
         updates[field] = normalizeTaskTags(value);
+      } else if (field === 'unit_label') {
+        updates[field] = typeof value === 'string' ? value.trim().toLowerCase() || null : null;
+      } else if (field === 'pace_settings') {
+        updates[field] = paceSettings;
       } else {
         updates[field] = value;
       }

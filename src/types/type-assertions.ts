@@ -29,6 +29,8 @@ import type {
   TaskChecklistItem,
   TaskComment,
   TaskStatusTransition,
+  WorkSession,
+  WorkSessionItem,
 } from './database';
 
 type Row<T extends keyof Database['public']['Tables']> = Database['public']['Tables'][T]['Row'];
@@ -84,6 +86,10 @@ type _TaskStatusTransitionKeys = Assert<KeysMatch<TaskStatusTransition, Row<'tas
 type _TaskStatusTransitionNulls = Assert<NullabilityMatches<TaskStatusTransition, Row<'task_status_transitions'>>>;
 type _ProjectStatusUpdateKeys = Assert<KeysMatch<ProjectStatusUpdate, Row<'project_status_updates'>>>;
 type _ProjectStatusUpdateNulls = Assert<NullabilityMatches<ProjectStatusUpdate, Row<'project_status_updates'>>>;
+type _WorkSessionKeys = Assert<KeysMatch<WorkSession, Row<'work_sessions'>>>;
+type _WorkSessionNulls = Assert<NullabilityMatches<WorkSession, Row<'work_sessions'>>>;
+type _WorkSessionItemKeys = Assert<KeysMatch<WorkSessionItem, Row<'work_session_items'>>>;
+type _WorkSessionItemNulls = Assert<NullabilityMatches<WorkSessionItem, Row<'work_session_items'>>>;
 /* eslint-enable @typescript-eslint/no-unused-vars */
 
 export {};

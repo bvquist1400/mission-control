@@ -34,6 +34,10 @@ import * as plannerSyncTodayRoute from '@/app/api/planner/sync-today/route';
 import * as projectsRoute from '@/app/api/projects/route';
 import * as projectRoute from '@/app/api/projects/[id]/route';
 import * as projectSectionsRoute from '@/app/api/projects/[id]/sections/route';
+import * as projectForecastRoute from '@/app/api/projects/[id]/forecast/route';
+import * as paceRatesRoute from '@/app/api/pace-rates/route';
+import * as workSessionsRoute from '@/app/api/work-sessions/route';
+import * as workSessionRoute from '@/app/api/work-sessions/[id]/route';
 import * as sectionRoute from '@/app/api/sections/[id]/route';
 import * as sprintsRoute from '@/app/api/sprints/route';
 import * as sprintRoute from '@/app/api/sprints/[id]/route';
@@ -353,6 +357,28 @@ async function handleRequest(
   if (segments[0] === 'projects' && segments[1] && segments[2] === 'sections' && segments.length === 3) {
     if (request.method === 'GET') return invokeDynamic(projectSectionsRoute.GET, requestWithContext, { id: segments[1] });
     if (request.method === 'POST') return invokeDynamic(projectSectionsRoute.POST, requestWithContext, { id: segments[1] });
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'projects' && segments[1] && segments[2] === 'forecast' && segments.length === 3) {
+    if (request.method === 'GET') return invokeDynamic(projectForecastRoute.GET, requestWithContext, { id: segments[1] });
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'work-sessions' && segments.length === 1) {
+    if (request.method === 'GET') return invokeStatic(workSessionsRoute.GET, requestWithContext);
+    if (request.method === 'POST') return invokeStatic(workSessionsRoute.POST, requestWithContext);
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'work-sessions' && segments[1] && segments.length === 2) {
+    if (request.method === 'PATCH') return invokeDynamic(workSessionRoute.PATCH, requestWithContext, { id: segments[1] });
+    if (request.method === 'DELETE') return invokeDynamic(workSessionRoute.DELETE, requestWithContext, { id: segments[1] });
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'pace-rates' && segments.length === 1) {
+    if (request.method === 'GET') return invokeStatic(paceRatesRoute.GET, requestWithContext);
     return methodNotAllowed();
   }
 

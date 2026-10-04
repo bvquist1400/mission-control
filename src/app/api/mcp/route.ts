@@ -22,6 +22,8 @@ const TASK_OWNER_LABEL_DESCRIPTION =
 const TASK_STATUS_LINE_DESCRIPTION =
   `One plain-English sentence on where the task stands, for Brent (max ${STATUS_LINE_MAX_LENGTH} characters; newlines are collapsed).`;
 const SECTION_PLANNED_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const WORK_TYPE_DESCRIPTION =
+  'Pace tracking work type: a lowercase slug such as "sc", "plain-dc", "waffle", "colorwork-dc", "chain".';
 const SECTION_PLANNED_START_DESCRIPTION =
   'Planned start date YYYY-MM-DD (timeline only: never changes due dates, overdue, priority or briefs).';
 const SECTION_PLANNED_END_DESCRIPTION =
@@ -694,6 +696,9 @@ function createMcpServer(): McpServer {
       owner: TASK_OWNER_INPUT_SCHEMA.optional().describe(TASK_OWNER_DESCRIPTION),
       owner_label: z.string().max(OWNER_LABEL_MAX_LENGTH).optional().describe(TASK_OWNER_LABEL_DESCRIPTION),
       status_line: z.string().max(STATUS_LINE_MAX_LENGTH).optional().describe(TASK_STATUS_LINE_DESCRIPTION),
+      unit_count: z.number().min(0).optional().describe('Pace tracking: units for the whole task when its checklist rows carry none (e.g. 970 stitches for a border round)'),
+      work_type: z.string().optional().describe(WORK_TYPE_DESCRIPTION),
+      is_sample: z.boolean().optional().describe('Pace tracking: true for a swatch / test piece / prototype; its speeds are labelled as sample speeds'),
       blocked_by_task_id: z.string().optional().describe('Task UUID this new task should depend on'),
       initial_comment: z.string().optional().describe('Creates first comment on the task'),
       initial_checklist: z.array(z.string()).optional().describe('Creates checklist items'),
@@ -747,6 +752,9 @@ function createMcpServer(): McpServer {
       source_url: z.string().nullable().optional().describe('Source URL for traceability, or null to clear'),
       external_source_system: z.string().nullable().optional().describe('External source namespace, or null to clear'),
       external_source_id: EXTERNAL_SOURCE_ID_INPUT_SCHEMA.nullable().optional().describe('Identifier within the external source system, or null to clear'),
+      unit_count: z.number().min(0).nullable().optional().describe('Pace tracking: units for the whole task when its checklist rows carry none; null clears'),
+      work_type: z.string().nullable().optional().describe(`${WORK_TYPE_DESCRIPTION} Null clears.`),
+      is_sample: z.boolean().optional().describe('Pace tracking: true for a swatch / test piece / prototype'),
     },
     async ({ task_id, ...updates }) => {
       const res = await fetch(
@@ -932,12 +940,14 @@ function createMcpServer(): McpServer {
 
   mcp.tool(
     'update_task_checklist',
-    'Update checklist items (mark done/undone).',
+    'Update checklist items: mark done/undone, or set the units on a row for pace tracking (unit_count, e.g. 195 stitches, and work_type, e.g. "colorwork-dc"; null clears). Each item needs its id and at least one field. Every item is validated before any is written. If some rows fail, the reply lists them under failed and is marked as an error. To record time spent, use log_work_session instead (it can tick the rows too).',
     {
       task_id: z.string().describe('Task UUID'),
       items: z.array(z.object({
         id: z.string().describe('Checklist item UUID'),
-        is_done: z.boolean().describe('Whether the item is done'),
+        is_done: z.boolean().optional().describe('Whether the item is done'),
+        unit_count: z.number().min(0).nullable().optional().describe('Units on this row (e.g. stitches); null clears'),
+        work_type: z.string().nullable().optional().describe(WORK_TYPE_DESCRIPTION),
       })).describe('Items to update'),
     },
     async ({ task_id, items }) => {
@@ -953,7 +963,147 @@ function createMcpServer(): McpServer {
         }
       );
       const data = await res.json();
-      return toMcpResponse(data);
+      const failed = !res.ok || res.status === 207;
+      return { ...toMcpResponse(data), ...(failed ? { isError: true } : {}) };
+    }
+  );
+
+  // ── PACE TRACKING (work sessions + forecast) ─────────────────────────
+  const paceHeaders = () => ({
+    'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY!,
+    'Content-Type': 'application/json',
+  });
+  const paceReply = async (res: Response) => {
+    const data = await res.json();
+    return { ...toMcpResponse(data), ...(res.ok ? {} : { isError: true }) };
+  };
+
+  mcp.tool(
+    'log_work_session',
+    'Log one sitting of work on a project (e.g. "I crocheted rows 11-15 from 1:38 to 2:39 PM"). Give task_id (or project_id alone for a sitting that spanned several tasks), and minutes and/or start+end (ET clock times like "13:38" or "1:38 PM", or ISO; if you give all three they must agree within 1 minute). Name the work covered with rows ("11-15", "11, 12", "row 10": matched to checklist items starting "Row N" in that task, or the whole project without task_id; it errors on missing or ambiguous rows and never guesses) and/or item_ids. Those rows are ticked done unless mark_items_done is false. Set exclude_from_stats with a reason (learning, reading-instructions, interrupted, frogged) when the time should not count toward speed; it still counts as time spent. Replies with the saved session and a one-line forecast (speed, minutes per day needed, what size fits).',
+    {
+      task_id: z.string().optional().describe('Task UUID the sitting was on'),
+      project_id: z.string().optional().describe('Project UUID, for a sitting across several tasks with no split (leave task_id out)'),
+      date: z.string().optional().describe('ET calendar date YYYY-MM-DD; default today (ET)'),
+      start: z.string().optional().describe('Start time: "13:38" / "1:38 PM" (ET, on date) or ISO with offset'),
+      end: z.string().optional().describe('End time, same formats as start'),
+      minutes: z.number().int().min(1).max(1440).optional().describe('Minutes worked; required unless start and end are both given'),
+      rows: z.string().optional().describe('Rows covered, e.g. "11-15", "11, 12" or "row 10"'),
+      item_ids: z.array(z.string()).optional().describe('Checklist item UUIDs covered (in addition to rows)'),
+      mark_items_done: z.boolean().optional().describe('Tick the covered rows done (default true)'),
+      extra_units: z.number().min(0).optional().describe('Units done that have no checklist row, e.g. half a row (90 stitches)'),
+      extra_work_type: z.string().optional().describe(`Work type of extra_units (default: the task's). ${WORK_TYPE_DESCRIPTION}`),
+      note: z.string().max(2000).optional().describe('Free note'),
+      exclude_from_stats: z.boolean().optional().describe('True = real time, but not a fair measure of speed'),
+      exclude_reason: z.string().max(200).optional().describe('Why it is excluded: learning, reading-instructions, interrupted, frogged …'),
+      idempotency_key: z.string().min(1).max(190).optional().describe('Optional key unique to this sitting (e.g. the chat message id). Retrying with the same key returns the first session instead of logging it twice (duplicate: true).'),
+    },
+    async (args) => {
+      const res = await fetch('https://mission-control-orpin-chi.vercel.app/api/work-sessions', {
+        method: 'POST',
+        headers: paceHeaders(),
+        body: JSON.stringify({ ...args, source: 'agent' }),
+      });
+      const data = await res.json();
+      if (!res.ok) return { ...toMcpResponse(data), isError: true };
+      const result = data as { forecast_line?: string };
+      return toMcpResponse({ summary: result.forecast_line, ...data });
+    }
+  );
+
+  mcp.tool(
+    'list_work_sessions',
+    'List logged sittings of work (newest first) for a project or a task, with minutes, times, linked checklist rows and whether each counts toward speed.',
+    {
+      project_id: z.string().optional().describe('Project UUID'),
+      task_id: z.string().optional().describe('Task UUID'),
+      since: z.string().optional().describe('Only sessions on or after this ET date (YYYY-MM-DD)'),
+    },
+    async ({ project_id, task_id, since }) => {
+      const params = new URLSearchParams();
+      if (project_id) params.set('project_id', project_id);
+      if (task_id) params.set('task_id', task_id);
+      if (since) params.set('since', since);
+      const res = await fetch(`https://mission-control-orpin-chi.vercel.app/api/work-sessions?${params.toString()}`, {
+        headers: paceHeaders(),
+      });
+      return paceReply(res);
+    }
+  );
+
+  mcp.tool(
+    'update_work_session',
+    'Fix a logged sitting: its date, start/end, minutes, task, covered rows (rows or item_ids replace the linked rows; ticks are not undone), note, extra units, or whether it counts toward speed (exclude_from_stats + exclude_reason).',
+    {
+      session_id: z.string().describe('Work session UUID'),
+      task_id: z.string().nullable().optional().describe('Move to another task in the same project, or null for a multi-task sitting'),
+      date: z.string().optional().describe('ET date YYYY-MM-DD'),
+      start: z.string().nullable().optional().describe('Start time ("13:38", "1:38 PM", or ISO); null clears'),
+      end: z.string().nullable().optional().describe('End time; null clears'),
+      minutes: z.number().int().min(1).max(1440).optional().describe('Minutes worked'),
+      rows: z.string().optional().describe('Rows covered, e.g. "11-15" (replaces the linked rows)'),
+      item_ids: z.array(z.string()).optional().describe('Checklist item UUIDs covered (replaces the linked rows)'),
+      extra_units: z.number().min(0).nullable().optional(),
+      extra_work_type: z.string().nullable().optional().describe(WORK_TYPE_DESCRIPTION),
+      note: z.string().max(2000).nullable().optional(),
+      exclude_from_stats: z.boolean().optional(),
+      exclude_reason: z.string().max(200).nullable().optional(),
+    },
+    async ({ session_id, ...updates }) => {
+      const res = await fetch(`https://mission-control-orpin-chi.vercel.app/api/work-sessions/${encodeURIComponent(session_id)}`, {
+        method: 'PATCH',
+        headers: paceHeaders(),
+        body: JSON.stringify(updates),
+      });
+      return paceReply(res);
+    }
+  );
+
+  mcp.tool(
+    'delete_work_session',
+    'Delete a logged sitting that was wrong or a duplicate. Checklist rows it ticked stay ticked (untick them with update_task_checklist if needed).',
+    {
+      session_id: z.string().describe('Work session UUID'),
+    },
+    async ({ session_id }) => {
+      const res = await fetch(`https://mission-control-orpin-chi.vercel.app/api/work-sessions/${encodeURIComponent(session_id)}`, {
+        method: 'DELETE',
+        headers: paceHeaders(),
+      });
+      return paceReply(res);
+    }
+  );
+
+  mcp.tool(
+    'get_project_forecast',
+    'Get the pace forecast for a project that tracks units (e.g. stitches): speed per work type with where it came from (measured, measured_sample = from a swatch, other projects, plan × your pace, plan), time left, cadence (minutes per day over the last 14 days), minutes per day needed to hit the target date, projected finish, health, and (when the project has a size setting and the main piece is not started) the widest size that fits by the target date at several minutes per day. Use it for "am I on pace?" or "how wide can I make it?".',
+    {
+      project_id: z.string().describe('Project UUID'),
+      today: z.string().optional().describe('ET date to compute as of (YYYY-MM-DD); default today'),
+    },
+    async ({ project_id, today }) => {
+      const query = today ? `?today=${encodeURIComponent(today)}` : '';
+      const res = await fetch(`https://mission-control-orpin-chi.vercel.app/api/projects/${encodeURIComponent(project_id)}/forecast${query}`, {
+        headers: paceHeaders(),
+      });
+      return paceReply(res);
+    }
+  );
+
+  mcp.tool(
+    'get_pace_rates',
+    'Get measured speeds (seconds per unit) across all projects that count the same unit, e.g. unit_label "stitches", optionally for one work type. Only counted sessions, the most recent 8 per type; swatch/sample speeds are listed separately and labelled.',
+    {
+      unit_label: z.string().describe('The unit, e.g. "stitches"'),
+      work_type: z.string().optional().describe(WORK_TYPE_DESCRIPTION),
+    },
+    async ({ unit_label, work_type }) => {
+      const params = new URLSearchParams({ unit_label });
+      if (work_type) params.set('work_type', work_type);
+      const res = await fetch(`https://mission-control-orpin-chi.vercel.app/api/pace-rates?${params.toString()}`, {
+        headers: paceHeaders(),
+      });
+      return paceReply(res);
     }
   );
 
@@ -1383,6 +1533,18 @@ function createMcpServer(): McpServer {
       status_summary: z.string().optional(),
       tags: z.array(z.string()).optional().describe('Freeform lowercase tags'),
       portfolio_rank: z.number().int().min(1).optional(),
+      unit_label: z.string().max(40).nullable().optional().describe('Pace tracking: the unit this project counts, e.g. "stitches"; null turns pace tracking off'),
+      pace_settings: z.object({
+        size: z.object({
+          label: z.string().describe('What the size is called, e.g. "width"'),
+          current: z.number().int().positive().describe('Planned size, e.g. 195'),
+          step: z.number().int().positive().describe('Size step, e.g. 12'),
+          offset: z.number().int().min(0).describe('Sizes are offset + step × k, e.g. 3'),
+          min: z.number().int().positive().describe('Smallest size worth considering, e.g. 27'),
+          unit: z.string().describe('The size unit, e.g. "stitches"'),
+          work_types: z.array(z.string()).min(1).describe('Work types whose units scale with the size'),
+        }).nullable().optional(),
+      }).nullable().optional().describe('Pace tracking settings; null clears'),
     },
     async ({ project_id, ...updates }) => {
       const res = await fetch(
@@ -1397,7 +1559,7 @@ function createMcpServer(): McpServer {
         }
       );
       const data = await res.json();
-      return toMcpResponse(data);
+      return { ...toMcpResponse(data), ...(res.ok ? {} : { isError: true }) };
     }
   );
 
