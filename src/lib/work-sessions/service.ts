@@ -38,6 +38,7 @@ import {
   reanchorSession,
   resolveSessionTiming,
 } from "@/lib/work-sessions/parse";
+import { ID_CHUNK, chunks, pagedSelect } from "@/lib/supabase/batch";
 import type { WorkSession } from "@/types/database";
 
 export class WorkSessionServiceError extends Error {
@@ -52,9 +53,6 @@ export class WorkSessionServiceError extends Error {
   }
 }
 
-const PAGE_SIZE = 1000;
-const MAX_PAGES = 50;
-const ID_CHUNK = 200;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SESSION_SOURCES = ["manual", "agent", "backfill"] as const;
 type SessionSource = (typeof SESSION_SOURCES)[number];
@@ -83,27 +81,6 @@ function optionalString(value: unknown, field: string, max: number): string | nu
 function asRecord(body: unknown): Record<string, unknown> {
   if (!body || typeof body !== "object" || Array.isArray(body)) bad("Body must be a JSON object");
   return body as Record<string, unknown>;
-}
-
-async function pagedSelect<T>(
-  build: (from: number, to: number) => PromiseLike<{ data: unknown; error: unknown }>
-): Promise<T[]> {
-  const rows: T[] = [];
-  for (let page = 0; page < MAX_PAGES; page += 1) {
-    const from = page * PAGE_SIZE;
-    const { data, error } = await build(from, from + PAGE_SIZE - 1);
-    if (error) throw error;
-    const batch = (data ?? []) as T[];
-    rows.push(...batch);
-    if (batch.length < PAGE_SIZE) return rows;
-  }
-  throw new Error("pagedSelect: too many rows");
-}
-
-function chunks<T>(values: T[], size = ID_CHUNK): T[][] {
-  const out: T[][] = [];
-  for (let index = 0; index < values.length; index += size) out.push(values.slice(index, index + size));
-  return out;
 }
 
 // ── Loading ─────────────────────────────────────────────────────────────────

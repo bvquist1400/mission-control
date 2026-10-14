@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { DEFAULT_PROJECT_STAGE, PROJECT_STAGE_VALUES, normalizeProjectStage } from '@/lib/project-stage';
+import { chunks, pagedSelect } from '@/lib/supabase/batch';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import { normalizeTaskTags } from '@/lib/task-tags';
 
@@ -112,25 +113,41 @@ export async function GET(request: NextRequest) {
         .filter((id): id is string => typeof id === 'string' && id.length > 0)
     )];
 
-    const { data: taskRows, error: taskError } = await supabase
-      .from('tasks')
-      .select('id, project_id, status, blocker')
-      .eq('user_id', userId)
-      .in('project_id', projectIds);
-    if (taskError) throw taskError;
+    // Paged + chunked: hundreds of task ids in one .in() overflow the request URL.
+    const taskRows = (
+      await Promise.all(
+        chunks(projectIds).map((ids) =>
+          pagedSelect<ProjectTaskRow>((from, to) =>
+            supabase
+              .from('tasks')
+              .select('id, project_id, status, blocker')
+              .eq('user_id', userId)
+              .in('project_id', ids)
+              .order('id', { ascending: true })
+              .range(from, to)
+          )
+        )
+      )
+    ).flat();
 
-    const taskIds = (taskRows || []).map((task) => task.id);
+    const taskIds = taskRows.map((task) => task.id);
     const [
-      { data: checklistRows, error: checklistError },
+      checklistRows,
       { data: implementationRows, error: implementationError },
     ] = await Promise.all([
-      taskIds.length > 0
-        ? supabase
-            .from('task_checklist_items')
-            .select('task_id, is_done')
-            .eq('user_id', userId)
-            .in('task_id', taskIds)
-        : Promise.resolve({ data: [], error: null }),
+      Promise.all(
+        chunks(taskIds).map((ids) =>
+          pagedSelect<TaskChecklistRow>((from, to) =>
+            supabase
+              .from('task_checklist_items')
+              .select('id, task_id, is_done')
+              .eq('user_id', userId)
+              .in('task_id', ids)
+              .order('id', { ascending: true })
+              .range(from, to)
+          )
+        )
+      ).then((pages) => pages.flat()),
       implementationIds.length > 0
         ? supabase
             .from('implementations')
@@ -140,7 +157,6 @@ export async function GET(request: NextRequest) {
         : Promise.resolve({ data: [], error: null }),
     ]);
 
-    if (checklistError) throw checklistError;
     if (implementationError) throw implementationError;
 
     const statsByProject = new Map<string, ProjectTaskStats>(
@@ -149,7 +165,7 @@ export async function GET(request: NextRequest) {
 
     const checklistCountsByTask = new Map<string, { total: number; done: number }>();
 
-    for (const checklistItem of (checklistRows || []) as TaskChecklistRow[]) {
+    for (const checklistItem of checklistRows) {
       const current = checklistCountsByTask.get(checklistItem.task_id) ?? { total: 0, done: 0 };
       current.total += 1;
       if (checklistItem.is_done) {
@@ -162,7 +178,7 @@ export async function GET(request: NextRequest) {
       projectIds.map((projectId) => [projectId, { completed: 0, total: 0 }])
     );
 
-    for (const task of (taskRows || []) as ProjectTaskRow[]) {
+    for (const task of taskRows) {
       if (!task.project_id) {
         continue;
       }
