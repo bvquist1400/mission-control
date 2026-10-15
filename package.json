@@ -10,6 +10,7 @@
     "test:planner-scoring": "node --experimental-strip-types scripts/test-planner-scoring.mjs",
     "test:personal-exclusion": "node --experimental-strip-types scripts/test-personal-exclusion.mjs",
     "test:famcal-api-key": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-famcal-api-key.mjs",
+    "test:famcal-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-famcal-db.mjs",
     "test:personal-work-reviews": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-personal-work-reviews.mjs",
     "test:task-recurrence": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-task-recurrence.mjs",
     "test:calendar-sanitize": "node scripts/test-calendar-sanitizer.mjs",

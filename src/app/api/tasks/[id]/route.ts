@@ -18,6 +18,7 @@ import {
   fetchFamcalVisibleTask,
   isFamcalVisibleTask,
   parseFamcalTaskPatch,
+  projectTaskForFamcal,
 } from '@/lib/famcal-api-key';
 import { validateOptionalTimestamp } from '@/lib/validate';
 import {
@@ -86,8 +87,13 @@ export async function GET(
     }
 
     // The FamCal key sees only tasks tagged `personal`; anything else looks missing.
-    if (auth.context.authSource === 'famcal_api_key' && !isFamcalVisibleTask(data as { tags?: string[] | null })) {
-      return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+    // What it does see is the FamCal projection: no work project, application,
+    // sprint or section (src/lib/famcal-api-key.ts, projectTaskForFamcal).
+    if (auth.context.authSource === 'famcal_api_key') {
+      if (!isFamcalVisibleTask(data as { tags?: string[] | null })) {
+        return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+      }
+      return NextResponse.json(projectTaskForFamcal(data as Record<string, unknown>));
     }
 
     return NextResponse.json(normalizeTaskWithRelations(data as Record<string, unknown>));
@@ -113,7 +119,11 @@ export async function PATCH(
     const body = (await request.json()) as Record<string, unknown>;
 
     // The FamCal key may only close/reopen a personal task or move its dates.
-    if (auth.context.authSource === 'famcal_api_key') {
+    // A status change is validated against the status read here, and the UPDATE
+    // below only lands while the task still has that status (else 409).
+    const isFamcalKey = auth.context.authSource === 'famcal_api_key';
+    let famcalExpectedStatus: TaskStatus | null = null;
+    if (isFamcalKey) {
       const famcalPatch = parseFamcalTaskPatch(body);
       if (!famcalPatch.ok) {
         return NextResponse.json({ error: famcalPatch.error }, { status: 400 });
@@ -129,6 +139,7 @@ export async function PATCH(
         if (transitionError) {
           return NextResponse.json({ error: transitionError }, { status: 400 });
         }
+        famcalExpectedStatus = visibleTask.status;
       }
     }
 
@@ -469,10 +480,15 @@ export async function PATCH(
       .update(updates)
       .eq('id', id)
       .eq('user_id', userId);
-    if (auth.context.authSource === 'famcal_api_key') {
+    if (isFamcalKey) {
       // Re-assert the personal tag in the UPDATE itself: a tag removed after the
       // guard's read matches no row, which becomes the PGRST116 → 404 below.
       updateQuery = updateQuery.contains('tags', [FAMCAL_REQUIRED_TAG]);
+      // Compare-and-set on the status the transition was validated against: a
+      // status changed by someone else meanwhile matches no row (→ 409 below).
+      if (famcalExpectedStatus) {
+        updateQuery = updateQuery.eq('status', famcalExpectedStatus);
+      }
     }
     const { data, error } = await updateQuery
       .select(TASK_WITH_RELATIONS_SELECT)
@@ -512,18 +528,35 @@ export async function PATCH(
         }
       }
       if (error.code === 'PGRST116') {
+        // FamCal: nothing was written. Say 409 only when the task is still
+        // personal and its status moved away from the one validated; a task that
+        // lost `personal` (or is gone) stays an indistinguishable 404.
+        if (isFamcalKey && famcalExpectedStatus) {
+          const now = await fetchFamcalVisibleTask(supabase, userId, id);
+          if (now && now.status !== famcalExpectedStatus) {
+            return NextResponse.json(
+              { error: 'The task changed since it was read; reload it and try again' },
+              { status: 409 }
+            );
+          }
+        }
         return NextResponse.json({ error: 'Task not found' }, { status: 404 });
       }
       throw error;
     }
 
-    if (currentTask && typeof updates.status === 'string' && updates.status !== currentTask.status) {
+    const fromStatus = famcalExpectedStatus ?? currentTask?.status;
+    if (currentTask && fromStatus && typeof updates.status === 'string' && updates.status !== fromStatus) {
       queueTaskStatusTransition(supabase, {
         userId,
         taskId: id,
-        fromStatus: currentTask.status,
+        fromStatus,
         toStatus: updates.status as typeof currentTask.status,
       });
+    }
+
+    if (isFamcalKey) {
+      return NextResponse.json(projectTaskForFamcal(data as Record<string, unknown>));
     }
 
     return NextResponse.json(normalizeTaskWithRelations(data as Record<string, unknown>));

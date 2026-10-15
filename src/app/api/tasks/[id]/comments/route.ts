@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isPostgrestNotFound } from '@/lib/supabase/errors';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
-import { fetchFamcalVisibleTask } from '@/lib/famcal-api-key';
+import { addFamcalTaskComment, readFamcalTaskComments } from '@/lib/famcal-api-key';
 import type { CommentSource } from '@/types/database';
 
 const VALID_SOURCES: CommentSource[] = ['manual', 'system', 'llm'];
@@ -24,9 +24,14 @@ export async function GET(
     const { supabase, userId } = auth.context;
     const { id } = await params;
 
-    // The FamCal key reads comments only on tasks tagged `personal`.
-    if (auth.context.authSource === 'famcal_api_key' && !(await fetchFamcalVisibleTask(supabase, userId, id))) {
-      return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+    // The FamCal key reads comments only on tasks tagged `personal`, and the tag
+    // check is part of the same query that reads them (one statement, one snapshot).
+    if (auth.context.authSource === 'famcal_api_key') {
+      const famcalComments = await readFamcalTaskComments(supabase, userId, id);
+      if (!famcalComments) {
+        return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+      }
+      return NextResponse.json(famcalComments);
     }
 
     const { data, error } = await supabase
@@ -82,9 +87,16 @@ export async function POST(
       source = body.source;
     }
 
-    // The FamCal key comments only on tasks tagged `personal`.
-    if (auth.context.authSource === 'famcal_api_key' && !(await fetchFamcalVisibleTask(supabase, userId, id))) {
-      return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+    // The FamCal key comments only on tasks tagged `personal`. One database
+    // transaction (migration 060) locks the task, checks the tag and inserts, so
+    // a comment can never land on a task that isn't personal at that moment, and
+    // a failure leaves nothing behind.
+    if (auth.context.authSource === 'famcal_api_key') {
+      const famcalComment = await addFamcalTaskComment(supabase, userId, id, body.content.trim(), source);
+      if (!famcalComment) {
+        return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+      }
+      return NextResponse.json(famcalComment, { status: 201 });
     }
 
     // Verify task exists and belongs to user
@@ -116,22 +128,6 @@ export async function POST(
 
     if (error) {
       throw error;
-    }
-
-    // An INSERT can't carry a WHERE on the task, so for the FamCal key re-check
-    // the tag after writing: if the task lost `personal` meanwhile, take the
-    // comment back out and answer 404, as if the guard had seen it first.
-    if (auth.context.authSource === 'famcal_api_key' && !(await fetchFamcalVisibleTask(supabase, userId, id))) {
-      const { error: undoError } = await supabase
-        .from('task_comments')
-        .delete()
-        .eq('id', (data as { id: string }).id)
-        .eq('task_id', id)
-        .eq('user_id', userId);
-      if (undoError) {
-        throw undoError;
-      }
-      return NextResponse.json({ error: 'Task not found' }, { status: 404 });
     }
 
     return NextResponse.json(data, { status: 201 });

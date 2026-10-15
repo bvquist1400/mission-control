@@ -5,6 +5,7 @@ import { withCorsHeaders } from '@/lib/cors';
 import { secureCompare } from '@/lib/secure-compare';
 import { readInternalAuthContext } from '@/lib/supabase/internal-auth';
 import { isFamcalKeyRouteAllowed } from '@/lib/famcal-api-key';
+import { isRefusedCollidingMachineKey, readMachineApiKeys, type MachineApiKeys } from '@/lib/machine-keys';
 
 export type AuthSource =
   | 'session'
@@ -87,29 +88,22 @@ function isActionsKeyRouteAllowed(method: string, pathname: string): boolean {
   );
 }
 
-export interface MachineApiKeys {
-  legacy?: string | null;
-  actions?: string | null;
-  famcal?: string | null;
-}
-
-export function readMachineApiKeys(env: NodeJS.ProcessEnv = process.env): MachineApiKeys {
-  return {
-    legacy: env.MISSION_CONTROL_API_KEY?.trim() || null,
-    actions: env.MISSION_CONTROL_ACTIONS_API_KEY?.trim() || null,
-    famcal: env.MISSION_CONTROL_FAMCAL_API_KEY?.trim() || null,
-  };
-}
+export type { MachineApiKeys } from '@/lib/machine-keys';
+export { famcalKeyCollisions, isRefusedCollidingMachineKey, readMachineApiKeys } from '@/lib/machine-keys';
 
 /**
  * Which machine key the caller presented. Checked in a fixed order (legacy,
- * actions, FamCal) so the two existing keys behave exactly as before even if a
- * value were ever reused; give every key its own value.
+ * actions, FamCal) so the two existing keys behave exactly as before when every
+ * key has its own value. A value shared with the FamCal key resolves to nothing
+ * (see isRefusedCollidingMachineKey).
  */
 export function resolveMachineKeySource(
   providedApiKey: string,
   keys: MachineApiKeys
 ): MachineAuthSource | null {
+  if (isRefusedCollidingMachineKey(providedApiKey, keys)) {
+    return null;
+  }
   if (keys.legacy && secureCompare(providedApiKey, keys.legacy)) {
     return 'legacy_api_key';
   }

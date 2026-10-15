@@ -6,7 +6,7 @@ import {
 } from '@/lib/task-relations';
 import { queueTaskStatusTransition } from '@/lib/task-status-transitions';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
-import { FAMCAL_REQUIRED_TAG, isFamcalVisibleTask } from '@/lib/famcal-api-key';
+import { FAMCAL_REQUIRED_TAG, isFamcalVisibleTask, projectTaskForFamcal } from '@/lib/famcal-api-key';
 
 // POST /api/tasks/park/[id] - Convenience endpoint to move a task into Parked
 export async function POST(
@@ -82,6 +82,10 @@ export async function POST(
         fromStatus: currentTask.status,
         toStatus: 'Parked',
       });
+    }
+
+    if (auth.context.authSource === 'famcal_api_key') {
+      return NextResponse.json(projectTaskForFamcal(data as Record<string, unknown>));
     }
 
     return NextResponse.json(normalizeTaskWithRelations(data as Record<string, unknown>));

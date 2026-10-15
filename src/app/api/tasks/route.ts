@@ -12,7 +12,12 @@ import {
 import { queueTaskStatusTransition } from '@/lib/task-status-transitions';
 import { calculateFinalPriorityScore, calculatePriorityBoosts, getHighPriorityStakeholderNames } from '@/lib/priority';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
-import { famcalListRequiredTags, redactDependencyForFamcal } from '@/lib/famcal-api-key';
+import {
+  famcalListRequiredTags,
+  famcalRefusedListParam,
+  projectTaskForFamcal,
+  redactDependencyForFamcal,
+} from '@/lib/famcal-api-key';
 import { fetchTaskDependencySummaries } from '@/lib/task-dependencies';
 import {
   queryNeedsReviewCount,
@@ -115,8 +120,14 @@ export async function GET(request: NextRequest) {
     const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 500) : 100;
     const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
 
-    if (isFamcalKey && view) {
-      return NextResponse.json({ error: 'view is not available with this key' }, { status: 400 });
+    // Views ignore the tag filter, and work-relation filters would reveal which
+    // personal tasks sit in a work project: refused when present at all, even
+    // empty (`?view=`), not just when they have a value.
+    if (isFamcalKey) {
+      const refused = famcalRefusedListParam(searchParams);
+      if (refused) {
+        return NextResponse.json({ error: `${refused} is not available with this key` }, { status: 400 });
+      }
     }
 
     if (view === 'needs_review_count') {
@@ -286,7 +297,9 @@ export async function GET(request: NextRequest) {
       throw error;
     }
 
-    const tasks = normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>);
+    const rows = (data || []) as Array<Record<string, unknown>>;
+    // The FamCal key gets its own projection (no work relations); others the full rows.
+    const tasks = isFamcalKey ? rows.map(projectTaskForFamcal) : normalizeTaskWithRelationsList(rows);
     const taskIds = tasks.map((task) => task.id);
     const dependencyMap = await fetchTaskDependencySummaries(supabase, userId, taskIds);
 

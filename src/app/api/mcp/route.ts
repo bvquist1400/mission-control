@@ -5,6 +5,7 @@ import { getAllowedCorsOrigin, applyCorsHeaders } from '@/lib/cors';
 import { getCanonicalAppUrl, getUpstreamApiUrl, isMcpDeployment } from '@/lib/mcp/config';
 import { fetchMissionControlItemById, searchMissionControlData } from '@/lib/mcp/search';
 import { PROJECT_STAGE_VALUES } from '@/lib/project-stage';
+import { isRefusedCollidingMachineKey } from '@/lib/machine-keys';
 import { secureCompare } from '@/lib/secure-compare';
 import { OWNER_LABEL_MAX_LENGTH, STATUS_LINE_MAX_LENGTH, TASK_OWNERS } from '@/lib/task-owner';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
@@ -246,6 +247,14 @@ function authenticateLegacyMcp(request: Request): LegacyMcpAuthResult | Response
   const authHeader = request.headers.get('authorization');
   const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
   const apiKey = customKey || bearerToken;
+
+  // A legacy/actions value reused as the FamCal key is refused (fail closed).
+  if (apiKey && isRefusedCollidingMachineKey(apiKey)) {
+    return new Response(JSON.stringify({ error: 'Invalid API key' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
 
   if (apiKey && validApiKey && secureCompare(apiKey, validApiKey)) {
     return {
