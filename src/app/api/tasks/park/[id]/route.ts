@@ -6,7 +6,7 @@ import {
 } from '@/lib/task-relations';
 import { queueTaskStatusTransition } from '@/lib/task-status-transitions';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
-import { isFamcalVisibleTask } from '@/lib/famcal-api-key';
+import { FAMCAL_REQUIRED_TAG, isFamcalVisibleTask } from '@/lib/famcal-api-key';
 
 // POST /api/tasks/park/[id] - Convenience endpoint to move a task into Parked
 export async function POST(
@@ -51,14 +51,19 @@ export async function POST(
       highPriorityStakeholderNames
     );
 
-    const { data, error } = await supabase
+    let updateQuery = supabase
       .from('tasks')
       .update({
         status: 'Parked',
         priority_score: priorityScore,
       })
       .eq('id', id)
-      .eq('user_id', userId)
+      .eq('user_id', userId);
+    if (auth.context.authSource === 'famcal_api_key') {
+      // Re-assert the personal tag in the UPDATE itself (no row → PGRST116 → 404).
+      updateQuery = updateQuery.contains('tags', [FAMCAL_REQUIRED_TAG]);
+    }
+    const { data, error } = await updateQuery
       .select(TASK_WITH_RELATIONS_SELECT)
       .single();
 

@@ -66,12 +66,14 @@ const MISSING_ID = "44444444-4444-4444-8444-444444444444";
 const WORK_DEP_ID = "55555555-5555-4555-8555-555555555555";
 
 // ── Fake Supabase client ───────────────────────────────────────────────────
-function makeDb() {
+// untagBeforeWrite: someone removes `personal` from PERSONAL_ID just before the
+// write lands (after the guard's read), as in the review's probes C1-C3.
+function makeDb({ untagBeforeWrite = false } = {}) {
   const tasks = new Map([
     [PERSONAL_ID, { id: PERSONAL_ID, user_id: API_USER_ID, title: "Register to vote", status: "Backlog", tags: ["personal"], base_priority: 50, due_at: null, stakeholder_mentions: [] }],
     [WORK_ID, { id: WORK_ID, user_id: API_USER_ID, title: "Day-job ticket", status: "Planned", tags: ["work"], base_priority: 50, due_at: null, stakeholder_mentions: [] }],
     [DONE_PERSONAL_ID, { id: DONE_PERSONAL_ID, user_id: API_USER_ID, title: "Old errand", status: "Done", tags: ["personal", "finance"], base_priority: 50, due_at: null, stakeholder_mentions: [] }],
-    [WORK_DEP_ID, { id: WORK_DEP_ID, user_id: API_USER_ID, title: "Secret work dependency", status: "Planned", tags: ["work"], base_priority: 50, due_at: null, stakeholder_mentions: [] }],
+    [WORK_DEP_ID, { id: WORK_DEP_ID, user_id: API_USER_ID, title: "Secret work dependency", status: "In Progress", tags: ["work"], base_priority: 50, due_at: null, stakeholder_mentions: [] }],
   ]);
   const comments = [
     { id: "c1", task_id: PERSONAL_ID, user_id: API_USER_ID, content: "Personal comment", source: "manual", created_at: "2026-10-01T00:00:00Z" },
@@ -89,6 +91,7 @@ function makeDb() {
     const mode = op("single") ? "single" : op("maybeSingle") ? "maybeSingle" : "many";
     const update = op("update")?.[1][0];
     const insert = op("insert")?.[1][0];
+    const isDelete = Boolean(op("delete"));
 
     const finish = (rows) => {
       if (mode === "many") return { data: rows, error: null };
@@ -104,6 +107,10 @@ function makeDb() {
       if (update) {
         const row = tasks.get(eqId);
         if (!row) return finish([]);
+        if (untagBeforeWrite && row.id === PERSONAL_ID) row.tags = ["work"];
+        for (const [, [column, value]] of ops.filter(([n]) => n === "contains")) {
+          if (column === "tags" && !value.every((tag) => row.tags.includes(tag))) return finish([]);
+        }
         Object.assign(row, update);
         return finish([{ ...row }]);
       }
@@ -120,7 +127,13 @@ function makeDb() {
       return finish(rows.map((row) => ({ ...row })));
     }
     if (table === "task_comments") {
+      if (isDelete) {
+        const commentId = eqs.find(([column]) => column === "id")?.[1];
+        const index = comments.findIndex((row) => row.id === commentId);
+        return finish(index >= 0 ? comments.splice(index, 1) : []);
+      }
       if (insert) {
+        if (untagBeforeWrite) tasks.get(PERSONAL_ID).tags = ["work"];
         const row = { id: `c${comments.length + 1}`, created_at: "2026-10-15T00:00:00Z", ...insert };
         comments.push(row);
         return finish([row]);
@@ -245,6 +258,22 @@ await test("FamCal key gets 403 on every other route, before any user lookup", a
   assert.equal(authFetchCalls, before);
 });
 
+await test("FamCal key: path and method tricks are 403 (HEAD, OPTIONS, %2F, //, ;x, encoded ..)", async () => {
+  for (const [method, path] of [
+    ["HEAD", "/api/tasks"],
+    ["OPTIONS", "/api/tasks"],
+    ["GET", `/api/tasks/${PERSONAL_ID}%2Fcomments`],
+    ["GET", `/api/tasks//${PERSONAL_ID}`],
+    ["GET", `/api/tasks/${PERSONAL_ID};x`],
+    ["GET", `/api/tasks/${PERSONAL_ID}/comments/%2E%2E/checklist`],
+    ["GET", `/api/tasks/${PERSONAL_ID}/comments/../checklist`],
+    ["patch", `/api/tasks/${PERSONAL_ID}/comments`],
+  ]) {
+    const result = await routeAuth.requireAuthenticatedRoute(keyRequest(FAMCAL_KEY, method, path));
+    assert.equal(result.response?.status, 403, `${method} ${path}`);
+  }
+});
+
 await test("FamCal key is also refused by the API-key-only guard on non-allowlisted routes", async () => {
   const result = await routeAuth.requireMissionControlApiKeyRoute(keyRequest(FAMCAL_KEY, "GET", "/api/briefing/render"));
   assert.equal(result.response.status, 403);
@@ -358,12 +387,36 @@ await test("GET /api/tasks?tag=personal (the FamCal contract call) returns perso
   assert.equal(body[0].dependencies.length, 1);
 });
 
-await test("FamCal key never sees a work task's title through dependencies", async () => {
+await test("FamCal key never sees a work task's title, status or id through dependencies", async () => {
   const db = makeDb();
   const response = await tasksRoute.GET(routeRequest(db, "famcal_api_key", "GET", "/api/tasks?tag=personal"));
-  const text = JSON.stringify(await response.json());
+  const body = await response.json();
+  const text = JSON.stringify(body);
   assert.doesNotMatch(text, /Secret work dependency/);
-  assert.match(text, /Another task/);
+  assert.doesNotMatch(text, /In Progress/);
+  assert.equal(text.includes(WORK_DEP_ID), false);
+  assert.equal(body[0].dependency_blocked, true);
+  const dependency = body[0].dependencies[0];
+  assert.deepEqual(
+    Object.keys(dependency).sort(),
+    ["created_at", "depends_on_commitment_id", "depends_on_task_id", "id", "resolved_at", "status", "task_id", "title", "type", "unresolved"]
+  );
+  assert.equal(dependency.title, "Another task");
+  assert.equal(dependency.status, "Blocked/Waiting");
+  assert.equal(dependency.depends_on_task_id, null);
+  assert.equal(dependency.unresolved, true);
+});
+
+await test("redactDependencyForFamcal: status mirrors unresolved; commitments say 'A commitment'", () => {
+  const base = { id: "d", task_id: PERSONAL_ID, type: "commitment", resolved_at: null, created_at: "x" };
+  assert.deepEqual(
+    famcal.redactDependencyForFamcal({ ...base, depends_on_task_id: null, depends_on_commitment_id: "c-1", title: "Client promise", status: "Open", unresolved: true }),
+    { ...base, depends_on_task_id: null, depends_on_commitment_id: null, title: "A commitment", status: "Blocked/Waiting", unresolved: true }
+  );
+  assert.equal(
+    famcal.redactDependencyForFamcal({ ...base, type: "task", depends_on_task_id: WORK_DEP_ID, depends_on_commitment_id: null, title: "t", status: "Done", unresolved: false }).status,
+    "Done"
+  );
 });
 
 await test("GET /api/tasks?view=… is refused for the FamCal key (views ignore the tag filter)", async () => {
@@ -508,6 +561,15 @@ await test("PATCH Done / due_at / follow_up_at on a personal task is 200", async
   assert.equal(db.tasks.get(DONE_PERSONAL_ID).follow_up_at, "2026-10-28T03:59:00.000Z");
 });
 
+await test("PATCH cannot clear a date: due_at/follow_up_at null, empty or non-string is 400", async () => {
+  for (const body of [{ due_at: null }, { due_at: "" }, { due_at: "   " }, { follow_up_at: null }, { follow_up_at: "" }, { due_at: {} }, { due_at: 0 }]) {
+    const db = makeDb();
+    const result = await famcalPatch(db, PERSONAL_ID, body);
+    assert.equal(result.status, 400, JSON.stringify(body));
+    assert.equal(tableOps(db, "tasks", "update").length, 0, JSON.stringify(body));
+  }
+});
+
 await test("PATCH with an invalid date is 400 (the route's normal timestamp check still runs)", async () => {
   const db = makeDb();
   const result = await famcalPatch(db, PERSONAL_ID, { due_at: "next tuesday" });
@@ -536,6 +598,44 @@ await test("PATCH unchanged for the legacy and actions keys: any field, any task
     assert.equal(response.status, 200, source);
     assert.equal(db.tasks.get(WORK_ID).title, "Renamed", source);
     assert.equal(db.tasks.get(WORK_ID).status, "In Progress", source);
+  }
+});
+
+// ── 5b. Write-time guard (tag removed between the guard's read and the write) ──
+await test("C1: PATCH after a concurrent untag is 404 and the task is not changed", async () => {
+  const db = makeDb({ untagBeforeWrite: true });
+  const result = await famcalPatch(db, PERSONAL_ID, { status: "Done" });
+  assert.equal(result.status, 404);
+  assert.equal(db.tasks.get(PERSONAL_ID).status, "Backlog");
+  const update = tableOps(db, "tasks", "update")[0];
+  assert.deepEqual(update.ops.find(([n]) => n === "contains")[1], ["tags", ["personal"]]);
+});
+
+await test("C2: park after a concurrent untag is 404 and the task is not parked", async () => {
+  const db = makeDb({ untagBeforeWrite: true });
+  const response = await parkRoute.POST(routeRequest(db, "famcal_api_key", "POST", `/api/tasks/park/${PERSONAL_ID}`), params(PERSONAL_ID));
+  assert.equal(response.status, 404);
+  assert.equal(db.tasks.get(PERSONAL_ID).status, "Backlog");
+});
+
+await test("C3: comment after a concurrent untag is 404 and the comment is taken back out", async () => {
+  const db = makeDb({ untagBeforeWrite: true });
+  const response = await commentsRoute.POST(
+    routeRequest(db, "famcal_api_key", "POST", `/api/tasks/${PERSONAL_ID}/comments`, { content: "From Sunday brief 10/25: done." }),
+    params(PERSONAL_ID)
+  );
+  assert.equal(response.status, 404);
+  assert.deepEqual(db.comments.map((row) => row.content), ["Personal comment", "Work comment"]);
+});
+
+await test("write-time tag filter is FamCal-only: legacy PATCH/park carry no tag filter", async () => {
+  for (const run of [
+    (db) => taskRoute.PATCH(routeRequest(db, "legacy_api_key", "PATCH", `/api/tasks/${WORK_ID}`, { status: "Done" }), params(WORK_ID)),
+    (db) => parkRoute.POST(routeRequest(db, "legacy_api_key", "POST", `/api/tasks/park/${WORK_ID}`), params(WORK_ID)),
+  ]) {
+    const db = makeDb();
+    assert.equal((await run(db)).status, 200);
+    assert.equal(tableOps(db, "tasks", "update")[0].ops.some(([n]) => n === "contains"), false);
   }
 });
 

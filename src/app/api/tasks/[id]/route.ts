@@ -14,6 +14,7 @@ import { getHighPriorityStakeholderNames, recalculateTaskPriority } from '@/lib/
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import {
   checkFamcalStatusTransition,
+  FAMCAL_REQUIRED_TAG,
   fetchFamcalVisibleTask,
   isFamcalVisibleTask,
   parseFamcalTaskPatch,
@@ -463,11 +464,17 @@ export async function PATCH(
       updates.estimate_source = 'manual';
     }
 
-    const { data, error } = await supabase
+    let updateQuery = supabase
       .from('tasks')
       .update(updates)
       .eq('id', id)
-      .eq('user_id', userId)
+      .eq('user_id', userId);
+    if (auth.context.authSource === 'famcal_api_key') {
+      // Re-assert the personal tag in the UPDATE itself: a tag removed after the
+      // guard's read matches no row, which becomes the PGRST116 → 404 below.
+      updateQuery = updateQuery.contains('tags', [FAMCAL_REQUIRED_TAG]);
+    }
+    const { data, error } = await updateQuery
       .select(TASK_WITH_RELATIONS_SELECT)
       .single();
 

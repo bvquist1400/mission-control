@@ -118,6 +118,22 @@ export async function POST(
       throw error;
     }
 
+    // An INSERT can't carry a WHERE on the task, so for the FamCal key re-check
+    // the tag after writing: if the task lost `personal` meanwhile, take the
+    // comment back out and answer 404, as if the guard had seen it first.
+    if (auth.context.authSource === 'famcal_api_key' && !(await fetchFamcalVisibleTask(supabase, userId, id))) {
+      const { error: undoError } = await supabase
+        .from('task_comments')
+        .delete()
+        .eq('id', (data as { id: string }).id)
+        .eq('task_id', id)
+        .eq('user_id', userId);
+      if (undoError) {
+        throw undoError;
+      }
+      return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+    }
+
     return NextResponse.json(data, { status: 201 });
   } catch (error) {
     console.error('Error creating comment:', error);

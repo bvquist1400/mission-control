@@ -68,6 +68,13 @@ export function parseFamcalTaskPatch(body: unknown): ParseResult<FamcalTaskPatch
     return { ok: false, error: 'No valid fields to update' };
   }
 
+  // Dates can be moved, not cleared: the brief's buttons always send a date.
+  for (const field of ['due_at', 'follow_up_at'] as const) {
+    if (field in record && (typeof record[field] !== 'string' || (record[field] as string).trim() === '')) {
+      return { ok: false, error: `${field} must be a date; this key cannot clear it` };
+    }
+  }
+
   if ('status' in record) {
     const status = record.status;
     const allowed = [...FAMCAL_CLOSED_STATUSES, ...FAMCAL_REOPEN_STATUSES] as ReadonlyArray<string>;
@@ -124,17 +131,28 @@ export function famcalListRequiredTags(requestedTag: string | null | undefined):
 export const FAMCAL_DEPENDENCY_TASK_TITLE = 'Another task';
 export const FAMCAL_DEPENDENCY_COMMITMENT_TITLE = 'A commitment';
 
+interface RedactableDependency {
+  title: string;
+  status: string;
+  unresolved: boolean;
+  depends_on_task_id: string | null;
+  depends_on_commitment_id: string | null;
+}
+
 /**
  * A personal task can depend on a work task or a stakeholder commitment. The
- * FamCal key keeps the dependency rows (so `dependency_blocked` and the array
- * shape are unchanged) but never returns the other item's title.
+ * FamCal key keeps the dependency rows (so `dependency_blocked`, `unresolved`
+ * and the array shape are unchanged) but nothing about the linked item: no
+ * title, no real status, no id. Status only says what `unresolved` already
+ * says (Blocked/Waiting while unresolved, else Done).
  */
-export function redactDependencyForFamcal<T extends { title: string; depends_on_task_id: string | null }>(
-  dependency: T
-): T {
+export function redactDependencyForFamcal<T extends RedactableDependency>(dependency: T): T {
   return {
     ...dependency,
     title: dependency.depends_on_task_id ? FAMCAL_DEPENDENCY_TASK_TITLE : FAMCAL_DEPENDENCY_COMMITMENT_TITLE,
+    status: dependency.unresolved ? 'Blocked/Waiting' : 'Done',
+    depends_on_task_id: null,
+    depends_on_commitment_id: null,
   };
 }
 
