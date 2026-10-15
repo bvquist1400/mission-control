@@ -22,6 +22,7 @@ If you want MCP access outside the browser app, or you still maintain the legacy
 
 - `MISSION_CONTROL_API_KEY` for legacy or internal machine-auth MCP callers
 - `MISSION_CONTROL_ACTIONS_API_KEY` only if you still use the private ChatGPT custom GPT Actions fallback
+- `MISSION_CONTROL_FAMCAL_API_KEY` only if the FamCal Sunday brief reads your personal tasks
 - `MISSION_CONTROL_USER_ID` for the user that machine-auth requests run as
 - `DEPLOYMENT_ROLE=main|mcp` to split the protected main app from the public MCP deployment
 - `MCP_CANONICAL_APP_URL` for stable user-facing URLs returned from `search` / `fetch`
@@ -56,6 +57,11 @@ If you want MCP access outside the browser app, or you still maintain the legacy
 - Use a distinct value for `MISSION_CONTROL_ACTIONS_API_KEY` so `/api/mcp` remains reserved for the primary MCP machine-auth key
 - The actions key is restricted to the allowlisted non-delete routes used by the legacy ChatGPT Actions surface
 - Delete operations are intentionally excluded from the ChatGPT Actions v1 fallback surface
+- `MISSION_CONTROL_FAMCAL_API_KEY`: optional backend key for the FamCal Sunday brief (FamCal stores the same value as `BASELINE_API_KEY`). Give it its own value. It sees only tasks that carry the `personal` tag themselves:
+  - Routes: `GET /api/tasks` (always filtered to `tag=personal`; `view=` is refused), `GET|PATCH /api/tasks/{id}`, `GET|POST /api/tasks/{id}/comments`, `POST /api/tasks/park/{id}`. Everything else, and every DELETE, is 403.
+  - Any other task is a 404 on the per-task routes. Dependency titles in the list come back as "Another task" / "A commitment".
+  - PATCH accepts only `status` (`Done`, `Parked`, or back to an open status from Done/Parked), `due_at` and `follow_up_at`; any other field is a 400.
+  - Set it on the `main` deployment only; FamCal must call the main app origin, not the MCP proxy.
 
 ### Remote MCP deployment settings
 

@@ -39,6 +39,7 @@ External task identities are stored as the nullable pair `external_source_system
 ### API Routes
 
 - Auth: use `requireAuthenticatedRoute()` from `@/lib/supabase/route-auth`
+- Machine keys (`X-Mission-Control-Key`, all act as `MISSION_CONTROL_USER_ID`): legacy `MISSION_CONTROL_API_KEY` reaches every route; `MISSION_CONTROL_ACTIONS_API_KEY` only its allowlist, no DELETE; `MISSION_CONTROL_FAMCAL_API_KEY` (authSource `famcal_api_key`, `src/lib/famcal-api-key.ts`) only personal tasks for the FamCal Sunday brief: `GET /api/tasks` (forced `tag=personal`, no `view=`, dependency titles redacted), `GET|PATCH /api/tasks/{uuid}`, `GET|POST /api/tasks/{uuid}/comments`, `POST /api/tasks/park/{uuid}`; a task without its own `personal` tag is a 404; PATCH takes only `status` (Done/Parked, or reopen from Done/Parked), `due_at`, `follow_up_at`. A route that adds a per-task read or write and joins that allowlist must add the same guard. `npm run test:famcal-api-key` pins all three keys.
 - CORS: wrap all responses with `withCorsHeaders()` from `@/lib/cors`
 - PATCH: always use an explicit `allowedFields` allowlist
 - Not-found checks: only translate PGRST116 into 404 (use `isPostgrestNotFound()` from `@/lib/supabase/errors`); rethrow other errors as 500s
@@ -203,6 +204,7 @@ Controls with behaviour (Button, Input) are components; pure-styling primitives 
 | OAuth routes | `src/app/oauth/` |
 | CORS | `src/lib/cors.ts` |
 | Route auth | `src/lib/supabase/route-auth.ts` |
+| FamCal scoped key (personal tasks only) | `src/lib/famcal-api-key.ts` |
 | Calendar parsing | `src/lib/calendar.ts` |
 | Daily brief digest builder | `src/lib/briefing/digest.ts` |
 | Daily brief digest route | `src/app/api/briefing/digest/route.ts` |
@@ -255,4 +257,5 @@ Controls with behaviour (Button, Input) are components; pure-styling primitives 
 - `WORK_ICAL_URL` — remote ICS feed URL
 - `MISSION_CONTROL_API_KEY` — legacy MCP auth
 - `MISSION_CONTROL_USER_ID` — legacy MCP user binding
+- `MISSION_CONTROL_FAMCAL_API_KEY` — FamCal Sunday brief key, personal tasks only (main deployment; its own value, same as FamCal's `BASELINE_API_KEY`)
 - `BASELINE_TELEGRAM_BOT_TOKEN`, `BASELINE_TELEGRAM_CHAT_ID` — the bot and chat for "brief ready" notices (main deployment; optional, a missing value is recorded on the brief)
