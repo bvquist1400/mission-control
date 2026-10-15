@@ -14,8 +14,10 @@
 --      rows, the API answers 404, nothing is written);
 --   3. insert the comment and return it.
 --
--- Any error rolls the whole call back, so the API can never answer 500 with a
--- comment left behind. SECURITY INVOKER: the service-role caller (the machine key)
+-- A SQL error inside the function rolls the whole call back, so that kind of 500
+-- leaves no comment behind. (If the reply is lost after the function committed,
+-- the caller sees an error although the comment exists; a retry then adds a
+-- second one. There is no idempotency token yet.) SECURITY INVOKER: the service-role caller (the machine key)
 -- is scoped by p_user_id; a signed-in user may only pass their own id (and RLS
 -- applies to them as usual).
 --

@@ -39,6 +39,7 @@ globalThis.fetch = async (input) => {
 
 const { NextRequest } = await import("next/server");
 const famcal = await import("../src/lib/famcal-api-key.ts");
+const { buildRecurringInstanceMetadata } = await import("../src/lib/recurrence.ts");
 const routeAuth = await import("../src/lib/supabase/route-auth.ts");
 const { writeInternalAuthContext } = await import("../src/lib/supabase/internal-auth.ts");
 const machineKeys = await import("../src/lib/machine-keys.ts");
@@ -76,6 +77,12 @@ const WORK_SPRINT = { id: "c0000000-0000-4000-8000-00000000000c", name: "Sprint 
 const WORK_SECTION = { id: "d0000000-0000-4000-8000-00000000000d", project_id: WORK_PROJECT.id, name: "Secret cutover section", sort_order: 1, created_at: "2026-10-01T00:00:00Z" };
 const PERSONAL_PROJECT = { id: "e0000000-0000-4000-8000-00000000000e", name: "Personal — House admin", stage: "Build", rag: "Green", tags: ["personal"] };
 const PERSONAL_SECTION = { id: "f0000000-0000-4000-8000-00000000000f", project_id: PERSONAL_PROJECT.id, name: "Paperwork", sort_order: 1, created_at: "2026-10-01T00:00:00Z" };
+// A personal occurrence generated from a WORK recurring template (review N1),
+// built with the real recurrence metadata builder.
+const PERSONAL_RECURRING_ID = "88888888-8888-4888-8888-888888888888";
+const WORK_TEMPLATE_ID = "99999999-9999-4999-8999-999999999999";
+const WORK_TEMPLATE_RECURRENCE = { enabled: true, frequency: "weekly", auto_mark_missed: false, day_of_week: 4, day_of_month: null, next_due: "2026-10-22", template_task_id: WORK_TEMPLATE_ID };
+const RECURRING_INSTANCE = buildRecurringInstanceMetadata(WORK_TEMPLATE_ID, WORK_TEMPLATE_RECURRENCE, "2026-10-15");
 const WORK_SECRETS = [
   WORK_APP.id, WORK_APP.name, WORK_PROJECT.id, WORK_PROJECT.name, WORK_SPRINT.id, WORK_SPRINT.name,
   WORK_SPRINT.theme, WORK_SECTION.id, WORK_SECTION.name, "inbox-secret-id", "TaskAdvisor", "TA-SECRET-9",
@@ -103,6 +110,14 @@ function makeDb({ untagBeforeWrite = false, statusBeforeWrite = null, rpcError =
       id: PERSONAL_IN_PERSONAL_PROJECT_ID, user_id: API_USER_ID, title: "File the deed", status: "Done", tags: ["personal"], base_priority: 40, due_at: null, stakeholder_mentions: [],
       implementation_id: null, project_id: PERSONAL_PROJECT.id, sprint_id: null, section_id: PERSONAL_SECTION.id,
       implementation: null, project: PERSONAL_PROJECT, sprint: null, section: PERSONAL_SECTION,
+    }],
+    [PERSONAL_RECURRING_ID, {
+      id: PERSONAL_RECURRING_ID, user_id: API_USER_ID, title: "Weekly errand (from a work template)", status: "Backlog", tags: ["personal"], base_priority: 40, stakeholder_mentions: [],
+      ...RECURRING_INSTANCE,
+    }],
+    [WORK_TEMPLATE_ID, {
+      id: WORK_TEMPLATE_ID, user_id: API_USER_ID, title: "Work recurring template", status: "Backlog", tags: ["work"], base_priority: 40, due_at: null, stakeholder_mentions: [],
+      is_recurring_template: true, recurrence: WORK_TEMPLATE_RECURRENCE,
     }],
   ]);
   const comments = [
@@ -428,7 +443,7 @@ await test("GET /api/tasks with the FamCal key returns personal tasks only, even
   const response = await tasksRoute.GET(routeRequest(db, "famcal_api_key", "GET", "/api/tasks?limit=500&include_done=true"));
   assert.equal(response.status, 200);
   const ids = (await response.json()).map((task) => task.id).sort();
-  assert.deepEqual(ids, [PERSONAL_ID, DONE_PERSONAL_ID, PERSONAL_IN_WORK_ID, PERSONAL_IN_PERSONAL_PROJECT_ID].sort());
+  assert.deepEqual(ids, [PERSONAL_ID, DONE_PERSONAL_ID, PERSONAL_IN_WORK_ID, PERSONAL_IN_PERSONAL_PROJECT_ID, PERSONAL_RECURRING_ID].sort());
 });
 
 await test("GET /api/tasks?tag=work with the FamCal key still requires personal (returns nothing)", async () => {
@@ -445,7 +460,7 @@ await test("GET /api/tasks?tag=personal (the FamCal contract call) returns perso
   const response = await tasksRoute.GET(routeRequest(db, "famcal_api_key", "GET", "/api/tasks?tag=personal&limit=500"));
   assert.equal(response.status, 200);
   const body = await response.json();
-  assert.deepEqual(body.map((task) => task.id), [PERSONAL_ID, PERSONAL_IN_WORK_ID]);
+  assert.deepEqual(body.map((task) => task.id), [PERSONAL_ID, PERSONAL_IN_WORK_ID, PERSONAL_RECURRING_ID]);
   assert.equal(body[0].dependency_blocked, true);
   assert.equal(body[0].dependencies.length, 1);
   // The fields FamCal S1 reads (baseline-client.ts parseBaselineTask) are all still there.
@@ -504,7 +519,7 @@ await test("list route unchanged for other keys: no forced tag, dependency title
     const db = makeDb();
     const response = await tasksRoute.GET(routeRequest(db, source, "GET", "/api/tasks"));
     const body = await response.json();
-    assert.deepEqual(body.map((task) => task.id).sort(), [PERSONAL_ID, WORK_ID, WORK_DEP_ID, PERSONAL_IN_WORK_ID].sort(), source);
+    assert.deepEqual(body.map((task) => task.id).sort(), [PERSONAL_ID, WORK_ID, WORK_DEP_ID, PERSONAL_IN_WORK_ID, PERSONAL_RECURRING_ID, WORK_TEMPLATE_ID].sort(), source);
     assert.equal(tableOps(db, "tasks", "contains").length, 0, source);
     assert.match(JSON.stringify(body), /Secret work dependency/, source);
   }
@@ -740,7 +755,10 @@ await test("R1: a failing comment function is a 500 and leaves no comment behind
   assert.equal(tableOps(db, "task_comments", "delete").length, 0);
 });
 
-await test("R1: a retry after a 500 can't duplicate: the failed call wrote nothing, the retry writes exactly one", async () => {
+// Scope (review L1): this holds for a SQL failure that rolls the function back. If the
+// reply is lost AFTER the function committed, the 500 is ambiguous and a retry adds a
+// second comment; there is no idempotency token yet (proposed follow-up for S2).
+await test("R1: a retry after a SQL failure that rolled back can't duplicate: the failed call wrote nothing, the retry writes one", async () => {
   const failing = makeDb({ rpcError: { code: "08006", message: "connection failure" } });
   assert.equal((await famcalComment(failing, PERSONAL_ID, { content: "Done via brief" })).status, 500);
   const healthy = makeDb();
@@ -869,7 +887,7 @@ await test("R3: a personal project's approved metadata is kept (project id/name/
 });
 
 await test("R3: projection keys are exactly the allowlist plus the relation keys, for every task", () => {
-  const expected = [...famcal.FAMCAL_TASK_FIELDS, "project_id", "section_id", "implementation_id", "sprint_id", "project", "implementation", "sprint", "section_name"].sort();
+  const expected = [...famcal.FAMCAL_TASK_FIELDS, "recurrence", "project_id", "section_id", "implementation_id", "sprint_id", "project", "implementation", "sprint", "section_name"].sort();
   const db = makeDb();
   for (const row of db.tasks.values()) {
     assert.deepEqual(Object.keys(famcal.projectTaskForFamcal(row)).sort(), expected, row.id);
@@ -999,6 +1017,119 @@ await test("R6: `?view=` (empty) and repeated view params are 400 for the FamCal
     const response = await tasksRoute.GET(routeRequest(db, "famcal_api_key", "GET", `/api/tasks?${query}`));
     assert.equal(response.status, 400, query);
     assert.equal(db.log.length, 0, query);
+  }
+});
+
+// ── 5d. Fix round 3 (Codex Astra re-check N1, N2) ──────────────────────────
+function assertNoTemplateId(task, label) {
+  assert.equal(JSON.stringify(task).includes(WORK_TEMPLATE_ID), false, `${label}: leaked the template id`);
+  assert.deepEqual(Object.keys(task.recurrence).sort(), [...famcal.FAMCAL_RECURRENCE_FIELDS].sort(), `${label}: recurrence keys`);
+  assert.equal("template_task_id" in task.recurrence, false, `${label}: template_task_id`);
+  assert.equal("recurring_template_id" in task, false, `${label}: recurring_template_id`);
+  // The scheduling facts themselves survive.
+  assert.equal(task.recurrence.frequency, "weekly", label);
+  assert.equal(task.recurrence.day_of_week, 4, label);
+  assert.equal(task.recurrence.next_due, "2026-10-15", label);
+  assert.equal(task.recurrence.enabled, false, label);
+}
+
+await test("N1: the real recurrence builder does put the template id in recurrence (precondition)", () => {
+  assert.equal(RECURRING_INSTANCE.recurrence.template_task_id, WORK_TEMPLATE_ID);
+});
+
+await test("N1: list never returns a work template's id inside recurrence", async () => {
+  const db = makeDb();
+  const response = await tasksRoute.GET(routeRequest(db, "famcal_api_key", "GET", "/api/tasks?tag=personal&limit=500"));
+  const task = (await response.json()).find((row) => row.id === PERSONAL_RECURRING_ID);
+  assert.ok(task);
+  assertNoTemplateId(task, "list");
+});
+
+await test("N1: detail never returns it", async () => {
+  const db = makeDb();
+  const response = await taskRoute.GET(routeRequest(db, "famcal_api_key", "GET", `/api/tasks/${PERSONAL_RECURRING_ID}`), params(PERSONAL_RECURRING_ID));
+  assert.equal(response.status, 200);
+  assertNoTemplateId(await response.json(), "detail");
+});
+
+await test("N1: PATCH response never returns it", async () => {
+  const db = makeDb();
+  const result = await famcalPatch(db, PERSONAL_RECURRING_ID, { follow_up_at: "2026-11-02T04:59:00Z" });
+  assert.equal(result.status, 200);
+  assertNoTemplateId(result.body, "PATCH");
+});
+
+await test("N1: park response never returns it", async () => {
+  const db = makeDb();
+  const response = await parkRoute.POST(routeRequest(db, "famcal_api_key", "POST", `/api/tasks/park/${PERSONAL_RECURRING_ID}`), params(PERSONAL_RECURRING_ID));
+  assert.equal(response.status, 200);
+  assertNoTemplateId(await response.json(), "park");
+});
+
+await test("N1: recurrence projection: only the six scalar fields, unknown future keys dropped, junk → null", () => {
+  const projected = famcal.projectRecurrenceForFamcal({ ...WORK_TEMPLATE_RECURRENCE, future_link_id: "x-secret", nested: { id: "y-secret" } });
+  assert.deepEqual(projected, { enabled: true, frequency: "weekly", auto_mark_missed: false, day_of_week: 4, day_of_month: null, next_due: "2026-10-22" });
+  assert.equal(famcal.projectRecurrenceForFamcal(null), null);
+  assert.equal(famcal.projectRecurrenceForFamcal({ template_task_id: WORK_TEMPLATE_ID }), null);
+  assert.equal(famcal.projectRecurrenceForFamcal("weekly"), null);
+});
+
+await test("N1: legacy and actions keys still get the full recurrence (unchanged)", async () => {
+  for (const source of ["legacy_api_key", "actions_api_key"]) {
+    const db = makeDb();
+    const response = await taskRoute.GET(routeRequest(db, source, "GET", `/api/tasks/${PERSONAL_RECURRING_ID}`), params(PERSONAL_RECURRING_ID));
+    const body = await response.json();
+    assert.equal(body.recurrence.template_task_id, WORK_TEMPLATE_ID, source);
+    assert.equal(body.recurring_template_id, WORK_TEMPLATE_ID, source);
+  }
+});
+
+await test("N2: external-source filters are 400 for the FamCal key (with a value, empty, bare, repeated), with no query", async () => {
+  for (const query of [
+    "external_source_system=TaskAdvisor",
+    "external_source_id=TA-SECRET-9",
+    "external_source_system=",
+    "external_source_id",
+    "external_source_id=A&external_source_id=B",
+    "tag=personal&limit=500&external_source_system=TaskAdvisor",
+  ]) {
+    const db = makeDb();
+    const response = await tasksRoute.GET(routeRequest(db, "famcal_api_key", "GET", `/api/tasks?${query}`));
+    assert.equal(response.status, 400, query);
+    assert.equal(db.log.length, 0, query);
+  }
+});
+
+await test("N2: strict list allowlist: unknown params (scope, include, anything new) and repeated allowed params are 400", async () => {
+  for (const query of ["scope=personal", "include=checklist", "search=x", "week_start_date=2026-10-12", "q=", "tag=personal&tag=work", "limit=5&limit=500", "Tag=personal"]) {
+    const db = makeDb();
+    const response = await tasksRoute.GET(routeRequest(db, "famcal_api_key", "GET", `/api/tasks?${query}`));
+    assert.equal(response.status, 400, query);
+    assert.equal(db.log.length, 0, query);
+  }
+});
+
+await test("N2: S1's exact call and every allowlisted param are still accepted (200)", async () => {
+  assert.deepEqual([...famcal.FAMCAL_LIST_PARAMS].sort(), ["due_soon", "include_done", "include_missed", "include_parked", "limit", "needs_review", "offset", "owner", "status", "tag"]);
+  for (const query of [
+    "tag=personal&limit=500",
+    "",
+    "tag=personal&limit=100&offset=0&status=Backlog&owner=brent&needs_review=false&due_soon=false&include_done=true&include_parked=true&include_missed=true",
+  ]) {
+    const db = makeDb();
+    const response = await tasksRoute.GET(routeRequest(db, "famcal_api_key", "GET", `/api/tasks${query ? `?${query}` : ""}`));
+    assert.equal(response.status, 200, query);
+  }
+});
+
+await test("N2: legacy and actions keys keep the external-source filter (unchanged)", async () => {
+  for (const source of ["legacy_api_key", "actions_api_key"]) {
+    const db = makeDb();
+    const response = await tasksRoute.GET(routeRequest(db, source, "GET", "/api/tasks?external_source_system=TaskAdvisor&external_source_id=TA-SECRET-9&scope=work"));
+    assert.equal(response.status, 200, source);
+    const query = tableOps(db, "tasks", "select")[0];
+    assert.ok(query.ops.some(([n, args]) => n === "eq" && args[0] === "external_source_system" && args[1] === "TaskAdvisor"), source);
+    assert.ok(query.ops.some(([n, args]) => n === "eq" && args[0] === "external_source_id" && args[1] === "TA-SECRET-9"), source);
   }
 });
 

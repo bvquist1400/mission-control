@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { hasPersonalTag, PERSONAL_TAG } from '@/lib/personal-exclusion';
+import { coerceTaskRecurrence } from '@/lib/recurrence';
 import type { TaskStatus } from '@/types/database';
 
 /**
@@ -159,18 +160,40 @@ export function redactDependencyForFamcal<T extends RedactableDependency>(depend
 }
 
 /**
- * List filters the FamCal key may not use. Each names a work relation
- * (application, sprint, project, section); filtering by one would tell the
- * caller which personal tasks sit in it, so it is refused (400), not ignored.
+ * The only query parameters GET /api/tasks accepts from the FamCal key: a strict
+ * allowlist. Each one filters or pages on the task's own, returned fields. Every
+ * other parameter is a 400 whenever it is present, even empty: `view` (views
+ * ignore the tag filter), the work-relation filters (implementation_id,
+ * sprint_id, project_id, section_id), external_source_system/_id (hidden ids of
+ * other systems), scope, and anything added to the route later. A parameter
+ * given twice is a 400 too. FamCal S1 sends only `tag` and `limit`.
  */
-export const FAMCAL_REFUSED_LIST_PARAMS = ['implementation_id', 'sprint_id', 'project_id', 'section_id'] as const;
+export const FAMCAL_LIST_PARAMS = [
+  'tag',
+  'limit',
+  'offset',
+  'status',
+  'owner',
+  'needs_review',
+  'due_soon',
+  'include_done',
+  'include_parked',
+  'include_missed',
+] as const;
 
-/** The first refused list parameter present (even when empty), or null. */
-export function famcalRefusedListParam(searchParams: URLSearchParams): string | null {
-  if (searchParams.has('view')) {
-    return 'view';
+/** Why this list query is refused for the FamCal key, or null when it is fine. */
+export function famcalListParamError(searchParams: URLSearchParams): string | null {
+  const seen = new Set<string>();
+  for (const name of searchParams.keys()) {
+    if (!(FAMCAL_LIST_PARAMS as ReadonlyArray<string>).includes(name)) {
+      return `${name} is not available with this key`;
+    }
+    if (seen.has(name)) {
+      return `${name} may only be given once`;
+    }
+    seen.add(name);
   }
-  return FAMCAL_REFUSED_LIST_PARAMS.find((name) => searchParams.has(name)) ?? null;
+  return null;
 }
 
 /**
@@ -179,6 +202,8 @@ export function famcalRefusedListParam(searchParams: URLSearchParams): string | 
  * purpose: user_id, inbox_item_id (intelligence inbox), recurring_template_id,
  * latest_instance_id and last_generated_at (other task rows), and
  * external_source_system / external_source_id (other systems' ids).
+ * `recurrence` is not copied either: projectRecurrenceForFamcal rebuilds it from
+ * FAMCAL_RECURRENCE_FIELDS.
  * implementation_id, sprint_id, project_id and section_id are decided by
  * projectTaskForFamcal below, never copied straight through.
  */
@@ -212,10 +237,29 @@ export const FAMCAL_TASK_FIELDS = [
   'work_type',
   'is_sample',
   'is_recurring_template',
-  'recurrence',
   'created_at',
   'updated_at',
 ] as const;
+
+/**
+ * Recurrence settings the FamCal key may read: scalar scheduling fields only.
+ * Never `template_task_id` (a generated occurrence carries its template's id,
+ * and the template may be a work task) and never a key added later.
+ */
+export const FAMCAL_RECURRENCE_FIELDS = ['enabled', 'frequency', 'auto_mark_missed', 'day_of_week', 'day_of_month', 'next_due'] as const;
+
+/** The recurrence JSON reduced to FAMCAL_RECURRENCE_FIELDS, or null when absent or invalid. */
+export function projectRecurrenceForFamcal(value: unknown): Record<string, unknown> | null {
+  const recurrence = coerceTaskRecurrence(value);
+  if (!recurrence) {
+    return null;
+  }
+  const out: Record<string, unknown> = {};
+  for (const field of FAMCAL_RECURRENCE_FIELDS) {
+    out[field] = recurrence[field];
+  }
+  return out;
+}
 
 /** Project fields kept when the task's project is itself tagged `personal`. */
 export const FAMCAL_PROJECT_FIELDS = ['id', 'name', 'stage', 'rag', 'tags'] as const;
@@ -272,6 +316,7 @@ export function projectTaskForFamcal(row: Record<string, unknown>): FamcalTaskVi
 
   return {
     ...(pick(row, FAMCAL_TASK_FIELDS) as { id: string }),
+    recurrence: projectRecurrenceForFamcal(row.recurrence),
     project_id: keptProject ? (keptProject.id as string) : null,
     section_id: keptSection && typeof row.section_id === 'string' ? row.section_id : null,
     implementation_id: null,
@@ -336,7 +381,11 @@ export interface FamcalTaskComment {
  * task row (FOR SHARE, so a concurrent retag waits), checks the user and the
  * exact `personal` tag under that lock, and inserts. Returns null (→ 404) when
  * the task is missing, someone else's or not personal; nothing is written then.
- * Any error means the transaction rolled back, so a 500 never leaves a comment.
+ * A SQL error inside the function rolls the transaction back, so that 500 leaves
+ * no comment. A connection lost after the function committed is ambiguous: the
+ * caller gets a 500 although the comment exists, and a retry adds a second one.
+ * There is no idempotency token yet (proposed follow-up), so callers should not
+ * auto-retry a comment POST.
  */
 export async function addFamcalTaskComment(
   supabase: SupabaseClient,

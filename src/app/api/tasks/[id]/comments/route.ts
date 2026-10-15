@@ -90,7 +90,8 @@ export async function POST(
     // The FamCal key comments only on tasks tagged `personal`. One database
     // transaction (migration 060) locks the task, checks the tag and inserts, so
     // a comment can never land on a task that isn't personal at that moment, and
-    // a failure leaves nothing behind.
+    // a SQL failure inside it leaves nothing behind. A reply lost after the commit
+    // is ambiguous: a retry would add a second comment (no idempotency token yet).
     if (auth.context.authSource === 'famcal_api_key') {
       const famcalComment = await addFamcalTaskComment(supabase, userId, id, body.content.trim(), source);
       if (!famcalComment) {

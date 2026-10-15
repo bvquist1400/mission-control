@@ -141,6 +141,7 @@ const tasksRoute = await import("../src/app/api/tasks/route.ts");
 const taskRoute = await import("../src/app/api/tasks/[id]/route.ts");
 const commentsRoute = await import("../src/app/api/tasks/[id]/comments/route.ts");
 const parkRoute = await import("../src/app/api/tasks/park/[id]/route.ts");
+const { buildRecurringInstanceMetadata } = await import("../src/lib/recurrence.ts");
 
 function routeRequest(supabase, authSource, method, path, body) {
   const request = new NextRequest(`http://localhost${path}`, {
@@ -360,6 +361,38 @@ try {
     const legacyBody = await legacy.json();
     assert.equal(legacyBody.project.name, workProject.name);
     assert.equal(legacyBody.sprint.theme, workSprint.theme);
+  });
+
+  await test("N1/N2 routes (real DB): a personal occurrence of a work template never shows the template id; external-source filters are 400", async () => {
+    const templateRecurrence = { enabled: true, frequency: "weekly", auto_mark_missed: false, day_of_week: 4, day_of_month: null, next_due: "2026-10-22", template_task_id: null };
+    const template = await insert("tasks", { user_id: userA, title: "Work recurring template", tags: ["work"], is_recurring_template: true, recurrence: templateRecurrence });
+    psql(`UPDATE tasks SET recurrence = jsonb_set(recurrence, '{template_task_id}', to_jsonb('${template.id}'::text)) WHERE id = '${template.id}';`);
+    const { data: stored } = await admin.from("tasks").select("recurrence").eq("id", template.id).single();
+    const instance = await insert("tasks", {
+      user_id: userA, title: "Weekly errand", tags: ["personal"],
+      external_source_system: "WorkTracker", external_source_id: "CLIENT-42",
+      ...buildRecurringInstanceMetadata(template.id, stored.recurrence, "2026-10-15"),
+    });
+    assert.equal(psql(`SELECT recurrence->>'template_task_id' FROM tasks WHERE id = '${instance.id}';`), template.id, "precondition: stored in the JSON");
+    const responses = [
+      ["list", (await (await tasksRoute.GET(routeRequest(admin, "famcal_api_key", "GET", "/api/tasks?tag=personal&limit=500"))).json()).find((row) => row.id === instance.id)],
+      ["detail", await (await taskRoute.GET(routeRequest(admin, "famcal_api_key", "GET", `/api/tasks/${instance.id}`), params(instance.id))).json()],
+      ["PATCH", await (await taskRoute.PATCH(routeRequest(admin, "famcal_api_key", "PATCH", `/api/tasks/${instance.id}`, { follow_up_at: "2026-11-02T04:59:00Z" }), params(instance.id))).json()],
+      ["park", await (await parkRoute.POST(routeRequest(admin, "famcal_api_key", "POST", `/api/tasks/park/${instance.id}`), params(instance.id))).json()],
+    ];
+    for (const [label, task] of responses) {
+      assert.ok(task, label);
+      const text = JSON.stringify(task);
+      for (const secret of [template.id, "WorkTracker", "CLIENT-42"]) assert.equal(text.includes(secret), false, `${label}: leaked ${secret}`);
+      assert.deepEqual(Object.keys(task.recurrence).sort(), ["auto_mark_missed", "day_of_month", "day_of_week", "enabled", "frequency", "next_due"], label);
+      assert.equal(task.recurrence.frequency, "weekly", label);
+    }
+    for (const query of ["external_source_system=WorkTracker", "external_source_id=CLIENT-42", "external_source_id="]) {
+      const response = await tasksRoute.GET(routeRequest(admin, "famcal_api_key", "GET", `/api/tasks?tag=personal&${query}`));
+      assert.equal(response.status, 400, query);
+    }
+    const legacy = await tasksRoute.GET(routeRequest(admin, "legacy_api_key", "GET", "/api/tasks?external_source_system=WorkTracker&external_source_id=CLIENT-42&include_parked=true"));
+    assert.deepEqual((await legacy.json()).map((row) => row.id), [instance.id], "legacy filter unchanged");
   });
 
   await test("R4 route: reopen while someone else changes the status → 409, their status stands; no race → 200", async () => {

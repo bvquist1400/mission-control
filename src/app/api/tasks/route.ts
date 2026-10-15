@@ -14,7 +14,7 @@ import { calculateFinalPriorityScore, calculatePriorityBoosts, getHighPrioritySt
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import {
   famcalListRequiredTags,
-  famcalRefusedListParam,
+  famcalListParamError,
   projectTaskForFamcal,
   redactDependencyForFamcal,
 } from '@/lib/famcal-api-key';
@@ -120,13 +120,13 @@ export async function GET(request: NextRequest) {
     const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 500) : 100;
     const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
 
-    // Views ignore the tag filter, and work-relation filters would reveal which
-    // personal tasks sit in a work project: refused when present at all, even
-    // empty (`?view=`), not just when they have a value.
+    // Strict allowlist of list parameters for the FamCal key (FAMCAL_LIST_PARAMS):
+    // anything else (views, work-relation and external-source filters, …) is a
+    // 400 whenever present, even empty or repeated.
     if (isFamcalKey) {
-      const refused = famcalRefusedListParam(searchParams);
-      if (refused) {
-        return NextResponse.json({ error: `${refused} is not available with this key` }, { status: 400 });
+      const paramError = famcalListParamError(searchParams);
+      if (paramError) {
+        return NextResponse.json({ error: paramError }, { status: 400 });
       }
     }
 
