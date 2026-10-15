@@ -59,8 +59,8 @@ If you want MCP access outside the browser app, or you still maintain the legacy
 - Delete operations are intentionally excluded from the ChatGPT Actions v1 fallback surface
 - `MISSION_CONTROL_FAMCAL_API_KEY`: optional backend key for the FamCal Sunday brief (FamCal stores the same value as `BASELINE_API_KEY`). Give it its own value. It sees only tasks that carry the `personal` tag themselves:
   - Routes: `GET /api/tasks` (always filtered to `tag=personal`; `view=` is refused), `GET|PATCH /api/tasks/{id}`, `GET|POST /api/tasks/{id}/comments`, `POST /api/tasks/park/{id}`. Everything else, and every DELETE, is 403.
-  - Any other task is a 404 on the per-task routes. Dependency titles in the list come back as "Another task" / "A commitment".
-  - PATCH accepts only `status` (`Done`, `Parked`, or back to an open status from Done/Parked), `due_at` and `follow_up_at`; any other field is a 400.
+  - Any other task is a 404 on the per-task routes. Dependency rows in the list keep `unresolved` but their title ("Another task" / "A commitment"), status and linked ids are redacted.
+  - PATCH accepts only `status` (`Done`, `Parked`, or back to an open status from Done/Parked), `due_at` and `follow_up_at` (a date; clearing is a 400); any other field is a 400. Writes re-check the `personal` tag at write time.
   - Set it on the `main` deployment only; FamCal must call the main app origin, not the MCP proxy.
 
 ### Remote MCP deployment settings
