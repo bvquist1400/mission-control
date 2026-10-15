@@ -12,6 +12,12 @@ import {
 import { queueTaskStatusTransition } from '@/lib/task-status-transitions';
 import { getHighPriorityStakeholderNames, recalculateTaskPriority } from '@/lib/priority';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
+import {
+  checkFamcalStatusTransition,
+  fetchFamcalVisibleTask,
+  isFamcalVisibleTask,
+  parseFamcalTaskPatch,
+} from '@/lib/famcal-api-key';
 import { validateOptionalTimestamp } from '@/lib/validate';
 import {
   externalSourceConflictPayload,
@@ -78,6 +84,11 @@ export async function GET(
       throw error;
     }
 
+    // The FamCal key sees only tasks tagged `personal`; anything else looks missing.
+    if (auth.context.authSource === 'famcal_api_key' && !isFamcalVisibleTask(data as { tags?: string[] | null })) {
+      return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+    }
+
     return NextResponse.json(normalizeTaskWithRelations(data as Record<string, unknown>));
   } catch (error) {
     console.error('Error fetching task:', error);
@@ -99,6 +110,26 @@ export async function PATCH(
     const { supabase, userId } = auth.context;
     const { id } = await params;
     const body = (await request.json()) as Record<string, unknown>;
+
+    // The FamCal key may only close/reopen a personal task or move its dates.
+    if (auth.context.authSource === 'famcal_api_key') {
+      const famcalPatch = parseFamcalTaskPatch(body);
+      if (!famcalPatch.ok) {
+        return NextResponse.json({ error: famcalPatch.error }, { status: 400 });
+      }
+
+      const visibleTask = await fetchFamcalVisibleTask(supabase, userId, id);
+      if (!visibleTask) {
+        return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+      }
+
+      if (typeof famcalPatch.value.status === 'string') {
+        const transitionError = checkFamcalStatusTransition(visibleTask.status, famcalPatch.value.status);
+        if (transitionError) {
+          return NextResponse.json({ error: transitionError }, { status: 400 });
+        }
+      }
+    }
 
     const allowedFields = [
       'title',

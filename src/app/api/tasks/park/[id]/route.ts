@@ -6,6 +6,7 @@ import {
 } from '@/lib/task-relations';
 import { queueTaskStatusTransition } from '@/lib/task-status-transitions';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
+import { isFamcalVisibleTask } from '@/lib/famcal-api-key';
 
 // POST /api/tasks/park/[id] - Convenience endpoint to move a task into Parked
 export async function POST(
@@ -34,6 +35,11 @@ export async function POST(
       }
 
       throw fetchError;
+    }
+
+    // The FamCal key parks only tasks tagged `personal`; anything else looks missing.
+    if (auth.context.authSource === 'famcal_api_key' && !isFamcalVisibleTask(currentTask as { tags?: string[] | null })) {
+      return NextResponse.json({ error: 'Task not found' }, { status: 404 });
     }
 
     const highPriorityStakeholderNames = await getHighPriorityStakeholderNames(supabase, userId);

@@ -12,6 +12,7 @@ import {
 import { queueTaskStatusTransition } from '@/lib/task-status-transitions';
 import { calculateFinalPriorityScore, calculatePriorityBoosts, getHighPriorityStakeholderNames } from '@/lib/priority';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
+import { famcalListRequiredTags, redactDependencyForFamcal } from '@/lib/famcal-api-key';
 import { fetchTaskDependencySummaries } from '@/lib/task-dependencies';
 import {
   queryNeedsReviewCount,
@@ -83,6 +84,8 @@ export async function GET(request: NextRequest) {
     }
 
     const { supabase, userId } = auth.context;
+    // The FamCal key only ever lists tasks tagged `personal` (see src/lib/famcal-api-key.ts).
+    const isFamcalKey = auth.context.authSource === 'famcal_api_key';
     const { searchParams } = new URL(request.url);
 
     const needsReview = searchParams.get('needs_review');
@@ -111,6 +114,10 @@ export async function GET(request: NextRequest) {
     const rawOffset = Number.parseInt(searchParams.get('offset') || '0', 10);
     const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 500) : 100;
     const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
+
+    if (isFamcalKey && view) {
+      return NextResponse.json({ error: 'view is not available with this key' }, { status: 400 });
+    }
 
     if (view === 'needs_review_count') {
       const count = await queryNeedsReviewCount(supabase, userId, scope);
@@ -223,7 +230,9 @@ export async function GET(request: NextRequest) {
       query = query.eq('sprint_id', sprintId);
     }
 
-    if (tag) {
+    if (isFamcalKey) {
+      query = query.contains('tags', famcalListRequiredTags(tag));
+    } else if (tag) {
       query = query.contains('tags', [tag]);
     }
 
@@ -282,7 +291,8 @@ export async function GET(request: NextRequest) {
     const dependencyMap = await fetchTaskDependencySummaries(supabase, userId, taskIds);
 
     const enrichedTasks = tasks.map((task) => {
-      const dependencies = dependencyMap.get(task.id) || [];
+      const rawDependencies = dependencyMap.get(task.id) || [];
+      const dependencies = isFamcalKey ? rawDependencies.map(redactDependencyForFamcal) : rawDependencies;
       return {
         ...task,
         dependencies,

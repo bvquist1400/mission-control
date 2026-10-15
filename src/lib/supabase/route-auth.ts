@@ -4,8 +4,15 @@ import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/sup
 import { withCorsHeaders } from '@/lib/cors';
 import { secureCompare } from '@/lib/secure-compare';
 import { readInternalAuthContext } from '@/lib/supabase/internal-auth';
+import { isFamcalKeyRouteAllowed } from '@/lib/famcal-api-key';
 
-export type AuthSource = 'session' | 'bearer' | 'legacy_api_key' | 'actions_api_key' | 'mcp_oauth';
+export type AuthSource =
+  | 'session'
+  | 'bearer'
+  | 'legacy_api_key'
+  | 'actions_api_key'
+  | 'famcal_api_key'
+  | 'mcp_oauth';
 
 export interface AuthenticatedRouteContext {
   supabase: SupabaseClient;
@@ -19,7 +26,7 @@ interface RouteAuthResult {
   response: NextResponse | null;
 }
 
-type MachineAuthSource = Extract<AuthSource, 'legacy_api_key' | 'actions_api_key'>;
+export type MachineAuthSource = Extract<AuthSource, 'legacy_api_key' | 'actions_api_key' | 'famcal_api_key'>;
 
 const ACTIONS_ROUTE_ALLOWLIST: ReadonlyArray<{ pattern: RegExp; methods: ReadonlyArray<string> }> = [
   { pattern: /^\/api\/calendar$/, methods: ['GET'] },
@@ -70,10 +77,7 @@ function normalizePathname(pathname: string): string {
   return pathname.replace(/\/+$/, '');
 }
 
-function isActionsKeyRouteAllowed(request: NextRequest): boolean {
-  const pathname = normalizePathname(request.nextUrl.pathname);
-  const method = request.method.toUpperCase();
-
+function isActionsKeyRouteAllowed(method: string, pathname: string): boolean {
   if (method === 'DELETE') {
     return false;
   }
@@ -83,17 +87,74 @@ function isActionsKeyRouteAllowed(request: NextRequest): boolean {
   );
 }
 
+export interface MachineApiKeys {
+  legacy?: string | null;
+  actions?: string | null;
+  famcal?: string | null;
+}
+
+export function readMachineApiKeys(env: NodeJS.ProcessEnv = process.env): MachineApiKeys {
+  return {
+    legacy: env.MISSION_CONTROL_API_KEY?.trim() || null,
+    actions: env.MISSION_CONTROL_ACTIONS_API_KEY?.trim() || null,
+    famcal: env.MISSION_CONTROL_FAMCAL_API_KEY?.trim() || null,
+  };
+}
+
+/**
+ * Which machine key the caller presented. Checked in a fixed order (legacy,
+ * actions, FamCal) so the two existing keys behave exactly as before even if a
+ * value were ever reused; give every key its own value.
+ */
+export function resolveMachineKeySource(
+  providedApiKey: string,
+  keys: MachineApiKeys
+): MachineAuthSource | null {
+  if (keys.legacy && secureCompare(providedApiKey, keys.legacy)) {
+    return 'legacy_api_key';
+  }
+  if (keys.actions && secureCompare(providedApiKey, keys.actions)) {
+    return 'actions_api_key';
+  }
+  if (keys.famcal && secureCompare(providedApiKey, keys.famcal)) {
+    return 'famcal_api_key';
+  }
+  return null;
+}
+
+/** Legacy: every route. Actions: its allowlist, no DELETE. FamCal: personal-task routes only. */
+export function isMachineKeyRouteAllowed(
+  authSource: MachineAuthSource,
+  method: string,
+  pathname: string
+): boolean {
+  const normalizedMethod = method.toUpperCase();
+  const normalizedPath = normalizePathname(pathname);
+
+  if (authSource === 'actions_api_key') {
+    return isActionsKeyRouteAllowed(normalizedMethod, normalizedPath);
+  }
+  if (authSource === 'famcal_api_key') {
+    return isFamcalKeyRouteAllowed(normalizedMethod, normalizedPath);
+  }
+  return true;
+}
+
+const MACHINE_KEY_FORBIDDEN_MESSAGES: Record<Exclude<MachineAuthSource, 'legacy_api_key'>, string> = {
+  actions_api_key: 'The actions API key is not permitted for this route',
+  famcal_api_key: 'The FamCal API key is not permitted for this route',
+};
+
 async function requireMachineKeyRoute(request: NextRequest): Promise<RouteAuthResult | null> {
   const providedApiKey = request.headers.get('x-mission-control-key')?.trim();
   if (!providedApiKey) {
     return null;
   }
 
-  const legacyApiKey = process.env.MISSION_CONTROL_API_KEY?.trim();
-  const actionsApiKey = process.env.MISSION_CONTROL_ACTIONS_API_KEY?.trim();
+  const keys = readMachineApiKeys();
   const apiUserId = process.env.MISSION_CONTROL_USER_ID?.trim();
 
-  if (!apiUserId || (!legacyApiKey && !actionsApiKey)) {
+  if (!apiUserId || (!keys.legacy && !keys.actions && !keys.famcal)) {
     return {
       context: null,
       response: corsJson(
@@ -104,13 +165,7 @@ async function requireMachineKeyRoute(request: NextRequest): Promise<RouteAuthRe
     };
   }
 
-  let authSource: MachineAuthSource | null = null;
-
-  if (legacyApiKey && secureCompare(providedApiKey, legacyApiKey)) {
-    authSource = 'legacy_api_key';
-  } else if (actionsApiKey && secureCompare(providedApiKey, actionsApiKey)) {
-    authSource = 'actions_api_key';
-  }
+  const authSource = resolveMachineKeySource(providedApiKey, keys);
 
   if (!authSource) {
     return {
@@ -119,12 +174,15 @@ async function requireMachineKeyRoute(request: NextRequest): Promise<RouteAuthRe
     };
   }
 
-  if (authSource === 'actions_api_key' && !isActionsKeyRouteAllowed(request)) {
+  if (
+    authSource !== 'legacy_api_key'
+    && !isMachineKeyRouteAllowed(authSource, request.method, request.nextUrl.pathname)
+  ) {
     return {
       context: null,
       response: corsJson(
         request,
-        { error: 'The actions API key is not permitted for this route' },
+        { error: MACHINE_KEY_FORBIDDEN_MESSAGES[authSource] },
         { status: 403 }
       ),
     };

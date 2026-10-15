@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isPostgrestNotFound } from '@/lib/supabase/errors';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
+import { fetchFamcalVisibleTask } from '@/lib/famcal-api-key';
 import type { CommentSource } from '@/types/database';
 
 const VALID_SOURCES: CommentSource[] = ['manual', 'system', 'llm'];
@@ -22,6 +23,11 @@ export async function GET(
 
     const { supabase, userId } = auth.context;
     const { id } = await params;
+
+    // The FamCal key reads comments only on tasks tagged `personal`.
+    if (auth.context.authSource === 'famcal_api_key' && !(await fetchFamcalVisibleTask(supabase, userId, id))) {
+      return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+    }
 
     const { data, error } = await supabase
       .from('task_comments')
@@ -74,6 +80,11 @@ export async function POST(
         );
       }
       source = body.source;
+    }
+
+    // The FamCal key comments only on tasks tagged `personal`.
+    if (auth.context.authSource === 'famcal_api_key' && !(await fetchFamcalVisibleTask(supabase, userId, id))) {
+      return NextResponse.json({ error: 'Task not found' }, { status: 404 });
     }
 
     // Verify task exists and belongs to user
