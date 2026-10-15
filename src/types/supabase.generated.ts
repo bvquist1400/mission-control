@@ -2539,6 +2539,29 @@ export type Database = {
         }
         Returns: Json
       }
+      famcal_add_personal_task_comment: {
+        Args: {
+          p_content: string
+          p_source?: string
+          p_task_id: string
+          p_user_id: string
+        }
+        Returns: {
+          content: string
+          created_at: string
+          id: string
+          source: string
+          task_id: string
+          updated_at: string
+          user_id: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "task_comments"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
       get_blocked_by_tasks: {
         Args: { p_task_id: string }
         Returns: {
