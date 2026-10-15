@@ -58,9 +58,12 @@ If you want MCP access outside the browser app, or you still maintain the legacy
 - The actions key is restricted to the allowlisted non-delete routes used by the legacy ChatGPT Actions surface
 - Delete operations are intentionally excluded from the ChatGPT Actions v1 fallback surface
 - `MISSION_CONTROL_FAMCAL_API_KEY`: optional backend key for the FamCal Sunday brief (FamCal stores the same value as `BASELINE_API_KEY`). Give it its own value. It sees only tasks that carry the `personal` tag themselves:
-  - Routes: `GET /api/tasks` (always filtered to `tag=personal`; `view=` is refused), `GET|PATCH /api/tasks/{id}`, `GET|POST /api/tasks/{id}/comments`, `POST /api/tasks/park/{id}`. Everything else, and every DELETE, is 403.
+  - Routes: `GET /api/tasks` (always filtered to `tag=personal`; `view`, `project_id`, `implementation_id`, `sprint_id` and `section_id` are refused with 400, even when empty), `GET|PATCH /api/tasks/{id}`, `GET|POST /api/tasks/{id}/comments`, `POST /api/tasks/park/{id}`. Everything else, and every DELETE, is 403.
   - Any other task is a 404 on the per-task routes. Dependency rows in the list keep `unresolved` but their title ("Another task" / "A commitment"), status and linked ids are redacted.
-  - PATCH accepts only `status` (`Done`, `Parked`, or back to an open status from Done/Parked), `due_at` and `follow_up_at` (a date; clearing is a 400); any other field is a 400. Writes re-check the `personal` tag at write time.
+  - Tasks come back in a fixed FamCal shape: the task's own fields, its project and section only when the project is itself tagged `personal`, and never an application or sprint (those are null), so a personal task filed under a work project shows nothing about it.
+  - PATCH accepts only `status` (`Done`, `Parked`, or back to an open status from Done/Parked), `due_at` and `follow_up_at` (a date; clearing is a 400); any other field is a 400. Writes re-check the `personal` tag at write time; a status change that races another change is a 409.
+  - Comments are written by one database function (migration 060) that checks the tag and inserts in the same transaction.
+  - If its value equals `MISSION_CONTROL_API_KEY` or `MISSION_CONTROL_ACTIONS_API_KEY`, that value stops working for every caller (401, logged) until the FamCal key gets its own value.
   - Set it on the `main` deployment only; FamCal must call the main app origin, not the MCP proxy.
 
 ### Remote MCP deployment settings

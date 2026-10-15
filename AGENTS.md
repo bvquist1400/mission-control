@@ -39,7 +39,7 @@ External task identities are stored as the nullable pair `external_source_system
 ### API Routes
 
 - Auth: use `requireAuthenticatedRoute()` from `@/lib/supabase/route-auth`
-- Machine keys (`X-Mission-Control-Key`, all act as `MISSION_CONTROL_USER_ID`): legacy `MISSION_CONTROL_API_KEY` reaches every route; `MISSION_CONTROL_ACTIONS_API_KEY` only its allowlist, no DELETE; `MISSION_CONTROL_FAMCAL_API_KEY` (authSource `famcal_api_key`, `src/lib/famcal-api-key.ts`) only personal tasks for the FamCal Sunday brief: `GET /api/tasks` (forced `tag=personal`, no `view=`, dependency title/status/linked ids redacted), `GET|PATCH /api/tasks/{uuid}`, `GET|POST /api/tasks/{uuid}/comments`, `POST /api/tasks/park/{uuid}`; a task without its own `personal` tag is a 404; PATCH takes only `status` (Done/Parked, or reopen from Done/Parked), `due_at`, `follow_up_at` (a date, never cleared); writes re-assert the tag (UPDATE carries `contains(tags, [personal])`, a comment is removed again if the tag vanished). A route that adds a per-task read or write and joins that allowlist must add the same guard. `npm run test:famcal-api-key` pins all three keys.
+- Machine keys (`X-Mission-Control-Key`, all act as `MISSION_CONTROL_USER_ID`): legacy `MISSION_CONTROL_API_KEY` reaches every route; `MISSION_CONTROL_ACTIONS_API_KEY` only its allowlist, no DELETE; `MISSION_CONTROL_FAMCAL_API_KEY` (authSource `famcal_api_key`, `src/lib/famcal-api-key.ts`) only personal tasks for the FamCal Sunday brief: `GET /api/tasks` (forced `tag=personal`; `view` and the work-relation filters `project_id`/`implementation_id`/`sprint_id`/`section_id` are 400 whenever present, even empty; dependency title/status/linked ids redacted), `GET|PATCH /api/tasks/{uuid}`, `GET|POST /api/tasks/{uuid}/comments`, `POST /api/tasks/park/{uuid}`; a task without its own `personal` tag is a 404. Every task it gets back (list, detail, PATCH, park) goes through `projectTaskForFamcal()`: the task's own `FAMCAL_TASK_FIELDS` only, its project (id/name/stage/rag/tags) and section only when the project itself is tagged `personal`, application and sprint always null, so a personal task filed under work never shows work names, ids or metadata. PATCH takes only `status` (Done/Parked, or reopen from Done/Parked), `due_at`, `follow_up_at` (a date, never cleared); its UPDATE carries `contains(tags, [personal])` and, for a status change, `status = <the status the transition was checked against>` (a concurrent change → 409, a lost tag → 404); park's UPDATE carries the tag. Comment POST is one RPC, `famcal_add_personal_task_comment` (migration 060: locks the task FOR SHARE, checks user + tag, inserts, one transaction; no rows → 404); comment GET is one query (the task filtered by user + tag with its comments embedded). A FamCal value equal to the legacy or actions value fails closed: `src/lib/machine-keys.ts` refuses that value for every caller (route-auth, legacy `/api/mcp`, `generate-recurring`) with 401 and logs the env var names. Not uniform by design: CORS preflight `OPTIONS` is answered by `src/proxy.ts` before auth (no data), and `/api/mcp`, `/api/mcp-upstream` and `generate-recurring` authenticate themselves (an unknown key there is 401, not 403). A route that adds a per-task read or write and joins that allowlist must add the same guard and projection. `npm run test:famcal-api-key` pins all three keys; `test:famcal-db` (local stack) checks 060, the lock under overlapping transactions and the routes on a real database.
 - CORS: wrap all responses with `withCorsHeaders()` from `@/lib/cors`
 - PATCH: always use an explicit `allowedFields` allowlist
 - Not-found checks: only translate PGRST116 into 404 (use `isPostgrestNotFound()` from `@/lib/supabase/errors`); rethrow other errors as 500s
@@ -51,7 +51,7 @@ External task identities are stored as the nullable pair `external_source_system
 
 - RLS: 4-policy pattern (SELECT, INSERT, UPDATE, DELETE) on every table
 - `updated_at` triggers: reuse `set_updated_at()` function
-- Migrations: `supabase/migrations/` (latest: 059); rollbacks in `supabase/rollbacks/`
+- Migrations: `supabase/migrations/` (latest: 060); rollbacks in `supabase/rollbacks/`
 - New tables get explicit `GRANT ... TO authenticated, service_role` (see 055): newer Supabase stacks, including a fresh `supabase start`, no longer auto-grant public tables to the API roles
 
 ### Schema Types
@@ -178,8 +178,8 @@ Controls with behaviour (Button, Input) are components; pure-styling primitives 
 
 ### Local DB test stack
 
-- The DB suites (`test:pace-db`, `test:portfolio-db`, `test:task-owner-db`, `test:briefs*-db`) need a disposable LOCAL Supabase stack. Use the private one checked in at `scripts/test-stack/` (project `mc-pace`, API 58321, DB 58322, migrations symlinked to `supabase/migrations`): `bash scripts/test-stack/up.sh` starts it with only images the installed CLI already has (realtime, studio, storage, mail, edge runtime, analytics and the pooler are off), applies every migration, grants the pre-055 tables to the API roles (a fresh stack doesn't; production does) and writes `scripts/test-stack/.env.local` (git-ignored; never print it). `bash scripts/test-stack/down.sh` stops it and deletes its volumes.
-- Then: `set -a; . scripts/test-stack/.env.local; set +a` and map the variables, e.g. `PACE_TEST_SUPABASE_URL=$STACK_API_URL PACE_TEST_ANON_KEY=$STACK_ANON_KEY PACE_TEST_SERVICE_ROLE_KEY=$STACK_SERVICE_ROLE_KEY PACE_TEST_DB_CONTAINER=$STACK_DB_CONTAINER npm run test:pace-db` (same for `PORTFOLIO_TEST_*`, `OWNER_TEST_*`, `BRIEFS_TEST_*`).
+- The DB suites (`test:pace-db`, `test:portfolio-db`, `test:task-owner-db`, `test:briefs*-db`, `test:famcal-db`) need a disposable LOCAL Supabase stack. Use the private one checked in at `scripts/test-stack/` (project `mc-pace`, API 58321, DB 58322, migrations symlinked to `supabase/migrations`): `bash scripts/test-stack/up.sh` starts it with only images the installed CLI already has (realtime, studio, storage, mail, edge runtime, analytics and the pooler are off), applies every migration, grants the pre-055 tables to the API roles (a fresh stack doesn't; production does) and writes `scripts/test-stack/.env.local` (git-ignored; never print it). `bash scripts/test-stack/down.sh` stops it and deletes its volumes.
+- Then: `set -a; . scripts/test-stack/.env.local; set +a` and map the variables, e.g. `PACE_TEST_SUPABASE_URL=$STACK_API_URL PACE_TEST_ANON_KEY=$STACK_ANON_KEY PACE_TEST_SERVICE_ROLE_KEY=$STACK_SERVICE_ROLE_KEY PACE_TEST_DB_CONTAINER=$STACK_DB_CONTAINER npm run test:pace-db` (same for `PORTFOLIO_TEST_*`, `OWNER_TEST_*`, `BRIEFS_TEST_*`, `FAMCAL_TEST_*`).
 - Never `supabase db reset`/stop another project's stack (e.g. the Grocery App's `pantry-local`), never `--linked`. Local types: `supabase gen types typescript --local --workdir scripts/test-stack` (keep the generated file's `__InternalSupabase` header).
 
 ## Key Files
@@ -205,6 +205,8 @@ Controls with behaviour (Button, Input) are components; pure-styling primitives 
 | CORS | `src/lib/cors.ts` |
 | Route auth | `src/lib/supabase/route-auth.ts` |
 | FamCal scoped key (personal tasks only) | `src/lib/famcal-api-key.ts` |
+| Machine key values + collision rule | `src/lib/machine-keys.ts` |
+| FamCal comment RPC | `supabase/migrations/060_famcal_personal_task_comment.sql` |
 | Calendar parsing | `src/lib/calendar.ts` |
 | Daily brief digest builder | `src/lib/briefing/digest.ts` |
 | Daily brief digest route | `src/app/api/briefing/digest/route.ts` |
@@ -257,5 +259,5 @@ Controls with behaviour (Button, Input) are components; pure-styling primitives 
 - `WORK_ICAL_URL` — remote ICS feed URL
 - `MISSION_CONTROL_API_KEY` — legacy MCP auth
 - `MISSION_CONTROL_USER_ID` — legacy MCP user binding
-- `MISSION_CONTROL_FAMCAL_API_KEY` — FamCal Sunday brief key, personal tasks only (main deployment; its own value, same as FamCal's `BASELINE_API_KEY`)
+- `MISSION_CONTROL_FAMCAL_API_KEY` — FamCal Sunday brief key, personal tasks only (main deployment; its own value, same as FamCal's `BASELINE_API_KEY`; a value equal to the legacy or actions key is refused for every caller)
 - `BASELINE_TELEGRAM_BOT_TOKEN`, `BASELINE_TELEGRAM_CHAT_ID` — the bot and chat for "brief ready" notices (main deployment; optional, a missing value is recorded on the brief)
