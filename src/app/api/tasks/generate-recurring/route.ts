@@ -3,6 +3,7 @@ import { generateRecurringTasks } from '@/lib/recurring-task-generator';
 import { secureCompare } from '@/lib/secure-compare';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
 import { readInternalAuthContext } from '@/lib/supabase/internal-auth';
+import { isRefusedCollidingMachineKey } from '@/lib/machine-keys';
 
 function isAuthorized(request: NextRequest): boolean {
   if (readInternalAuthContext(request)) {
@@ -19,7 +20,8 @@ function isAuthorized(request: NextRequest): boolean {
     return true;
   }
 
-  if (apiKey && secureCompare(providedApiKey, apiKey)) {
+  // A legacy value reused as the FamCal key is refused here too (fail closed).
+  if (apiKey && secureCompare(providedApiKey, apiKey) && !isRefusedCollidingMachineKey(providedApiKey)) {
     return true;
   }
 

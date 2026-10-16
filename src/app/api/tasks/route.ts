@@ -12,6 +12,13 @@ import {
 import { queueTaskStatusTransition } from '@/lib/task-status-transitions';
 import { calculateFinalPriorityScore, calculatePriorityBoosts, getHighPriorityStakeholderNames } from '@/lib/priority';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
+import {
+  famcalListRequiredTags,
+  FAMCAL_ELIGIBLE_FIELD,
+  famcalListParamError,
+  projectTaskForFamcal,
+  redactDependencyForFamcal,
+} from '@/lib/famcal-api-key';
 import { fetchTaskDependencySummaries } from '@/lib/task-dependencies';
 import {
   queryNeedsReviewCount,
@@ -83,6 +90,8 @@ export async function GET(request: NextRequest) {
     }
 
     const { supabase, userId } = auth.context;
+    // The FamCal key only ever lists tasks tagged `personal` (see src/lib/famcal-api-key.ts).
+    const isFamcalKey = auth.context.authSource === 'famcal_api_key';
     const { searchParams } = new URL(request.url);
 
     const needsReview = searchParams.get('needs_review');
@@ -111,6 +120,16 @@ export async function GET(request: NextRequest) {
     const rawOffset = Number.parseInt(searchParams.get('offset') || '0', 10);
     const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 500) : 100;
     const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
+
+    // Strict allowlist of list parameters for the FamCal key (FAMCAL_LIST_PARAMS):
+    // anything else (views, work-relation and external-source filters, …) is a
+    // 400 whenever present, even empty or repeated.
+    if (isFamcalKey) {
+      const paramError = famcalListParamError(searchParams);
+      if (paramError) {
+        return NextResponse.json({ error: paramError }, { status: 400 });
+      }
+    }
 
     if (view === 'needs_review_count') {
       const count = await queryNeedsReviewCount(supabase, userId, scope);
@@ -223,7 +242,10 @@ export async function GET(request: NextRequest) {
       query = query.eq('sprint_id', sprintId);
     }
 
-    if (tag) {
+    if (isFamcalKey) {
+      // Eligibility is in the query itself, so limit/offset page over eligible tasks only.
+      query = query.contains('tags', famcalListRequiredTags(tag)).eq(FAMCAL_ELIGIBLE_FIELD, true);
+    } else if (tag) {
       query = query.contains('tags', [tag]);
     }
 
@@ -277,12 +299,15 @@ export async function GET(request: NextRequest) {
       throw error;
     }
 
-    const tasks = normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>);
+    const rows = (data || []) as Array<Record<string, unknown>>;
+    // The FamCal key gets its own projection (no work relations); others the full rows.
+    const tasks = isFamcalKey ? rows.map(projectTaskForFamcal) : normalizeTaskWithRelationsList(rows);
     const taskIds = tasks.map((task) => task.id);
     const dependencyMap = await fetchTaskDependencySummaries(supabase, userId, taskIds);
 
     const enrichedTasks = tasks.map((task) => {
-      const dependencies = dependencyMap.get(task.id) || [];
+      const rawDependencies = dependencyMap.get(task.id) || [];
+      const dependencies = isFamcalKey ? rawDependencies.map(redactDependencyForFamcal) : rawDependencies;
       return {
         ...task,
         dependencies,
