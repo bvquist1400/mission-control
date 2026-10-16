@@ -399,6 +399,22 @@ export async function fetchFamcalVisibleTask(
   return row;
 }
 
+/**
+ * SQLSTATEs for a bounded wait that ran out: lock_not_available (the function's
+ * 5s lock_timeout) and query_canceled (a statement timeout). The function never
+ * waits on an ineligible task (its locking read filters on famcal_eligible
+ * first), so these can only come from an eligible task, and the route answers
+ * 503 "busy". A missing or ineligible task is always the immediate 404.
+ */
+export const FAMCAL_BUSY_SQLSTATES: ReadonlyArray<string> = ['55P03', '57014'];
+
+export class FamcalTaskBusyError extends Error {
+  constructor() {
+    super('The task is busy; try again shortly');
+    this.name = 'FamcalTaskBusyError';
+  }
+}
+
 /** The RPC (migration 060) behind the FamCal key's comment POST. */
 export const FAMCAL_ADD_COMMENT_RPC = 'famcal_add_personal_task_comment';
 
@@ -438,6 +454,9 @@ export async function addFamcalTaskComment(
   });
 
   if (error) {
+    if (typeof error.code === 'string' && FAMCAL_BUSY_SQLSTATES.includes(error.code)) {
+      throw new FamcalTaskBusyError();
+    }
     throw error;
   }
 

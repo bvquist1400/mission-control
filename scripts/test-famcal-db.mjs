@@ -393,6 +393,60 @@ try {
     assert.equal(legacyBody.sprint.theme, workSprint.theme);
   });
 
+  await test("N3: a work-project task held by another writer is NOT waited on: comment POST, PATCH and park are an immediate 404, same as a missing id", async () => {
+    const holder = psqlConnection("holder");
+    try {
+      holder.send(`BEGIN; UPDATE public.tasks SET follow_up_at = follow_up_at WHERE id IN ('${inWork.id}', '${inBuild.id}'); SELECT 'held';`);
+      await holder.waitFor("held");
+      const missingId = randomUUID();
+      const timed = async (fn) => {
+        const started = Date.now();
+        const response = await fn();
+        return { status: response.status, body: await response.json(), ms: Date.now() - started };
+      };
+      const missing = await timed(() => commentsRoute.POST(routeRequest(admin, "famcal_api_key", "POST", `/api/tasks/${missingId}/comments`, { content: "probe" }), params(missingId)));
+      for (const [label, task] of [["work project", inWork], ["build project", inBuild]]) {
+        const attempts = [
+          await timed(() => commentsRoute.POST(routeRequest(admin, "famcal_api_key", "POST", `/api/tasks/${task.id}/comments`, { content: "probe" }), params(task.id))),
+          await timed(() => taskRoute.PATCH(routeRequest(admin, "famcal_api_key", "PATCH", `/api/tasks/${task.id}`, { status: "Done" }), params(task.id))),
+          await timed(() => parkRoute.POST(routeRequest(admin, "famcal_api_key", "POST", `/api/tasks/park/${task.id}`), params(task.id))),
+        ];
+        for (const [index, attempt] of attempts.entries()) {
+          assert.equal(attempt.status, 404, `${label} #${index}`);
+          assert.deepEqual(attempt.body, missing.body, `${label} #${index}: same body as missing`);
+          assert.ok(attempt.ms < 2000, `${label} #${index}: answered in ${attempt.ms} ms, did not wait on the held row`);
+        }
+      }
+      // Direct function call on the held row: no rows, no wait.
+      const started = Date.now();
+      assert.match(psql(`SET lock_timeout = '2s'; SELECT count(*) || ' rows' FROM ${FN}('${userA}', '${inWork.id}', 'probe', 'manual');`), /0 rows/);
+      assert.ok(Date.now() - started < 2000, "the function skipped the held ineligible row");
+      assert.equal(missing.status, 404);
+    } finally {
+      holder.send("ROLLBACK; SELECT 'released';");
+      await holder.waitFor("released");
+      await holder.end();
+    }
+    assert.equal(await commentCount(inWork.id), 0);
+    assert.equal(await commentCount(inBuild.id), 0);
+  });
+
+  await test("N3: an ELIGIBLE task held longer than the function's 5s lock_timeout gives 503 busy and no comment", async () => {
+    const task = await insert("tasks", { user_id: userA, title: "Held eligible task", tags: ["personal"] });
+    const holder = psqlConnection("holder2");
+    try {
+      holder.send(`BEGIN; UPDATE public.tasks SET follow_up_at = follow_up_at WHERE id = '${task.id}'; SELECT 'held';`);
+      await holder.waitFor("held");
+      const response = await commentsRoute.POST(routeRequest(admin, "famcal_api_key", "POST", `/api/tasks/${task.id}/comments`, { content: "busy probe" }), params(task.id));
+      assert.equal(response.status, 503);
+    } finally {
+      holder.send("ROLLBACK; SELECT 'released';");
+      await holder.waitFor("released");
+      await holder.end();
+    }
+    assert.equal(await commentCount(task.id), 0);
+  });
+
   await test("E1 concurrency: project re-tag first, comment waits on the project lock, then writes nothing", async () => {
     const project = await insert("projects", { user_id: userA, name: "Race project A", tags: ["personal"] });
     const task = await insert("tasks", { user_id: userA, title: "Race: project retag first", tags: ["personal"], project_id: project.id });

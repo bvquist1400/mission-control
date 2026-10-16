@@ -800,7 +800,7 @@ await test("R1: FamCal comment POST is one RPC (user, task, trimmed content, sou
 });
 
 await test("R1: a failing comment function is a 500 and leaves no comment behind (nothing to clean up)", async () => {
-  const db = makeDb({ rpcError: { code: "57014", message: "canceling statement due to statement timeout" } });
+  const db = makeDb({ rpcError: { code: "XX000", message: "synthetic internal error" } });
   const response = await famcalComment(db, PERSONAL_ID, { content: "From Sunday brief: done." });
   assert.equal(response.status, 500);
   assert.deepEqual(db.comments.map((row) => row.content), ["Personal comment", "Work comment"]);
@@ -1267,6 +1267,18 @@ await test("N2: legacy and actions keys keep the external-source filter (unchang
     assert.ok(query.ops.some(([n, args]) => n === "eq" && args[0] === "external_source_system" && args[1] === "TaskAdvisor"), source);
     assert.ok(query.ops.some(([n, args]) => n === "eq" && args[0] === "external_source_id" && args[1] === "TA-SECRET-9"), source);
   }
+});
+
+// ── 5f. Fix round 5 (Codex Sol N3) ─────────────────────────────────────────
+await test("N3: a lock or statement timeout in the comment function is 503 busy (not 500), and writes nothing", async () => {
+  for (const code of ["55P03", "57014"]) {
+    const db = makeDb({ rpcError: { code, message: "timeout" } });
+    const response = await famcalComment(db, PERSONAL_ID, { content: "Done via brief" });
+    assert.equal(response.status, 503, code);
+    assert.match((await response.json()).error, /busy/, code);
+    assert.equal(db.comments.length, 2, code);
+  }
+  assert.deepEqual([...famcal.FAMCAL_BUSY_SQLSTATES].sort(), ["55P03", "57014"]);
 });
 
 // ── 6. Pure helpers ────────────────────────────────────────────────────────

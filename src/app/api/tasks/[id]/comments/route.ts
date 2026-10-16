@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isPostgrestNotFound } from '@/lib/supabase/errors';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
-import { addFamcalTaskComment, readFamcalTaskComments } from '@/lib/famcal-api-key';
+import { addFamcalTaskComment, FamcalTaskBusyError, readFamcalTaskComments } from '@/lib/famcal-api-key';
 import type { CommentSource } from '@/types/database';
 
 const VALID_SOURCES: CommentSource[] = ['manual', 'system', 'llm'];
@@ -93,7 +93,17 @@ export async function POST(
     // a SQL failure inside it leaves nothing behind. A reply lost after the commit
     // is ambiguous: a retry would add a second comment (no idempotency token yet).
     if (auth.context.authSource === 'famcal_api_key') {
-      const famcalComment = await addFamcalTaskComment(supabase, userId, id, body.content.trim(), source);
+      let famcalComment;
+      try {
+        famcalComment = await addFamcalTaskComment(supabase, userId, id, body.content.trim(), source);
+      } catch (error) {
+        // Only an eligible task can be busy (the function never waits on an
+        // ineligible row), so this never tells a work task apart from a missing one.
+        if (error instanceof FamcalTaskBusyError) {
+          return NextResponse.json({ error: error.message }, { status: 503 });
+        }
+        throw error;
+      }
       if (!famcalComment) {
         return NextResponse.json({ error: 'Task not found' }, { status: 404 });
       }

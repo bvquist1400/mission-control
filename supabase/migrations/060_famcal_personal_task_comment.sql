@@ -17,9 +17,12 @@
 --
 -- famcal_add_personal_task_comment does the eligibility check and the insert in ONE
 -- transaction:
---   1. lock the task row FOR SHARE (a concurrent UPDATE of the task, e.g. removing
---      `personal` or moving it to another project, waits; one that committed first is
---      re-checked by the locking read);
+--   1. lock the task row FOR SHARE, but only a row that is already eligible in the
+--      statement's snapshot (famcal_eligible(t) is in the locking read's WHERE): an
+--      ineligible task is skipped without ever waiting on its row lock, so a busy
+--      work task answers exactly like a missing id (404, at once). For an eligible
+--      task a concurrent UPDATE (e.g. removing `personal` or moving it to another
+--      project) waits; one that committed first is re-checked by the locking read;
 --   2. if the task is in a project, lock that project row FOR SHARE too and require
 --      the user and `personal` on it (a concurrent project re-tag waits the same way);
 --   3. insert the comment and return it. No row at step 1 or 2 -> no rows returned,
@@ -27,7 +30,9 @@
 -- A SQL error inside the function rolls the whole call back, so that kind of 500
 -- leaves no comment behind. (If the reply is lost after the function committed, the
 -- caller sees an error although the comment exists; a retry then adds a second one.
--- There is no idempotency token yet.)
+-- There is no idempotency token yet.) Waits are bounded: lock_timeout is 5s inside
+-- the function; a timeout (55P03) can only happen on an eligible task and the API
+-- answers 503 "busy, try again".
 --
 -- SECURITY INVOKER: the service-role caller (the machine key) is scoped by p_user_id;
 -- a signed-in user may only pass their own id (and RLS applies as usual). Only
@@ -69,6 +74,7 @@ RETURNS SETOF task_comments
 LANGUAGE plpgsql
 SECURITY INVOKER
 SET search_path = public
+SET lock_timeout = '5s'
 AS $$
 DECLARE
   v_content TEXT := btrim(COALESCE(p_content, ''));
@@ -88,7 +94,9 @@ BEGIN
     RAISE EXCEPTION 'source must be manual, system or llm' USING ERRCODE = '22023';
   END IF;
 
-  -- 1. The task, locked: own tag, no sprint, and either standalone or in a project.
+  -- 1. The task, locked: own tag, no sprint, standalone or in a project, and
+  --    eligible (project included) BEFORE any lock is taken, so an ineligible row
+  --    is never waited on.
   SELECT t.*
     INTO v_task
     FROM public.tasks t
@@ -97,7 +105,8 @@ BEGIN
      AND COALESCE(t.tags, '{}'::TEXT[]) @> ARRAY['personal']::TEXT[]
      AND t.sprint_id IS NULL
      AND (t.project_id IS NOT NULL OR (t.implementation_id IS NULL AND t.section_id IS NULL))
-     FOR SHARE;
+     AND public.famcal_eligible(t)
+     FOR SHARE OF t;
 
   IF v_task.id IS NULL THEN
     RETURN;
