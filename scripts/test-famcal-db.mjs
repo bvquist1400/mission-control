@@ -176,20 +176,21 @@ try {
   // ── Part 1: migration 060 ───────────────────────────────────────────────
   await test("060 rollback drops the function; re-apply restores it; a second apply is a no-op", async () => {
     psql(ROLLBACK);
-    assert.equal(psql(`SELECT count(*) FROM pg_proc WHERE proname = '${FN}';`), "0");
+    assert.equal(psql(`SELECT count(*) FROM pg_proc WHERE proname IN ('${FN}', 'famcal_eligible');`), "0");
     await waitForFunction(false);
     psql(MIGRATION);
     psql(MIGRATION);
-    assert.equal(psql(`SELECT count(*) FROM pg_proc WHERE proname = '${FN}';`), "1");
+    assert.equal(psql(`SELECT count(*) FROM pg_proc WHERE proname IN ('${FN}', 'famcal_eligible');`), "2");
     await waitForFunction(true);
   });
 
-  await test("060 grants: service_role may execute; anon and authenticated may not; SECURITY INVOKER", async () => {
-    const sig = `public.${FN}(uuid, uuid, text, text)`;
-    assert.equal(psql(`SELECT has_function_privilege('service_role', '${sig}', 'execute');`), "t");
-    assert.equal(psql(`SELECT has_function_privilege('anon', '${sig}', 'execute');`), "f");
-    assert.equal(psql(`SELECT has_function_privilege('authenticated', '${sig}', 'execute');`), "f");
-    assert.equal(psql(`SELECT prosecdef FROM pg_proc WHERE proname = '${FN}';`), "f");
+  await test("060 grants: service_role may execute; anon and authenticated may not; SECURITY INVOKER (both functions)", async () => {
+    for (const sig of [`public.${FN}(uuid, uuid, text, text)`, "public.famcal_eligible(tasks)"]) {
+      assert.equal(psql(`SELECT has_function_privilege('service_role', '${sig}', 'execute');`), "t", sig);
+      assert.equal(psql(`SELECT has_function_privilege('anon', '${sig}', 'execute');`), "f", sig);
+      assert.equal(psql(`SELECT has_function_privilege('authenticated', '${sig}', 'execute');`), "f", sig);
+    }
+    assert.equal(psql(`SELECT bool_or(prosecdef) FROM pg_proc WHERE proname IN ('${FN}', 'famcal_eligible');`), "f");
     const viaAnon = await anon.rpc(FN, { p_user_id: userA, p_task_id: randomUUID(), p_content: "x", p_source: "manual" });
     assert.ok(viaAnon.error, "anon call refused");
   });
@@ -300,56 +301,77 @@ try {
     }
   });
 
-  // R3 fixtures: a personal task filed under a work application/project/sprint/section,
-  // and one under a personal project + section.
+  // Round 4 fixtures (Brent 10/16: only standalone to-dos or tasks in a personal project).
   const workApp = await insert("implementations", { user_id: userA, name: "Confidential Client App" });
+  const personalApp = await insert("implementations", { user_id: userA, name: "FamCal app" });
   const workProject = await insert("projects", { user_id: userA, name: "Confidential Work Project", tags: ["work"], implementation_id: workApp.id });
+  const buildProject = await insert("projects", { user_id: userA, name: "Side build (not tagged personal)", tags: ["build"] });
   const workSprint = await insert("sprints", { user_id: userA, name: "Sprint Secret-42", start_date: "2026-10-12", end_date: "2026-10-23", theme: "Secret go-live theme" });
   const workSection = await insert("project_sections", { user_id: userA, project_id: workProject.id, name: "Secret cutover section" });
   const personalProject = await insert("projects", { user_id: userA, name: "Personal — House admin", tags: ["personal"] });
   const personalSection = await insert("project_sections", { user_id: userA, project_id: personalProject.id, name: "Paperwork" });
+  const appProject = await insert("projects", { user_id: userA, name: "Personal — FamCal Sunday Brief", tags: ["personal", "famcal"], implementation_id: personalApp.id });
+  const appSection = await insert("project_sections", { user_id: userA, project_id: appProject.id, name: "S1 show-only" });
+  const otherUsersProject = await insert("projects", { user_id: userB, name: "B's personal project", tags: ["personal"] });
   const inWork = await insert("tasks", {
     user_id: userA, title: "Dentist (filed under work)", tags: ["personal"], status: "Planned",
     project_id: workProject.id, section_id: workSection.id, sprint_id: workSprint.id,
   });
+  const inBuild = await insert("tasks", { user_id: userA, title: "Build task tagged personal", tags: ["personal"], project_id: buildProject.id, due_at: "2026-10-27T03:59:00Z" });
+  const appNoProject = await insert("tasks", { user_id: userA, title: "No project, but an application", tags: ["personal"], implementation_id: workApp.id });
+  const withSprint = await insert("tasks", { user_id: userA, title: "Personal project, but a sprint", tags: ["personal"], project_id: personalProject.id, sprint_id: workSprint.id });
+  const inOtherUsersProject = await insert("tasks", { user_id: userA, title: "Points at B's project", tags: ["personal"] });
+  psql(`ALTER TABLE tasks DISABLE TRIGGER USER; UPDATE tasks SET project_id = '${otherUsersProject.id}' WHERE id = '${inOtherUsersProject.id}'; ALTER TABLE tasks ENABLE TRIGGER USER;`);
   const inPersonal = await insert("tasks", {
     user_id: userA, title: "File the deed", tags: ["personal"], project_id: personalProject.id, section_id: personalSection.id,
   });
-  const secrets = [workApp.id, workApp.name, workProject.id, workProject.name, workSprint.id, workSprint.name, workSprint.theme, workSection.id, workSection.name];
+  const inAppProject = await insert("tasks", {
+    user_id: userA, title: "Wire the to-dos section", tags: ["personal"], project_id: appProject.id, section_id: appSection.id, source_url: "https://example.test/secret-link",
+  });
+  const ineligible = [["work project", inWork], ["build project", inBuild], ["app without project", appNoProject], ["sprint", withSprint], ["another user's project", inOtherUsersProject]];
+  const secrets = [workApp.id, workApp.name, workProject.id, workProject.name, workSprint.id, workSprint.name, workSprint.theme, workSection.id, workSection.name, personalApp.id, "secret-link"];
 
-  function assertClean(task, label) {
-    const text = JSON.stringify(task);
-    for (const secret of secrets) assert.equal(text.includes(secret), false, `${label}: leaked ${secret}`);
-    for (const key of ["project", "project_id", "implementation", "implementation_id", "sprint", "sprint_id", "section_id", "section_name"]) {
-      assert.equal(task[key], null, `${label}: ${key}`);
+  await test("E1 (SQL): famcal_eligible(tasks) is true only for standalone personal tasks and tasks in the user's own personal project", async () => {
+    const value = (id) => psql(`SELECT famcal_eligible(t) FROM tasks t WHERE t.id = '${id}';`);
+    for (const [label, task] of ineligible) assert.equal(value(task.id), "f", label);
+    assert.equal(value(work.id), "f", "work task");
+    assert.equal(value(upperTag.id), "f", "'Personal' (case)");
+    for (const [label, task] of [["standalone", personal], ["personal project", inPersonal], ["personal project with an application", inAppProject]]) {
+      assert.equal(value(task.id), "t", label);
     }
-    assert.equal("user_id" in task, false, `${label}: user_id`);
-  }
-
-  await test("R3 (real DB): the hierarchy trigger did put the work application on the task (precondition)", async () => {
-    assert.equal(psql(`SELECT implementation_id FROM tasks WHERE id = '${inWork.id}';`), workApp.id);
+    assert.equal(psql(`SELECT implementation_id FROM tasks WHERE id = '${inWork.id}';`), workApp.id, "precondition: 046 put the work application on the task");
+    assert.equal(psql(`SELECT implementation_id FROM tasks WHERE id = '${inAppProject.id}';`), personalApp.id, "precondition: the personal project's application");
   });
 
-  await test("R3 routes: list, detail, PATCH and park never return the work relations of a personal task", async () => {
-    const list = await tasksRoute.GET(routeRequest(admin, "famcal_api_key", "GET", "/api/tasks?tag=personal&limit=500"));
-    assert.equal(list.status, 200);
-    const listed = (await list.json()).find((row) => row.id === inWork.id);
-    assert.ok(listed, "listed");
-    assertClean(listed, "list");
-    assert.equal(typeof listed.dependency_blocked, "boolean");
-    const detail = await taskRoute.GET(routeRequest(admin, "famcal_api_key", "GET", `/api/tasks/${inWork.id}`), params(inWork.id));
-    assertClean(await detail.json(), "detail");
-    const patch = await taskRoute.PATCH(routeRequest(admin, "famcal_api_key", "PATCH", `/api/tasks/${inWork.id}`, { follow_up_at: "2026-11-02T04:59:00Z" }), params(inWork.id));
-    assert.equal(patch.status, 200);
-    assertClean(await patch.json(), "PATCH");
-    const park = await parkRoute.POST(routeRequest(admin, "famcal_api_key", "POST", `/api/tasks/park/${inWork.id}`), params(inWork.id));
-    assert.equal(park.status, 200);
-    const parked = await park.json();
-    assertClean(parked, "park");
-    assert.equal(parked.status, "Parked");
+  await test("E1 routes: every ineligible personal task is absent from the list and the same 404 as a missing task on detail/PATCH/park/comments; nothing written", async () => {
+    const listBody = await (await tasksRoute.GET(routeRequest(admin, "famcal_api_key", "GET", "/api/tasks?tag=personal&limit=500&include_done=true&include_parked=true"))).json();
+    const listed = new Set(listBody.map((row) => row.id));
+    for (const [label, task] of ineligible) assert.equal(listed.has(task.id), false, `list: ${label}`);
+    for (const task of [personal, inPersonal, inAppProject]) assert.ok(listed.has(task.id), `list keeps ${task.title}`);
+    const missingId = randomUUID();
+    const missing = await taskRoute.GET(routeRequest(admin, "famcal_api_key", "GET", `/api/tasks/${missingId}`), params(missingId));
+    const missingBody = await missing.json();
+    for (const [label, task] of ineligible) {
+      const before = psql(`SELECT status || '|' || coalesce(follow_up_at::text, '') FROM tasks WHERE id = '${task.id}';`);
+      const results = [
+        await taskRoute.GET(routeRequest(admin, "famcal_api_key", "GET", `/api/tasks/${task.id}`), params(task.id)),
+        await taskRoute.PATCH(routeRequest(admin, "famcal_api_key", "PATCH", `/api/tasks/${task.id}`, { status: "Done" }), params(task.id)),
+        await taskRoute.PATCH(routeRequest(admin, "famcal_api_key", "PATCH", `/api/tasks/${task.id}`, { follow_up_at: "2026-11-02T04:59:00Z" }), params(task.id)),
+        await parkRoute.POST(routeRequest(admin, "famcal_api_key", "POST", `/api/tasks/park/${task.id}`), params(task.id)),
+        await commentsRoute.GET(routeRequest(admin, "famcal_api_key", "GET", `/api/tasks/${task.id}/comments`), params(task.id)),
+        await commentsRoute.POST(routeRequest(admin, "famcal_api_key", "POST", `/api/tasks/${task.id}/comments`, { content: "nope" }), params(task.id)),
+      ];
+      for (const [index, response] of results.entries()) {
+        assert.equal(response.status, 404, `${label} #${index}`);
+        assert.deepEqual(await response.json(), missingBody, `${label} #${index}: same body as missing`);
+      }
+      assert.equal(psql(`SELECT status || '|' || coalesce(follow_up_at::text, '') FROM tasks WHERE id = '${task.id}';`), before, `${label}: unchanged`);
+      assert.equal(await commentCount(task.id), 0, `${label}: no comment`);
+      assert.deepEqual((await admin.rpc(FN, { p_user_id: userA, p_task_id: task.id, p_content: "x", p_source: "manual" })).data, [], `${label}: function`);
+    }
   });
 
-  await test("R3 routes: a personal project's metadata and section are kept; legacy still sees the work relations", async () => {
+  await test("E1 routes: personal-project tasks keep their project/section (application hidden, no source_url); legacy still sees everything", async () => {
     const detail = await taskRoute.GET(routeRequest(admin, "famcal_api_key", "GET", `/api/tasks/${inPersonal.id}`), params(inPersonal.id));
     const body = await detail.json();
     assert.equal(body.project.name, "Personal — House admin");
@@ -357,10 +379,74 @@ try {
     assert.deepEqual(Object.keys(body.project).sort(), ["id", "name", "rag", "stage", "tags"]);
     assert.equal(body.section_name, "Paperwork");
     assert.equal(body.section_id, personalSection.id);
-    const legacy = await taskRoute.GET(routeRequest(admin, "legacy_api_key", "GET", `/api/tasks/${inWork.id}`), params(inWork.id));
-    const legacyBody = await legacy.json();
+    const appBody = await (await taskRoute.GET(routeRequest(admin, "famcal_api_key", "GET", `/api/tasks/${inAppProject.id}`), params(inAppProject.id))).json();
+    assert.equal(appBody.project.name, "Personal — FamCal Sunday Brief");
+    assert.equal(appBody.section_name, "S1 show-only");
+    assert.equal(appBody.implementation, null);
+    assert.equal(appBody.implementation_id, null);
+    assert.equal("source_url" in appBody, false);
+    for (const secret of secrets) assert.equal(JSON.stringify(appBody).includes(secret), false, secret);
+    const patched = await taskRoute.PATCH(routeRequest(admin, "famcal_api_key", "PATCH", `/api/tasks/${inAppProject.id}`, { follow_up_at: "2026-11-02T04:59:00Z" }), params(inAppProject.id));
+    assert.equal(patched.status, 200);
+    const legacyBody = await (await taskRoute.GET(routeRequest(admin, "legacy_api_key", "GET", `/api/tasks/${inWork.id}`), params(inWork.id))).json();
     assert.equal(legacyBody.project.name, workProject.name);
     assert.equal(legacyBody.sprint.theme, workSprint.theme);
+  });
+
+  await test("E1 concurrency: project re-tag first, comment waits on the project lock, then writes nothing", async () => {
+    const project = await insert("projects", { user_id: userA, name: "Race project A", tags: ["personal"] });
+    const task = await insert("tasks", { user_id: userA, title: "Race: project retag first", tags: ["personal"], project_id: project.id });
+    const result = await overlap(
+      `UPDATE projects SET tags = ARRAY['work'] WHERE id = '${project.id}';`,
+      `SELECT count(*) || ' rows' FROM ${FN}('${userA}', '${task.id}', 'late comment', 'manual');`
+    );
+    assert.ok(result.secondBlocked, "the comment waited for the project re-tag");
+    assert.match(result.second, /0 rows/);
+    assert.equal(await commentCount(task.id), 0);
+  });
+
+  await test("E1 concurrency: comment first (project locked FOR SHARE), project re-tag waits; the comment was written while personal", async () => {
+    const project = await insert("projects", { user_id: userA, name: "Race project B", tags: ["personal"] });
+    const task = await insert("tasks", { user_id: userA, title: "Race: comment first", tags: ["personal"], project_id: project.id });
+    const result = await overlap(
+      `SELECT count(*) || ' rows' FROM ${FN}('${userA}', '${task.id}', 'early comment', 'manual');`,
+      `UPDATE projects SET tags = ARRAY['work'] WHERE id = '${project.id}';`
+    );
+    assert.ok(result.secondBlocked, "the re-tag waited for the comment's transaction");
+    assert.match(result.first, /1 rows/);
+    assert.equal(await commentCount(task.id), 1);
+  });
+
+  await test("E1 route race: project re-tagged between the PATCH check and its UPDATE → 404, task unchanged", async () => {
+    const project = await insert("projects", { user_id: userA, name: "Race project C", tags: ["personal"] });
+    const task = await insert("tasks", { user_id: userA, title: "Race: PATCH", tags: ["personal"], project_id: project.id, status: "Done" });
+    const racing = new Proxy(admin, {
+      get(target, prop) {
+        if (prop === "from") {
+          return (table) => {
+            const builder = target.from(table);
+            if (table !== "tasks") return builder;
+            return new Proxy(builder, {
+              get(inner, innerProp) {
+                if (innerProp === "update") {
+                  return (...args) => {
+                    psql(`UPDATE projects SET tags = ARRAY['work'] WHERE id = '${project.id}';`);
+                    return inner.update(...args);
+                  };
+                }
+                const value = inner[innerProp];
+                return typeof value === "function" ? value.bind(inner) : value;
+              },
+            });
+          };
+        }
+        const value = target[prop];
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const raced = await taskRoute.PATCH(routeRequest(racing, "famcal_api_key", "PATCH", `/api/tasks/${task.id}`, { status: "Backlog" }), params(task.id));
+    assert.equal(raced.status, 404);
+    assert.equal(psql(`SELECT status FROM tasks WHERE id = '${task.id}';`), "Done");
   });
 
   await test("N1/N2 routes (real DB): a personal occurrence of a work template never shows the template id; external-source filters are 400", async () => {

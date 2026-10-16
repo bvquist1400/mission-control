@@ -120,6 +120,39 @@ export function isFamcalVisibleTask(task: { tags?: string[] | null } | null | un
   return Boolean(task) && hasPersonalTag(task);
 }
 
+/**
+ * PostgREST computed field (migration 060, `famcal_eligible(tasks)`): the one
+ * definition of which tasks the FamCal key may see or change. Every FamCal read
+ * and write filters on `famcal_eligible = true` in the same query, so an
+ * ineligible task is simply "not found" (404, same body as a missing one).
+ *
+ * Eligible (Brent, 10/16: "Leave it out of the brief") only when ALL hold:
+ * - the task's own tags contain `personal`;
+ * - it has no sprint;
+ * - EITHER it has no project, no application and no section (a standalone
+ *   to-do), OR its project is the same user's and is itself tagged `personal`.
+ * isFamcalEligibleRow below mirrors it in code for rows read with their project.
+ */
+export const FAMCAL_ELIGIBLE_FIELD = 'famcal_eligible';
+
+/** Code mirror of famcal_eligible for a row selected with its `project` relation (defence in depth). */
+export function isFamcalEligibleRow(row: Record<string, unknown> | null | undefined): boolean {
+  if (!row || !hasPersonalTag(row as { tags?: string[] | null })) {
+    return false;
+  }
+  if (row.sprint_id) {
+    return false;
+  }
+  if (!row.project_id) {
+    return !row.implementation_id && !row.section_id;
+  }
+  const projectValue = Array.isArray(row.project) ? row.project[0] : row.project;
+  const project = projectValue && typeof projectValue === 'object' ? (projectValue as Record<string, unknown>) : null;
+  return Boolean(project)
+    && project!.id === row.project_id
+    && hasPersonalTag(project as { tags?: string[] | null });
+}
+
 /** Tags the list query must contain for the FamCal key: always `personal`, plus any extra tag asked for. */
 export function famcalListRequiredTags(requestedTag: string | null | undefined): string[] {
   const tag = typeof requestedTag === 'string' ? requestedTag.trim() : '';
@@ -201,7 +234,8 @@ export function famcalListParamError(searchParams: URLSearchParams): string | nu
  * column added later stays hidden until someone adds it here. Left out on
  * purpose: user_id, inbox_item_id (intelligence inbox), recurring_template_id,
  * latest_instance_id and last_generated_at (other task rows), and
- * external_source_system / external_source_id (other systems' ids).
+ * external_source_system / external_source_id (other systems' ids), and
+ * source_url (a link that may point into another system; FamCal doesn't read it).
  * `recurrence` is not copied either: projectRecurrenceForFamcal rebuilds it from
  * FAMCAL_RECURRENCE_FIELDS.
  * implementation_id, sprint_id, project_id and section_id are decided by
@@ -232,7 +266,6 @@ export const FAMCAL_TASK_FIELDS = [
   'actual_minutes',
   'stakeholder_mentions',
   'source_type',
-  'source_url',
   'unit_count',
   'work_type',
   'is_sample',
@@ -336,8 +369,9 @@ export interface FamcalVisibleTask {
 
 /**
  * Loads the task's id, status and tags for the per-task guard. Returns null when
- * the task does not exist for this user or does not carry the personal tag, so
- * the caller answers 404 either way and never reveals that a work task exists.
+ * the task does not exist for this user or is not FamCal-eligible (filtered in
+ * the same query), so the caller answers 404 either way and never reveals that
+ * a work task exists.
  */
 export async function fetchFamcalVisibleTask(
   supabase: SupabaseClient,
@@ -349,6 +383,8 @@ export async function fetchFamcalVisibleTask(
     .select('id, status, tags')
     .eq('id', taskId)
     .eq('user_id', userId)
+    .contains('tags', [FAMCAL_REQUIRED_TAG])
+    .eq(FAMCAL_ELIGIBLE_FIELD, true)
     .maybeSingle();
 
   if (error) {
@@ -427,6 +463,7 @@ export async function readFamcalTaskComments(
     .eq('id', taskId)
     .eq('user_id', userId)
     .contains('tags', [FAMCAL_REQUIRED_TAG])
+    .eq(FAMCAL_ELIGIBLE_FIELD, true)
     .eq('task_comments.user_id', userId)
     .order('created_at', { referencedTable: 'task_comments', ascending: true })
     .maybeSingle();

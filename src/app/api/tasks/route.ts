@@ -14,6 +14,7 @@ import { calculateFinalPriorityScore, calculatePriorityBoosts, getHighPrioritySt
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import {
   famcalListRequiredTags,
+  FAMCAL_ELIGIBLE_FIELD,
   famcalListParamError,
   projectTaskForFamcal,
   redactDependencyForFamcal,
@@ -242,7 +243,8 @@ export async function GET(request: NextRequest) {
     }
 
     if (isFamcalKey) {
-      query = query.contains('tags', famcalListRequiredTags(tag));
+      // Eligibility is in the query itself, so limit/offset page over eligible tasks only.
+      query = query.contains('tags', famcalListRequiredTags(tag)).eq(FAMCAL_ELIGIBLE_FIELD, true);
     } else if (tag) {
       query = query.contains('tags', [tag]);
     }

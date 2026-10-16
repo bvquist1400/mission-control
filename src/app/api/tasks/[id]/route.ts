@@ -14,9 +14,10 @@ import { getHighPriorityStakeholderNames, recalculateTaskPriority } from '@/lib/
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import {
   checkFamcalStatusTransition,
+  FAMCAL_ELIGIBLE_FIELD,
   FAMCAL_REQUIRED_TAG,
   fetchFamcalVisibleTask,
-  isFamcalVisibleTask,
+  isFamcalEligibleRow,
   parseFamcalTaskPatch,
   projectTaskForFamcal,
 } from '@/lib/famcal-api-key';
@@ -72,12 +73,17 @@ export async function GET(
     const { supabase, userId } = auth.context;
     const { id } = await params;
 
-    const { data, error } = await supabase
+    const isFamcalKey = auth.context.authSource === 'famcal_api_key';
+    let query = supabase
       .from('tasks')
       .select(TASK_WITH_RELATIONS_SELECT)
       .eq('id', id)
-      .eq('user_id', userId)
-      .single();
+      .eq('user_id', userId);
+    if (isFamcalKey) {
+      // FamCal-eligible only (personal tag; standalone or in a personal project; no sprint).
+      query = query.contains('tags', [FAMCAL_REQUIRED_TAG]).eq(FAMCAL_ELIGIBLE_FIELD, true);
+    }
+    const { data, error } = await query.single();
 
     if (error) {
       if (error.code === 'PGRST116') {
@@ -86,11 +92,11 @@ export async function GET(
       throw error;
     }
 
-    // The FamCal key sees only tasks tagged `personal`; anything else looks missing.
+    // The FamCal key sees only eligible personal tasks; anything else looks missing.
     // What it does see is the FamCal projection: no work project, application,
     // sprint or section (src/lib/famcal-api-key.ts, projectTaskForFamcal).
     if (auth.context.authSource === 'famcal_api_key') {
-      if (!isFamcalVisibleTask(data as { tags?: string[] | null })) {
+      if (!isFamcalEligibleRow(data as Record<string, unknown>)) {
         return NextResponse.json({ error: 'Task not found' }, { status: 404 });
       }
       return NextResponse.json(projectTaskForFamcal(data as Record<string, unknown>));
@@ -483,7 +489,7 @@ export async function PATCH(
     if (isFamcalKey) {
       // Re-assert the personal tag in the UPDATE itself: a tag removed after the
       // guard's read matches no row, which becomes the PGRST116 → 404 below.
-      updateQuery = updateQuery.contains('tags', [FAMCAL_REQUIRED_TAG]);
+      updateQuery = updateQuery.contains('tags', [FAMCAL_REQUIRED_TAG]).eq(FAMCAL_ELIGIBLE_FIELD, true);
       // Compare-and-set on the status the transition was validated against: a
       // status changed by someone else meanwhile matches no row (→ 409 below).
       if (famcalExpectedStatus) {

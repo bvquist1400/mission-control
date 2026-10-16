@@ -83,6 +83,17 @@ const PERSONAL_RECURRING_ID = "88888888-8888-4888-8888-888888888888";
 const WORK_TEMPLATE_ID = "99999999-9999-4999-8999-999999999999";
 const WORK_TEMPLATE_RECURRENCE = { enabled: true, frequency: "weekly", auto_mark_missed: false, day_of_week: 4, day_of_month: null, next_due: "2026-10-22", template_task_id: WORK_TEMPLATE_ID };
 const RECURRING_INSTANCE = buildRecurringInstanceMetadata(WORK_TEMPLATE_ID, WORK_TEMPLATE_RECURRENCE, "2026-10-15");
+// Round 4 eligibility fixtures (Brent 10/16: only standalone to-dos or tasks in a
+// personal project reach FamCal).
+const BUILD_PROJECT = { id: "b1000000-0000-4000-8000-0000000000b1", name: "Side build (not tagged personal)", stage: "Build", rag: "Green", tags: ["build"] };
+const PERSONAL_APP = { id: "a1000000-0000-4000-8000-0000000000a1", name: "FamCal app", phase: "Build", rag: "Green" };
+const PERSONAL_APP_PROJECT = { id: "e1000000-0000-4000-8000-0000000000e1", name: "Personal — FamCal Sunday Brief", stage: "Build", rag: "Green", tags: ["personal", "famcal"] };
+const PERSONAL_APP_SECTION = { id: "f1000000-0000-4000-8000-0000000000f1", project_id: PERSONAL_APP_PROJECT.id, name: "S1 show-only", sort_order: 1, created_at: "2026-10-01T00:00:00Z" };
+const PERSONAL_IN_BUILD_ID = "a2000000-0000-4000-8000-0000000000a2";
+const PERSONAL_APP_NO_PROJECT_ID = "a3000000-0000-4000-8000-0000000000a3";
+const PERSONAL_WITH_SPRINT_ID = "a4000000-0000-4000-8000-0000000000a4";
+const PERSONAL_IN_APP_PROJECT_ID = "a5000000-0000-4000-8000-0000000000a5";
+const INELIGIBLE_IDS = [PERSONAL_IN_WORK_ID, PERSONAL_IN_BUILD_ID, PERSONAL_APP_NO_PROJECT_ID, PERSONAL_WITH_SPRINT_ID];
 const WORK_SECRETS = [
   WORK_APP.id, WORK_APP.name, WORK_PROJECT.id, WORK_PROJECT.name, WORK_SPRINT.id, WORK_SPRINT.name,
   WORK_SPRINT.theme, WORK_SECTION.id, WORK_SECTION.name, "inbox-secret-id", "TaskAdvisor", "TA-SECRET-9",
@@ -94,7 +105,20 @@ const WORK_SECRETS = [
 // statusBeforeWrite: someone sets the target task to this status just before the
 // UPDATE lands (after the FamCal transition check), as in review R4.
 // rpcError: the comment function fails (the real one rolls back: nothing written).
-function makeDb({ untagBeforeWrite = false, statusBeforeWrite = null, rpcError = null } = {}) {
+// untagProjectBeforeWrite: someone removes `personal` from PERSONAL_PROJECT just
+// before the write lands (round 4: project re-tag between check and write).
+function makeDb({ untagBeforeWrite = false, statusBeforeWrite = null, rpcError = null, untagProjectBeforeWrite = false } = {}) {
+  const projects = new Map(
+    [WORK_PROJECT, PERSONAL_PROJECT, BUILD_PROJECT, PERSONAL_APP_PROJECT].map((project) => [project.id, { ...project, tags: [...project.tags] }])
+  );
+  // Independent oracle for famcal_eligible (migration 060), read at query time.
+  const eligible = (row) => {
+    if (!row.tags.includes("personal") || row.sprint_id) return false;
+    if (!row.project_id) return !row.implementation_id && !row.section_id;
+    const project = projects.get(row.project_id);
+    return Boolean(project && project.tags.includes("personal"));
+  };
+  const withProject = (row) => (row.project_id ? { ...row, project: { ...projects.get(row.project_id) } } : { ...row });
   const tasks = new Map([
     [PERSONAL_ID, { id: PERSONAL_ID, user_id: API_USER_ID, title: "Register to vote", status: "Backlog", tags: ["personal"], base_priority: 50, due_at: null, follow_up_at: null, waiting_on: null, blocked_reason: null, status_line: null, updated_at: "2026-10-01T00:00:00Z", project: null, stakeholder_mentions: [] }],
     [WORK_ID, { id: WORK_ID, user_id: API_USER_ID, title: "Day-job ticket", status: "Planned", tags: ["work"], base_priority: 50, due_at: null, stakeholder_mentions: [] }],
@@ -114,6 +138,24 @@ function makeDb({ untagBeforeWrite = false, statusBeforeWrite = null, rpcError =
     [PERSONAL_RECURRING_ID, {
       id: PERSONAL_RECURRING_ID, user_id: API_USER_ID, title: "Weekly errand (from a work template)", status: "Backlog", tags: ["personal"], base_priority: 40, stakeholder_mentions: [],
       ...RECURRING_INSTANCE,
+    }],
+    [PERSONAL_IN_BUILD_ID, {
+      id: PERSONAL_IN_BUILD_ID, user_id: API_USER_ID, title: "Build task tagged personal", status: "Planned", tags: ["personal"], base_priority: 40, due_at: "2026-10-27T03:59:00Z", stakeholder_mentions: [],
+      implementation_id: null, project_id: BUILD_PROJECT.id, sprint_id: null, section_id: null, implementation: null, project: BUILD_PROJECT, sprint: null, section: null,
+    }],
+    [PERSONAL_APP_NO_PROJECT_ID, {
+      id: PERSONAL_APP_NO_PROJECT_ID, user_id: API_USER_ID, title: "No project, but an application", status: "Backlog", tags: ["personal"], base_priority: 40, stakeholder_mentions: [],
+      implementation_id: WORK_APP.id, project_id: null, sprint_id: null, section_id: null, implementation: WORK_APP, project: null, sprint: null, section: null,
+    }],
+    [PERSONAL_WITH_SPRINT_ID, {
+      id: PERSONAL_WITH_SPRINT_ID, user_id: API_USER_ID, title: "Personal project, but in a sprint", status: "Backlog", tags: ["personal"], base_priority: 40, stakeholder_mentions: [],
+      implementation_id: null, project_id: PERSONAL_PROJECT.id, sprint_id: WORK_SPRINT.id, section_id: null, implementation: null, project: PERSONAL_PROJECT, sprint: WORK_SPRINT, section: null,
+    }],
+    [PERSONAL_IN_APP_PROJECT_ID, {
+      id: PERSONAL_IN_APP_PROJECT_ID, user_id: API_USER_ID, title: "Wire the to-dos section", status: "Planned", tags: ["personal"], base_priority: 40, stakeholder_mentions: [],
+      source_url: "https://example.test/secret-link",
+      implementation_id: PERSONAL_APP.id, project_id: PERSONAL_APP_PROJECT.id, sprint_id: null, section_id: PERSONAL_APP_SECTION.id,
+      implementation: PERSONAL_APP, project: PERSONAL_APP_PROJECT, sprint: null, section: PERSONAL_APP_SECTION,
     }],
     [WORK_TEMPLATE_ID, {
       id: WORK_TEMPLATE_ID, user_id: API_USER_ID, title: "Work recurring template", status: "Backlog", tags: ["work"], base_priority: 40, due_at: null, stakeholder_mentions: [],
@@ -153,16 +195,18 @@ function makeDb({ untagBeforeWrite = false, statusBeforeWrite = null, rpcError =
         const row = tasks.get(eqId);
         if (!row) return finish([]);
         if (untagBeforeWrite && row.id === PERSONAL_ID) row.tags = ["work"];
+        if (untagProjectBeforeWrite) projects.get(PERSONAL_PROJECT.id).tags = ["work"];
         if (statusBeforeWrite) row.status = statusBeforeWrite;
         for (const [, [column, value]] of ops.filter(([n]) => n === "contains")) {
           if (column === "tags" && !value.every((tag) => row.tags.includes(tag))) return finish([]);
         }
-        // Every eq filter is part of the UPDATE's WHERE (id, user_id, status…).
+        // Every eq filter is part of the UPDATE's WHERE (id, user_id, status, famcal_eligible…).
         for (const [column, value] of eqs) {
-          if (row[column] !== value) return finish([]);
+          const actual = column === "famcal_eligible" ? eligible(row) : row[column];
+          if (actual !== value) return finish([]);
         }
         Object.assign(row, update);
-        return finish([{ ...row }]);
+        return finish([withProject(row)]);
       }
       let rows = [...tasks.values()];
       if (eqId) rows = rows.filter((row) => row.id === eqId);
@@ -173,6 +217,9 @@ function makeDb({ untagBeforeWrite = false, statusBeforeWrite = null, rpcError =
       }
       for (const [, [column, value]] of ops.filter(([n]) => n === "neq")) {
         rows = rows.filter((row) => row[column] !== value);
+      }
+      for (const [column, value] of eqs) {
+        if (column === "famcal_eligible") rows = rows.filter((row) => eligible(row) === value);
       }
       // Embedded comments (select 'id, task_comments(...)'): one statement, so the
       // tag filter above and the comment rows come from the same state.
@@ -187,7 +234,7 @@ function makeDb({ untagBeforeWrite = false, statusBeforeWrite = null, rpcError =
             .map((comment) => ({ ...comment })),
         })));
       }
-      return finish(rows.map((row) => ({ ...row })));
+      return finish(rows.map(withProject));
     }
     if (table === "task_comments") {
       if (isDelete) {
@@ -203,6 +250,10 @@ function makeDb({ untagBeforeWrite = false, statusBeforeWrite = null, rpcError =
       }
       const taskId = eqs.find(([column]) => column === "task_id")?.[1];
       return finish(comments.filter((row) => row.task_id === taskId));
+    }
+    if (table === "project_sections") {
+      const sections = [WORK_SECTION, PERSONAL_SECTION, PERSONAL_APP_SECTION].map((section) => ({ ...section, user_id: API_USER_ID }));
+      return finish(sections.filter((row) => eqs.every(([column, value]) => row[column] === value)));
     }
     if (table === "task_dependencies") {
       const inIds = op("in")?.[1]?.[1] ?? [];
@@ -220,9 +271,10 @@ function makeDb({ untagBeforeWrite = false, statusBeforeWrite = null, rpcError =
       log.push({ table: `rpc:${name}`, ops: [["rpc", [args]]] });
       if (name !== "famcal_add_personal_task_comment") return { data: null, error: { code: "PGRST202", message: "no such function" } };
       if (untagBeforeWrite && args.p_task_id === PERSONAL_ID) tasks.get(PERSONAL_ID).tags = ["work"];
+      if (untagProjectBeforeWrite) projects.get(PERSONAL_PROJECT.id).tags = ["work"];
       if (rpcError) return { data: null, error: rpcError };
       const task = tasks.get(args.p_task_id);
-      if (!task || task.user_id !== args.p_user_id || !task.tags.includes("personal")) return { data: [], error: null };
+      if (!task || task.user_id !== args.p_user_id || !eligible(task)) return { data: [], error: null };
       const row = { id: `c${comments.length + 1}`, task_id: task.id, user_id: args.p_user_id, content: args.p_content, source: args.p_source, created_at: "2026-10-15T00:00:00Z", updated_at: "2026-10-15T00:00:00Z" };
       comments.push(row);
       return { data: [row], error: null };
@@ -247,7 +299,7 @@ function makeDb({ untagBeforeWrite = false, statusBeforeWrite = null, rpcError =
     },
   };
 
-  return { client, tasks, comments, log, rpcCalls };
+  return { client, tasks, projects, comments, log, rpcCalls };
 }
 
 function routeRequest(db, authSource, method, path, body) {
@@ -443,7 +495,7 @@ await test("GET /api/tasks with the FamCal key returns personal tasks only, even
   const response = await tasksRoute.GET(routeRequest(db, "famcal_api_key", "GET", "/api/tasks?limit=500&include_done=true"));
   assert.equal(response.status, 200);
   const ids = (await response.json()).map((task) => task.id).sort();
-  assert.deepEqual(ids, [PERSONAL_ID, DONE_PERSONAL_ID, PERSONAL_IN_WORK_ID, PERSONAL_IN_PERSONAL_PROJECT_ID, PERSONAL_RECURRING_ID].sort());
+  assert.deepEqual(ids, [PERSONAL_ID, DONE_PERSONAL_ID, PERSONAL_IN_PERSONAL_PROJECT_ID, PERSONAL_RECURRING_ID, PERSONAL_IN_APP_PROJECT_ID].sort());
 });
 
 await test("GET /api/tasks?tag=work with the FamCal key still requires personal (returns nothing)", async () => {
@@ -460,7 +512,7 @@ await test("GET /api/tasks?tag=personal (the FamCal contract call) returns perso
   const response = await tasksRoute.GET(routeRequest(db, "famcal_api_key", "GET", "/api/tasks?tag=personal&limit=500"));
   assert.equal(response.status, 200);
   const body = await response.json();
-  assert.deepEqual(body.map((task) => task.id), [PERSONAL_ID, PERSONAL_IN_WORK_ID, PERSONAL_RECURRING_ID]);
+  assert.deepEqual(body.map((task) => task.id), [PERSONAL_ID, PERSONAL_RECURRING_ID, PERSONAL_IN_APP_PROJECT_ID]);
   assert.equal(body[0].dependency_blocked, true);
   assert.equal(body[0].dependencies.length, 1);
   // The fields FamCal S1 reads (baseline-client.ts parseBaselineTask) are all still there.
@@ -519,7 +571,7 @@ await test("list route unchanged for other keys: no forced tag, dependency title
     const db = makeDb();
     const response = await tasksRoute.GET(routeRequest(db, source, "GET", "/api/tasks"));
     const body = await response.json();
-    assert.deepEqual(body.map((task) => task.id).sort(), [PERSONAL_ID, WORK_ID, WORK_DEP_ID, PERSONAL_IN_WORK_ID, PERSONAL_RECURRING_ID, WORK_TEMPLATE_ID].sort(), source);
+    assert.deepEqual(body.map((task) => task.id).sort(), [PERSONAL_ID, WORK_ID, WORK_DEP_ID, PERSONAL_IN_WORK_ID, PERSONAL_RECURRING_ID, WORK_TEMPLATE_ID, ...INELIGIBLE_IDS.slice(1), PERSONAL_IN_APP_PROJECT_ID].sort(), source);
     assert.equal(tableOps(db, "tasks", "contains").length, 0, source);
     assert.match(JSON.stringify(body), /Secret work dependency/, source);
   }
@@ -842,36 +894,120 @@ function assertNoWorkRelations(task, label) {
   }
 }
 
-await test("R3: list never returns a personal task's work application/project/sprint/section", async () => {
+// Round 4 (Brent 10/16, "Leave it out of the brief"): a personal task that is not
+// standalone and not in a personal project is never handed to FamCal at all.
+async function notFoundBody(db) {
+  const response = await taskRoute.GET(routeRequest(db, "famcal_api_key", "GET", `/api/tasks/${MISSING_ID}`), params(MISSING_ID));
+  return { status: response.status, body: await response.json() };
+}
+
+await test("E1: list leaves out every ineligible personal task (work project, build project, app without project, sprint), in the query", async () => {
+  const db = makeDb();
+  const response = await tasksRoute.GET(routeRequest(db, "famcal_api_key", "GET", "/api/tasks?tag=personal&limit=500&include_done=true&include_parked=true&include_missed=true"));
+  const ids = (await response.json()).map((row) => row.id);
+  for (const id of INELIGIBLE_IDS) assert.equal(ids.includes(id), false, id);
+  const query = tableOps(db, "tasks", "select")[0];
+  assert.ok(query.ops.some(([n, args]) => n === "eq" && args[0] === "famcal_eligible" && args[1] === true), "eligibility is a query filter, so paging counts only eligible tasks");
+  assert.ok(ids.includes(PERSONAL_ID) && ids.includes(PERSONAL_IN_APP_PROJECT_ID) && ids.includes(PERSONAL_IN_PERSONAL_PROJECT_ID));
+});
+
+await test("E1: the S1 review case: a personal task in a project tagged only `build` is not listed (it can't slip past FamCal's project-tag filter)", async () => {
   const db = makeDb();
   const response = await tasksRoute.GET(routeRequest(db, "famcal_api_key", "GET", "/api/tasks?tag=personal&limit=500"));
-  const task = (await response.json()).find((row) => row.id === PERSONAL_IN_WORK_ID);
-  assert.ok(task);
-  assertNoWorkRelations(task, "list");
-  assert.equal(task.title, "Dentist (filed under work)");
+  assert.equal(JSON.stringify(await response.json()).includes("Build task tagged personal"), false);
 });
 
-await test("R3: detail never returns them either", async () => {
-  const db = makeDb();
-  const response = await taskRoute.GET(routeRequest(db, "famcal_api_key", "GET", `/api/tasks/${PERSONAL_IN_WORK_ID}`), params(PERSONAL_IN_WORK_ID));
-  assert.equal(response.status, 200);
-  assertNoWorkRelations(await response.json(), "detail");
+await test("E1: detail, PATCH, park and comments GET/POST are the same 404 as a missing task for every ineligible task; nothing written", async () => {
+  for (const id of INELIGIBLE_IDS) {
+    const db = makeDb();
+    const missing = await notFoundBody(db);
+    const before = JSON.stringify([...db.tasks.values()]);
+    const results = [
+      await taskRoute.GET(routeRequest(db, "famcal_api_key", "GET", `/api/tasks/${id}`), params(id)),
+      await taskRoute.PATCH(routeRequest(db, "famcal_api_key", "PATCH", `/api/tasks/${id}`, { status: "Done" }), params(id)),
+      await taskRoute.PATCH(routeRequest(db, "famcal_api_key", "PATCH", `/api/tasks/${id}`, { follow_up_at: "2026-11-02T04:59:00Z" }), params(id)),
+      await parkRoute.POST(routeRequest(db, "famcal_api_key", "POST", `/api/tasks/park/${id}`), params(id)),
+      await commentsRoute.GET(routeRequest(db, "famcal_api_key", "GET", `/api/tasks/${id}/comments`), params(id)),
+      await commentsRoute.POST(routeRequest(db, "famcal_api_key", "POST", `/api/tasks/${id}/comments`, { content: "nope" }), params(id)),
+    ];
+    for (const [index, response] of results.entries()) {
+      assert.equal(response.status, missing.status, `${id} #${index}`);
+      assert.deepEqual(await response.json(), missing.body, `${id} #${index}: same body as missing`);
+    }
+    assert.equal(JSON.stringify([...db.tasks.values()]), before, `${id}: no task changed`);
+    assert.equal(db.comments.length, 2, `${id}: no comment written`);
+  }
 });
 
-await test("R3: PATCH response never returns them", async () => {
+await test("E1: a task in a personal project that has an application and a section stays eligible (FamCal/Stock & Stir shape); the application is still hidden", async () => {
   const db = makeDb();
-  const result = await famcalPatch(db, PERSONAL_IN_WORK_ID, { follow_up_at: "2026-11-02T04:59:00Z" });
-  assert.equal(result.status, 200);
-  assertNoWorkRelations(result.body, "PATCH");
-});
-
-await test("R3: park response never returns them", async () => {
-  const db = makeDb();
-  const response = await parkRoute.POST(routeRequest(db, "famcal_api_key", "POST", `/api/tasks/park/${PERSONAL_IN_WORK_ID}`), params(PERSONAL_IN_WORK_ID));
+  const response = await taskRoute.GET(routeRequest(db, "famcal_api_key", "GET", `/api/tasks/${PERSONAL_IN_APP_PROJECT_ID}`), params(PERSONAL_IN_APP_PROJECT_ID));
   assert.equal(response.status, 200);
   const body = await response.json();
-  assertNoWorkRelations(body, "park");
-  assert.equal(body.status, "Parked");
+  assert.equal(body.project.name, PERSONAL_APP_PROJECT.name);
+  assert.equal(body.section_name, PERSONAL_APP_SECTION.name);
+  assert.equal(body.implementation, null);
+  assert.equal(body.implementation_id, null);
+  assert.equal(JSON.stringify(body).includes(PERSONAL_APP.id), false);
+  const patch = await famcalPatch(db, PERSONAL_IN_APP_PROJECT_ID, { status: "Done" });
+  assert.equal(patch.status, 200, JSON.stringify(patch.body));
+  const comment = await famcalComment(db, PERSONAL_IN_APP_PROJECT_ID, { content: "Done via brief" });
+  assert.equal(comment.status, 201);
+});
+
+await test("E1: project re-tagged between the check and the write: PATCH, park and comment POST are 404 and write nothing", async () => {
+  const patchDb = makeDb({ untagProjectBeforeWrite: true });
+  const patch = await famcalPatch(patchDb, PERSONAL_IN_PERSONAL_PROJECT_ID, { status: "Backlog" });
+  assert.equal(patch.status, 404, JSON.stringify(patch.body));
+  assert.equal(patchDb.tasks.get(PERSONAL_IN_PERSONAL_PROJECT_ID).status, "Done");
+  const update = tableOps(patchDb, "tasks", "update")[0];
+  assert.ok(update.ops.some(([n, args]) => n === "eq" && args[0] === "famcal_eligible" && args[1] === true), "the UPDATE carries the eligibility filter");
+  const parkDb = makeDb({ untagProjectBeforeWrite: true });
+  const park = await parkRoute.POST(routeRequest(parkDb, "famcal_api_key", "POST", `/api/tasks/park/${PERSONAL_IN_PERSONAL_PROJECT_ID}`), params(PERSONAL_IN_PERSONAL_PROJECT_ID));
+  assert.equal(park.status, 404);
+  assert.equal(parkDb.tasks.get(PERSONAL_IN_PERSONAL_PROJECT_ID).status, "Done");
+  const commentDb = makeDb({ untagProjectBeforeWrite: true });
+  const comment = await famcalComment(commentDb, PERSONAL_IN_PERSONAL_PROJECT_ID, { content: "late" });
+  assert.equal(comment.status, 404);
+  assert.equal(commentDb.comments.length, 2);
+});
+
+await test("E1: isFamcalEligibleRow mirrors the rule (code defence in depth)", () => {
+  const db = makeDb();
+  for (const row of db.tasks.values()) {
+    const withProject = row.project_id ? { ...row, project: db.projects.get(row.project_id) } : row;
+    const expected = !INELIGIBLE_IDS.includes(row.id) && row.tags.includes("personal");
+    assert.equal(famcal.isFamcalEligibleRow(withProject), expected, row.id);
+  }
+  assert.equal(famcal.isFamcalEligibleRow({ tags: ["personal"], project_id: "p", project: { id: "other", tags: ["personal"] } }), false, "project mismatch");
+  assert.equal(famcal.isFamcalEligibleRow({ tags: ["personal"], section_id: "s" }), false, "section without project");
+  assert.equal(famcal.isFamcalEligibleRow(null), false);
+});
+
+await test("E1: legacy and actions keys still see ineligible personal tasks (unchanged)", async () => {
+  for (const source of ["legacy_api_key", "actions_api_key"]) {
+    const db = makeDb();
+    for (const id of INELIGIBLE_IDS) {
+      const response = await taskRoute.GET(routeRequest(db, source, "GET", `/api/tasks/${id}`), params(id));
+      assert.equal(response.status, 200, `${source} ${id}`);
+    }
+    assert.equal(tableOps(db, "tasks", "select").some((entry) => entry.ops.some(([n, args]) => n === "eq" && args[0] === "famcal_eligible")), false, source);
+  }
+});
+
+await test("R3 (defence in depth): the projection alone still nulls every work relation of a personal-in-work row", () => {
+  const db = makeDb();
+  assertNoWorkRelations(famcal.projectTaskForFamcal(db.tasks.get(PERSONAL_IN_WORK_ID)), "projection");
+});
+
+await test("source_url is not in the FamCal projection (round 4); legacy still returns it", async () => {
+  assert.equal(famcal.FAMCAL_TASK_FIELDS.includes("source_url"), false);
+  const db = makeDb();
+  const famcalBody = await (await taskRoute.GET(routeRequest(db, "famcal_api_key", "GET", `/api/tasks/${PERSONAL_IN_APP_PROJECT_ID}`), params(PERSONAL_IN_APP_PROJECT_ID))).json();
+  assert.equal("source_url" in famcalBody, false);
+  assert.equal(JSON.stringify(famcalBody).includes("secret-link"), false);
+  const legacyBody = await (await taskRoute.GET(routeRequest(db, "legacy_api_key", "GET", `/api/tasks/${PERSONAL_IN_APP_PROJECT_ID}`), params(PERSONAL_IN_APP_PROJECT_ID))).json();
+  assert.equal(legacyBody.source_url, "https://example.test/secret-link");
 });
 
 await test("R3: a personal project's approved metadata is kept (project id/name/stage/rag/tags, its section)", async () => {

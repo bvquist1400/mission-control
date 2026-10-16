@@ -2562,6 +2562,10 @@ export type Database = {
           isSetofReturn: true
         }
       }
+      famcal_eligible: {
+        Args: { t: Database["public"]["Tables"]["tasks"]["Row"] }
+        Returns: boolean
+      }
       get_blocked_by_tasks: {
         Args: { p_task_id: string }
         Returns: {

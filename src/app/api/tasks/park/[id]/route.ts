@@ -6,7 +6,7 @@ import {
 } from '@/lib/task-relations';
 import { queueTaskStatusTransition } from '@/lib/task-status-transitions';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
-import { FAMCAL_REQUIRED_TAG, isFamcalVisibleTask, projectTaskForFamcal } from '@/lib/famcal-api-key';
+import { FAMCAL_ELIGIBLE_FIELD, FAMCAL_REQUIRED_TAG, isFamcalVisibleTask, projectTaskForFamcal } from '@/lib/famcal-api-key';
 
 // POST /api/tasks/park/[id] - Convenience endpoint to move a task into Parked
 export async function POST(
@@ -22,12 +22,17 @@ export async function POST(
     const { supabase, userId } = auth.context;
     const { id } = await params;
 
-    const { data: currentTask, error: fetchError } = await supabase
+    const isFamcalKey = auth.context.authSource === 'famcal_api_key';
+    let currentQuery = supabase
       .from('tasks')
       .select('*')
       .eq('id', id)
-      .eq('user_id', userId)
-      .single();
+      .eq('user_id', userId);
+    if (isFamcalKey) {
+      // FamCal-eligible only; an ineligible task is the same 404 as a missing one.
+      currentQuery = currentQuery.contains('tags', [FAMCAL_REQUIRED_TAG]).eq(FAMCAL_ELIGIBLE_FIELD, true);
+    }
+    const { data: currentTask, error: fetchError } = await currentQuery.single();
 
     if (fetchError) {
       if (fetchError.code === 'PGRST116') {
@@ -61,7 +66,7 @@ export async function POST(
       .eq('user_id', userId);
     if (auth.context.authSource === 'famcal_api_key') {
       // Re-assert the personal tag in the UPDATE itself (no row → PGRST116 → 404).
-      updateQuery = updateQuery.contains('tags', [FAMCAL_REQUIRED_TAG]);
+      updateQuery = updateQuery.contains('tags', [FAMCAL_REQUIRED_TAG]).eq(FAMCAL_ELIGIBLE_FIELD, true);
     }
     const { data, error } = await updateQuery
       .select(TASK_WITH_RELATIONS_SELECT)
