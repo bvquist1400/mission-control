@@ -3,6 +3,7 @@ import { isPostgrestNotFound } from '@/lib/supabase/errors';
 import { fetchTaskDependenciesForTask } from '@/lib/task-dependencies';
 import {
   DependencyGraphTooLargeError,
+  DependencyReadIncompleteError,
   describeDependencyCycle,
   findDependencyPath,
   makeWaitsOnLoader,
@@ -201,6 +202,13 @@ export async function POST(
       } catch (cycleError) {
         if (cycleError instanceof DependencyGraphTooLargeError) {
           return NextResponse.json({ error: cycleError.message }, { status: 409 });
+        }
+        if (cycleError instanceof DependencyReadIncompleteError) {
+          // Never treat a partial read as "no loop": refuse, nothing is added.
+          return NextResponse.json(
+            { error: "Couldn't read all the links to check for a loop, so nothing was added. Try again." },
+            { status: 503 }
+          );
         }
         throw cycleError;
       }

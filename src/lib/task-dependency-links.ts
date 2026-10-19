@@ -76,15 +76,31 @@ function compareByDueThenTitle(
 }
 
 /**
+ * FamCal view of the linked tasks, built from ONE eligibility-filtered read.
+ * - `visibleTasks`: rows read with the personal tag AND famcal_eligible in the
+ *   same query (fields and eligibility from the same snapshot).
+ * - `hiddenTaskStatus`: status only, for forward links whose target was not in
+ *   that read; it only decides "Done or not" on the placeholder, as the task
+ *   list already does. No other field of a hidden task is ever read.
+ */
+export interface FamcalLinkedTasks {
+  visibleTasks: LinkedItemRow[];
+  hiddenTaskStatus: ReadonlyMap<string, string>;
+}
+
+/**
  * Pure: builds blocked_by / blocks for one task.
  *
- * `famcalVisibleTaskIds` is null for every caller except the FamCal key. For
- * the FamCal key it is the set of linked task ids that are FamCal-eligible
- * (`famcal_eligible`, migration 060), which that key can already read by id.
- * Every other linked task, and every commitment, is reduced to the same
- * placeholder `redactDependencyForFamcal` uses ("Another task" / "A
- * commitment"): no id, no title, no due date, and a status that only repeats
- * `unresolved` (blocked_by) or nothing at all (blocks).
+ * `famcal` is null for every caller except the FamCal key, and then every
+ * linked task comes from `tasks` in full. For the FamCal key, `tasks` is
+ * ignored: only `famcal.visibleTasks` (FamCal-eligible, which that key can
+ * already read by id) keep their fields.
+ * - blocked_by: any other linked task, and every commitment, is the
+ *   placeholder `redactDependencyForFamcal` uses ("Another task" / "A
+ *   commitment"): no id, no title, no due date, status only Done vs not. This
+ *   matches the list route, which already shows one redacted row per link.
+ * - blocks: a hidden task that waits on this one is left out entirely (no
+ *   placeholder, no link id), so the number of hidden waiting tasks never shows.
  */
 export function buildTaskDependencyLinks(input: {
   taskId: string;
@@ -92,11 +108,11 @@ export function buildTaskDependencyLinks(input: {
   incoming: DependencyLinkRow[];
   tasks: LinkedItemRow[];
   commitments: LinkedItemRow[];
-  famcalVisibleTaskIds: ReadonlySet<string> | null;
+  famcal: FamcalLinkedTasks | null;
 }): TaskDependencyLinks {
-  const taskById = new Map(input.tasks.map((row) => [row.id, row]));
+  const famcal = input.famcal;
+  const taskById = new Map((famcal ? famcal.visibleTasks : input.tasks).map((row) => [row.id, row]));
   const commitmentById = new Map(input.commitments.map((row) => [row.id, row]));
-  const famcal = input.famcalVisibleTaskIds;
 
   const blockedBy: BlockedByLink[] = [];
   for (const row of input.outgoing) {
@@ -104,9 +120,9 @@ export function buildTaskDependencyLinks(input: {
 
     if (row.depends_on_task_id) {
       const target = taskById.get(row.depends_on_task_id);
-      const status = target?.status ?? 'Blocked/Waiting';
-      const unresolved = status !== 'Done';
-      if (famcal && !famcal.has(row.depends_on_task_id)) {
+      if (famcal && !target) {
+        const hiddenStatus = famcal.hiddenTaskStatus.get(row.depends_on_task_id) ?? 'Blocked/Waiting';
+        const unresolved = hiddenStatus !== 'Done';
         blockedBy.push({
           dependency_id: row.id,
           type: 'task',
@@ -118,6 +134,7 @@ export function buildTaskDependencyLinks(input: {
         });
         continue;
       }
+      const status = target?.status ?? 'Blocked/Waiting';
       blockedBy.push({
         dependency_id: row.id,
         type: 'task',
@@ -125,7 +142,7 @@ export function buildTaskDependencyLinks(input: {
         title: target?.title ?? UNKNOWN_TASK_TITLE,
         status,
         due_at: target?.due_at ?? null,
-        unresolved,
+        unresolved: status !== 'Done',
       });
     } else if (row.depends_on_commitment_id) {
       const target = commitmentById.get(row.depends_on_commitment_id);
@@ -159,14 +176,8 @@ export function buildTaskDependencyLinks(input: {
   for (const row of input.incoming) {
     if (row.depends_on_task_id !== input.taskId) continue;
     const waiting = taskById.get(row.task_id);
-    if (famcal && !famcal.has(row.task_id)) {
-      blocks.push({
-        dependency_id: row.id,
-        id: null,
-        title: FAMCAL_DEPENDENCY_TASK_TITLE,
-        status: null,
-        due_at: null,
-      });
+    if (famcal && !waiting) {
+      // Hidden from FamCal: leave it out, so not even the count shows.
       continue;
     }
     blocks.push({
@@ -198,9 +209,94 @@ function chunk<T>(values: T[], size: number): T[][] {
   return out;
 }
 
+// ── Complete reads ────────────────────────────────────────────────────────
+
+/**
+ * A read that could not be proven complete (the server returned rows out of
+ * the requested order, or the page limit ran out). Callers answer 503 ("try
+ * again") instead of acting on a partial list.
+ */
+export class DependencyReadIncompleteError extends Error {
+  constructor() {
+    super("Couldn't read all the links between tasks. Try again.");
+    this.name = 'DependencyReadIncompleteError';
+  }
+}
+
+export const DEPENDENCY_PAGE_SIZE = 1000;
+const DEPENDENCY_MAX_PAGES = 10000;
+
+type PageResult<T> = { data: T[] | null; error: unknown };
+
+/**
+ * Reads every row of a query with keyset paging on the unique `id`:
+ * `runPage(afterId, limit)` must build a fresh query with `order('id')`,
+ * `gt('id', afterId)` when afterId is set, and `limit(limit)`. It stops only on
+ * an EMPTY page, so a server cap below the page size (PostgREST max_rows) still
+ * reads everything, and a row deleted mid-read can't shift later rows out of
+ * view (as offset paging would). Rows must come back in strictly increasing id
+ * order; anything else, or running out of pages, throws
+ * DependencyReadIncompleteError. Never returns a short list.
+ */
+export async function fetchAllPages<T extends { id: string }>(
+  runPage: (afterId: string | null, limit: number) => PromiseLike<PageResult<T>>,
+  pageSize: number = DEPENDENCY_PAGE_SIZE,
+  maxPages: number = DEPENDENCY_MAX_PAGES
+): Promise<T[]> {
+  const rows: T[] = [];
+  let afterId: string | null = null;
+  for (let page = 0; page < maxPages; page += 1) {
+    const { data, error } = await runPage(afterId, pageSize);
+    if (error) throw error;
+    const batch = data || [];
+    if (batch.length === 0) {
+      return rows;
+    }
+    for (const row of batch) {
+      if (typeof row.id !== 'string' || (afterId !== null && !(row.id > afterId))) {
+        throw new DependencyReadIncompleteError();
+      }
+      afterId = row.id;
+      rows.push(row);
+    }
+  }
+  throw new DependencyReadIncompleteError();
+}
+
+/** The filter calls readActiveLinks callers chain (a narrow view of the PostgREST builder). */
+interface LinkQuery {
+  eq(column: string, value: unknown): LinkQuery;
+  gt(column: string, value: unknown): LinkQuery;
+  in(column: string, values: unknown[]): LinkQuery;
+  not(column: string, operator: string, value: unknown): LinkQuery;
+  order(column: string, options: { ascending: boolean }): LinkQuery;
+  limit(count: number): PromiseLike<PageResult<DependencyLinkRow>>;
+}
+
+/** All active links matching the caller's extra filters, read completely. */
+function readActiveLinks(
+  supabase: SupabaseClient,
+  userId: string,
+  apply: (query: LinkQuery) => LinkQuery,
+  select: string = LINK_ROW_SELECT
+): Promise<DependencyLinkRow[]> {
+  return fetchAllPages<DependencyLinkRow>((afterId, limit) => {
+    let query = apply(
+      supabase
+        .from('task_dependencies')
+        .select(select)
+        .eq('user_id', userId)
+        .eq('is_resolved', false) as unknown as LinkQuery
+    );
+    if (afterId !== null) query = query.gt('id', afterId);
+    return query.order('id', { ascending: true }).limit(limit);
+  });
+}
+
 /**
  * Reads blocked_by / blocks for one task. Pass `famcal: true` only for the
- * FamCal key: linked tasks that key can't see come back as placeholders.
+ * FamCal key: linked tasks that key can't read are placeholders (blocked_by)
+ * or left out (blocks), and no field of such a task is ever read.
  */
 export async function fetchTaskDependencyLinks(
   supabase: SupabaseClient,
@@ -208,66 +304,32 @@ export async function fetchTaskDependencyLinks(
   taskId: string,
   options: { famcal: boolean }
 ): Promise<TaskDependencyLinks> {
-  const [outgoingResult, incomingResult] = await Promise.all([
-    supabase
-      .from('task_dependencies')
-      .select(LINK_ROW_SELECT)
-      .eq('user_id', userId)
-      .eq('task_id', taskId)
-      .eq('is_resolved', false),
-    supabase
-      .from('task_dependencies')
-      .select(LINK_ROW_SELECT)
-      .eq('user_id', userId)
-      .eq('depends_on_task_id', taskId)
-      .eq('is_resolved', false),
+  const [outgoing, incoming] = await Promise.all([
+    readActiveLinks(supabase, userId, (query) => query.eq('task_id', taskId)),
+    readActiveLinks(supabase, userId, (query) => query.eq('depends_on_task_id', taskId)),
   ]);
 
-  if (outgoingResult.error) throw outgoingResult.error;
-  if (incomingResult.error) throw incomingResult.error;
-
-  const outgoing = (outgoingResult.data || []) as DependencyLinkRow[];
-  const incoming = (incomingResult.data || []) as DependencyLinkRow[];
-
-  const linkedTaskIds = [
-    ...new Set([
-      ...outgoing.map((row) => row.depends_on_task_id).filter((value): value is string => Boolean(value)),
-      ...incoming.map((row) => row.task_id).filter(Boolean),
-    ]),
+  const forwardTaskIds = [
+    ...new Set(outgoing.map((row) => row.depends_on_task_id).filter((value): value is string => Boolean(value))),
   ];
+  const linkedTaskIds = [...new Set([...forwardTaskIds, ...incoming.map((row) => row.task_id).filter(Boolean)])];
   const commitmentIds = [
     ...new Set(outgoing.map((row) => row.depends_on_commitment_id).filter((value): value is string => Boolean(value))),
   ];
 
-  const tasks: LinkedItemRow[] = [];
-  const famcalVisible = options.famcal ? new Set<string>() : null;
-  for (const ids of chunk(linkedTaskIds, ID_CHUNK_SIZE)) {
-    const { data, error } = await supabase
-      .from('tasks')
-      .select('id, title, status, due_at')
-      .eq('user_id', userId)
-      .in('id', ids);
-    if (error) throw error;
-    tasks.push(...((data || []) as LinkedItemRow[]));
-
-    if (famcalVisible) {
-      // Same filter as every other FamCal read: the personal tag and famcal_eligible.
-      const { data: visible, error: visibleError } = await supabase
-        .from('tasks')
-        .select('id')
-        .eq('user_id', userId)
-        .in('id', ids)
-        .contains('tags', [FAMCAL_REQUIRED_TAG])
-        .eq(FAMCAL_ELIGIBLE_FIELD, true);
-      if (visibleError) throw visibleError;
-      for (const row of (visible || []) as Array<{ id: string }>) {
-        famcalVisible.add(row.id);
-      }
-    }
-  }
-
-  const commitments: LinkedItemRow[] = [];
   if (!options.famcal) {
+    const tasks: LinkedItemRow[] = [];
+    for (const ids of chunk(linkedTaskIds, ID_CHUNK_SIZE)) {
+      const { data, error } = await supabase
+        .from('tasks')
+        .select('id, title, status, due_at')
+        .eq('user_id', userId)
+        .in('id', ids);
+      if (error) throw error;
+      tasks.push(...((data || []) as LinkedItemRow[]));
+    }
+
+    const commitments: LinkedItemRow[] = [];
     for (const ids of chunk(commitmentIds, ID_CHUNK_SIZE)) {
       const { data, error } = await supabase
         .from('commitments')
@@ -277,19 +339,53 @@ export async function fetchTaskDependencyLinks(
       if (error) throw error;
       commitments.push(...((data || []) as LinkedItemRow[]));
     }
-  } else {
-    // FamCal never sees commitment details, but the placeholder status still
-    // says whether the commitment is Done, as the task list does.
-    for (const ids of chunk(commitmentIds, ID_CHUNK_SIZE)) {
-      const { data, error } = await supabase
-        .from('commitments')
-        .select('id, status')
-        .eq('user_id', userId)
-        .in('id', ids);
-      if (error) throw error;
-      for (const row of (data || []) as Array<{ id: string; status: string }>) {
-        commitments.push({ id: row.id, status: row.status, title: '', due_at: null });
-      }
+
+    return buildTaskDependencyLinks({ taskId, outgoing, incoming, tasks, commitments, famcal: null });
+  }
+
+  // FamCal: fields and eligibility in ONE query (the same personal tag +
+  // famcal_eligible filter as every other FamCal read). Visible ids and
+  // visible fields both come from these rows.
+  const visibleTasks: LinkedItemRow[] = [];
+  for (const ids of chunk(linkedTaskIds, ID_CHUNK_SIZE)) {
+    const { data, error } = await supabase
+      .from('tasks')
+      .select('id, title, status, due_at')
+      .eq('user_id', userId)
+      .in('id', ids)
+      .contains('tags', [FAMCAL_REQUIRED_TAG])
+      .eq(FAMCAL_ELIGIBLE_FIELD, true);
+    if (error) throw error;
+    visibleTasks.push(...((data || []) as LinkedItemRow[]));
+  }
+
+  // Hidden prerequisites: status only, for the placeholder's Done-or-not.
+  const visibleIds = new Set(visibleTasks.map((row) => row.id));
+  const hiddenForwardIds = forwardTaskIds.filter((value) => !visibleIds.has(value));
+  const hiddenTaskStatus = new Map<string, string>();
+  for (const ids of chunk(hiddenForwardIds, ID_CHUNK_SIZE)) {
+    const { data, error } = await supabase
+      .from('tasks')
+      .select('id, status')
+      .eq('user_id', userId)
+      .in('id', ids);
+    if (error) throw error;
+    for (const row of (data || []) as Array<{ id: string; status: string }>) {
+      hiddenTaskStatus.set(row.id, row.status);
+    }
+  }
+
+  // FamCal never sees commitment details; status only, as the task list does.
+  const commitments: LinkedItemRow[] = [];
+  for (const ids of chunk(commitmentIds, ID_CHUNK_SIZE)) {
+    const { data, error } = await supabase
+      .from('commitments')
+      .select('id, status')
+      .eq('user_id', userId)
+      .in('id', ids);
+    if (error) throw error;
+    for (const row of (data || []) as Array<{ id: string; status: string }>) {
+      commitments.push({ id: row.id, status: row.status, title: '', due_at: null });
     }
   }
 
@@ -297,9 +393,9 @@ export async function fetchTaskDependencyLinks(
     taskId,
     outgoing,
     incoming,
-    tasks,
+    tasks: [],
     commitments,
-    famcalVisibleTaskIds: famcalVisible,
+    famcal: { visibleTasks, hiddenTaskStatus },
   });
 }
 
@@ -341,28 +437,23 @@ export function buildProjectDependencyLinks(
   return links;
 }
 
-const PROJECT_TASK_PAGE_SIZE = 1000;
-
-/** Reads every active link among a project's tasks (all statuses), paging the task read. */
+/** Reads every active link among a project's tasks (all statuses); every read is paged to completion. */
 export async function fetchProjectDependencyLinks(
   supabase: SupabaseClient,
   userId: string,
   projectId: string
 ): Promise<ProjectDependencyLink[]> {
-  const tasks: Array<{ id: string; title: string }> = [];
-  for (let from = 0; ; from += PROJECT_TASK_PAGE_SIZE) {
-    const { data, error } = await supabase
+  const tasks = await fetchAllPages<{ id: string; title: string }>((afterId, limit) => {
+    let query = supabase
       .from('tasks')
       .select('id, title')
       .eq('user_id', userId)
-      .eq('project_id', projectId)
-      .order('id', { ascending: true })
-      .range(from, from + PROJECT_TASK_PAGE_SIZE - 1);
-    if (error) throw error;
-    const page = (data || []) as Array<{ id: string; title: string }>;
-    tasks.push(...page);
-    if (page.length < PROJECT_TASK_PAGE_SIZE) break;
-  }
+      .eq('project_id', projectId);
+    if (afterId !== null) query = query.gt('id', afterId);
+    return query.order('id', { ascending: true }).limit(limit) as unknown as PromiseLike<
+      PageResult<{ id: string; title: string }>
+    >;
+  });
 
   if (tasks.length === 0) {
     return [];
@@ -370,15 +461,9 @@ export async function fetchProjectDependencyLinks(
 
   const rows: DependencyLinkRow[] = [];
   for (const ids of chunk(tasks.map((task) => task.id), ID_CHUNK_SIZE)) {
-    const { data, error } = await supabase
-      .from('task_dependencies')
-      .select(LINK_ROW_SELECT)
-      .eq('user_id', userId)
-      .eq('is_resolved', false)
-      .not('depends_on_task_id', 'is', null)
-      .in('task_id', ids);
-    if (error) throw error;
-    rows.push(...((data || []) as DependencyLinkRow[]));
+    rows.push(
+      ...(await readActiveLinks(supabase, userId, (query) => query.not('depends_on_task_id', 'is', null).in('task_id', ids)))
+    );
   }
 
   return buildProjectDependencyLinks(tasks, rows);
@@ -445,20 +530,23 @@ export async function findDependencyPath(
   return null;
 }
 
-/** Loader for findDependencyPath over the user's active task→task links. */
+/**
+ * Loader for findDependencyPath over the user's active task→task links. Each
+ * frontier chunk is read to completion (fetchAllPages); a read that can't be
+ * proven complete throws DependencyReadIncompleteError, so the loop check
+ * refuses the add rather than answering "no path" from a partial graph.
+ */
 export function makeWaitsOnLoader(supabase: SupabaseClient, userId: string) {
   return async (taskIds: string[]) => {
     const edges: Array<{ task_id: string; depends_on_task_id: string | null }> = [];
     for (const ids of chunk(taskIds, ID_CHUNK_SIZE)) {
-      const { data, error } = await supabase
-        .from('task_dependencies')
-        .select('task_id, depends_on_task_id')
-        .eq('user_id', userId)
-        .eq('is_resolved', false)
-        .not('depends_on_task_id', 'is', null)
-        .in('task_id', ids);
-      if (error) throw error;
-      edges.push(...((data || []) as Array<{ task_id: string; depends_on_task_id: string | null }>));
+      const rows = await readActiveLinks(
+        supabase,
+        userId,
+        (query) => query.not('depends_on_task_id', 'is', null).in('task_id', ids),
+        'id, task_id, depends_on_task_id'
+      );
+      edges.push(...rows.map((row) => ({ task_id: row.task_id, depends_on_task_id: row.depends_on_task_id })));
     }
     return edges;
   };

@@ -3,7 +3,7 @@ import { DEFAULT_PROJECT_STAGE, PROJECT_STAGE_VALUES, normalizeProjectStage } fr
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import { normalizeTaskTags } from '@/lib/task-tags';
 import { parsePaceSettings } from '@/lib/pace';
-import { fetchProjectDependencyLinks } from '@/lib/task-dependency-links';
+import { DependencyReadIncompleteError, fetchProjectDependencyLinks } from '@/lib/task-dependency-links';
 
 function withNormalizedProjectStage<T extends Record<string, unknown>>(project: T): T & { stage: string } {
   const rest = { ...project } as T & { phase?: unknown };
@@ -83,6 +83,9 @@ export async function GET(
       dependency_links: dependencyLinks,
     });
   } catch (error) {
+    if (error instanceof DependencyReadIncompleteError) {
+      return NextResponse.json({ error: error.message }, { status: 503 });
+    }
     console.error('Error fetching project:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }

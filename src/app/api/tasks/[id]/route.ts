@@ -22,7 +22,7 @@ import {
   projectTaskForFamcal,
 } from '@/lib/famcal-api-key';
 import { validateOptionalTimestamp } from '@/lib/validate';
-import { fetchTaskDependencyLinks } from '@/lib/task-dependency-links';
+import { DependencyReadIncompleteError, fetchTaskDependencyLinks } from '@/lib/task-dependency-links';
 import {
   externalSourceConflictPayload,
   isTaskExternalSourceUniqueViolation,
@@ -108,6 +108,9 @@ export async function GET(
     const links = await fetchTaskDependencyLinks(supabase, userId, id, { famcal: false });
     return NextResponse.json({ ...normalizeTaskWithRelations(data as Record<string, unknown>), ...links });
   } catch (error) {
+    if (error instanceof DependencyReadIncompleteError) {
+      return NextResponse.json({ error: error.message }, { status: 503 });
+    }
     console.error('Error fetching task:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }

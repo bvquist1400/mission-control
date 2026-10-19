@@ -128,8 +128,16 @@ function dep(depId, taskId, dependsOnTaskId, extra = {}) {
 // ── Fake Supabase (generic, in-memory) ────────────────────────────────────
 // failInsert: { table, error } makes that table's insert fail once.
 // failDelete: { table, error } makes that table's delete fail.
-function makeDb({ failInsert = null, failDelete = null } = {}) {
-  const state = seed();
+// rowCap: like PostgREST's max_rows (scripts/test-stack config: 1000), no read
+//   returns more rows than this, whatever range it asks for.
+// countMode: "exact" answers select(..., { count: "exact" }); "none" never
+//   returns a count.
+// unordered: the server ignores order() and gt() (a pager must notice that it
+//   can't prove it read everything).
+// hook({ table, ops, state }): runs after each query's result is fixed, to
+//   model an edit landing between two queries.
+function makeDb({ failInsert = null, failDelete = null, rowCap = 1000, countMode = "exact", unordered = false, hook = null, state: given = null } = {}) {
+  const state = given ?? seed();
   const log = [];
   const projectById = () => new Map(state.projects.map((p) => [p.id, p]));
   const famcalEligible = (row) => {
@@ -143,10 +151,14 @@ function makeDb({ failInsert = null, failDelete = null } = {}) {
   function run(table, ops) {
     const op = (name) => ops.find(([n]) => n === name);
     const mode = op("single") ? "single" : op("maybeSingle") ? "maybeSingle" : "many";
+    const selectOptions = op("select")?.[1][1] ?? {};
+    const wantsCount = selectOptions.count === "exact" && countMode === "exact";
+    let matchedCount = null;
     const finish = (rows, error = null) => {
       if (error) return { data: null, error };
-      if (op("head")) return { data: null, error: null, count: rows.length };
-      if (mode === "many") return { data: rows, error: null, count: rows.length };
+      const count = wantsCount ? (matchedCount ?? rows.length) : null;
+      if (selectOptions.head) return { data: null, error: null, count: matchedCount ?? rows.length };
+      if (mode === "many") return { data: rows, error: null, count };
       if (rows.length === 0) {
         return mode === "single" ? { data: null, error: { code: "PGRST116", message: "no rows" } } : { data: null, error: null };
       }
@@ -159,6 +171,7 @@ function makeDb({ failInsert = null, failDelete = null } = {}) {
       if (name === "neq") return value(table, row, args[0]) !== args[1];
       if (name === "in") return args[1].includes(value(table, row, args[0]));
       if (name === "is") return value(table, row, args[0]) === args[1];
+      if (name === "gt") return unordered || String(value(table, row, args[0])) > String(args[1]);
       if (name === "not" && args[1] === "is") return value(table, row, args[0]) !== args[2];
       if (name === "contains") return args[1].every((tag) => (value(table, row, args[0]) || []).includes(tag));
       return true;
@@ -198,10 +211,19 @@ function makeDb({ failInsert = null, failDelete = null } = {}) {
       return finish(hit.map(withRelations));
     }
     let rows = rowsOf().filter(matches);
+    matchedCount = rows.length;
+    for (const [name, args] of ops) {
+      if (name !== "order" || unordered) continue;
+      const [column, options = {}] = args;
+      const dir = options.ascending === false ? -1 : 1;
+      const key = (row) => String(row[column] ?? "");
+      rows = [...rows].sort((a, b) => dir * (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
+    }
     const range = op("range")?.[1];
     if (range) rows = rows.slice(range[0], range[1] + 1);
     const limit = op("limit")?.[1][0];
     if (typeof limit === "number") rows = rows.slice(0, limit);
+    if (mode === "many") rows = rows.slice(0, rowCap);
     return finish(rows.map(withRelations));
   }
 
@@ -217,6 +239,7 @@ function makeDb({ failInsert = null, failDelete = null } = {}) {
         get(_target, prop) {
           if (prop === "then") {
             const result = run(table, ops);
+            if (hook) hook({ table, ops, state });
             return (resolve, reject) => Promise.resolve(result).then(resolve, reject);
           }
           return (...args) => {
@@ -433,10 +456,12 @@ await test("FamCal get_task: a personal task waiting on a work task sees 'Anothe
   for (const secret of WORK_SECRETS) assert.equal(text.includes(secret), false, `leaked ${secret}`);
 });
 
-await test("FamCal get_task (reverse direction): a work task waiting on a personal task shows only a placeholder in blocks", async () => {
+await test("FamCal get_task (reverse direction): a work task waiting on a personal task is left out of blocks entirely", async () => {
   const db = makeDb();
   const { body } = await getTask(db, "famcal_api_key", T.license);
-  assert.deepEqual(body.blocks.find((link) => link.dependency_id === "p3"), { dependency_id: "p3", id: null, title: "Another task", status: null, due_at: null });
+  assert.equal(body.blocks.some((link) => link.dependency_id === "p3"), false);
+  assert.equal(body.blocks.some((link) => link.id === null || link.title === "Another task"), false);
+  assert.deepEqual(body.blocks.map((link) => link.id), [T.voter]);
 });
 
 await test("FamCal get_task: eligible personal tasks on either side keep their id, title, status and due date", async () => {
@@ -465,6 +490,17 @@ await test("FamCal get_task: the eligibility check uses the same filters as othe
     && entry.ops.some(([name, args]) => name === "contains" && args[0] === "tags" && args[1].includes("personal"))
     && entry.ops.some(([name, args]) => name === "in" && args[0] === "id"));
   assert.equal(eligibilityReads.length, 1);
+  // Fix round 1 (P1-1): the eligibility-filtered read is the one that carries the
+  // fields, and no other task read in the FamCal path selects a title or a date.
+  const fieldSelect = String(eligibilityReads[0].ops.find(([name]) => name === "select")?.[1][0] ?? "");
+  assert.match(fieldSelect, /title/);
+  assert.match(fieldSelect, /due_at/);
+  const otherTaskReads = db.log.filter((entry) => entry.table === "tasks" && entry !== eligibilityReads[0]
+    && entry.ops.some(([name, args]) => name === "in" && args[0] === "id"));
+  for (const entry of otherTaskReads) {
+    const select = String(entry.ops.find(([name]) => name === "select")?.[1][0] ?? "");
+    assert.doesNotMatch(select, /title|due_at|\*/, `unfiltered task read selects ${select}`);
+  }
   // FamCal never reads commitment titles.
   for (const entry of db.log.filter((e) => e.table === "commitments")) {
     const select = String(entry.ops.find(([name]) => name === "select")?.[1][0] ?? "");
@@ -493,9 +529,238 @@ await test("buildTaskDependencyLinks: placeholders don't carry real due dates in
       { id: "seen", title: "Seen", status: "Planned", due_at: "2026-12-01T00:00:00Z" },
     ],
     commitments: [],
-    famcalVisibleTaskIds: new Set(["seen"]),
+    famcal: {
+      visibleTasks: [{ id: "seen", title: "Seen", status: "Planned", due_at: "2026-12-01T00:00:00Z" }],
+      hiddenTaskStatus: new Map([["hidden", "Planned"]]),
+    },
   });
   assert.deepEqual(out.blocked_by.map((link) => link.dependency_id), ["b", "a"]);
+  // FamCal mode never takes fields from `tasks`, even when a caller passes them.
+  assert.equal(out.blocked_by.find((link) => link.dependency_id === "a").title, "Another task");
+});
+
+// ── 4b. Fix round 1 (Codex Sol P1-1, P1-2, P2-3) ───────────────────────────
+// P1-1: an edit landing between two reads must never put a work title or date
+// into the FamCal response. The hook re-tags the work task as personal, with a
+// public title and no date, right after the first linked-task read.
+async function famcalGetWithEditAfterFirstTaskRead(taskId, targetId) {
+  let edited = false;
+  const db = makeDb({
+    hook: ({ table, ops, state }) => {
+      if (edited || table !== "tasks") return;
+      if (!ops.some(([name, args]) => name === "in" && args[0] === "id")) return;
+      edited = true;
+      Object.assign(state.tasks.find((row) => row.id === targetId), { tags: ["personal"], title: "Public personal title", due_at: null });
+    },
+  });
+  const result = await getTask(db, "famcal_api_key", taskId);
+  return { db, edited, ...result };
+}
+
+await test("P1-1: forward link: a work task re-tagged personal between reads never shows its old work title or date", async () => {
+  const { edited, status, body } = await famcalGetWithEditAfterFirstTaskRead(T.license, T.workSecret);
+  assert.ok(edited, "precondition: the edit landed between reads");
+  assert.equal(status, 200);
+  const text = JSON.stringify(body);
+  assert.equal(text.includes("Secret work dependency"), false, "old work title leaked");
+  assert.equal(text.includes("2026-10-19T21:00:00Z"), false, "old work date leaked");
+  const link = body.blocked_by.find((row) => row.dependency_id === "p2");
+  // Either the placeholder (read before the edit) or the new public fields; never a mix.
+  assert.ok(
+    (link.id === null && link.title === "Another task" && link.due_at === null)
+      || (link.id === T.workSecret && link.title === "Public personal title" && link.due_at === null),
+    JSON.stringify(link)
+  );
+});
+
+await test("P1-1: reverse link: a work task re-tagged personal between reads never shows its old work title or date", async () => {
+  const { edited, body } = await famcalGetWithEditAfterFirstTaskRead(T.license, T.workWaiter);
+  assert.ok(edited);
+  const text = JSON.stringify(body);
+  assert.equal(text.includes("Secret waiting work task"), false);
+  assert.equal(text.includes("2026-10-30T21:00:00Z"), false);
+});
+
+await test("P1-1 control: with no edit, the next read shows the re-tagged task with its new fields", async () => {
+  const db = makeDb();
+  Object.assign(db.state.tasks.find((row) => row.id === T.workSecret), { tags: ["personal"], title: "Public personal title", due_at: null });
+  const { body } = await getTask(db, "famcal_api_key", T.license);
+  assert.equal(body.blocked_by.find((row) => row.dependency_id === "p2").title, "Public personal title");
+});
+
+// P1-2: the number of hidden tasks waiting on a personal task must not show.
+function reverseCountState(hiddenWaiters) {
+  const state = seed();
+  const extra = [id(31), id(32)];
+  state.tasks.push(task(extra[0], "Hidden waiter one"), task(extra[1], "Hidden waiter two"));
+  state.task_dependencies = [
+    dep("visible-link", T.voter, T.license),
+    ...extra.slice(0, hiddenWaiters).map((waiter, index) => dep(`hidden-${index}`, waiter, T.license)),
+  ];
+  return state;
+}
+
+await test("P1-2: FamCal blocks look the same with 2, 1 or 0 hidden work tasks waiting (no count, no link ids)", async () => {
+  const bodies = [];
+  for (const hidden of [2, 1, 0]) {
+    const db = makeDb({ state: reverseCountState(hidden) });
+    const { status, body } = await getTask(db, "famcal_api_key", T.license);
+    assert.equal(status, 200);
+    bodies.push(body.blocks);
+    assert.equal(JSON.stringify(body).includes("hidden-"), false, "hidden link id leaked");
+  }
+  assert.deepEqual(bodies[0], bodies[2]);
+  assert.deepEqual(bodies[1], bodies[2]);
+  assert.deepEqual(bodies[2].map((link) => link.id), [T.voter]);
+});
+
+await test("P1-2 control: other keys still see every waiting task", async () => {
+  const db = makeDb({ state: reverseCountState(2) });
+  const { body } = await getTask(db, "legacy_api_key", T.license);
+  assert.equal(body.blocks.length, 3);
+});
+
+// P2-3: reads past the 1,000-row cap.
+function rowCapLoopState() {
+  // B waits on 11 middle tasks; those have 1,001 outgoing links between them,
+  // and only the last one reaches A. Reading that frontier needs 2 pages.
+  const A = id(41), B = id(42);
+  const middle = Array.from({ length: 11 }, (_, i) => id(100 + i));
+  const leaves = Array.from({ length: 91 }, (_, i) => id(200 + i));
+  const state = seed();
+  state.tasks.push(task(A, "Task A"), task(B, "Task B"), ...middle.map((m) => task(m, `Middle ${m}`)), ...leaves.map((l) => task(l, `Leaf ${l}`)));
+  state.task_dependencies = middle.map((m, i) => dep(`bm-${String(i).padStart(2, "0")}`, B, m));
+  for (const [i, m] of middle.entries()) {
+    for (const [j, leaf] of leaves.entries()) {
+      state.task_dependencies.push(dep(`ml-${String(i).padStart(2, "0")}-${String(j).padStart(2, "0")}`, m, i === 10 && j === 90 ? A : leaf));
+    }
+  }
+  return { state, A, B, middle };
+}
+
+await test("P2-3: a loop hidden past the 1,000-row cap is still refused", async () => {
+  const { state, A, B, middle } = rowCapLoopState();
+  const db = makeDb({ state });
+  const before = db.state.task_dependencies.length;
+  const result = await addDependency(db, A, { depends_on_task_id: B });
+  assert.equal(result.status, 400, JSON.stringify(result.body).slice(0, 300));
+  assert.deepEqual(result.body.cycle_task_ids, [B, middle[10], A]);
+  assert.equal(db.state.task_dependencies.length, before);
+});
+
+await test("P2-3: the same loop is refused when the server caps pages below the page size (cap 100)", async () => {
+  const { state, A, B } = rowCapLoopState();
+  const db = makeDb({ state, rowCap: 100 });
+  const result = await addDependency(db, A, { depends_on_task_id: B });
+  assert.equal(result.status, 400);
+});
+
+await test("P2-3: if the loop check can't prove it read every link, it refuses the add (never 'no path')", async () => {
+  const { state, A, B } = rowCapLoopState();
+  const db = makeDb({ state, unordered: true });
+  const before = db.state.task_dependencies.length;
+  const result = await addDependency(db, A, { depends_on_task_id: B });
+  assert.equal(result.status, 503, JSON.stringify(result.body));
+  assert.match(result.body.error, /couldn't read all the links/i);
+  assert.equal(db.state.task_dependencies.length, before);
+});
+
+await test("P2-3: a link removed between pages can't push the loop's edge out of view (keyset, not offset)", async () => {
+  const { state, A, B, middle } = rowCapLoopState();
+  let removed = false;
+  const db = makeDb({
+    state,
+    hook: ({ table, ops, state: live }) => {
+      // After the first full page of the middle tasks' links, remove a row that page already read.
+      if (removed || table !== "task_dependencies") return;
+      const frontier = ops.find(([name, args]) => name === "in" && args[0] === "task_id")?.[1][1] ?? [];
+      if (!frontier.includes(middle[0])) return;
+      removed = true;
+      live.task_dependencies = live.task_dependencies.filter((row) => row.id !== "ml-00-00");
+    },
+  });
+  const result = await addDependency(db, A, { depends_on_task_id: B });
+  assert.ok(removed, "precondition: a row was removed mid-read");
+  assert.equal(result.status, 400, JSON.stringify(result.body).slice(0, 200));
+  assert.equal(db.state.task_dependencies.some((row) => row.task_id === A && row.depends_on_task_id === B), false);
+});
+
+await test("P2-3: get_project returns all 1,035 links of a 46-task project", async () => {
+  const project = id(800);
+  const state = seed();
+  state.projects.push({ id: project, name: "Big", stage: "Build", rag: "Green", tags: ["work"], user_id: API_USER_ID, implementation_id: null });
+  const nodes = Array.from({ length: 46 }, (_, i) => task(id(1000 + i), `Node ${String(i).padStart(2, "0")}`, { project_id: project }));
+  state.tasks.push(...nodes);
+  state.task_dependencies = [];
+  for (let i = 0; i < 46; i++) for (let j = i + 1; j < 46; j++) state.task_dependencies.push(dep(`p-${String(i).padStart(2, "0")}-${String(j).padStart(2, "0")}`, nodes[i].id, nodes[j].id));
+  const db = makeDb({ state });
+  const response = await projectRoute.GET(routeRequest(db, "legacy_api_key", "GET", `/api/projects/${project}`), params(project));
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.dependency_links.length, 1035);
+  assert.equal(new Set(body.dependency_links.map((link) => link.dependency_id)).size, 1035);
+});
+
+await test("P2-3: get_task returns every one of 1,200 tasks waiting on it", async () => {
+  const state = seed();
+  const waiters = Array.from({ length: 1200 }, (_, i) => id(5000 + i));
+  state.tasks.push(...waiters.map((w) => task(w, `Waiter ${w}`)));
+  state.task_dependencies = waiters.map((w, i) => dep(`w-${String(i).padStart(4, "0")}`, w, T.calendar));
+  const db = makeDb({ state });
+  const { status, body } = await getTask(db, "legacy_api_key", T.calendar);
+  assert.equal(status, 200);
+  assert.equal(body.blocks.length, 1200);
+});
+
+await test("P2-3: a detail read that can't be proven complete is an error, not a short list", async () => {
+  const state = seed();
+  const waiters = Array.from({ length: 1200 }, (_, i) => id(5000 + i));
+  state.tasks.push(...waiters.map((w) => task(w, `Waiter ${w}`)));
+  state.task_dependencies = waiters.map((w, i) => dep(`w-${String(i).padStart(4, "0")}`, w, T.calendar));
+  const db = makeDb({ state, unordered: true });
+  const { status, body } = await getTask(db, "legacy_api_key", T.calendar);
+  assert.equal(status, 503, JSON.stringify(body).slice(0, 200));
+  assert.equal("blocks" in body, false);
+});
+
+await test("P2-3: every paged dependency read keeps the user and active filters and a unique order", async () => {
+  const db = makeDb();
+  await getTask(db, "legacy_api_key", T.release);
+  await projectRoute.GET(routeRequest(db, "legacy_api_key", "GET", `/api/projects/${PROJECT.id}`), params(PROJECT.id));
+  await addDependency(db, T.workWaiter, { depends_on_task_id: T.calendar });
+  const reads = db.log.filter((entry) => entry.table === "task_dependencies" && entry.ops.some(([name]) => name === "limit"));
+  assert.ok(reads.length >= 4, `only ${reads.length} paged reads`);
+  for (const entry of reads) {
+    assert.ok(entry.ops.some(([name, args]) => name === "eq" && args[0] === "user_id" && args[1] === API_USER_ID));
+    assert.ok(entry.ops.some(([name, args]) => name === "eq" && args[0] === "is_resolved" && args[1] === false));
+    assert.ok(entry.ops.some(([name, args]) => name === "order" && args[0] === "id"));
+  }
+  // Every read of the new code (blocked_by/blocks, project links, loop check) is
+  // paged. The only other reads are the add route's duplicate check
+  // (maybeSingle) and its reply, built by the older fetchTaskDependencySummaries
+  // (selects resolved_at; out of this round's scope, noted in the handoff).
+  const unpaged = db.log.filter((entry) => entry.table === "task_dependencies"
+    && entry.ops.some(([name]) => name === "select") && !entry.ops.some(([name]) => name === "limit")
+    && !entry.ops.some(([name]) => name === "insert") && !entry.ops.some(([name]) => name === "maybeSingle")
+    && !String(entry.ops.find(([name]) => name === "select")?.[1][0]).includes("resolved_at"));
+  assert.equal(unpaged.length, 0, `unpaged dependency reads: ${unpaged.map((e) => JSON.stringify(e.ops)).join(" | ")}`);
+});
+
+await test("fetchAllPages: keyset pages until an empty page, at any server cap; refuses out-of-order rows and endless reads", async () => {
+  const rows = Array.from({ length: 2500 }, (_, i) => ({ id: `r${String(i).padStart(4, "0")}` }));
+  const server = (cap) => async (afterId, limit) => ({
+    data: rows.filter((row) => afterId === null || row.id > afterId).slice(0, Math.min(limit, cap)), error: null,
+  });
+  assert.equal((await links.fetchAllPages(server(1000))).length, 2500);
+  assert.equal((await links.fetchAllPages(server(70))).length, 2500);
+  assert.equal((await links.fetchAllPages(server(1000), 1000)).map((row) => row.id).join(), rows.map((row) => row.id).join());
+  const ignoresOrder = async () => ({ data: rows.slice(0, 10), error: null });
+  await assert.rejects(() => links.fetchAllPages(ignoresOrder), links.DependencyReadIncompleteError);
+  await assert.rejects(() => links.fetchAllPages(server(1), 1000, 5), links.DependencyReadIncompleteError);
+  await assert.rejects(
+    () => links.fetchAllPages(async () => ({ data: null, error: { code: "XX000", message: "boom" } })),
+    (error) => error?.code === "XX000"
+  );
 });
 
 // ── 5. GET /api/projects/{id}: dependency_links ────────────────────────────
