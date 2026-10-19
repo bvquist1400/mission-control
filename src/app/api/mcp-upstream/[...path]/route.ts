@@ -49,6 +49,8 @@ import * as taskExternalLookupRoute from '@/app/api/tasks/lookup-external/route'
 import * as taskRoute from '@/app/api/tasks/[id]/route';
 import * as taskCommentsRoute from '@/app/api/tasks/[id]/comments/route';
 import * as taskChecklistRoute from '@/app/api/tasks/[id]/checklist/route';
+import * as taskDependenciesRoute from '@/app/api/tasks/[id]/dependencies/route';
+import * as taskDependencyRoute from '@/app/api/tasks/[id]/dependencies/[dep_id]/route';
 import * as taskRecurrenceRoute from '@/app/api/tasks/[id]/recur/route';
 import * as taskParkRoute from '@/app/api/tasks/park/[id]/route';
 import * as parkedTasksRoute from '@/app/api/tasks/parked/route';
@@ -310,6 +312,19 @@ async function handleRequest(
     if (request.method === 'POST') return invokeDynamic(taskChecklistRoute.POST, requestWithContext, { id: segments[1] });
     if (request.method === 'PATCH') return invokeDynamic(taskChecklistRoute.PATCH, requestWithContext, { id: segments[1] });
     if (request.method === 'DELETE') return invokeDynamic(taskChecklistRoute.DELETE, requestWithContext, { id: segments[1] });
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'tasks' && segments[1] && segments[2] === 'dependencies' && segments.length === 3) {
+    if (request.method === 'GET') return invokeDynamic(taskDependenciesRoute.GET, requestWithContext, { id: segments[1] });
+    if (request.method === 'POST') return invokeDynamic(taskDependenciesRoute.POST, requestWithContext, { id: segments[1] });
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'tasks' && segments[1] && segments[2] === 'dependencies' && segments[3] && segments.length === 4) {
+    if (request.method === 'DELETE') {
+      return invokeDynamic(taskDependencyRoute.DELETE, requestWithContext, { id: segments[1], dep_id: segments[3] });
+    }
     return methodNotAllowed();
   }
 

@@ -3,6 +3,7 @@ import { DEFAULT_PROJECT_STAGE, PROJECT_STAGE_VALUES, normalizeProjectStage } fr
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import { normalizeTaskTags } from '@/lib/task-tags';
 import { parsePaceSettings } from '@/lib/pace';
+import { fetchProjectDependencyLinks } from '@/lib/task-dependency-links';
 
 function withNormalizedProjectStage<T extends Record<string, unknown>>(project: T): T & { stage: string } {
   const rest = { ...project } as T & { phase?: unknown };
@@ -71,11 +72,15 @@ export async function GET(
       implementation = impl || null;
     }
 
+    // Every active "waits on" link between two of this project's tasks (any status).
+    const dependencyLinks = await fetchProjectDependencyLinks(supabase, userId, id);
+
     return NextResponse.json({
       ...withNormalizedProjectStage(project),
       blockers_count: blockersCount || 0,
       open_tasks: openTasks || [],
       implementation,
+      dependency_links: dependencyLinks,
     });
   } catch (error) {
     console.error('Error fetching project:', error);

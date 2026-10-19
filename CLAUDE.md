@@ -178,6 +178,14 @@ Controls with behaviour (Button, Input) are components; pure-styling primitives 
 - Project page: `ProjectDetail` shows `PaceSection` (`src/components/projects/pace/`) between the header card and the tasks, only when `unit_label` is set. It reads `GET /api/projects/[id]/pace` (`getProjectPace()` in the work-sessions service: forecast, sittings with task + rows, the form's tasks and a default task; UI only, not an MCP route) and writes through `/api/work-sessions` (POST with an `idempotency_key` per form open, PATCH `exclude_from_stats`, DELETE with an inline confirm). Width-that-fits is shown while `size_fit` exists (until the first body row is done). Time and row fixes stay in chat.
 - A PATCH with a new date and no new start/end moves the stored start to that date at the same ET clock time and sets end = start + the (new or old) minutes, so a DST night keeps its length.
 
+### Task dependencies (cascade S0: visibility)
+
+- `task_dependencies` (003/013/038): an active row (`is_resolved = false`) means `task_id` waits on `depends_on_task_id` (or `depends_on_commitment_id`). Removing a link sets `is_resolved = true` + `resolved_at` (the "recently unblocked" signal), it never deletes. No migration in S0.
+- Reads (`src/lib/task-dependency-links.ts`): `GET /api/tasks/[id]` (MCP `get_task`) adds `blocked_by[]` (dependency_id, type task/commitment, id, title, status, due_at, unresolved) and `blocks[]` (dependency_id, id, title, status, due_at); `GET /api/projects/[id]` (MCP `get_project`) adds `dependency_links[]`, every active task→task link with both ends in the project (any status). For the FamCal key, linked tasks that are FamCal-eligible (the same personal tag + `famcal_eligible` filter as every FamCal read) keep their fields; every other linked task, in either direction, and every commitment, is a placeholder ("Another task" / "A commitment", id and due_at null; status only says Blocked/Waiting|Open vs Done in blocked_by, null in blocks). The FamCal PATCH/park responses and the list's `dependencies` are unchanged.
+- Writes: `POST /api/tasks/[id]/dependencies` (the UI panel and MCP `add_task_dependency`) refuses self links, duplicates (409, including a 23505 race) and loops: "A waits on B" is refused (400, `cycle_task_ids`) when B already reaches A over the user's active task→task links (`findDependencyPath`, visited set, capped at 5000 tasks → 409). Two opposite adds at the same moment can both pass (no DB lock or trigger yet). MCP `remove_task_dependency` takes `dependency_id` or `depends_on_task_id` and calls `DELETE /api/tasks/[id]/dependencies/[dep_id]`. Both routes are in the OAuth upstream router.
+- Create-time `blocked_by_task_id` (POST `/api/tasks`): if the link insert fails, the new task is deleted and the call returns 500 with an error; if that delete also fails, the 500 says so and returns `task_id`.
+- Tests: `npm run test:task-dependency-links` (pure + routes with a fake client + the MCP tools through `/api/mcp`).
+
 ### Local DB test stack
 
 - The DB suites (`test:pace-db`, `test:portfolio-db`, `test:task-owner-db`, `test:briefs*-db`, `test:famcal-db`) need a disposable LOCAL Supabase stack. Use the private one checked in at `scripts/test-stack/` (project `mc-pace`, API 58321, DB 58322, migrations symlinked to `supabase/migrations`): `bash scripts/test-stack/up.sh` starts it with only images the installed CLI already has (realtime, studio, storage, mail, edge runtime, analytics and the pooler are off), applies every migration, grants the pre-055 tables to the API roles (a fresh stack doesn't; production does) and writes `scripts/test-stack/.env.local` (git-ignored; never print it). `bash scripts/test-stack/down.sh` stops it and deletes its volumes.
@@ -207,6 +215,7 @@ Controls with behaviour (Button, Input) are components; pure-styling primitives 
 | CORS | `src/lib/cors.ts` |
 | Route auth | `src/lib/supabase/route-auth.ts` |
 | FamCal scoped key (personal tasks only) | `src/lib/famcal-api-key.ts` |
+| Task dependency reads, loop check | `src/lib/task-dependency-links.ts` |
 | Machine key values + collision rule | `src/lib/machine-keys.ts` |
 | FamCal eligibility + comment RPC | `supabase/migrations/060_famcal_personal_task_comment.sql` (`famcal_eligible`, `famcal_add_personal_task_comment`) |
 | Calendar parsing | `src/lib/calendar.ts` |

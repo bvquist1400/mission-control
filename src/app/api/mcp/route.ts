@@ -659,7 +659,7 @@ function createMcpServer(): McpServer {
   // ── GET TASK ──────────────────────────────────────────────────────────
   mcp.tool(
     'get_task',
-    'Get a single task by ID, including implementation details and explicit recurring template/instance linkage fields.',
+    'Get a single task by ID, including implementation details and explicit recurring template/instance linkage fields. Also returns its dependencies: blocked_by (what this task waits on: dependency_id, type task/commitment, id, title, status, due_at, unresolved) and blocks (the tasks waiting on it: dependency_id, id, title, status, due_at). Change them with add_task_dependency / remove_task_dependency.',
     {
       task_id: z.string().describe('Task UUID'),
     },
@@ -708,7 +708,7 @@ function createMcpServer(): McpServer {
       unit_count: z.number().min(0).optional().describe('Pace tracking: units for the whole task when its checklist rows carry none (e.g. 970 stitches for a border round)'),
       work_type: z.string().optional().describe(WORK_TYPE_DESCRIPTION),
       is_sample: z.boolean().optional().describe('Pace tracking: true for a swatch / test piece / prototype; its speeds are labelled as sample speeds'),
-      blocked_by_task_id: z.string().optional().describe('Task UUID this new task should depend on'),
+      blocked_by_task_id: z.string().optional().describe('Task UUID this new task waits on. If the link can\'t be saved, the task is not created and an error is returned.'),
       initial_comment: z.string().optional().describe('Creates first comment on the task'),
       initial_checklist: z.array(z.string()).optional().describe('Creates checklist items'),
     },
@@ -886,6 +886,89 @@ function createMcpServer(): McpServer {
       });
       const data = await res.json();
       return toMcpResponse(data);
+    }
+  );
+
+  // ── TASK DEPENDENCIES ─────────────────────────────────────────────────
+  mcp.tool(
+    'add_task_dependency',
+    'Make a task wait on another task (or on a commitment). task_id is the task that waits; give exactly one of depends_on_task_id or depends_on_commitment_id. Refused when the link already exists, when a task would wait on itself, or when it would make a loop (the other task already waits on this one, directly or through other tasks). Only adds the link: no dates or statuses change. Returns the new link; get_task shows all of them.',
+    {
+      task_id: z.string().describe('UUID of the task that waits'),
+      depends_on_task_id: z.string().optional().describe('UUID of the task it waits on'),
+      depends_on_commitment_id: z.string().optional().describe('UUID of the commitment it waits on (instead of a task)'),
+    },
+    async ({ task_id, depends_on_task_id, depends_on_commitment_id }) => {
+      const res = await fetch(
+        `https://mission-control-orpin-chi.vercel.app/api/tasks/${encodeURIComponent(task_id)}/dependencies`,
+        {
+          method: 'POST',
+          headers: {
+            'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY!,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            ...(depends_on_task_id !== undefined ? { depends_on_task_id } : {}),
+            ...(depends_on_commitment_id !== undefined ? { depends_on_commitment_id } : {}),
+          }),
+        }
+      );
+      const data = await res.json();
+      return { ...toMcpResponse(data), ...(res.ok ? {} : { isError: true }) };
+    }
+  );
+
+  mcp.tool(
+    'remove_task_dependency',
+    'Remove a link so a task no longer waits on another task or commitment. Give task_id (the task that waits) and either dependency_id (from get_task blocked_by) or depends_on_task_id. Only the link changes; no dates or statuses change.',
+    {
+      task_id: z.string().describe('UUID of the task that waits'),
+      dependency_id: z.string().optional().describe('The link\'s dependency_id, from get_task blocked_by'),
+      depends_on_task_id: z.string().optional().describe('UUID of the task it waits on (used when dependency_id is not given)'),
+    },
+    async ({ task_id, dependency_id, depends_on_task_id }) => {
+      const taskPath = `https://mission-control-orpin-chi.vercel.app/api/tasks/${encodeURIComponent(task_id)}/dependencies`;
+      let dependencyId = dependency_id?.trim() || null;
+
+      if (!dependencyId) {
+        const target = depends_on_task_id?.trim();
+        if (!target) {
+          return {
+            ...toMcpResponse({ error: 'Give dependency_id or depends_on_task_id' }),
+            isError: true,
+          };
+        }
+
+        const listRes = await fetch(taskPath, {
+          headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
+        });
+        const listData = await listRes.json();
+        if (!listRes.ok) {
+          return { ...toMcpResponse(listData), isError: true };
+        }
+
+        const dependencies = Array.isArray((listData as { dependencies?: unknown }).dependencies)
+          ? ((listData as { dependencies: Array<{ id?: unknown; depends_on_task_id?: unknown }> }).dependencies)
+          : [];
+        const match = dependencies.find((dependency) => dependency.depends_on_task_id === target);
+        if (!match || typeof match.id !== 'string') {
+          return {
+            ...toMcpResponse({ error: 'This task does not wait on that task' }),
+            isError: true,
+          };
+        }
+        dependencyId = match.id;
+      }
+
+      const res = await fetch(`${taskPath}/${encodeURIComponent(dependencyId)}`, {
+        method: 'DELETE',
+        headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
+      });
+      const data = await res.json();
+      return {
+        ...toMcpResponse(res.ok ? { ...(data as Record<string, unknown>), dependency_id: dependencyId } : data),
+        ...(res.ok ? {} : { isError: true }),
+      };
     }
   );
 
@@ -1337,7 +1420,7 @@ function createMcpServer(): McpServer {
   // ── GET PROJECT ───────────────────────────────────────────────────────
   mcp.tool(
     'get_project',
-    'Get a single project with open tasks, blocker count, and linked application.',
+    'Get a single project with open tasks (top 10 by priority), blocker count, linked application, and dependency_links: every "waits on" link between two of its tasks, any status (dependency_id, task_id + task_title = the task that waits, depends_on_task_id + depends_on_title = the task it waits on).',
     {
       project_id: z.string().describe('Project UUID'),
     },

@@ -22,6 +22,7 @@ import {
   projectTaskForFamcal,
 } from '@/lib/famcal-api-key';
 import { validateOptionalTimestamp } from '@/lib/validate';
+import { fetchTaskDependencyLinks } from '@/lib/task-dependency-links';
 import {
   externalSourceConflictPayload,
   isTaskExternalSourceUniqueViolation,
@@ -99,10 +100,13 @@ export async function GET(
       if (!isFamcalEligibleRow(data as Record<string, unknown>)) {
         return NextResponse.json({ error: 'Task not found' }, { status: 404 });
       }
-      return NextResponse.json(projectTaskForFamcal(data as Record<string, unknown>));
+      // Linked tasks the key can't read by id come back as "Another task" placeholders.
+      const famcalLinks = await fetchTaskDependencyLinks(supabase, userId, id, { famcal: true });
+      return NextResponse.json({ ...projectTaskForFamcal(data as Record<string, unknown>), ...famcalLinks });
     }
 
-    return NextResponse.json(normalizeTaskWithRelations(data as Record<string, unknown>));
+    const links = await fetchTaskDependencyLinks(supabase, userId, id, { famcal: false });
+    return NextResponse.json({ ...normalizeTaskWithRelations(data as Record<string, unknown>), ...links });
   } catch (error) {
     console.error('Error fetching task:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

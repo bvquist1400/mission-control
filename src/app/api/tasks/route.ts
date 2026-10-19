@@ -30,6 +30,7 @@ import { addDateOnlyDays, getDateStartInTimeZone } from '@/lib/today/week-board'
 import { DEFAULT_WORKDAY_CONFIG } from '@/lib/workday';
 import { filterTasksByScope, normalizeTaskScope } from '@/lib/personal-exclusion';
 import { validateOptionalTimestamp } from '@/lib/validate';
+import { isPostgrestNotFound } from '@/lib/supabase/errors';
 import {
   externalSourceConflictPayload,
   isTaskExternalSourceUniqueViolation,
@@ -511,6 +512,10 @@ export async function POST(request: NextRequest) {
         .eq('user_id', userId)
         .single();
 
+      if (blockerError && !isPostgrestNotFound(blockerError)) {
+        throw blockerError;
+      }
+
       if (blockerError || !blockerTask) {
         return NextResponse.json({ error: 'blocked_by_task_id is invalid' }, { status: 400 });
       }
@@ -609,14 +614,45 @@ export async function POST(request: NextRequest) {
       throw error;
     }
 
-    // Create dependency if blocked_by_task_id was provided
+    // Create dependency if blocked_by_task_id was provided. A failed link must
+    // not leave a task that silently lacks it: remove the new task (nothing else
+    // has been written for it yet) and report the error, so a retry is clean.
     if (blockedByTaskId && data) {
-      await supabase.from('task_dependencies').insert({
+      const { error: linkError } = await supabase.from('task_dependencies').insert({
         user_id: userId,
         task_id: data.id,
         depends_on_task_id: blockedByTaskId,
         depends_on_commitment_id: null,
       });
+
+      if (linkError) {
+        console.error('Failed to link new task to blocked_by_task_id:', linkError);
+        const { error: rollbackError } = await supabase
+          .from('tasks')
+          .delete()
+          .eq('id', data.id)
+          .eq('user_id', userId);
+
+        if (rollbackError) {
+          console.error('Failed to remove task after its dependency link failed:', rollbackError);
+          return NextResponse.json(
+            {
+              error:
+                'The task was created, but it could not be linked to blocked_by_task_id and could not be removed. Add the link with add_task_dependency, or delete the task.',
+              task_id: data.id,
+            },
+            { status: 500 }
+          );
+        }
+
+        return NextResponse.json(
+          {
+            error:
+              'The task could not be linked to blocked_by_task_id, so it was not created. Nothing was saved; try again.',
+          },
+          { status: 500 }
+        );
+      }
     }
 
     // Create initial comment if provided (useful for "blocked - reason" workflow)

@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isPostgrestNotFound } from '@/lib/supabase/errors';
 import { fetchTaskDependenciesForTask } from '@/lib/task-dependencies';
+import {
+  DependencyGraphTooLargeError,
+  describeDependencyCycle,
+  findDependencyPath,
+  makeWaitsOnLoader,
+} from '@/lib/task-dependency-links';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import type { CommitmentStatus, TaskStatus } from '@/types/database';
 
@@ -68,7 +74,7 @@ export async function POST(
 
     const { data: task, error: taskError } = await supabase
       .from('tasks')
-      .select('id')
+      .select('id, title')
       .eq('id', id)
       .eq('user_id', userId)
       .single();
@@ -186,6 +192,34 @@ export async function POST(
       return NextResponse.json({ error: 'Dependency already exists' }, { status: 409 });
     }
 
+    // Refuse a loop: "this task waits on X" is a loop when X already waits on
+    // this task, directly or through other tasks.
+    if (type === 'task' && dependsOnTaskId) {
+      let cyclePath: string[] | null;
+      try {
+        cyclePath = await findDependencyPath(dependsOnTaskId, id, makeWaitsOnLoader(supabase, userId));
+      } catch (cycleError) {
+        if (cycleError instanceof DependencyGraphTooLargeError) {
+          return NextResponse.json({ error: cycleError.message }, { status: 409 });
+        }
+        throw cycleError;
+      }
+
+      if (cyclePath) {
+        return NextResponse.json(
+          {
+            error: describeDependencyCycle({
+              taskTitle: String((task as { title?: unknown }).title ?? 'this task'),
+              dependsOnTitle: targetTitle,
+              path: cyclePath,
+            }),
+            cycle_task_ids: cyclePath,
+          },
+          { status: 400 }
+        );
+      }
+    }
+
     const { data, error } = await supabase
       .from('task_dependencies')
       .insert({
@@ -198,6 +232,10 @@ export async function POST(
       .single();
 
     if (error) {
+      // Two identical adds at once: the partial unique index (038) lets one through.
+      if (error.code === '23505') {
+        return NextResponse.json({ error: 'Dependency already exists' }, { status: 409 });
+      }
       throw error;
     }
 
