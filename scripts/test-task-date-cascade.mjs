@@ -560,6 +560,19 @@ await test("PATCH cascade:'preview' writes nothing and returns what would move (
   assert.equal(db.log.some((entry) => entry.ops.some(([name]) => name === "update" || name === "insert")), false);
 });
 
+await test("PATCH cascade:'preview' of a move that wouldn't cascade (earlier, cleared) still saves nothing", async () => {
+  for (const due of [etAt("2026-10-19"), null]) {
+    const db = makeDb();
+    const before = JSON.stringify(db.state.tasks);
+    const result = await patch(db, ONCORE_IDS[0], { due_at: due, cascade: "preview", title: "Renamed in a preview" });
+    assert.equal(result.status, 200);
+    assert.equal(result.body.preview, true);
+    assert.equal(result.body.cascade.status, "preview");
+    assert.equal(JSON.stringify(db.state.tasks), before);
+    assert.equal(db.log.some((entry) => entry.ops.some(([name]) => name === "update" || name === "insert")), false);
+  }
+});
+
 await test("PATCH cascade:false moves only this task (no link read, no function call)", async () => {
   const db = makeDb();
   const result = await patch(db, ONCORE_IDS[0], { due_at: etAt("2026-10-22"), cascade: false });

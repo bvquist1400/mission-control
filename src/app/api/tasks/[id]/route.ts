@@ -517,11 +517,16 @@ export async function PATCH(
       } else {
         const trigger = cascadeTrigger(currentTask, { ...currentTask, ...updates } as Task, mode);
         if (!trigger.run) {
-          cascadeReply = buildCascadeReply({
-            status: cascadeOptions.cascade === 'preview' ? 'preview' : 'not_applicable',
-            mode,
-            reason: trigger.reason,
-          });
+          if (cascadeOptions.cascade === 'preview') {
+            // A preview never saves, even when nothing would cascade.
+            return NextResponse.json({
+              preview: true,
+              task_id: id,
+              due_at: updates.due_at,
+              cascade: buildCascadeReply({ status: 'preview', mode, reason: trigger.reason }),
+            });
+          }
+          cascadeReply = buildCascadeReply({ status: 'not_applicable', mode, reason: trigger.reason });
         } else {
           let plan: CascadePlan | null = null;
           let graph: Awaited<ReturnType<typeof loadCascadeGraph>> | null = null;
