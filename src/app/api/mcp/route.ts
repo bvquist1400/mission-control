@@ -729,7 +729,7 @@ function createMcpServer(): McpServer {
   // ── UPDATE TASK ───────────────────────────────────────────────────────
   mcp.tool(
     'update_task',
-    'Update an existing task. Provide task_id and any fields to change.',
+    'Update an existing task. Provide task_id and any fields to change. Moving due_at LATER also moves the tasks that wait on this one (cascade): cascade_mode "same_gap" (default) moves them by the same number of working days (Mon-Fri, ET); "only_collisions" moves only a task that would now be due before a task it waits on, to that day. Pass cascade:false to move only this task, or cascade:"preview" to see what would move without saving anything. Done tasks stop the walk (nothing after them moves); Missed and recurring tasks never move; Parked and undated tasks never move but the walk goes past them. Moving a date earlier never moves other tasks. More than 25 moves are refused (nothing saved, the preview comes back) unless cascade_confirm:true. The reply\'s cascade object says which mode ran and lists every task that moved (old and new due date), what was left alone and why, and any project now past its target date (its RAG goes Green to Yellow). Each moved task gets a comment saying why.',
     {
       task_id: z.string().describe('Task UUID'),
       title: z.string().optional(),
@@ -764,6 +764,9 @@ function createMcpServer(): McpServer {
       unit_count: z.number().min(0).nullable().optional().describe('Pace tracking: units for the whole task when its checklist rows carry none; null clears'),
       work_type: z.string().nullable().optional().describe(`${WORK_TYPE_DESCRIPTION} Null clears.`),
       is_sample: z.boolean().optional().describe('Pace tracking: true for a swatch / test piece / prototype'),
+      cascade: z.union([z.boolean(), z.literal('preview')]).optional().describe('When due_at moves later: true (default) moves the tasks that wait on this one too; false moves only this task; "preview" saves nothing and returns what would move'),
+      cascade_mode: z.enum(['same_gap', 'only_collisions']).optional().describe('How later tasks move: "same_gap" (default) by the same number of working days; "only_collisions" only those that would be due before a task they wait on'),
+      cascade_confirm: z.boolean().optional().describe('Required (true) when the cascade would move more than 25 tasks'),
     },
     async ({ task_id, ...updates }) => {
       const res = await fetch(

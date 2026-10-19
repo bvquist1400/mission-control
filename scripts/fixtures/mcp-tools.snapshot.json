@@ -3747,6 +3747,30 @@
         "is_sample": {
           "description": "Pace tracking: true for a swatch / test piece / prototype",
           "type": "boolean"
+        },
+        "cascade": {
+          "description": "When due_at moves later: true (default) moves the tasks that wait on this one too; false moves only this task; \"preview\" saves nothing and returns what would move",
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "string",
+              "const": "preview"
+            }
+          ]
+        },
+        "cascade_mode": {
+          "description": "How later tasks move: \"same_gap\" (default) by the same number of working days; \"only_collisions\" only those that would be due before a task they wait on",
+          "type": "string",
+          "enum": [
+            "same_gap",
+            "only_collisions"
+          ]
+        },
+        "cascade_confirm": {
+          "description": "Required (true) when the cascade would move more than 25 tasks",
+          "type": "boolean"
         }
       },
       "required": [

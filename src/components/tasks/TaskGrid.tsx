@@ -697,7 +697,12 @@ export function TaskGrid({
     );
   }
 
-  async function updateTask(taskId: string, updates: TaskUpdatePayload): Promise<void> {
+  // requestOptions travel in the PATCH body only (never into the task row shown).
+  async function updateTask(
+    taskId: string,
+    updates: TaskUpdatePayload,
+    requestOptions: { cascade?: boolean } = {}
+  ): Promise<void> {
     const previousTask = tasks.find((task) => task.id === taskId);
     markSaving(taskId);
     setError(null);
@@ -745,7 +750,7 @@ export function TaskGrid({
       const response = await fetch(`/api/tasks/${taskId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updates),
+        body: JSON.stringify({ ...updates, ...requestOptions }),
       });
 
       if (!response.ok) {
@@ -753,7 +758,8 @@ export function TaskGrid({
         throw new Error(typeof data.error === "string" ? data.error : "Update failed");
       }
 
-      const updatedTask = (await response.json()) as TaskWithImplementation;
+      const { cascade: _cascade, ...updatedTask } = (await response.json()) as TaskWithImplementation & { cascade?: unknown };
+      void _cascade;
       replaceTaskSnapshot(updatedTask);
     } catch (updateError) {
       if (previousTask) {
@@ -826,7 +832,10 @@ export function TaskGrid({
     }
 
     setBulkActionBusy(true);
-    await Promise.all(selectedIds.map((taskId) => updateTask(taskId, updates)));
+    // A bulk date set moves exactly the selected tasks: no cascade to the tasks
+    // that wait on them (the parallel PATCHes would otherwise each move chains).
+    const requestOptions = "due_at" in updates ? { cascade: false } : {};
+    await Promise.all(selectedIds.map((taskId) => updateTask(taskId, updates, requestOptions)));
     setBulkActionBusy(false);
 
     if (options.clearDueDate || "due_at" in updates) {
