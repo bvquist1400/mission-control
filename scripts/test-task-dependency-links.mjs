@@ -210,6 +210,11 @@ function makeDb({ failInsert = null, failDelete = null, rowCap = 1000, countMode
       for (const row of hit) Object.assign(row, update);
       return finish(hit.map(withRelations));
     }
+    // Like the real server: a very long id list makes the URL too long (seen
+    // on the local stack with 1,000 UUIDs in one in() filter).
+    if (ops.some(([name, args]) => name === "in" && args[1].length > 500)) {
+      return finish([], { message: "URI too long" });
+    }
     let rows = rowsOf().filter(matches);
     matchedCount = rows.length;
     for (const [name, args] of ops) {
@@ -735,15 +740,25 @@ await test("P2-3: every paged dependency read keeps the user and active filters 
     assert.ok(entry.ops.some(([name, args]) => name === "eq" && args[0] === "is_resolved" && args[1] === false));
     assert.ok(entry.ops.some(([name, args]) => name === "order" && args[0] === "id"));
   }
-  // Every read of the new code (blocked_by/blocks, project links, loop check) is
-  // paged. The only other reads are the add route's duplicate check
-  // (maybeSingle) and its reply, built by the older fetchTaskDependencySummaries
-  // (selects resolved_at; out of this round's scope, noted in the handoff).
+  // Every read on these paths is paged; the only other one is the add route's
+  // duplicate check (maybeSingle). The add route's reply no longer re-reads links.
   const unpaged = db.log.filter((entry) => entry.table === "task_dependencies"
     && entry.ops.some(([name]) => name === "select") && !entry.ops.some(([name]) => name === "limit")
-    && !entry.ops.some(([name]) => name === "insert") && !entry.ops.some(([name]) => name === "maybeSingle")
-    && !String(entry.ops.find(([name]) => name === "select")?.[1][0]).includes("resolved_at"));
+    && !entry.ops.some(([name]) => name === "insert") && !entry.ops.some(([name]) => name === "maybeSingle"));
   assert.equal(unpaged.length, 0, `unpaged dependency reads: ${unpaged.map((e) => JSON.stringify(e.ops)).join(" | ")}`);
+});
+
+await test("P2-3 sweep: adding a link to a task that already waits on 1,100 tasks replies 201 with the new link", async () => {
+  const state = seed();
+  const many = Array.from({ length: 1100 }, (_, i) => id(7000 + i));
+  state.tasks.push(...many.map((m) => task(m, `Prereq ${m}`)));
+  state.task_dependencies = many.map((m, i) => dep(`wide-${String(i).padStart(4, "0")}`, T.workWaiter, m));
+  const db = makeDb({ state, failInsert: null });
+  const result = await addDependency(db, T.workWaiter, { depends_on_task_id: T.calendar });
+  assert.equal(result.status, 201, JSON.stringify(result.body).slice(0, 200));
+  assert.equal(result.body.depends_on_task_id, T.calendar);
+  assert.equal(result.body.title, "Calendar build");
+  assert.equal(result.body.unresolved, true);
 });
 
 await test("fetchAllPages: keyset pages until an empty page, at any server cap; refuses out-of-order rows and endless reads", async () => {

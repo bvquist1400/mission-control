@@ -247,13 +247,9 @@ export async function POST(
       throw error;
     }
 
-    const dependencies = await fetchTaskDependenciesForTask(supabase, userId, id);
-    const created = dependencies.find((dependency) => dependency.id === data.id);
-
-    if (created) {
-      return NextResponse.json(created, { status: 201 });
-    }
-
+    // Reply from the inserted row and the target read above. Re-reading all of
+    // this task's links here could fail on a task with very many links (an
+    // over-long id list) and turn a saved link into a 500.
     return NextResponse.json(
       {
         id: data.id,
@@ -264,6 +260,7 @@ export async function POST(
         title: targetTitle,
         status: targetStatus,
         unresolved: targetStatus !== 'Done',
+        resolved_at: null,
         created_at: data.created_at,
       },
       { status: 201 }
