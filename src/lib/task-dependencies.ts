@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { fetchAllPages } from '@/lib/task-dependency-links';
 import type {
   CommitmentStatus,
   RecentlyResolvedTaskDependencySummary,
@@ -48,6 +49,76 @@ const UNKNOWN_COMMITMENT_TITLE = 'Unknown commitment';
 const UNKNOWN_TASK_STATUS: TaskStatus = 'Blocked/Waiting';
 const UNKNOWN_COMMITMENT_STATUS: CommitmentStatus = 'Open';
 
+const ID_CHUNK_SIZE = 100;
+const DEPENDENCY_ROW_SELECT = 'id, task_id, depends_on_task_id, depends_on_commitment_id, resolved_at, is_resolved, created_at';
+
+function chunkIds(values: string[]): string[][] {
+  const out: string[][] = [];
+  for (let index = 0; index < values.length; index += ID_CHUNK_SIZE) {
+    out.push(values.slice(index, index + ID_CHUNK_SIZE));
+  }
+  return out;
+}
+
+interface DependencyRowQuery {
+  eq(column: string, value: unknown): DependencyRowQuery;
+  gt(column: string, value: unknown): DependencyRowQuery;
+  gte(column: string, value: unknown): DependencyRowQuery;
+  in(column: string, values: unknown[]): DependencyRowQuery;
+  not(column: string, operator: string, value: unknown): DependencyRowQuery;
+  order(column: string, options: { ascending: boolean }): DependencyRowQuery;
+  limit(count: number): PromiseLike<{ data: TaskDependencyRow[] | null; error: unknown }>;
+}
+
+/**
+ * Every dependency row for these tasks, read completely: task ids in chunks of
+ * 100 (a long in() list makes the URL too long), each chunk keyset-paged on the
+ * row id until an empty page (fetchAllPages), so PostgREST's max_rows cap can't
+ * cut the list short. A read that can't be proven complete throws
+ * DependencyReadIncompleteError instead of returning a short list.
+ */
+async function readDependencyRows(
+  supabase: SupabaseClient,
+  userId: string,
+  taskIds: string[],
+  apply: (query: DependencyRowQuery) => DependencyRowQuery
+): Promise<TaskDependencyRow[]> {
+  const rows: TaskDependencyRow[] = [];
+  for (const ids of chunkIds(taskIds)) {
+    rows.push(
+      ...(await fetchAllPages<TaskDependencyRow>((afterId, limit) => {
+        let query = apply(
+          supabase
+            .from('task_dependencies')
+            .select(DEPENDENCY_ROW_SELECT)
+            .eq('user_id', userId) as unknown as DependencyRowQuery
+        ).in('task_id', ids);
+        if (afterId !== null) query = query.gt('id', afterId);
+        return query.order('id', { ascending: true }).limit(limit);
+      }))
+    );
+  }
+  return rows;
+}
+
+/** Rows of `table` with these ids (chunked), scoped to the user. */
+async function readRowsById<T>(
+  supabase: SupabaseClient,
+  userId: string,
+  table: 'tasks' | 'commitments',
+  ids: string[]
+): Promise<T[]> {
+  const out: T[] = [];
+  for (const chunk of chunkIds(ids)) {
+    const { data, error } = await supabase.from(table).select('id, title, status').eq('user_id', userId).in('id', chunk);
+    if (error) {
+      throw error;
+    }
+    out.push(...((data || []) as T[]));
+  }
+  return out;
+}
+
 export function isDependencyResolved(status: DependencyStatus): boolean {
   return status === 'Done';
 }
@@ -64,18 +135,7 @@ export async function fetchTaskDependencySummaries(
   }
 
   const uniqueTaskIds = [...new Set(taskIds)];
-  const { data: dependencyRows, error: dependencyError } = await supabase
-    .from('task_dependencies')
-    .select('id, task_id, depends_on_task_id, depends_on_commitment_id, resolved_at, is_resolved, created_at')
-    .eq('user_id', userId)
-    .eq('is_resolved', false)
-    .in('task_id', uniqueTaskIds);
-
-  if (dependencyError) {
-    throw dependencyError;
-  }
-
-  const dependencies = (dependencyRows || []) as TaskDependencyRow[];
+  const dependencies = await readDependencyRows(supabase, userId, uniqueTaskIds, (query) => query.eq('is_resolved', false));
   if (dependencies.length === 0) {
     return byTaskId;
   }
@@ -95,35 +155,8 @@ export async function fetchTaskDependencySummaries(
     ),
   ];
 
-  let dependencyTasks: DependencyTaskRow[] = [];
-  if (dependencyTaskIds.length > 0) {
-    const { data, error } = await supabase
-      .from('tasks')
-      .select('id, title, status')
-      .eq('user_id', userId)
-      .in('id', dependencyTaskIds);
-
-    if (error) {
-      throw error;
-    }
-
-    dependencyTasks = (data || []) as DependencyTaskRow[];
-  }
-
-  let dependencyCommitments: DependencyCommitmentRow[] = [];
-  if (dependencyCommitmentIds.length > 0) {
-    const { data, error } = await supabase
-      .from('commitments')
-      .select('id, title, status')
-      .eq('user_id', userId)
-      .in('id', dependencyCommitmentIds);
-
-    if (error) {
-      throw error;
-    }
-
-    dependencyCommitments = (data || []) as DependencyCommitmentRow[];
-  }
+  const dependencyTasks = await readRowsById<DependencyTaskRow>(supabase, userId, 'tasks', dependencyTaskIds);
+  const dependencyCommitments = await readRowsById<DependencyCommitmentRow>(supabase, userId, 'commitments', dependencyCommitmentIds);
 
   const taskById = new Map<string, DependencyTaskRow>();
   for (const row of dependencyTasks) {
@@ -212,20 +245,9 @@ export async function fetchRecentlyResolvedTaskDependencySummaries(
   }
 
   const uniqueTaskIds = [...new Set(taskIds)];
-  const { data: dependencyRows, error: dependencyError } = await supabase
-    .from('task_dependencies')
-    .select('id, task_id, depends_on_task_id, depends_on_commitment_id, resolved_at, is_resolved, created_at')
-    .eq('user_id', userId)
-    .eq('is_resolved', true)
-    .not('resolved_at', 'is', null)
-    .gte('resolved_at', resolvedAfterIso)
-    .in('task_id', uniqueTaskIds);
-
-  if (dependencyError) {
-    throw dependencyError;
-  }
-
-  const dependencies = (dependencyRows || []) as TaskDependencyRow[];
+  const dependencies = await readDependencyRows(supabase, userId, uniqueTaskIds, (query) =>
+    query.eq('is_resolved', true).not('resolved_at', 'is', null).gte('resolved_at', resolvedAfterIso)
+  );
   if (dependencies.length === 0) {
     return byTaskId;
   }
@@ -245,35 +267,8 @@ export async function fetchRecentlyResolvedTaskDependencySummaries(
     ),
   ];
 
-  let dependencyTasks: DependencyTaskRow[] = [];
-  if (dependencyTaskIds.length > 0) {
-    const { data, error } = await supabase
-      .from('tasks')
-      .select('id, title, status')
-      .eq('user_id', userId)
-      .in('id', dependencyTaskIds);
-
-    if (error) {
-      throw error;
-    }
-
-    dependencyTasks = (data || []) as DependencyTaskRow[];
-  }
-
-  let dependencyCommitments: DependencyCommitmentRow[] = [];
-  if (dependencyCommitmentIds.length > 0) {
-    const { data, error } = await supabase
-      .from('commitments')
-      .select('id, title, status')
-      .eq('user_id', userId)
-      .in('id', dependencyCommitmentIds);
-
-    if (error) {
-      throw error;
-    }
-
-    dependencyCommitments = (data || []) as DependencyCommitmentRow[];
-  }
+  const dependencyTasks = await readRowsById<DependencyTaskRow>(supabase, userId, 'tasks', dependencyTaskIds);
+  const dependencyCommitments = await readRowsById<DependencyCommitmentRow>(supabase, userId, 'commitments', dependencyCommitmentIds);
 
   const taskById = new Map<string, DependencyTaskRow>();
   for (const row of dependencyTasks) {

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getRequiredScopesForPath } from '@/lib/mcp/upstream-scopes';
 import * as applicationsRoute from '@/app/api/applications/route';
 import * as applicationRoute from '@/app/api/applications/[id]/route';
 import * as applicationCopyUpdateRoute from '@/app/api/applications/[id]/copy-update/route';
@@ -89,52 +90,6 @@ async function invokeDynamic<TParams extends Record<string, string>>(
 
 function normalizeSegments(input: string[] | undefined): string[] {
   return (input || []).filter(Boolean);
-}
-
-function getRequiredScopesForPath(pathSegments: string[], method: string): readonly ('mcp.read' | 'mcp.write' | 'mcp.delete')[] {
-  const normalizedMethod = method.toUpperCase();
-
-  if (
-    normalizedMethod === 'POST' &&
-    pathSegments[0] === 'briefing' &&
-    pathSegments[1] === 'narrative'
-  ) {
-    return ['mcp.read'] as const;
-  }
-
-  if (
-    (normalizedMethod === 'GET' || normalizedMethod === 'POST') &&
-    pathSegments[0] === 'planner' &&
-    pathSegments[1] === 'plan'
-  ) {
-    return ['mcp.read'] as const;
-  }
-
-  if (
-    normalizedMethod === 'DELETE' &&
-    pathSegments[0] === 'tasks' &&
-    pathSegments[2] === 'recur'
-  ) {
-    return ['mcp.write'] as const;
-  }
-
-  if (
-    normalizedMethod === 'POST'
-    && pathSegments[0] === 'tasks'
-    && pathSegments[1] === 'lookup-external'
-  ) {
-    return ['mcp.read'] as const;
-  }
-
-  if (normalizedMethod === 'DELETE') {
-    return ['mcp.delete'] as const;
-  }
-
-  if (normalizedMethod === 'GET' || normalizedMethod === 'HEAD' || normalizedMethod === 'OPTIONS') {
-    return ['mcp.read'] as const;
-  }
-
-  return ['mcp.write'] as const;
 }
 
 export async function GET(

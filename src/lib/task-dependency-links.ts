@@ -224,6 +224,9 @@ export class DependencyReadIncompleteError extends Error {
 }
 
 export const DEPENDENCY_PAGE_SIZE = 1000;
+
+/** SQLSTATE of the migration 061 loop guard on task_dependencies. */
+export const TASK_DEPENDENCY_LOOP_SQLSTATE = 'MC061';
 const DEPENDENCY_MAX_PAGES = 10000;
 
 type PageResult<T> = { data: T[] | null; error: unknown };
@@ -236,7 +239,14 @@ type PageResult<T> = { data: T[] | null; error: unknown };
  * reads everything, and a row deleted mid-read can't shift later rows out of
  * view (as offset paging would). Rows must come back in strictly increasing id
  * order; anything else, or running out of pages, throws
- * DependencyReadIncompleteError. Never returns a short list.
+ * DependencyReadIncompleteError.
+ *
+ * What the empty last page proves: every matching row with an id ABOVE the
+ * cursor was read. It is not one transactional snapshot: a row inserted while
+ * the read runs with an id below the cursor is missed. Checks that must hold
+ * against concurrent writes (the loop check) are backed by the database: the
+ * migration 061 loop guard serializes link adds per user and refuses a loop
+ * (SQLSTATE MC061) whatever this read saw.
  */
 export async function fetchAllPages<T extends { id: string }>(
   runPage: (afterId: string | null, limit: number) => PromiseLike<PageResult<T>>,
@@ -296,7 +306,9 @@ function readActiveLinks(
 /**
  * Reads blocked_by / blocks for one task. Pass `famcal: true` only for the
  * FamCal key: linked tasks that key can't read are placeholders (blocked_by)
- * or left out (blocks), and no field of such a task is ever read.
+ * or left out (blocks). Of such a task only its status is read, for a forward
+ * link's placeholder (Done or not, the same flip the task list's redacted
+ * `dependencies` already shows); never its title, due date or id.
  */
 export async function fetchTaskDependencyLinks(
   supabase: SupabaseClient,
@@ -346,18 +358,7 @@ export async function fetchTaskDependencyLinks(
   // FamCal: fields and eligibility in ONE query (the same personal tag +
   // famcal_eligible filter as every other FamCal read). Visible ids and
   // visible fields both come from these rows.
-  const visibleTasks: LinkedItemRow[] = [];
-  for (const ids of chunk(linkedTaskIds, ID_CHUNK_SIZE)) {
-    const { data, error } = await supabase
-      .from('tasks')
-      .select('id, title, status, due_at')
-      .eq('user_id', userId)
-      .in('id', ids)
-      .contains('tags', [FAMCAL_REQUIRED_TAG])
-      .eq(FAMCAL_ELIGIBLE_FIELD, true);
-    if (error) throw error;
-    visibleTasks.push(...((data || []) as LinkedItemRow[]));
-  }
+  const visibleTasks = await fetchFamcalVisibleLinkedTasks(supabase, userId, linkedTaskIds);
 
   // Hidden prerequisites: status only, for the placeholder's Done-or-not.
   const visibleIds = new Set(visibleTasks.map((row) => row.id));
@@ -397,6 +398,34 @@ export async function fetchTaskDependencyLinks(
     commitments,
     famcal: { visibleTasks, hiddenTaskStatus },
   });
+}
+
+/**
+ * The linked tasks the FamCal key may see in full, read in ONE query per chunk
+ * with the personal tag + famcal_eligible filter (fields and eligibility from the
+ * same rows). Used by the task detail and the task list, so both show a linked
+ * task the same way: an eligible one with its fields, any other as a placeholder.
+ */
+export async function fetchFamcalVisibleLinkedTasks(
+  supabase: SupabaseClient,
+  userId: string,
+  taskIds: string[]
+): Promise<LinkedItemRow[]> {
+  const visibleTasks: LinkedItemRow[] = [];
+  for (const ids of chunk([...new Set(taskIds)], ID_CHUNK_SIZE)) {
+    const { data, error } = await supabase
+      .from('tasks')
+      .select('id, title, status, due_at')
+      .eq('user_id', userId)
+      .in('id', ids)
+      .contains('tags', [FAMCAL_REQUIRED_TAG])
+      .eq(FAMCAL_ELIGIBLE_FIELD, true);
+    if (error) throw error;
+    for (const row of (data || []) as LinkedItemRow[]) {
+      if (ids.includes(row.id)) visibleTasks.push(row);
+    }
+  }
+  return visibleTasks;
 }
 
 // ── Project view ──────────────────────────────────────────────────────────

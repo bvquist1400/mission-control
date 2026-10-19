@@ -7,6 +7,7 @@ import {
   describeDependencyCycle,
   findDependencyPath,
   makeWaitsOnLoader,
+  TASK_DEPENDENCY_LOOP_SQLSTATE,
 } from '@/lib/task-dependency-links';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import type { CommitmentStatus, TaskStatus } from '@/types/database';
@@ -243,6 +244,19 @@ export async function POST(
       // Two identical adds at once: the partial unique index (038) lets one through.
       if (error.code === '23505') {
         return NextResponse.json({ error: 'Dependency already exists' }, { status: 409 });
+      }
+      // The database loop guard (061): an opposite link committed after the check
+      // above (two adds at once, or one behind the paging cursor). Nothing saved.
+      if (error.code === TASK_DEPENDENCY_LOOP_SQLSTATE) {
+        return NextResponse.json(
+          {
+            error: `That would make a loop: "${targetTitle}" already waits on "${String((task as { title?: unknown }).title ?? 'this task')}", directly or through other tasks. Remove one of those links first.`,
+          },
+          { status: 400 }
+        );
+      }
+      if (error.code === '55P03') {
+        return NextResponse.json({ error: 'Links are being changed right now; try again.' }, { status: 503 });
       }
       throw error;
     }

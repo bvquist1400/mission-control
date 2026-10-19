@@ -256,8 +256,19 @@ function makeDb({ untagBeforeWrite = false, statusBeforeWrite = null, rpcError =
       return finish(sections.filter((row) => eqs.every(([column, value]) => row[column] === value)));
     }
     if (table === "task_dependencies") {
-      const inIds = op("in")?.[1]?.[1] ?? [];
-      return finish(dependencies.filter((row) => inIds.includes(row.task_id)));
+      // Keyset paging like PostgREST (cascade S1 pages every dependency read):
+      // in() on its column, eq() on the columns these rows carry, gt/order/limit on id.
+      const inOp = op("in")?.[1];
+      let rows = dependencies.filter((row) => !inOp || inOp[1].includes(row[inOp[0]]));
+      for (const [column, value] of eqs) {
+        if (column in (rows[0] ?? {})) rows = rows.filter((row) => row[column] === value);
+      }
+      const gtOp = op("gt")?.[1];
+      if (gtOp) rows = rows.filter((row) => String(row[gtOp[0]]) > String(gtOp[1]));
+      if (op("order")) rows = [...rows].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      const limit = op("limit")?.[1]?.[0];
+      if (typeof limit === "number") rows = rows.slice(0, limit);
+      return finish(rows);
     }
     return finish([]);
   }

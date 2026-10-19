@@ -193,6 +193,30 @@ export function redactDependencyForFamcal<T extends RedactableDependency>(depend
 }
 
 /**
+ * The task list's dependency rows for the FamCal key, aligned with the task
+ * detail (cascade S1): a prerequisite task the key may read by id (`visible`,
+ * from ONE eligibility-filtered read) keeps its id, title and status, taken from
+ * that read and never from the unfiltered summary; any other task and every
+ * commitment is the redactDependencyForFamcal placeholder.
+ */
+export function redactDependencyForFamcalList<T extends RedactableDependency>(
+  dependency: T,
+  visible: ReadonlyMap<string, { title: string; status: string }>
+): T {
+  const target = dependency.depends_on_task_id ? visible.get(dependency.depends_on_task_id) : undefined;
+  if (!target) {
+    return redactDependencyForFamcal(dependency);
+  }
+  return {
+    ...dependency,
+    title: target.title,
+    status: target.status,
+    unresolved: target.status !== 'Done',
+    depends_on_commitment_id: null,
+  };
+}
+
+/**
  * The only query parameters GET /api/tasks accepts from the FamCal key: a strict
  * allowlist. Each one filters or pages on the task's own, returned fields. Every
  * other parameter is a 400 whenever it is present, even empty: `view` (views
