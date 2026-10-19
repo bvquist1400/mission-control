@@ -13,7 +13,7 @@ BEGIN;
 
 DROP TRIGGER IF EXISTS trg_task_dependencies_guard_loop ON task_dependencies;
 DROP FUNCTION IF EXISTS task_dependencies_guard_loop();
-DROP FUNCTION IF EXISTS apply_task_date_cascade(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB);
+DROP FUNCTION IF EXISTS apply_task_date_cascade(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN);
 DROP FUNCTION IF EXISTS task_graph_lock_key(UUID);
 DROP TABLE IF EXISTS task_date_cascade_moves;
 DROP TABLE IF EXISTS task_date_cascades;

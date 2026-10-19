@@ -24,23 +24,33 @@
 --    (src/lib/task-date-cascade.ts) in ONE transaction, all or nothing:
 --    - takes the same per-user advisory lock (cascades and link adds serialize);
 --    - re-checks that the edited ("root") task still has the due date the caller
---      just saved; otherwise nothing moves (status "superseded");
+--      just saved and is still not Done or recurring; otherwise nothing moves
+--      (status "superseded"). (The API's own root UPDATE is a compare-and-set on
+--      the date the plan was made from, so two overlapping edits can't stack.);
 --    - locks the tasks to move in id order (FOR UPDATE; with scope 'famcal' only
 --      rows that are FamCal-eligible in that same read, so an ineligible task is
---      never waited on or written);
+--      never waited on or written), then the root's and the targets' PROJECTS
+--      FOR SHARE in id order (060's order: task, then project), and reads root
+--      eligibility again under those locks, so a project re-tag either committed
+--      first or waits;
 --    - per task, a compare-and-set: due_at must still equal the planned old date,
 --      the task must still be open (Backlog/Planned/In Progress/Blocked/Waiting)
 --      and not recurring, and with scope 'famcal' still personal + eligible. A
 --      task that changed meanwhile is skipped and reported, never overwritten;
 --    - writes one source='system' comment per moved task. The caller sends two
---      texts; the function uses the redacted one ("a task it depends on") when the
---      moved task is FamCal-eligible and the root is not, decided under the lock,
---      so a personal task's comments never name a work task;
+--      texts; on a FamCal-eligible moved task the function uses the redacted one
+--      ("... because a task it depends on moved later.", no title, date or gap)
+--      unless the root was FamCal-visible when planned (p_root_was_visible) AND
+--      under the locks now AND its title still equals p_root_title (the title
+--      the named text carries), so a personal task's comments never name a work
+--      task, including one renamed and re-tagged in the same edit;
+--    - keeps a moved task's current priority_score when its base_priority changed
+--      since planning (the move carries the base the new score came from);
 --    - projects whose target date a moved task now passes (ET date after
 --      target_date): RAG Green -> Yellow (Yellow and Red untouched; target_date and
---      status_summary never written), one system comment on the root (a work
---      project is "another project" on a FamCal-visible root), and a
---      project_flags entry in the reply;
+--      status_summary never written), one system comment on the root (none at all
+--      when the root is FamCal-visible and the project is not personal: nothing of
+--      a work project reaches FamCal), and a project_flags entry in the reply;
 --    - returns { status, cascade_id, moved[], skipped[], project_flags[] }.
 --    Waits are bounded by lock_timeout 5s (55P03). SECURITY INVOKER: a signed-in
 --    user may only pass their own id (RLS applies); the API's machine keys call it
@@ -203,7 +213,9 @@ CREATE OR REPLACE FUNCTION apply_task_date_cascade(
   p_delta_workdays INTEGER,
   p_scope TEXT,
   p_source TEXT,
-  p_moves JSONB
+  p_moves JSONB,
+  p_root_title TEXT,
+  p_root_was_visible BOOLEAN
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -233,7 +245,8 @@ DECLARE
   v_project RECORD;
   v_rag_before TEXT;
   v_rag_after TEXT;
-  v_project_label TEXT;
+  v_name_ok BOOLEAN;
+  v_root_title TEXT;
 BEGIN
   -- Caller and arguments.
   IF p_user_id IS NULL OR p_root_task_id IS NULL OR p_root_new_due_at IS NULL THEN
@@ -267,7 +280,7 @@ BEGIN
     END IF;
     IF EXISTS (
       SELECT 1 FROM jsonb_object_keys(v_move) AS k(key)
-       WHERE k.key NOT IN ('task_id', 'old_due_at', 'new_due_at', 'priority_score', 'comment', 'comment_redacted')
+       WHERE k.key NOT IN ('task_id', 'old_due_at', 'new_due_at', 'priority_score', 'base_priority', 'comment', 'comment_redacted')
     ) THEN
       RAISE EXCEPTION 'unknown move field' USING ERRCODE = '22023';
     END IF;
@@ -301,13 +314,17 @@ BEGIN
   -- One cascade (or link add) per user at a time.
   PERFORM pg_advisory_xact_lock(task_graph_lock_key(p_user_id));
 
-  -- The root must still carry the date the caller just saved.
-  SELECT t.id, t.title, t.due_at,
-         (COALESCE(t.tags, '{}'::TEXT[]) @> ARRAY['personal']::TEXT[] AND public.famcal_eligible(t)) AS visible
+  -- The root must still carry the date the caller just saved, and still be a
+  -- task that cascades (not Done, not recurring). Locked FOR SHARE: its tags,
+  -- project and title can't change until this commits.
+  SELECT t.id, t.project_id, t.due_at
     INTO v_root
     FROM public.tasks t
    WHERE t.id = p_root_task_id
      AND t.user_id = p_user_id
+     AND t.status <> 'Done'
+     AND NOT COALESCE(t.is_recurring_template, false)
+     AND t.recurring_template_id IS NULL
      AND (p_scope <> 'famcal' OR (COALESCE(t.tags, '{}'::TEXT[]) @> ARRAY['personal']::TEXT[] AND public.famcal_eligible(t)))
      FOR SHARE OF t;
 
@@ -317,7 +334,6 @@ BEGIN
       'moved', '[]'::jsonb, 'skipped', '[]'::jsonb, 'project_flags', '[]'::jsonb
     );
   END IF;
-  v_root_visible := COALESCE(v_root.visible, false);
 
   IF jsonb_array_length(p_moves) = 0 THEN
     RETURN jsonb_build_object(
@@ -325,10 +341,6 @@ BEGIN
       'moved', '[]'::jsonb, 'skipped', '[]'::jsonb, 'project_flags', '[]'::jsonb
     );
   END IF;
-
-  INSERT INTO public.task_date_cascades (user_id, root_task_id, root_old_due_at, root_new_due_at, mode, delta_workdays, scope, source)
-  VALUES (p_user_id, p_root_task_id, p_root_old_due_at, p_root_new_due_at, p_mode, p_delta_workdays, p_scope, p_source)
-  RETURNING id INTO v_cascade_id;
 
   -- Lock the targets in id order (FamCal: only rows eligible in this same read).
   SELECT array_agg(x ORDER BY x) INTO v_ids
@@ -341,6 +353,44 @@ BEGIN
     ORDER BY t.id
       FOR UPDATE OF t;
 
+  -- Eligibility also depends on the PROJECT's tags (060 locks the project for
+  -- the same reason). Lock the root's and the targets' projects FOR SHARE, in id
+  -- order, after the task rows (060's order: task, then project), so a project
+  -- re-tag either commits before these reads or waits until this commits.
+  PERFORM 1
+     FROM public.projects p
+    WHERE p.user_id = p_user_id
+      AND p.id IN (
+        SELECT t.project_id FROM public.tasks t
+         WHERE t.user_id = p_user_id
+           AND t.project_id IS NOT NULL
+           AND (t.id = p_root_task_id OR t.id = ANY (v_ids))
+      )
+    ORDER BY p.id
+      FOR SHARE OF p;
+
+  -- Root visibility, read again under all those locks (a new statement, so it
+  -- sees a re-tag that committed while this waited).
+  SELECT (COALESCE(t.tags, '{}'::TEXT[]) @> ARRAY['personal']::TEXT[] AND public.famcal_eligible(t)), t.title
+    INTO v_root_visible, v_root_title
+    FROM public.tasks t
+   WHERE t.id = p_root_task_id AND t.user_id = p_user_id;
+  v_root_visible := COALESCE(v_root_visible, false);
+  IF p_scope = 'famcal' AND NOT v_root_visible THEN
+    RETURN jsonb_build_object(
+      'status', 'superseded', 'cascade_id', NULL,
+      'moved', '[]'::jsonb, 'skipped', '[]'::jsonb, 'project_flags', '[]'::jsonb
+    );
+  END IF;
+  -- The edited task may be named on a FamCal-visible task only when FamCal could
+  -- read it both when the plan was made and now, and the comment carries the
+  -- title it has now (a rename in the same edit can't publish the old title).
+  v_name_ok := COALESCE(p_root_was_visible, false) AND v_root_visible AND v_root_title IS NOT DISTINCT FROM p_root_title;
+
+  INSERT INTO public.task_date_cascades (user_id, root_task_id, root_old_due_at, root_new_due_at, mode, delta_workdays, scope, source)
+  VALUES (p_user_id, p_root_task_id, p_root_old_due_at, p_root_new_due_at, p_mode, p_delta_workdays, p_scope, p_source)
+  RETURNING id INTO v_cascade_id;
+
   FOR v_move IN
     SELECT value FROM jsonb_array_elements(p_moves) ORDER BY (value->>'task_id')::uuid
   LOOP
@@ -352,7 +402,13 @@ BEGIN
 
     UPDATE public.tasks t
        SET due_at = v_new,
-           priority_score = (v_move->>'priority_score')::integer
+           -- The new score was computed from the row as planned; keep the current
+           -- one if its base priority changed since (a later edit wins).
+           priority_score = CASE
+             WHEN v_move ? 'base_priority' AND t.base_priority IS DISTINCT FROM (v_move->>'base_priority')::integer
+               THEN t.priority_score
+             ELSE (v_move->>'priority_score')::integer
+           END
      WHERE t.id = v_task_id
        AND t.user_id = p_user_id
        AND t.due_at = v_old
@@ -373,13 +429,14 @@ BEGIN
     VALUES (
       v_task_id,
       p_user_id,
-      btrim(CASE WHEN v_updated.visible AND NOT v_root_visible THEN v_move->>'comment_redacted' ELSE v_move->>'comment' END),
+      btrim(CASE WHEN v_updated.visible AND NOT v_name_ok THEN v_move->>'comment_redacted' ELSE v_move->>'comment' END),
       'system'
     )
     RETURNING id INTO v_comment_id;
 
     INSERT INTO public.task_date_cascade_moves (cascade_id, user_id, task_id, old_due_at, new_due_at, old_priority_score, new_priority_score, comment_id)
-    VALUES (v_cascade_id, p_user_id, v_task_id, v_old, v_new, v_old_priority, (v_move->>'priority_score')::integer, v_comment_id);
+    VALUES (v_cascade_id, p_user_id, v_task_id, v_old, v_new, v_old_priority,
+            (SELECT t.priority_score FROM public.tasks t WHERE t.id = v_task_id), v_comment_id);
 
     v_moved := v_moved || jsonb_build_array(jsonb_build_object(
       'task_id', v_task_id, 'old_due_at', v_old, 'new_due_at', v_new, 'project_id', v_updated.project_id
@@ -427,21 +484,21 @@ BEGIN
       'rag_after', v_rag_after
     ));
 
-    v_project_label := CASE
-      WHEN v_root_visible AND NOT v_project.personal THEN 'another project'
-      ELSE '"' || v_project.name || '"'
-    END;
-    INSERT INTO public.task_comments (task_id, user_id, content, source)
-    VALUES (
-      p_root_task_id,
-      p_user_id,
-      'Moving this task pushed ' || v_project.n || CASE WHEN v_project.n = 1 THEN ' task' ELSE ' tasks' END
-        || ' in ' || v_project_label || ' past the project''s target date ('
-        || to_char(v_project.target_date, 'Dy FMMM/FMDD') || '; latest now '
-        || to_char(v_project.latest, 'Dy FMMM/FMDD') || ')'
-        || CASE WHEN v_rag_before = 'Green' THEN '. The project went from Green to Yellow.' ELSE '.' END,
-      'system'
-    );
+    -- A FamCal-visible root never carries anything about a work project (no
+    -- name, count, dates or RAG); the caller's reply still lists the flag.
+    IF NOT (v_root_visible AND NOT v_project.personal) THEN
+      INSERT INTO public.task_comments (task_id, user_id, content, source)
+      VALUES (
+        p_root_task_id,
+        p_user_id,
+        'Moving this task pushed ' || v_project.n || CASE WHEN v_project.n = 1 THEN ' task' ELSE ' tasks' END
+          || ' in "' || v_project.name || '" past the project''s target date ('
+          || to_char(v_project.target_date, 'Dy FMMM/FMDD') || '; latest now '
+          || to_char(v_project.latest, 'Dy FMMM/FMDD') || ')'
+          || CASE WHEN v_rag_before = 'Green' THEN '. The project went from Green to Yellow.' ELSE '.' END,
+        'system'
+      );
+    END IF;
   END LOOP;
 
   UPDATE public.task_date_cascades SET moved_count = v_count, project_flags = v_flags WHERE id = v_cascade_id;
@@ -456,13 +513,13 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION apply_task_date_cascade(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB) IS
+COMMENT ON FUNCTION apply_task_date_cascade(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN) IS
   'Applies a planned due-date cascade in one transaction: root re-check, compare-and-set per task, system comments, project flags, log (061).';
 
 REVOKE ALL ON FUNCTION task_graph_lock_key(UUID) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION task_graph_lock_key(UUID) TO authenticated, service_role;
-REVOKE ALL ON FUNCTION apply_task_date_cascade(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION apply_task_date_cascade(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB) TO authenticated, service_role;
+REVOKE ALL ON FUNCTION apply_task_date_cascade(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION apply_task_date_cascade(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION famcal_eligible(tasks) TO authenticated;
 
 COMMIT;

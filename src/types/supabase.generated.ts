@@ -2652,6 +2652,8 @@ export type Database = {
           p_root_new_due_at: string
           p_root_old_due_at: string
           p_root_task_id: string
+          p_root_title: string
+          p_root_was_visible: boolean
           p_scope: string
           p_source: string
           p_user_id: string
