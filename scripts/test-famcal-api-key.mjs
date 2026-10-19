@@ -263,6 +263,13 @@ function makeDb({ untagBeforeWrite = false, statusBeforeWrite = null, rpcError =
       for (const [column, value] of eqs) {
         if (column in (rows[0] ?? {})) rows = rows.filter((row) => row[column] === value);
       }
+      // FamCal cascade link read: the waiting task joined (inner) and filtered on eligibility.
+      if (eqs.some(([column, value]) => column === "waiting.famcal_eligible" && value === true)) {
+        rows = rows.filter((row) => {
+          const waiting = tasks.get(row.task_id);
+          return Boolean(waiting && eligible(waiting));
+        });
+      }
       const gtOp = op("gt")?.[1];
       if (gtOp) rows = rows.filter((row) => String(row[gtOp[0]]) > String(gtOp[1]));
       if (op("order")) rows = [...rows].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
@@ -1332,9 +1339,14 @@ await test("S1 cascade, FamCal → work: a FamCal date move never reads a waitin
   assert.equal("cascade" in result.body, false);
   assert.equal(db.tasks.get(WORK_ID).due_at, "2026-10-22T21:00:00.000Z");
   assert.equal(db.rpcCalls.some((call) => call.name === "apply_task_date_cascade"), false);
-  // Every read of the waiting task carries the FamCal filter in the same query.
+  // The link read filters on the waiting task's eligibility in the database, and
+  // any task read that could touch the work task carries the FamCal filter too.
+  const linkReads = db.log.filter((entry) => entry.table === "task_dependencies" && entry.ops.some(([n, args]) => n === "in" && args[0] === "depends_on_task_id"));
+  assert.ok(linkReads.length > 0);
+  for (const entry of linkReads) {
+    assert.ok(entry.ops.some(([n, args]) => n === "eq" && args[0] === "waiting.famcal_eligible" && args[1] === true));
+  }
   const reads = db.log.filter((entry) => entry.table === "tasks" && entry.ops.some(([n, args]) => n === "in" && args[1].includes(WORK_ID)));
-  assert.ok(reads.length > 0);
   for (const entry of reads) {
     assert.ok(entry.ops.some(([n, args]) => n === "eq" && args[0] === "famcal_eligible" && args[1] === true));
   }
@@ -1355,7 +1367,7 @@ await test("S1 cascade, work → FamCal: moving a work task sends the personal f
   assert.equal(call.args.p_scope, "all");
   assert.deepEqual(call.args.p_moves.map((move) => move.task_id), [PERSONAL_ID]);
   assert.match(call.args.p_moves[0].comment, /Secret work dependency/);
-  assert.match(call.args.p_moves[0].comment_redacted, /because a task it depends on slipped 2 working days/);
+  assert.match(call.args.p_moves[0].comment_redacted, /because a task it depends on moved later\./);
   assert.equal(call.args.p_moves[0].comment_redacted.includes("Secret work dependency"), false);
 });
 

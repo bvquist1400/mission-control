@@ -41,7 +41,7 @@ if (!["127.0.0.1", "localhost", "[::1]"].includes(new URL(url).hostname)) {
 const MIGRATION = readFileSync(new URL("../supabase/migrations/061_task_date_cascade.sql", import.meta.url), "utf8");
 const ROLLBACK = readFileSync(new URL("../supabase/rollbacks/061_task_date_cascade.down.sql", import.meta.url), "utf8");
 const FN = "apply_task_date_cascade";
-const FN_SIG = "public.apply_task_date_cascade(uuid, uuid, timestamptz, timestamptz, text, integer, text, text, jsonb)";
+const FN_SIG = "public.apply_task_date_cascade(uuid, uuid, timestamptz, timestamptz, text, integer, text, text, jsonb, text, boolean)";
 
 function psql(sql) {
   return execFileSync(
@@ -85,6 +85,7 @@ async function waitForFunction(present) {
     const { error } = await admin.rpc(FN, {
       p_user_id: randomUUID(), p_root_task_id: randomUUID(), p_root_old_due_at: null, p_root_new_due_at: "2026-10-20T00:00:00Z",
       p_mode: "same_gap", p_delta_workdays: 0, p_scope: "all", p_source: "probe", p_moves: [],
+      p_root_title: "probe", p_root_was_visible: false,
     });
     const missing = error?.code === "PGRST202";
     if (present ? !missing : missing) return;
@@ -127,17 +128,17 @@ const dependenciesRoute = await import("../src/app/api/tasks/[id]/dependencies/r
 const cascade = await import("../src/lib/task-date-cascade.ts");
 const famcal = await import("../src/lib/famcal-api-key.ts");
 
-function routeRequest(authSource, method, path, body, userId = userA) {
+function routeRequest(authSource, method, path, body, userId = userA, supabase = admin) {
   const request = new NextRequest(`http://localhost${path}`, {
     method,
     headers: body === undefined ? {} : { "content-type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  return writeInternalAuthContext(request, { supabase: admin, user: { id: userId }, userId, authSource });
+  return writeInternalAuthContext(request, { supabase, user: { id: userId }, userId, authSource });
 }
 const params = (id) => ({ params: Promise.resolve({ id }) });
-async function patch(taskId, body, authSource = "legacy_api_key") {
-  const response = await taskRoute.PATCH(routeRequest(authSource, "PATCH", `/api/tasks/${taskId}`, body), params(taskId));
+async function patch(taskId, body, authSource = "legacy_api_key", supabase = admin) {
+  const response = await taskRoute.PATCH(routeRequest(authSource, "PATCH", `/api/tasks/${taskId}`, body, userA, supabase), params(taskId));
   return { status: response.status, body: await response.json() };
 }
 
@@ -161,7 +162,8 @@ const link = (waiting, on, userId = userA) => insert("task_dependencies", { user
 function rpcArgs(root, overrides = {}) {
   return {
     p_user_id: userA, p_root_task_id: root.id, p_root_old_due_at: null, p_root_new_due_at: root.due_at,
-    p_mode: "same_gap", p_delta_workdays: 1, p_scope: "all", p_source: "db-test", p_moves: [], ...overrides,
+    p_mode: "same_gap", p_delta_workdays: 1, p_scope: "all", p_source: "db-test", p_moves: [],
+    p_root_title: root.title, p_root_was_visible: false, ...overrides,
   };
 }
 const move = (task, newDue, extra = {}) => ({ task_id: task.id, old_due_at: task.due_at, new_due_at: newDue, priority_score: 55, comment: `named ${task.title}`, comment_redacted: `redacted ${task.title}`, ...extra });
@@ -346,7 +348,7 @@ try {
     const ok = await insert("tasks", { user_id: userA, title: "Personal follower", tags: ["personal"], due_at: etAt("2026-10-23") });
     const work = await insert("tasks", { user_id: userA, title: "Work follower", tags: ["work"], due_at: etAt("2026-10-23") });
     const inWork = await insert("tasks", { user_id: userA, title: "Personal in work project", tags: ["personal"], due_at: etAt("2026-10-23"), project_id: project.id });
-    const { data, error } = await admin.rpc(FN, rpcArgs(r, { p_scope: "famcal", p_moves: [move(ok, etAt("2026-10-26")), move(work, etAt("2026-10-26")), move(inWork, etAt("2026-10-26"))] }));
+    const { data, error } = await admin.rpc(FN, rpcArgs(r, { p_scope: "famcal", p_root_was_visible: true, p_moves: [move(ok, etAt("2026-10-26")), move(work, etAt("2026-10-26")), move(inWork, etAt("2026-10-26"))] }));
     assert.equal(error, null);
     assert.deepEqual(data.moved.map((m) => m.task_id), [ok.id]);
     assert.equal(etDateSql(work.id), "2026-10-23");
@@ -382,7 +384,7 @@ try {
     const f = await insert("tasks", { user_id: userA, title: "Session follower (personal)", tags: ["personal"], due_at: etAt("2026-10-23") });
     const movesJson = JSON.stringify([move(f, etAt("2026-10-26"))]).replace(/'/g, "''");
     const asUser = (userId) => `BEGIN; SET LOCAL role authenticated; SELECT set_config('request.jwt.claims', '{"sub":"${userA}","role":"authenticated"}', true);
-      SELECT ${FN}('${userId}', '${r.id}', NULL, '${r.due_at}', 'same_gap', 1, 'all', 'session', '${movesJson}'::jsonb)->>'status'; COMMIT;`;
+      SELECT ${FN}('${userId}', '${r.id}', NULL, '${r.due_at}', 'same_gap', 1, 'all', 'session', '${movesJson}'::jsonb, 'Session root', false)->>'status'; COMMIT;`;
     assert.throws(() => psql(asUser(userB)), /cannot move tasks for another user/);
     assert.match(psql(asUser(userA)), /moved/);
     assert.equal(etDateSql(f.id), "2026-10-26");
@@ -480,7 +482,7 @@ try {
     const response = await commentsRoute.GET(routeRequest("famcal_api_key", "GET", `/api/tasks/${plates.id}/comments`), params(plates.id));
     assert.equal(response.status, 200);
     const text = JSON.stringify(await response.json());
-    assert.match(text, /because a task it depends on slipped 2 working days/);
+    assert.match(text, /because a task it depends on moved later\./);
     assert.equal(text.includes("Secret work"), false);
   });
 
@@ -511,8 +513,10 @@ try {
       patch(rows[0].id, { due_at: etAt("2026-10-22") }),
       patch(rows[0].id, { due_at: etAt("2026-10-23") }),
     ]);
-    assert.equal(first.status, 200);
-    assert.equal(second.status, 200);
+    // Since fix round 1 the root save is a compare-and-set on the date the plan
+    // was made from: a PATCH that lost the race is a 409 with nothing saved.
+    for (const result of [first, second]) assert.ok([200, 409].includes(result.status), String(result.status));
+    assert.ok(first.status === 200 || second.status === 200, "at least one move lands");
     for (const r of rows.slice(1)) {
       const log = psql(`SELECT coalesce(string_agg(m.old_due_at || '>' || m.new_due_at, ',' ORDER BY c.created_at, m.created_at), '') FROM task_date_cascade_moves m JOIN task_date_cascades c ON c.id = m.cascade_id WHERE m.task_id = '${r.id}';`);
       const now = psql(`SELECT due_at FROM tasks WHERE id = '${r.id}';`);
@@ -528,8 +532,184 @@ try {
       assert.equal(now, at, r.title);
       assert.ok(steps.length <= 2, r.title);
     }
-    const statuses = [first.body.cascade.status, second.body.cascade.status].sort();
-    assert.ok(["moved", "superseded"].includes(statuses[0]) && ["moved", "superseded"].includes(statuses[1]), statuses.join(","));
+    for (const result of [first, second]) {
+      if (result.status === 200) assert.ok(["moved", "superseded", "not_applicable"].includes(result.body.cascade.status), result.body.cascade.status);
+    }
+    // With one winner, the chain sits exactly at the winner's gap from where it started.
+    if (first.status !== second.status) {
+      const winner = first.status === 200 ? etAt("2026-10-22") : etAt("2026-10-23");
+      assert.equal(psql(`SELECT due_at = '${winner}'::timestamptz FROM tasks WHERE id = '${rows[0].id}';`), "t");
+      const expected = winner === etAt("2026-10-22") ? ["2026-10-23", "2026-10-26", "2026-10-27"] : ["2026-10-26", "2026-10-27", "2026-10-28"];
+      assert.deepEqual(rows.slice(1).map((r) => etDateSql(r.id)), expected);
+    }
+  });
+  // ── Part 3: fix round 1 (Fable ecd121ca, Codex Astra) ───────────────────
+  async function famcalCommentsText(taskId) {
+    const response = await commentsRoute.GET(routeRequest("famcal_api_key", "GET", `/api/tasks/${taskId}/comments`), params(taskId));
+    assert.equal(response.status, 200);
+    return JSON.stringify(await response.json());
+  }
+
+  await test("R1 P1-1: rename + re-tag work→personal + later date in one PATCH: FamCal never reads the old work title on the follower", async () => {
+    const root = await insert("tasks", { user_id: userA, title: "Secret work launch", tags: ["work"], due_at: etAt("2026-10-20") });
+    const follower = await insert("tasks", { user_id: userA, title: "Book the movers", tags: ["personal"], due_at: etAt("2026-10-21") });
+    await link(follower.id, root.id);
+    const result = await patch(root.id, { title: "Personal reminder", tags: ["personal"], due_at: etAt("2026-10-22") });
+    assert.equal(result.status, 200, JSON.stringify(result.body).slice(0, 300));
+    assert.equal(etDateSql(follower.id), "2026-10-23");
+    const text = await famcalCommentsText(follower.id);
+    assert.equal(text.includes("Secret work launch"), false);
+    assert.match(text, /a task it depends on moved later/);
+  });
+
+  await test("R1 P1-2 A: a redacted comment carries no date or gap of the hidden task (only_collisions and same_gap)", async () => {
+    for (const mode of ["only_collisions", "same_gap"]) {
+      const root = await insert("tasks", { user_id: userA, title: `Hidden ${mode}`, tags: ["work"], due_at: etAt("2026-10-20") });
+      const follower = await insert("tasks", { user_id: userA, title: `Personal ${mode}`, tags: ["personal"], due_at: etAt("2026-10-21") });
+      await link(follower.id, root.id);
+      await patch(root.id, { due_at: etAt("2026-10-22"), cascade_mode: mode });
+      const text = await famcalCommentsText(follower.id);
+      assert.doesNotMatch(text, /moved to|slipped|working day/, mode);
+      assert.match(text, /because a task it depends on moved later\./, mode);
+    }
+  });
+
+  await test("R1 P2-3: a FamCal-visible root gets NO comment about a work project past its target (the caller's reply keeps the flag)", async () => {
+    const workProject = await insert("projects", { user_id: userA, name: "Secret work program", tags: ["work"], rag: "Green", target_date: "2026-10-22" });
+    const root = await insert("tasks", { user_id: userA, title: "Personal errand root", tags: ["personal"], due_at: etAt("2026-10-20") });
+    const workDep = await insert("tasks", { user_id: userA, title: "Work step", tags: ["work"], due_at: etAt("2026-10-21"), project_id: workProject.id });
+    await link(workDep.id, root.id);
+    const result = await patch(root.id, { due_at: etAt("2026-10-22") });
+    assert.equal(etDateSql(workDep.id), "2026-10-23");
+    assert.equal(psql(`SELECT rag FROM projects WHERE id = '${workProject.id}';`), "Yellow");
+    assert.deepEqual(result.body.cascade.project_flags.map((f) => f.name), ["Secret work program"]);
+    assert.equal(comments(root.id), "");
+    const text = await famcalCommentsText(root.id);
+    for (const leak of ["Secret work program", "another project", "target date", "Yellow", "Thu 10/22"]) assert.equal(text.includes(leak), false, leak);
+  });
+
+  await test("R1 P1-3: 600 hidden work tasks waiting on a personal task change nothing FamCal sees: the personal follower moves, no notice", async () => {
+    const root = await insert("tasks", { user_id: userA, title: "Personal fan root", tags: ["personal"], due_at: etAt("2026-10-20") });
+    const follower = await insert("tasks", { user_id: userA, title: "Personal fan follower", tags: ["personal"], due_at: etAt("2026-10-22") });
+    await link(follower.id, root.id);
+    psql(`WITH made AS (
+            INSERT INTO tasks (user_id, title, tags, due_at)
+            SELECT '${userA}', 'Hidden fan ' || g, ARRAY['work'], '${etAt("2026-10-22")}'::timestamptz FROM generate_series(1, 600) g
+            RETURNING id)
+          INSERT INTO task_dependencies (user_id, task_id, depends_on_task_id) SELECT '${userA}', id, '${root.id}' FROM made;`);
+    const result = await patch(root.id, { due_at: etAt("2026-10-22") }, "famcal_api_key");
+    assert.equal(result.status, 200);
+    assert.equal("cascade" in result.body, false);
+    assert.equal(etDateSql(follower.id), "2026-10-26");
+    assert.equal(comments(root.id), "");
+    assert.equal(psql(`SELECT count(*) FROM tasks WHERE user_id = '${userA}' AND title LIKE 'Hidden fan %' AND (due_at AT TIME ZONE 'America/New_York')::date <> '2026-10-22';`), "0");
+  });
+
+  // Pauses the first `select('*')…single()` read of tasks (the PATCH's own read
+  // of the task) until resume() is called.
+  function pausedClient() {
+    let armed = true;
+    let signal;
+    let release;
+    const read = new Promise((resolve) => { signal = resolve; });
+    const gate = new Promise((resolve) => { release = resolve; });
+    const wrap = (builder, ops) => new Proxy(builder, {
+      get(inner, prop) {
+        if (prop === "then") {
+          const capture = armed && ops.some(([name]) => name === "single") && ops.some(([name, args]) => name === "select" && args[0] === "*");
+          if (capture) armed = false;
+          return (resolve, reject) => inner.then(async (result) => {
+            if (capture) { signal(); await gate; }
+            return result;
+          }).then(resolve, reject);
+        }
+        const value = inner[prop];
+        if (typeof value !== "function") return value;
+        return (...args) => wrap(value.apply(inner, args), [...ops, [prop, args]]);
+      },
+    });
+    const client = new Proxy(admin, {
+      get(target, prop) {
+        if (prop === "from") return (table) => (table === "tasks" ? wrap(target.from(table), []) : target.from(table));
+        const value = target[prop];
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    return { client, read, resume: () => release() };
+  }
+
+  await test("R1 P2-1: two overlapping PATCHes on one task: the stale one is a 409 with nothing saved (no extra shift); a retry gives the serial gap", async () => {
+    const root = await insert("tasks", { user_id: userA, title: "Overlap root", tags: ["work"], due_at: etAt("2026-10-20") });
+    const child = await insert("tasks", { user_id: userA, title: "Overlap child", tags: ["work"], due_at: etAt("2026-10-22") });
+    await link(child.id, root.id);
+    const paused = pausedClient();
+    const pending = patch(root.id, { due_at: etAt("2026-10-22") }, "legacy_api_key", paused.client);
+    await paused.read;
+    const intervening = await patch(root.id, { due_at: etAt("2026-10-21") });
+    assert.equal(intervening.body.cascade.status, "moved");
+    assert.equal(etDateSql(child.id), "2026-10-23");
+    paused.resume();
+    const stale = await pending;
+    assert.equal(stale.status, 409, JSON.stringify(stale.body).slice(0, 300));
+    assert.equal(etDateSql(root.id), "2026-10-21");
+    assert.equal(etDateSql(child.id), "2026-10-23");
+    const retry = await patch(root.id, { due_at: etAt("2026-10-22") });
+    assert.equal(retry.status, 200);
+    // Serial: Tue→Wed moved the child Thu→Fri; Wed→Thu moves it Fri→Mon.
+    assert.equal(etDateSql(child.id), "2026-10-26");
+  });
+
+  await test("R1 P2-2: a project re-tag that is in flight when the cascade runs is waited for; the comment follows the committed tags (redacted)", async () => {
+    const personalProject = await insert("projects", { user_id: userA, name: "Home move", tags: ["personal"], rag: "Green" });
+    const root = await insert("tasks", { user_id: userA, title: "Root in a personal project", tags: ["personal"], due_at: etAt("2026-10-20"), project_id: personalProject.id });
+    const follower = await insert("tasks", { user_id: userA, title: "Standalone personal follower", tags: ["personal"], due_at: etAt("2026-10-21") });
+    await link(follower.id, root.id);
+    const retag = psqlConnection("retag");
+    let result;
+    try {
+      retag.send(`BEGIN; UPDATE projects SET tags = ARRAY['work'] WHERE id = '${personalProject.id}'; SELECT 'retag-held';`);
+      await retag.waitFor("retag-held");
+      const pending = patch(root.id, { due_at: etAt("2026-10-22") });
+      let done = false;
+      pending.then(() => { done = true; });
+      await sleep(1500);
+      assert.equal(done, false, "the cascade waited for the project re-tag");
+      retag.send("COMMIT; SELECT 'retag-done';");
+      await retag.waitFor("retag-done");
+      result = await pending;
+    } finally {
+      await retag.end();
+    }
+    assert.equal(result.status, 200);
+    assert.equal(etDateSql(follower.id), "2026-10-23");
+    assert.equal(comments(follower.id), "system: Due date moved from Wed 10/21 to Fri 10/23 because a task it depends on moved later.");
+  });
+
+  await test("R1 LOW a: the function refuses a root that became Done (or recurring) after planning: superseded, nothing moves", async () => {
+    for (const change of ["status = 'Done'", `recurring_template_id = '${g.a.id}'`]) {
+      const r = await insert("tasks", { user_id: userA, title: "Finished root", tags: ["work"], due_at: etAt("2026-10-22") });
+      const f = await insert("tasks", { user_id: userA, title: "After a finished root", tags: ["work"], due_at: etAt("2026-10-23") });
+      psql(`UPDATE tasks SET ${change} WHERE id = '${r.id}';`);
+      const { data, error } = await admin.rpc(FN, rpcArgs(r, { p_moves: [move(f, etAt("2026-10-26"))] }));
+      assert.equal(error, null, change);
+      assert.equal(data.status, "superseded", change);
+      assert.equal(etDateSql(f.id), "2026-10-23", change);
+    }
+  });
+
+  await test("R1 P2-4 (low): a base-priority edit after planning keeps its own score; an unchanged base gets the planned one", async () => {
+    const r = await insert("tasks", { user_id: userA, title: "Priority root", tags: ["work"], due_at: etAt("2026-10-22") });
+    const edited = await insert("tasks", { user_id: userA, title: "Edited meanwhile", tags: ["work"], due_at: etAt("2026-10-23"), base_priority: 50, priority_score: 50 });
+    const plain = await insert("tasks", { user_id: userA, title: "Not edited", tags: ["work"], due_at: etAt("2026-10-23"), base_priority: 50, priority_score: 50 });
+    psql(`UPDATE tasks SET base_priority = 90, priority_score = 90 WHERE id = '${edited.id}';`);
+    const { data, error } = await admin.rpc(FN, rpcArgs(r, {
+      p_moves: [move(edited, etAt("2026-10-26"), { base_priority: 50 }), move(plain, etAt("2026-10-26"), { base_priority: 50 })],
+    }));
+    assert.equal(error, null);
+    assert.equal(data.moved.length, 2);
+    assert.equal(psql(`SELECT priority_score FROM tasks WHERE id = '${edited.id}';`), "90");
+    assert.equal(psql(`SELECT priority_score FROM tasks WHERE id = '${plain.id}';`), "55");
+    assert.equal(psql(`SELECT new_priority_score FROM task_date_cascade_moves WHERE task_id = '${edited.id}';`), "90");
   });
 } finally {
   for (const id of users) {

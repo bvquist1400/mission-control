@@ -150,7 +150,7 @@ await test("Brent's example: license Tue 10/20 → Thu 10/22 moves voter registr
     rootTitle: "MA driver's license transfer", rootNewDueAt: etAt("2026-10-22"), mode: "same_gap", deltaWorkdays: 2, move: result.moves[0],
   });
   assert.equal(comments.named, "Due date moved from Thu 10/22 to Mon 10/26 because \"MA driver's license transfer\" slipped 2 working days.");
-  assert.equal(comments.redacted, "Due date moved from Thu 10/22 to Mon 10/26 because a task it depends on slipped 2 working days.");
+  assert.equal(comments.redacted, "Due date moved from Thu 10/22 to Mon 10/26 because a task it depends on moved later.");
 });
 
 // OnCore-shaped chain: calendar + 6 steps, each waiting on the one before.
@@ -363,7 +363,14 @@ function makeDb({ rowCap = 1000, rpcFails = null, hook = null, state: given = nu
     const project = projectById().get(r.project_id);
     return Boolean(project && project.user_id === r.user_id && project.tags.includes("personal"));
   };
-  const value = (table, r, column) => (table === "tasks" && column === "famcal_eligible" ? famcalEligible(r) : r[column]);
+  const value = (table, r, column) => {
+    // FamCal link read: the waiting task joined as `waiting` (inner join).
+    if (table === "task_dependencies" && String(column).startsWith("waiting.")) {
+      const waiting = state.tasks.find((t) => t.id === r.task_id);
+      return waiting ? value("tasks", waiting, column.slice("waiting.".length)) : undefined;
+    }
+    return table === "tasks" && column === "famcal_eligible" ? famcalEligible(r) : r[column];
+  };
 
   function run(table, ops) {
     const op = (name) => ops.find(([n]) => n === name);
@@ -377,7 +384,7 @@ function makeDb({ rowCap = 1000, rpcFails = null, hook = null, state: given = nu
     };
     const rowsOf = () => (state[table] ||= []);
     const matches = (r) => ops.every(([name, args]) => {
-      if (name === "eq" && String(args[0]).includes(".")) return true; // embedded-table filter, applied below
+      if (name === "eq" && String(args[0]).startsWith("task_comments.")) return true; // embedded comments, applied below
       if (name === "eq") return value(table, r, args[0]) === args[1];
       if (name === "neq") return value(table, r, args[0]) !== args[1];
       if (name === "in") return args[1].includes(value(table, r, args[0]));
@@ -440,7 +447,9 @@ function makeDb({ rowCap = 1000, rpcFails = null, hook = null, state: given = nu
   function applyCascade(args) {
     const root = state.tasks.find((r) => r.id === args.p_root_task_id && r.user_id === args.p_user_id);
     const rootVisible = Boolean(root && famcalEligible(root));
-    if (!root || (args.p_scope === "famcal" && !rootVisible) || Date.parse(root.due_at) !== Date.parse(args.p_root_new_due_at)) {
+    const rootCascades = root && root.status !== "Done" && !root.is_recurring_template && !root.recurring_template_id;
+    const nameOk = Boolean(args.p_root_was_visible) && rootVisible && root.title === args.p_root_title;
+    if (!rootCascades || (args.p_scope === "famcal" && !rootVisible) || Date.parse(root.due_at) !== Date.parse(args.p_root_new_due_at)) {
       return { status: "superseded", cascade_id: null, moved: [], skipped: [], project_flags: [] };
     }
     const cascadeId = `cascade-${state.task_date_cascades.length + 1}`;
@@ -458,8 +467,8 @@ function makeDb({ rowCap = 1000, rpcFails = null, hook = null, state: given = nu
         continue;
       }
       target.due_at = move.new_due_at;
-      target.priority_score = move.priority_score;
-      const content = famcalEligible(target) && !rootVisible ? move.comment_redacted : move.comment;
+      if (!("base_priority" in move) || target.base_priority === move.base_priority) target.priority_score = move.priority_score;
+      const content = famcalEligible(target) && !nameOk ? move.comment_redacted : move.comment;
       state.task_comments.push({ id: `cc-${state.task_comments.length + 1}`, task_id: target.id, user_id: args.p_user_id, content, source: "system" });
       state.task_date_cascade_moves.push({ cascade_id: cascadeId, task_id: target.id, old_due_at: move.old_due_at, new_due_at: move.new_due_at });
       moved.push({ task_id: target.id, old_due_at: move.old_due_at, new_due_at: move.new_due_at, project_id: target.project_id });
@@ -744,7 +753,7 @@ await test("Brent moves a WORK task (MCP key): the personal task after it moves 
   const result = await patch(db, T.workRoot, { due_at: etAt("2026-10-22") });
   assert.equal(result.body.cascade.moves.length, 2);
   assert.equal(etDate(dueOf(db, T.personalDep)), "2026-10-23");
-  assert.deepEqual(commentsOn(db, T.personalDep), ["Due date moved from Wed 10/21 to Fri 10/23 because a task it depends on slipped 2 working days."]);
+  assert.deepEqual(commentsOn(db, T.personalDep), ["Due date moved from Wed 10/21 to Fri 10/23 because a task it depends on moved later."]);
   assert.deepEqual(commentsOn(db, T.workDep), ['Due date moved from Wed 10/21 to Fri 10/23 because "Secret work milestone" slipped 2 working days.']);
   // And FamCal reading that personal task's comments sees no work title.
   const commentsRoute = await import("../src/app/api/tasks/[id]/comments/route.ts");
@@ -917,6 +926,158 @@ await test("Carry: if removing the half-made task also fails, the 500 says so an
   assert.equal(result.status, 500);
   assert.match(result.body.error, /could not be removed/);
   assert.ok(result.body.task_id);
+});
+
+// ── 6b. Fix round 1 (Fable ecd121ca, Codex Astra) ─────────────────────────
+async function famcalCommentsText(db, taskId) {
+  const commentsRoute = await import("../src/app/api/tasks/[id]/comments/route.ts");
+  const response = await commentsRoute.GET(routeRequest(db, "famcal_api_key", "GET", `/api/tasks/${taskId}/comments`), params(taskId));
+  assert.equal(response.status, 200);
+  return JSON.stringify(await response.json());
+}
+
+await test("R1 P1-1: rename + re-tag work→personal + later date in ONE PATCH never puts the old work title on a FamCal-readable comment", async () => {
+  const db = makeDb();
+  const result = await patch(db, T.workRoot, { title: "Personal reminder", tags: ["personal"], due_at: etAt("2026-10-22") });
+  assert.equal(result.status, 200);
+  const call = db.rpcCalls.find((c) => c.name === "apply_task_date_cascade");
+  assert.equal(call.args.p_root_title, "Personal reminder");
+  assert.equal(call.args.p_root_was_visible, false);
+  for (const move of call.args.p_moves) {
+    assert.equal(move.comment.includes("Secret work milestone"), false, "named text uses the saved title");
+  }
+  const text = await famcalCommentsText(db, T.personalDep);
+  assert.equal(text.includes("Secret work milestone"), false);
+  // It was work when the plan was made, so the personal follower gets the redacted text.
+  assert.match(text, /because a task it depends on moved later/);
+});
+
+await test("R1 P1-2 A: a redacted comment says only what changed on that task (no date or gap of the hidden task), both modes", async () => {
+  for (const mode of ["only_collisions", "same_gap"]) {
+    const db = makeDb();
+    const result = await patch(db, T.workRoot, { due_at: etAt("2026-10-22"), cascade_mode: mode });
+    assert.equal(result.status, 200);
+    const text = await famcalCommentsText(db, T.personalDep);
+    assert.equal(text.includes("Secret work milestone"), false, mode);
+    assert.doesNotMatch(text, /depends on moved to|slipped|working day/, mode);
+    assert.match(text, /because a task it depends on moved later\./, mode);
+  }
+});
+
+function famcalFan(hiddenCount) {
+  const state = seed();
+  state.tasks = state.tasks.filter((r) => [T.license, T.voter].includes(r.id));
+  state.task_dependencies = [dep("p1", T.voter, T.license)];
+  for (let index = 0; index < hiddenCount; index += 1) {
+    const hidden = tid(7000 + index);
+    state.tasks.push(task(hidden, `Hidden ${index}`, { due_at: etAt("2026-10-22") }));
+    state.task_dependencies.push(dep(`h-${String(index).padStart(5, "0")}`, hidden, T.license));
+  }
+  return state;
+}
+
+await test("R1 P1-3: hidden work tasks waiting on a personal task never count toward the limits or change what FamCal sees (0 / 499 / 600)", async () => {
+  const outcomes = [];
+  for (const hidden of [0, 499, 600]) {
+    const db = makeDb({ state: famcalFan(hidden) });
+    const result = await patch(db, T.license, { due_at: etAt("2026-10-22") }, "famcal_api_key");
+    assert.equal(result.status, 200);
+    outcomes.push(JSON.stringify({ body: Object.keys(result.body).sort(), voter: etDate(dueOf(db, T.voter)), license: commentsOn(db, T.license), voterComments: commentsOn(db, T.voter) }));
+    // The link read itself is filtered on the waiting task's eligibility in the database.
+    const linkReads = db.log.filter((entry) => entry.table === "task_dependencies");
+    assert.ok(linkReads.length > 0);
+    for (const entry of linkReads) {
+      assert.ok(entry.ops.some(([name, args]) => name === "eq" && args[0] === "waiting.famcal_eligible" && args[1] === true), "eligibility in the link read");
+      assert.ok(entry.ops.some(([name, args]) => name === "contains" && args[0] === "waiting.tags"), "personal tag in the link read");
+    }
+    if (hidden) assert.equal(etDate(dueOf(db, tid(7000))), "2026-10-22", "hidden task never moves");
+  }
+  assert.equal(new Set(outcomes).size, 1, outcomes.join("\n"));
+  assert.match(outcomes[0], /"voter":"2026-10-26"/);
+});
+
+await test("R1 P2-1: two overlapping PATCHes on one task: the stale one is a 409 (nothing saved), never an extra shift; a retry gives the serial result", async () => {
+  const state = seed();
+  const db = makeDb({ state });
+  const originalFrom = db.client.from;
+  let armed = true;
+  let signalRead;
+  let resume;
+  const read = new Promise((resolve) => { signalRead = resolve; });
+  const gate = new Promise((resolve) => { resume = resolve; });
+  // Pause PATCH A right after it reads the task (before it reads the links).
+  db.client.from = (table) => {
+    const query = originalFrom(table);
+    if (table !== "tasks" || !armed) return query;
+    const ops = [];
+    const proxy = new Proxy({}, {
+      get(_target, prop) {
+        if (prop === "then") {
+          const capture = armed && ops.some(([name]) => name === "single") && ops.some(([name, args]) => name === "select" && args[0] === "*");
+          if (capture) armed = false;
+          return (resolve, reject) => {
+            let built = query;
+            for (const [name, args] of ops) built = built[name](...args);
+            return Promise.resolve(built).then(async (result) => {
+              if (capture) { signalRead(); await gate; }
+              return result;
+            }).then(resolve, reject);
+          };
+        }
+        return (...args) => { ops.push([prop, args]); return proxy; };
+      },
+    });
+    return proxy;
+  };
+  const pending = patch(db, T.license, { due_at: etAt("2026-10-22") });
+  await read;
+  const intervening = await patch(db, T.license, { due_at: etAt("2026-10-21") });
+  assert.equal(intervening.body.cascade.status, "moved");
+  assert.equal(etDate(dueOf(db, T.voter)), "2026-10-23");
+  resume();
+  const stale = await pending;
+  assert.equal(stale.status, 409);
+  assert.match(stale.body.error, /changed since it was read/);
+  assert.equal(etDate(dueOf(db, T.license)), "2026-10-21");
+  assert.equal(etDate(dueOf(db, T.voter)), "2026-10-23");
+  const retry = await patch(db, T.license, { due_at: etAt("2026-10-22") });
+  assert.equal(retry.status, 200);
+  assert.equal(etDate(dueOf(db, T.voter)), "2026-10-26");
+});
+
+await test("R1 LOW a: a task marked Done between planning and applying moves nothing after it", async () => {
+  let changed = false;
+  const db = makeDb({
+    hook: ({ table, ops, state }) => {
+      if (!changed && table === "tasks" && ops.some(([name]) => name === "update")) {
+        changed = true;
+        state.tasks.find((r) => r.id === ONCORE_IDS[0]).status = "Done";
+      }
+    },
+  });
+  const result = await patch(db, ONCORE_IDS[0], { due_at: etAt("2026-10-22") });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.cascade.status, "superseded");
+  assert.equal(etDate(dueOf(db, ONCORE_IDS[1])), "2026-10-21");
+});
+
+await test("R1 P2-4 (low): a base-priority edit made after planning is not overwritten by the planned score", async () => {
+  let changed = false;
+  const db = makeDb({
+    hook: ({ table, ops, state }) => {
+      if (!changed && table === "tasks" && ops.some(([name]) => name === "update")) {
+        changed = true;
+        Object.assign(state.tasks.find((r) => r.id === T.voter), { base_priority: 90, priority_score: 90 });
+      }
+    },
+  });
+  const result = await patch(db, T.license, { due_at: etAt("2026-10-22") });
+  assert.equal(result.body.cascade.status, "moved");
+  const voter = db.state.tasks.find((r) => r.id === T.voter);
+  assert.equal(etDate(voter.due_at), "2026-10-26");
+  assert.equal(voter.priority_score, 90);
+  const call = db.rpcCalls.find((c) => c.name === "apply_task_date_cascade");
+  assert.equal(call.args.p_moves[0].base_priority, 50);
 });
 
 // ── 7. MCP update_task ─────────────────────────────────────────────────────
