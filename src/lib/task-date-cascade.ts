@@ -471,7 +471,11 @@ function chunk<T>(values: T[], size: number): T[][] {
   return out;
 }
 
+/** FamCal link read: the waiting task joined (inner) so its eligibility filters the links themselves. */
+export const FAMCAL_LINK_SELECT = 'id, task_id, depends_on_task_id, waiting:tasks!task_dependencies_blocked_task_id_fkey!inner(id)';
+
 interface PagedQuery {
+  contains(column: string, value: unknown[]): PagedQuery;
   eq(column: string, value: unknown): PagedQuery;
   gt(column: string, value: unknown): PagedQuery;
   in(column: string, values: unknown[]): PagedQuery;
@@ -510,10 +514,16 @@ export async function loadCascadeGraph(
         ...(await fetchAllPages((afterId, limit) => {
           let query = supabase
             .from('task_dependencies')
-            .select('id, task_id, depends_on_task_id')
+            .select(options.famcal ? FAMCAL_LINK_SELECT : 'id, task_id, depends_on_task_id')
             .eq('user_id', userId)
             .eq('is_resolved', false)
             .in('depends_on_task_id', ids) as unknown as PagedQuery;
+          if (options.famcal) {
+            // FamCal: only links whose WAITING task it may see, filtered in the
+            // database (inner join), so hidden tasks are never paged, counted
+            // toward the limits, or able to change what FamCal observes.
+            query = query.contains('waiting.tags', [FAMCAL_REQUIRED_TAG]).eq(`waiting.${FAMCAL_ELIGIBLE_FIELD}`, true);
+          }
           if (afterId !== null) query = query.gt('id', afterId);
           return query.order('id', { ascending: true }).limit(limit);
         }))
@@ -611,7 +621,9 @@ export function buildCascadeMoveComments(input: {
     return `Due date moved from ${from} to ${to} because ${who} moved to ${formatEtDay(input.rootNewDueAt)} and this task can't be due before a task it waits on.`;
   };
   const title = input.rootTitle.trim() || 'Untitled task';
-  return { named: build(`"${title}"`), redacted: build(CASCADE_REDACTED_ROOT) };
+  // The redacted text says only what changed on this task: no gap, no date of
+  // the task it waits on (FamCal may read it while that task is hidden from it).
+  return { named: build(`"${title}"`), redacted: `Due date moved from ${from} to ${to} because ${CASCADE_REDACTED_ROOT} moved later.` };
 }
 
 // ── Priority for the moved tasks ─────────────────────────────────────────
@@ -733,14 +745,11 @@ export async function applyTaskDateCascade(
     deltaWorkdays: number;
     scope: 'all' | 'famcal';
     source: string;
-    moves: Array<{
-      task_id: string;
-      old_due_at: string;
-      new_due_at: string;
-      priority_score: number;
-      comment: string;
-      comment_redacted: string;
-    }>;
+    moves: CascadeApplyMove[];
+    /** The edited task's title as saved by this PATCH (the comments name this one). */
+    rootTitle: string;
+    /** Whether FamCal could read the edited task before this PATCH (read before the save). */
+    rootWasVisible: boolean;
   }
 ): Promise<CascadeApplyResult> {
   const { data, error } = await supabase.rpc(CASCADE_APPLY_RPC, {
@@ -753,6 +762,8 @@ export async function applyTaskDateCascade(
     p_scope: input.scope,
     p_source: input.source,
     p_moves: input.moves,
+    p_root_title: input.rootTitle,
+    p_root_was_visible: input.rootWasVisible,
   });
   if (error) {
     const err = error as { message?: string; code?: string };
@@ -814,6 +825,8 @@ export interface CascadeApplyMove {
   old_due_at: string;
   new_due_at: string;
   priority_score: number;
+  /** base_priority the score was computed from; the function keeps the current score if it changed. */
+  base_priority: number;
   comment: string;
   comment_redacted: string;
 }
@@ -839,6 +852,7 @@ export async function prepareCascadeApplyMoves(
       old_due_at: move.old_due_at,
       new_due_at: move.new_due_at,
       priority_score: priorities.get(move.task_id) ?? task?.priority_score ?? 50,
+      base_priority: typeof task?.base_priority === 'number' ? task.base_priority : (task?.priority_score ?? 50),
       comment: comments.named,
       comment_redacted: comments.redacted,
     };
