@@ -140,17 +140,21 @@ export async function POST(request: NextRequest) {
   try {
     const payload = (await request.json()) as EmailIntakePayload;
 
-    if (!payload.subject || !payload.from_email || !payload.received_at) {
-      return NextResponse.json(
-        { error: 'Missing required fields: subject, from_email, received_at' },
-        { status: 400 }
-      );
-    }
-
+    // Checked before the required fields on purpose: a body with only an unknown
+    // `mode` is a side-effect-free 400 "Invalid mode" here, while a build without
+    // this mode answers "Missing required fields". The support-mail Apps Script
+    // uses that as its version check before it posts anything.
     const mode = parseIntakeMode(payload.mode);
     if (!mode) {
       return NextResponse.json(
         { error: 'Invalid mode. Leave it out, or send "inbox_only".' },
+        { status: 400 }
+      );
+    }
+
+    if (!payload.subject || !payload.from_email || !payload.received_at) {
+      return NextResponse.json(
+        { error: 'Missing required fields: subject, from_email, received_at' },
         { status: 400 }
       );
     }

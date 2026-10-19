@@ -463,6 +463,17 @@ await test("bad mode values -> 400 before any database call or AI call", async (
   }
 });
 
+await test("version check: a body with only an unknown mode -> 400 Invalid mode (not missing fields), nothing touched", async () => {
+  const db = resetState();
+  const res = await post(keyRequest({ mode: "version_check" }));
+  assert.equal(res.status, 400);
+  assert.deepEqual(res.body, { error: 'Invalid mode. Leave it out, or send "inbox_only".' });
+  assert.equal(db.log.length, 0);
+  assert.equal(state.extractCalls.length, 0);
+  const noKey = await post(keyRequest({ mode: "version_check" }, { key: "wrong-key-wrong-key-wrong-key-00" }));
+  assert.equal(noKey.status, 401, "a wrong key is still 401 first");
+});
+
 // ── 4. MCP search + fetch show the excerpt ─────────────────────────────────
 const INBOX_ONLY_ROW = {
   id: INBOX_ID,
