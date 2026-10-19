@@ -330,7 +330,9 @@ export interface StakeholderWithCounts extends Stakeholder {
   open_commitments_count: number;
 }
 
-// LLM Extraction JSON schema (stored in inbox_items.llm_extraction_json)
+// LLM Extraction JSON schema (stored in inbox_items.llm_extraction_json). Rows from
+// POST /api/intake/email with mode "inbox_only" hold { intake_mode, body_snippet,
+// body_snippet_truncated } there instead (no extraction ran).
 export interface LlmExtraction {
   title: string;
   suggested_tasks: string[];
