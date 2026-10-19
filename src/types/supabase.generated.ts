@@ -2090,6 +2090,123 @@ export type Database = {
           },
         ]
       }
+      task_date_cascade_moves: {
+        Row: {
+          cascade_id: string
+          comment_id: string | null
+          created_at: string
+          id: string
+          new_due_at: string
+          new_priority_score: number | null
+          old_due_at: string
+          old_priority_score: number | null
+          task_id: string
+          user_id: string
+        }
+        Insert: {
+          cascade_id: string
+          comment_id?: string | null
+          created_at?: string
+          id?: string
+          new_due_at: string
+          new_priority_score?: number | null
+          old_due_at: string
+          old_priority_score?: number | null
+          task_id: string
+          user_id: string
+        }
+        Update: {
+          cascade_id?: string
+          comment_id?: string | null
+          created_at?: string
+          id?: string
+          new_due_at?: string
+          new_priority_score?: number | null
+          old_due_at?: string
+          old_priority_score?: number | null
+          task_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "task_date_cascade_moves_cascade_id_fkey"
+            columns: ["cascade_id"]
+            isOneToOne: false
+            referencedRelation: "task_date_cascades"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "task_date_cascade_moves_comment_id_fkey"
+            columns: ["comment_id"]
+            isOneToOne: false
+            referencedRelation: "task_comments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "task_date_cascade_moves_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      task_date_cascades: {
+        Row: {
+          created_at: string
+          delta_workdays: number
+          id: string
+          mode: string
+          moved_count: number
+          project_flags: Json
+          root_new_due_at: string
+          root_old_due_at: string | null
+          root_task_id: string
+          scope: string
+          source: string
+          undone_at: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          delta_workdays: number
+          id?: string
+          mode: string
+          moved_count?: number
+          project_flags?: Json
+          root_new_due_at: string
+          root_old_due_at?: string | null
+          root_task_id: string
+          scope: string
+          source: string
+          undone_at?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          delta_workdays?: number
+          id?: string
+          mode?: string
+          moved_count?: number
+          project_flags?: Json
+          root_new_due_at?: string
+          root_old_due_at?: string | null
+          root_task_id?: string
+          scope?: string
+          source?: string
+          undone_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "task_date_cascades_root_task_id_fkey"
+            columns: ["root_task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       task_dependencies: {
         Row: {
           created_at: string
@@ -2527,6 +2644,20 @@ export type Database = {
         Args: { num_days: number; start_date: string }
         Returns: string
       }
+      apply_task_date_cascade: {
+        Args: {
+          p_delta_workdays: number
+          p_mode: string
+          p_moves: Json
+          p_root_new_due_at: string
+          p_root_old_due_at: string
+          p_root_task_id: string
+          p_scope: string
+          p_source: string
+          p_user_id: string
+        }
+        Returns: Json
+      }
       brief_item_transition: {
         Args: {
           p_expected_state: string
@@ -2651,6 +2782,7 @@ export type Database = {
           sync_at: string
         }[]
       }
+      task_graph_lock_key: { Args: { p_user_id: string }; Returns: number }
       upsert_project_template: {
         Args: {
           p_default_rag?: Database["public"]["Enums"]["rag_status"]
