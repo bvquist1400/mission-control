@@ -51,6 +51,32 @@ interface EmailIntakePayload {
   message_id?: string;
   source_url?: string;
   body_snippet?: string;
+  mode?: unknown;
+}
+
+// Opt-in "inbox only" mode (mode: "inbox_only"): store the inbox row with the
+// trimmed excerpt so it can be triaged later, and skip the AI extraction and the
+// task. Leaving `mode` out keeps the original behaviour (extraction + task).
+type IntakeMode = 'default' | 'inbox_only';
+const INBOX_ONLY_EXCERPT_MAX_CHARS = 2000;
+
+function parseIntakeMode(value: unknown): IntakeMode | null {
+  if (value === undefined) return 'default';
+  if (value === 'inbox_only') return 'inbox_only';
+  return null;
+}
+
+// Cut to at most INBOX_ONLY_EXCERPT_MAX_CHARS characters (whole code points) and
+// drop what Postgres JSON cannot store (NUL; lone surrogates become U+FFFD), so a
+// malformed excerpt can never make the insert fail on every retry.
+function prepareInboxOnlyExcerpt(value: string | undefined | null): { text: string | null; truncated: boolean } {
+  if (value === undefined || value === null) return { text: null, truncated: false };
+  const cleaned = value
+    .replace(/\u0000/g, '')
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD');
+  const chars = Array.from(cleaned);
+  if (chars.length <= INBOX_ONLY_EXCERPT_MAX_CHARS) return { text: cleaned, truncated: false };
+  return { text: chars.slice(0, INBOX_ONLY_EXCERPT_MAX_CHARS).join(''), truncated: true };
 }
 
 function generateDedupeKey(payload: EmailIntakePayload, userId: string): string {
@@ -121,6 +147,26 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const mode = parseIntakeMode(payload.mode);
+    if (!mode) {
+      return NextResponse.json(
+        { error: 'Invalid mode. Leave it out, or send "inbox_only".' },
+        { status: 400 }
+      );
+    }
+
+    if (
+      mode === 'inbox_only'
+      && payload.body_snippet !== undefined
+      && payload.body_snippet !== null
+      && typeof payload.body_snippet !== 'string'
+    ) {
+      return NextResponse.json(
+        { error: 'body_snippet must be a string' },
+        { status: 400 }
+      );
+    }
+
     const dedupeKey = generateDedupeKey(payload, userId);
 
     const { data: existing, error: existingError } = await supabase
@@ -139,6 +185,46 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { message: 'Duplicate email, already processed', inbox_item_id: existing.id },
         { status: 200 }
+      );
+    }
+
+    if (mode === 'inbox_only') {
+      const excerpt = prepareInboxOnlyExcerpt(payload.body_snippet);
+      const { data: storedItem, error: storeError } = await supabase
+        .from('inbox_items')
+        .insert({
+          user_id: userId,
+          received_at: payload.received_at,
+          from_name: payload.from_name || null,
+          from_email: payload.from_email,
+          subject: payload.subject,
+          source: 'ActionIntakeEmail',
+          source_message_id: payload.message_id || null,
+          source_url: payload.source_url || null,
+          dedupe_key: dedupeKey,
+          triage_state: 'New',
+          extraction_version: 1,
+          // inbox_items has no body column; this mode keeps the excerpt in the
+          // row's JSON field, marked so readers can tell it from an AI extraction.
+          llm_extraction_json: {
+            intake_mode: 'inbox_only',
+            body_snippet: excerpt.text,
+            body_snippet_truncated: excerpt.truncated,
+          },
+        })
+        .select()
+        .single();
+
+      if (storeError || !storedItem) {
+        throw new Error(`Failed to create inbox_item: ${storeError?.message}`);
+      }
+
+      inboxItemId = storedItem.id;
+      await logIngestionEvent(supabase, userId, inboxItemId, 'received', true, 'Inbox only: no extraction, no task');
+
+      return NextResponse.json(
+        { success: true, mode: 'inbox_only', inbox_item_id: inboxItemId, task_id: null },
+        { status: 201 }
       );
     }
 

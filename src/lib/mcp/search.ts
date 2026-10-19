@@ -131,6 +131,24 @@ function joinText(parts: Array<string | null | undefined>): string {
     .trim();
 }
 
+// An inbox row stored by POST /api/intake/email with mode "inbox_only" keeps its
+// excerpt (not an AI extraction) in llm_extraction_json. Show that as plain text;
+// any other value is shown as JSON, as before.
+function describeInboxJson(value: unknown, pretty: boolean): string | null {
+  if (value && typeof value === 'object' && (value as { intake_mode?: unknown }).intake_mode === 'inbox_only') {
+    const { body_snippet: excerpt, body_snippet_truncated: truncated } = value as {
+      body_snippet?: unknown;
+      body_snippet_truncated?: unknown;
+    };
+    const excerptText = typeof excerpt === 'string' && excerpt.trim() ? excerpt : '(none)';
+    return [
+      `Intake mode: inbox only (no task was created)`,
+      `Excerpt${truncated === true ? ' (cut at 2,000 characters)' : ''}:\n${excerptText}`,
+    ].join(pretty ? '\n\n' : ' ');
+  }
+  return typeof value === 'object' ? JSON.stringify(value, null, pretty ? 2 : undefined) : null;
+}
+
 /**
  * Like joinText, but keeps each part's own line breaks so Markdown (lists,
  * tables, headings) survives into full-record fetches and the /r pages.
@@ -502,7 +520,7 @@ async function searchEmails(
       joinText([
         item.from_name ? `From: ${item.from_name}` : null,
         item.from_email ? `Email: ${item.from_email}` : null,
-        typeof item.llm_extraction_json === 'object' ? JSON.stringify(item.llm_extraction_json) : null,
+        describeInboxJson(item.llm_extraction_json, false),
       ])
     ),
     url: buildCanonicalUrl(canonicalBaseUrl, 'email', item.id),
@@ -518,7 +536,7 @@ async function searchEmails(
         item.subject,
         item.from_name,
         item.from_email,
-        typeof item.llm_extraction_json === 'object' ? JSON.stringify(item.llm_extraction_json) : null,
+        describeInboxJson(item.llm_extraction_json, false),
       ],
       item.created_at
     ),
@@ -950,7 +968,7 @@ async function fetchEmail(
       data.from_email ? `Email: ${data.from_email}` : null,
       data.received_at ? `Received: ${data.received_at}` : null,
       data.triage_state ? `Triage state: ${data.triage_state}` : null,
-      typeof data.llm_extraction_json === 'object' ? JSON.stringify(data.llm_extraction_json, null, 2) : null,
+      describeInboxJson(data.llm_extraction_json, true),
     ]),
     url: buildCanonicalUrl(canonicalBaseUrl, 'email', data.id),
     metadata: {
