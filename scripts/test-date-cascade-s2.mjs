@@ -326,38 +326,71 @@ await test("Cascade replies carry the edited task's dates and planned count; pro
   assert.match(failed.message, /Baseline was busy/);
 });
 
-await test("FR2 P2-1: the PATCH sends when it saved the edited task (p_root_saved_at) on both apply calls; a replayed (adopted) cascade keeps its id, moves and titles", async () => {
+await test("FR2/FR3 change numbers: the PATCH sends its own save's change token (p_root_change_id) on both apply calls; a replayed (adopted) cascade is described by its own log row (root dates, mode, gap, moves, titles), never the caller's plan", async () => {
   const calls = [];
   const replay = {
     status: "moved", cascade_id: "winner", adopted: true, skipped: [], project_flags: [],
-    moved: [{ task_id: "c", old_due_at: "2026-10-23T21:00:00Z", new_due_at: "2026-10-27T21:00:00Z", project_id: null, title: "Child (from the log)" }],
+    change_id: "token-1", mode: "only_collisions", delta_workdays: 0,
+    root_old_due_at: "2026-10-23T21:00:00+00:00", root_new_due_at: "2026-10-26T21:00:00+00:00",
+    moved: [{ task_id: "c", old_due_at: "2026-10-23T21:00:00Z", new_due_at: "2026-10-26T21:00:00Z", project_id: null, title: "Child (from the log)" }],
   };
   const fakeDb = { rpc: async (name, args) => { calls.push({ name, args }); return { data: replay, error: null }; } };
   const applied = await cascade.applyTaskDateCascade(fakeDb, {
-    userId: "u", rootTaskId: "r", rootOldDueAt: null, rootNewDueAt: "2026-10-26T21:00:00Z", mode: "same_gap", deltaWorkdays: 2,
-    scope: "all", source: "session", moves: [], rootTitle: "R", rootWasVisible: false, rootSavedAt: "2026-10-20T16:00:00.123456+00:00",
+    userId: "u", rootTaskId: "r", rootOldDueAt: "2026-10-22T21:00:00Z", rootNewDueAt: "2026-10-26T21:00:00Z", mode: "same_gap", deltaWorkdays: 2,
+    scope: "all", source: "session", moves: [], rootTitle: "R", rootWasVisible: false, rootChangeId: "token-1",
   });
   assert.equal(calls[0].name, "apply_task_date_cascade");
-  assert.equal(calls[0].args.p_root_saved_at, "2026-10-20T16:00:00.123456+00:00");
+  assert.equal(calls[0].args.p_root_change_id, "token-1");
+  assert.equal("p_root_saved_at" in calls[0].args, false, "a timestamp is not the identity");
   assert.equal(applied.adopted, true);
   assert.equal(applied.cascade_id, "winner");
-  const reply = cascade.buildCascadeReply({ status: "moved", mode: "same_gap", applied });
-  assert.deepEqual(reply.moves.map((m) => [m.task_id, m.title]), [["c", "Child (from the log)"]]);
+  const plan = { mode: "same_gap", deltaWorkdays: 2, rootOldDueAt: "2026-10-22T21:00:00Z", rootNewDueAt: "2026-10-26T21:00:00Z", moves: [{ task_id: "c", title: "Child", old_due_at: "x", new_due_at: "y", via: [] }], skipped: [{ task_id: "s", title: "Skipped by my plan", reason: "done" }], depthLimited: 0 };
+  const reply = cascade.buildCascadeReply({ status: "moved", mode: "same_gap", plan, applied, changeId: "token-1" });
+  assert.deepEqual(reply.moves.map((m) => [m.task_id, m.title]), [["c", "Child"]]);
   assert.equal(reply.cascade_id, "winner");
-  // Without a save time (direct callers) the argument is sent as null: 061's behaviour.
+  assert.equal(reply.change_id, "token-1");
+  assert.equal(reply.mode, "only_collisions", "the winner's mode, not this caller's");
+  assert.equal(reply.delta_workdays, 0);
+  assert.equal(reply.root_old_due_at, "2026-10-23T21:00:00+00:00", "the log row's root dates, not this caller's plan");
+  assert.deepEqual(reply.skipped, [], "this caller's own skips are not the winner's");
+  // A fresh (not adopted) apply keeps the plan's wording and dates.
+  const fresh = cascade.buildCascadeReply({ status: "moved", mode: "same_gap", plan, applied: { ...applied, adopted: undefined }, changeId: "token-1" });
+  assert.deepEqual([fresh.mode, fresh.root_old_due_at], ["same_gap", "2026-10-22T21:00:00Z"]);
+  // Without a token (direct callers) the argument is sent as null: 061's behaviour.
   await cascade.applyTaskDateCascade(fakeDb, { userId: "u", rootTaskId: "r", rootOldDueAt: null, rootNewDueAt: "x", mode: "same_gap", deltaWorkdays: 0, scope: "all", source: "s", moves: [], rootTitle: "R", rootWasVisible: false });
-  assert.equal(calls[1].args.p_root_saved_at, null);
-  // Both PATCH apply calls (the cascade and the edited task's own flag) pass the saved row's updated_at.
+  assert.equal(calls[1].args.p_root_change_id, null);
+  // Both PATCH apply calls (the cascade and the edited task's own flag) pass the token read back from the save.
   const route = readFileSync(new URL("../src/app/api/tasks/[id]/route.ts", import.meta.url), "utf8");
-  assert.match(route, /const rootSavedAt = \(data as \{ updated_at\?: string \| null \}\)\.updated_at \?\? null;/);
-  assert.equal((route.match(/^\s+rootSavedAt,$/gm) ?? []).length, 2);
-  // 062: the initial apply checks the change's identity under the lock, stamps log rows under the locks.
+  assert.match(route, /const rootChangeId = \(data as \{ due_change_id\?: string \| null \}\)\.due_change_id \?\? null;/);
+  assert.equal((route.match(/^\s+rootChangeId,$/gm) ?? []).length, 2);
+  assert.doesNotMatch(route, /rootSavedAt|updated_at \?\? null/);
+  // The flag-only path adopts the winner's moves and mode too (Codex's mixed-mode LOW).
+  assert.match(route, /flagged\.cascade_id && flagged\.adopted/);
+  // 062: the token is set in the same row write as the date, checked under the locks before any write, logged.
   const sql = readFileSync(new URL("../supabase/migrations/062_task_date_cascade_undo.sql", import.meta.url), "utf8");
+  assert.match(sql, /CREATE TRIGGER trg_tasks_due_change_id\s+BEFORE INSERT OR UPDATE ON tasks/);
+  assert.match(sql, /ELSIF NEW\.due_at IS DISTINCT FROM OLD\.due_at THEN\s+NEW\.due_change_id := gen_random_uuid\(\);/);
   const core = sql.slice(sql.indexOf("CREATE OR REPLACE FUNCTION task_date_cascade_apply_core"), sql.indexOf("CREATE OR REPLACE FUNCTION apply_task_date_cascade"));
-  assert.ok(core.indexOf("task_date_cascade_current(") > core.indexOf("PERFORM task_date_cascade_lock("), "identity read after the locks");
-  assert.ok(core.indexOf("task_date_cascade_current(") < core.indexOf("INSERT INTO public.task_date_cascades"), "and before any log row");
-  assert.match(core, /c\.created_at > p_root_saved_at/);
-  assert.match(core, /clock_timestamp\(\)\)\s+RETURNING id INTO v_cascade_id/);
+  const lock = core.indexOf("PERFORM task_date_cascade_lock(");
+  const tokenCheck = core.indexOf("v_root.due_change_id IS DISTINCT FROM p_root_change_id");
+  const adopt = core.indexOf("c.root_change_id = p_root_change_id");
+  const insert = core.indexOf("INSERT INTO public.task_date_cascades");
+  assert.ok(lock > 0 && tokenCheck > lock && adopt > tokenCheck && insert > adopt, "token check, then adoption by token, both under the locks and before any log row");
+  assert.doesNotMatch(core, /created_at > p_root_saved_at/);
+  assert.match(core, /v_root\.due_change_id, clock_timestamp\(\)\)\s+RETURNING id INTO v_cascade_id/);
+  // Undo / switch / Try again carry the token: endpoint, client and toast.
+  const parsed = undo.parseDateCascadeRequest({ action: "undo", cascade_id: null, from_due_at: "2026-10-22T21:00:00Z", to_due_at: "2026-10-26T21:00:00Z", change_id: "6fcad51b-aacc-48e9-a74f-f059371e367e" });
+  assert.equal(parsed.ok && parsed.value.changeId, "6fcad51b-aacc-48e9-a74f-f059371e367e");
+  assert.equal(undo.parseDateCascadeRequest({ action: "undo", cascade_id: null, to_due_at: "2026-10-26T21:00:00Z", change_id: "nope" }).ok, false);
+  const lib = readFileSync(new URL("../src/lib/task-date-cascade-undo.ts", import.meta.url), "utf8");
+  assert.equal((lib.match(/p_root_change_id: changeId,/g) ?? []).length, 2, "undo and replace RPCs send the token");
+  const provider = readFileSync(new URL("../src/components/tasks/DateCascadeProvider.tsx", import.meta.url), "utf8");
+  assert.equal((provider.match(/change_id: session\.changeId,/g) ?? []).length, 2, "the toast's switch/Try again and Undo send the token");
+  assert.match(provider, /changeId: cascade\.change_id \?\? null,/);
+  responder = () => json({ status: "undone" });
+  fetchCalls.length = 0;
+  await cascadeClient.undoDateChange("t1", { cascade_id: null, from_due_at: "a", to_due_at: "b", change_id: "tok" });
+  assert.equal(fetchCalls[0].body.change_id, "tok");
 });
 
 await test("Project PATCH: a deadlock (40P01) from 046's re-point trigger is sent again (bounded, 3 tries); other errors are not retried", async () => {

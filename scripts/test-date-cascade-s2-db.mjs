@@ -8,7 +8,8 @@
 //
 // P2 (carried from the S1 re-check): a cascade and a project PATCH that re-points
 //   the application, paused at the exact interleaving that deadlocked under 061.
-// Migration 062: rollback and re-apply, grants, the shared lock protocol.
+// Migration 062: rollback and re-apply, grants, the shared lock protocol, and (fix
+//   round 3, "change numbers") the per-save change token tasks.due_change_id.
 // The new endpoint POST /api/tasks/{id}/date-cascade on the real database: Undo
 //   (full, partial with a kept task, the edited task's own date, the health rule),
 //   switching mode (replaces the first move), retry after a failed cascade, the
@@ -297,8 +298,14 @@ try {
   // ── Migration 062 ────────────────────────────────────────────────────────
   await test("062 rollback restores 061's apply function and drops the new functions and columns; re-apply restores them; a second apply is a no-op", async () => {
     const fns = "('undo_task_date_cascade', 'replace_task_date_cascade', 'task_date_cascade_lock', 'task_date_cascade_apply_core', 'task_date_cascade_undo_core', 'task_date_cascade_score_unchanged', 'task_date_cascade_current')";
+    const tokenParts = () => psql(`SELECT
+        (SELECT count(*) FROM information_schema.columns WHERE (table_name, column_name) IN (('tasks', 'due_change_id'), ('task_date_cascades', 'root_change_id')))
+        || ',' || (SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_tasks_due_change_id' AND NOT tgisinternal)
+        || ',' || (SELECT count(*) FROM pg_proc WHERE proname = 'tasks_set_due_change_id')
+        || ',' || (SELECT count(*) FROM pg_indexes WHERE indexname = 'idx_task_date_cascades_root_change');`);
     psql(ROLLBACK_062);
     assert.equal(psql(`SELECT count(*) FROM pg_proc WHERE proname IN ${fns};`), "0");
+    assert.equal(tokenParts(), "0,0,0,0", "the change token's column, trigger, function and index are gone");
     assert.equal(psql("SELECT count(*) FROM information_schema.columns WHERE table_name IN ('task_date_cascades', 'task_date_cascade_moves') AND column_name IN ('replaces_cascade_id', 'undone_reason', 'restored_at', 'restore_comment_id');"), "0");
     assert.equal(psql("SELECT count(*) FROM pg_proc WHERE proname = 'apply_task_date_cascade';"), "1");
     assert.match(psql("SELECT prosrc FROM pg_proc WHERE proname = 'apply_task_date_cascade';"), /FOR SHARE OF t;/);
@@ -308,9 +315,15 @@ try {
     assert.equal(psql(`SELECT count(*) FROM pg_proc WHERE proname IN ${fns};`), "7");
     assert.equal(psql("SELECT count(*) FROM information_schema.columns WHERE table_name IN ('task_date_cascades', 'task_date_cascade_moves') AND column_name IN ('replaces_cascade_id', 'undone_reason', 'restored_at', 'restore_comment_id');"), "4");
     assert.match(psql("SELECT prosrc FROM pg_proc WHERE proname = 'apply_task_date_cascade';"), /task_date_cascade_apply_core/);
-    // Fix round 2: one apply function, 12 arguments (p_root_saved_at has a default, so 11-argument calls still resolve).
-    assert.equal(psql("SELECT string_agg(pronargs::text || '/' || pronargdefaults::text, ',') FROM pg_proc WHERE proname = 'apply_task_date_cascade';"), "12/1");
-    assert.equal(psql("SELECT string_agg(pronargs::text, ',') FROM pg_proc WHERE proname = 'task_date_cascade_apply_core';"), "13");
+    assert.equal(tokenParts(), "2,1,1,1", "the change token's column, trigger, function and index are back");
+    // Fix round 3: one apply function, 12 arguments (p_root_change_id has a default, so 11-argument calls still resolve).
+    const nargs = (name) => psql(`SELECT string_agg(pronargs::text || '/' || pronargdefaults::text, ',') FROM pg_proc WHERE proname = '${name}';`);
+    assert.equal(nargs("apply_task_date_cascade"), "12/1");
+    assert.equal(nargs("task_date_cascade_apply_core"), "14/0");
+    assert.equal(nargs("task_date_cascade_current"), "4/1");
+    assert.equal(nargs("undo_task_date_cascade"), "9/1");
+    assert.equal(nargs("replace_task_date_cascade"), "13/1");
+    assert.equal(psql("SELECT format_type(atttypid, atttypmod) || ',' || attnotnull FROM pg_attribute WHERE attrelid = 'public.tasks'::regclass AND attname = 'due_change_id';"), "uuid,false");
     // The stale 9-argument draft is gone wherever it existed.
     assert.equal(psql("SELECT count(*) FROM pg_proc WHERE proname = 'apply_task_date_cascade' AND pronargs = 9;"), "0");
     for (let attempt = 0; attempt < 80; attempt += 1) {
@@ -325,13 +338,13 @@ try {
 
   await test("062 grants: authenticated + service_role execute the new functions, anon doesn't; all SECURITY INVOKER with lock_timeout 5s; a signed-in user can't act for another", async () => {
     const sigs = [
-      "public.undo_task_date_cascade(uuid, uuid, uuid, timestamptz, timestamptz, boolean, jsonb, jsonb)",
-      "public.replace_task_date_cascade(uuid, uuid, uuid, timestamptz, timestamptz, text, integer, text, jsonb, text, boolean, jsonb)",
+      "public.undo_task_date_cascade(uuid, uuid, uuid, timestamptz, timestamptz, boolean, jsonb, jsonb, uuid)",
+      "public.replace_task_date_cascade(uuid, uuid, uuid, timestamptz, timestamptz, text, integer, text, jsonb, text, boolean, jsonb, uuid)",
       "public.task_date_cascade_lock(uuid, uuid[], text, uuid[])",
-      "public.task_date_cascade_apply_core(uuid, uuid, timestamptz, timestamptz, text, integer, text, text, jsonb, text, boolean, uuid, timestamptz)",
-      "public.apply_task_date_cascade(uuid, uuid, timestamptz, timestamptz, text, integer, text, text, jsonb, text, boolean, timestamptz)",
+      "public.task_date_cascade_apply_core(uuid, uuid, timestamptz, timestamptz, text, integer, text, text, jsonb, text, boolean, uuid, uuid, boolean)",
+      "public.apply_task_date_cascade(uuid, uuid, timestamptz, timestamptz, text, integer, text, text, jsonb, text, boolean, uuid)",
       "public.task_date_cascade_undo_core(uuid, uuid, jsonb, text, boolean)",
-      "public.task_date_cascade_current(uuid, uuid, timestamptz)",
+      "public.task_date_cascade_current(uuid, uuid, timestamptz, uuid)",
     ];
     for (const sig of sigs) {
       assert.equal(psql(`SELECT has_function_privilege('service_role', '${sig}', 'execute');`), "t", sig);
@@ -340,6 +353,9 @@ try {
       assert.equal(psql(`SELECT prosecdef FROM pg_proc WHERE oid = '${sig}'::regprocedure;`), "f", sig);
       assert.match(psql(`SELECT array_to_string(proconfig, ',') FROM pg_proc WHERE oid = '${sig}'::regprocedure;`), /lock_timeout=5s/, sig);
     }
+    // The change token's trigger function (fires without an EXECUTE check; same grants).
+    const trig = "public.tasks_set_due_change_id()";
+    assert.deepEqual(["service_role", "authenticated", "anon"].map((role) => psql(`SELECT has_function_privilege('${role}', '${trig}', 'execute');`)), ["t", "t", "f"]);
     const other = randomUUID();
     const out = psql(`BEGIN; SET LOCAL ROLE authenticated; SELECT set_config('request.jwt.claims', '{"sub":"${other}"}', true);
       DO $$ BEGIN PERFORM undo_task_date_cascade('${userA}', '${randomUUID()}', NULL, now(), now(), true, NULL, '[]'::jsonb);
@@ -884,6 +900,171 @@ try {
     assert.equal(again.body.cascade.status, "moved");
     assert.ok(again.body.cascade.cascade_id && again.body.cascade.cascade_id !== first.body.cascade.cascade_id);
     assert.equal(etDateSql(child.id), "2026-10-29");
+  });
+
+  // ── Fix round 3: change numbers (one identity per due-date save) ─────────
+  // Codex fix-2 re-check, new P2-1 (Brent 10/20: "Change numbers"). Same set as
+  // FR2: project Green, target Fri 10/23; root Thu 10/22, child Fri 10/23.
+  const tokenOf = (taskId) => psql(`SELECT coalesce(due_change_id::text, 'none') FROM tasks WHERE id = '${taskId}';`);
+
+  await test("FR3 token: every save of the due date gets a new change token in the same UPDATE; other updates keep it; a caller can't set it", async () => {
+    const row = await insert("tasks", { user_id: userA, title: "FR3 token", tags: ["work"], due_at: etAt("2026-10-22") });
+    assert.match(row.due_change_id ?? "", /^[0-9a-f-]{36}$/, "an insert with a date has one");
+    const first = tokenOf(row.id);
+    psql(`UPDATE tasks SET title = 'FR3 token renamed' WHERE id = '${row.id}';`);
+    assert.equal(tokenOf(row.id), first, "not a date save");
+    psql(`UPDATE tasks SET due_at = due_at WHERE id = '${row.id}';`);
+    assert.equal(tokenOf(row.id), first, "the same date is not a change");
+    psql(`UPDATE tasks SET due_change_id = '${randomUUID()}' WHERE id = '${row.id}';`);
+    assert.equal(tokenOf(row.id), first, "callers can't set it");
+    const moved = await patch(row.id, { due_at: etAt("2026-10-26") });
+    assert.equal(moved.status, 200, JSON.stringify(moved.body).slice(0, 300));
+    const second = tokenOf(row.id);
+    assert.notEqual(second, first);
+    assert.equal(moved.body.due_change_id, second, "the PATCH reads it back from its own save");
+    assert.equal(moved.body.cascade.change_id, second, "and hands it to the toast");
+    psql(`UPDATE tasks SET due_at = '${etAt("2026-10-22")}' WHERE id = '${row.id}'; UPDATE tasks SET due_at = '${etAt("2026-10-26")}' WHERE id = '${row.id}';`);
+    assert.ok(![first, second].includes(tokenOf(row.id)), "leaving a date and coming back is a new change");
+  });
+
+  await test("FR3 P2-1 (Codex schedule): A's PATCH (Thu → Mon) paused after its save; B saves Mon → Fri, then Fri → Mon (moves the child, C1); A resumes: moves and logs nothing and doesn't return C1's id; Undo with C1 puts back B's own change (root Fri, child Fri, Green)", async () => {
+    const { project, root, child } = await fr2Set("codex");
+    let b2 = null;
+    const paused = pausingApplyClient(async () => {
+      assert.equal(etDateSql(root.id), "2026-10-26", "A saved the edited task first");
+      const b1 = await patch(root.id, { due_at: etAt("2026-10-23") });
+      assert.equal(b1.status, 200, JSON.stringify(b1.body).slice(0, 300));
+      b2 = await patch(root.id, { due_at: etAt("2026-10-26") });
+      assert.equal(b2.status, 200, JSON.stringify(b2.body).slice(0, 300));
+      assert.equal(b2.body.cascade.status, "moved");
+      assert.equal(etDateSql(child.id), "2026-10-26", "B's change moved the child Fri → Mon");
+      assert.equal(ragOf(project.id), "Yellow");
+    });
+    const a = await patch(root.id, { due_at: etAt("2026-10-26") }, "legacy_api_key", paused);
+    assert.ok(b2, "B ran while A was paused");
+    assert.equal(a.status, 200, JSON.stringify(a.body).slice(0, 300));
+    const c1 = b2.body.cascade.cascade_id;
+    assert.notEqual(a.body.cascade.cascade_id, c1, "A must not return B's cascade as its own");
+    assert.equal(a.body.cascade.cascade_id, null);
+    assert.equal(a.body.cascade.status, "superseded");
+    assert.deepEqual(a.body.cascade.moves, []);
+    assert.equal(cascadeRows(root.id), 1, "A logged nothing");
+    assert.equal(etDateSql(child.id), "2026-10-26", "A moved nothing");
+    assert.equal((comments(child.id).match(/Due date moved/g) ?? []).length, 1, "one move comment on the child (B's)");
+
+    // An id-less Undo carrying A's token (date only, it would put Thu back over B's save) leaves the task alone.
+    const aUndo = await dateCascade(root.id, { action: "undo", cascade_id: null, from_due_at: a.body.cascade.root_old_due_at, to_due_at: a.body.cascade.root_new_due_at, change_id: a.body.cascade.change_id });
+    assert.equal(aUndo.status, 200, JSON.stringify(aUndo.body));
+    assert.equal(aUndo.body.root.restored, false);
+    assert.equal(etDateSql(root.id), "2026-10-26");
+
+    // B's own Undo puts back B's change, as B's reply described it.
+    assert.equal(etDateOf(b2.body.cascade.root_old_due_at), "2026-10-23");
+    const undo = await dateCascade(root.id, { action: "undo", cascade_id: c1, change_id: b2.body.cascade.change_id });
+    assert.equal(undo.status, 200, JSON.stringify(undo.body));
+    assert.equal(etDateSql(root.id), "2026-10-23");
+    assert.equal(etDateSql(child.id), "2026-10-23");
+    assert.equal(ragOf(project.id), "Green");
+    assert.equal(activeCascades(root.id), 0);
+  });
+
+  await test("FR3 P2-1 variant: B's second save is Just this task (a flag-only row), then a How far switch to Same gap moves the child (C1); A resumes: nothing moved or logged, not C1's id; Undo with C1 restores root Fri, child Fri, Green", async () => {
+    const { project, root, child } = await fr2Set("codex switch");
+    let switched = null;
+    const paused = pausingApplyClient(async () => {
+      const b1 = await patch(root.id, { due_at: etAt("2026-10-23") });
+      assert.equal(b1.status, 200, JSON.stringify(b1.body).slice(0, 300));
+      const b2 = await patch(root.id, { due_at: etAt("2026-10-26"), cascade: false });
+      assert.equal(b2.status, 200, JSON.stringify(b2.body).slice(0, 300));
+      assert.ok(b2.body.cascade.cascade_id, "B's Just this task recorded the edited task's own flag");
+      assert.equal(etDateSql(child.id), "2026-10-23");
+      switched = await dateCascade(root.id, { action: "apply", cascade_id: b2.body.cascade.cascade_id, mode: "same_gap", change_id: b2.body.cascade.change_id });
+      assert.equal(switched.status, 200, JSON.stringify(switched.body));
+      assert.equal(etDateSql(child.id), "2026-10-26", "the switch moved the child Fri → Mon");
+    });
+    const a = await patch(root.id, { due_at: etAt("2026-10-26") }, "legacy_api_key", paused);
+    assert.ok(switched, "B ran while A was paused");
+    assert.equal(a.status, 200, JSON.stringify(a.body).slice(0, 300));
+    const c1 = switched.body.cascade.cascade_id;
+    assert.notEqual(a.body.cascade.cascade_id, c1, "A must not return B's cascade as its own");
+    assert.equal(a.body.cascade.cascade_id, null);
+    assert.equal(a.body.cascade.status, "superseded");
+    assert.equal(cascadeRows(root.id), 2, "B's flag row and its replacement; nothing from A");
+    assert.equal(activeCascades(root.id), 1);
+    assert.equal(etDateSql(child.id), "2026-10-26");
+    const undo = await dateCascade(root.id, { action: "undo", cascade_id: c1, change_id: switched.body.cascade.change_id });
+    assert.equal(undo.status, 200, JSON.stringify(undo.body));
+    assert.equal(etDateSql(root.id), "2026-10-23");
+    assert.equal(etDateSql(child.id), "2026-10-23");
+    assert.equal(ragOf(project.id), "Green");
+    assert.equal(activeCascades(root.id), 0);
+  });
+
+  await test("FR3 P2-1 FamCal variant: a FamCal-key PATCH (Thu → Mon) paused after its save; B saves Mon → Fri, then Fri → Mon with Just this task; FamCal's late apply moves and logs nothing (the child stays Fri)", async () => {
+    const root = await insert("tasks", { user_id: userA, title: "FR3 famcal root", tags: ["personal"], due_at: etAt("2026-10-22") });
+    const child = await insert("tasks", { user_id: userA, title: "FR3 famcal child", tags: ["personal"], due_at: etAt("2026-10-23") });
+    await link(child.id, root.id);
+    let ran = false;
+    const paused = pausingApplyClient(async () => {
+      assert.equal(etDateSql(root.id), "2026-10-26", "FamCal's PATCH saved the edited task first");
+      const b1 = await patch(root.id, { due_at: etAt("2026-10-23") });
+      assert.equal(b1.status, 200, JSON.stringify(b1.body).slice(0, 300));
+      const b2 = await patch(root.id, { due_at: etAt("2026-10-26"), cascade: false });
+      assert.equal(b2.status, 200, JSON.stringify(b2.body).slice(0, 300));
+      assert.equal(b2.body.cascade.status, "off");
+      ran = true;
+    });
+    const a = await patch(root.id, { due_at: etAt("2026-10-26") }, "famcal_api_key", paused);
+    assert.ok(ran, "B ran while FamCal's apply was paused");
+    assert.equal(a.status, 200, JSON.stringify(a.body).slice(0, 300));
+    assert.equal("cascade" in a.body, false, "FamCal's reply has no cascade key");
+    assert.equal(etDateSql(child.id), "2026-10-23", "B said Just this task; FamCal's older change must not move the child");
+    assert.equal(cascadeRows(root.id), 0, "nothing logged");
+    assert.equal(comments(child.id).includes("Due date moved"), false);
+  });
+
+  await test("FR3 class: Undo and How far from an older toast carry that save's token: after another save set the same date again, the switch is a 409 and the Undo leaves the edited task alone", async () => {
+    const root = await insert("tasks", { user_id: userA, title: "FR3 old toast root", tags: ["work"], due_at: etAt("2026-10-22") });
+    const child = await insert("tasks", { user_id: userA, title: "FR3 old toast child", tags: ["work"], due_at: etAt("2026-10-23") });
+    await link(child.id, root.id);
+    const a = await patch(root.id, { due_at: etAt("2026-10-26"), cascade: false });
+    assert.equal(a.status, 200, JSON.stringify(a.body).slice(0, 300));
+    assert.equal(a.body.cascade.cascade_id, null);
+    const b1 = await patch(root.id, { due_at: etAt("2026-10-23") });
+    const b2 = await patch(root.id, { due_at: etAt("2026-10-26"), cascade: false });
+    assert.equal(b1.status + b2.status, 400);
+    const fromA = { cascade_id: null, from_due_at: a.body.cascade.root_old_due_at, to_due_at: a.body.cascade.root_new_due_at, change_id: a.body.cascade.change_id };
+    const sw = await dateCascade(root.id, { action: "apply", mode: "same_gap", ...fromA });
+    assert.equal(sw.status, 409, JSON.stringify(sw.body));
+    assert.equal(sw.body.reason, "changed");
+    assert.equal(etDateSql(child.id), "2026-10-23", "nothing moved");
+    assert.equal(cascadeRows(root.id), 0);
+    const un = await dateCascade(root.id, { action: "undo", ...fromA });
+    assert.equal(un.status, 200, JSON.stringify(un.body));
+    assert.equal(un.body.root.restored, false);
+    assert.equal(etDateSql(root.id), "2026-10-26", "B's save stands");
+    // B's own toast (its token) still works.
+    const bSwitch = await dateCascade(root.id, { action: "apply", mode: "same_gap", cascade_id: null, from_due_at: b2.body.cascade.root_old_due_at, to_due_at: b2.body.cascade.root_new_due_at, change_id: b2.body.cascade.change_id });
+    assert.equal(bSwitch.status, 200, JSON.stringify(bSwitch.body));
+    assert.equal(etDateSql(child.id), "2026-10-26", "B's gap (Fri → Mon, one workday)");
+  });
+
+  await test("FR3 LOW (mixed mode): a Just this task PATCH paused while another session's id-less Same gap of the same change moves the child: the reply adopts that cascade with its moves and mode", async () => {
+    const { root, child } = await fr2Set("mixed");
+    let other = null;
+    const paused = pausingApplyClient(async () => {
+      other = await fr2Retry(root.id);
+      assert.equal(other.status, 200, JSON.stringify(other.body));
+      assert.equal(etDateSql(child.id), "2026-10-27");
+    });
+    const original = await patch(root.id, { due_at: etAt("2026-10-26"), cascade: false }, "legacy_api_key", paused);
+    assert.ok(other, "the other session ran first");
+    assert.equal(original.status, 200, JSON.stringify(original.body).slice(0, 300));
+    assert.equal(original.body.cascade.cascade_id, other.body.cascade.cascade_id);
+    assert.equal(original.body.cascade.status, "moved");
+    assert.equal(original.body.cascade.mode, "same_gap");
+    assert.deepEqual(original.body.cascade.moves.map((m) => [m.task_id, etDateOf(m.new_due_at)]), [[child.id, "2026-10-27"]]);
+    assert.equal(cascadeRows(root.id), 1);
   });
 
   // ── Carried LOWs (S1 re-check) ───────────────────────────────────────────

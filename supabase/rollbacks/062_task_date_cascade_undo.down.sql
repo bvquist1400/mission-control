@@ -13,21 +13,26 @@
 -- is deployed.
 --
 -- Data: dates that an Undo or a switch put back stay where they are, and the
--- "moved back" system comments stay (ordinary task_comments rows). The log loses
--- replaces_cascade_id, undone_reason, restored_at and restore_comment_id; undone_at
+-- "moved back" system comments stay (ordinary task_comments rows). tasks loses
+-- due_change_id (and its trigger); the log loses replaces_cascade_id,
+-- undone_reason, root_change_id, restored_at and restore_comment_id; undone_at
 -- (061) stays, and so do log rows with no moves that only recorded the edited
 -- task's own target-date flag (061 never reads them). A project 062 turned Yellow
 -- stays Yellow. Re-running is safe.
 
 BEGIN;
 
+DROP FUNCTION IF EXISTS replace_task_date_cascade(UUID, UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, JSONB, TEXT, BOOLEAN, JSONB, UUID);
 DROP FUNCTION IF EXISTS replace_task_date_cascade(UUID, UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, JSONB, TEXT, BOOLEAN, JSONB);
+DROP FUNCTION IF EXISTS undo_task_date_cascade(UUID, UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, BOOLEAN, JSONB, JSONB, UUID);
 DROP FUNCTION IF EXISTS undo_task_date_cascade(UUID, UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, BOOLEAN, JSONB, JSONB);
 DROP FUNCTION IF EXISTS task_date_cascade_undo_core(UUID, UUID, JSONB, TEXT, BOOLEAN);
 DROP FUNCTION IF EXISTS task_date_cascade_undo_core(UUID, UUID, JSONB, TEXT);
+DROP FUNCTION IF EXISTS task_date_cascade_current(UUID, UUID, TIMESTAMPTZ, UUID);
 DROP FUNCTION IF EXISTS task_date_cascade_current(UUID, UUID, TIMESTAMPTZ);
--- 062's 12-argument apply (p_root_saved_at) first: next to it, 061's 11-argument
--- one would make every call ambiguous.
+-- 062's 12-argument apply (p_root_change_id; an earlier draft's p_root_saved_at)
+-- first: next to it, 061's 11-argument one would make every call ambiguous.
+DROP FUNCTION IF EXISTS apply_task_date_cascade(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN, UUID);
 DROP FUNCTION IF EXISTS apply_task_date_cascade(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN, TIMESTAMPTZ);
 
 -- 061's apply function, verbatim (it no longer calls the 062 core).
@@ -343,6 +348,7 @@ $$;
 COMMENT ON FUNCTION apply_task_date_cascade(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN) IS
   'Applies a planned due-date cascade in one transaction: root re-check, compare-and-set per task, system comments, project flags, log (061).';
 
+DROP FUNCTION IF EXISTS task_date_cascade_apply_core(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN, UUID, UUID, BOOLEAN);
 DROP FUNCTION IF EXISTS task_date_cascade_apply_core(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN, UUID, TIMESTAMPTZ);
 DROP FUNCTION IF EXISTS task_date_cascade_apply_core(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN, UUID);
 DROP FUNCTION IF EXISTS task_date_cascade_score_unchanged(INTEGER, TEXT, TEXT, TEXT[], JSONB);
@@ -354,9 +360,16 @@ GRANT EXECUTE ON FUNCTION apply_task_date_cascade(UUID, UUID, TIMESTAMPTZ, TIMES
 ALTER TABLE task_date_cascade_moves
   DROP COLUMN IF EXISTS restore_comment_id,
   DROP COLUMN IF EXISTS restored_at;
+DROP INDEX IF EXISTS idx_task_date_cascades_root_change;
 ALTER TABLE task_date_cascades
+  DROP COLUMN IF EXISTS root_change_id,
   DROP COLUMN IF EXISTS undone_reason,
   DROP COLUMN IF EXISTS replaces_cascade_id;
+
+-- The change token (062, 7).
+DROP TRIGGER IF EXISTS trg_tasks_due_change_id ON tasks;
+DROP FUNCTION IF EXISTS tasks_set_due_change_id();
+ALTER TABLE tasks DROP COLUMN IF EXISTS due_change_id;
 
 COMMIT;
 

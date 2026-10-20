@@ -823,11 +823,20 @@ export interface CascadeApplyResult {
   skipped: Array<{ task_id: string; reason: string }>;
   project_flags: CascadeProjectFlag[];
   /**
-   * 062 fix round 2: another session handled this change (same edited task, same
-   * new date) after this PATCH saved it; nothing was written and this is that
-   * change's current cascade replayed (or nothing, when it was undone since).
+   * 062: another session handled this same change (same change token) while this
+   * call waited; nothing was written and this is that change's current cascade
+   * replayed (or nothing, when it was undone since).
    */
   adopted?: boolean;
+  /**
+   * With a cascade id: that log row's own change token, root dates, mode and gap
+   * (a replayed cascade may differ from this caller's plan in mode and moves).
+   */
+  change_id?: string | null;
+  mode?: CascadeMode;
+  delta_workdays?: number;
+  root_old_due_at?: string | null;
+  root_new_due_at?: string | null;
 }
 
 /** Whether a failed cascade call may be retried as is (it rolled back: deadlock, or 062's MC062). */
@@ -889,11 +898,13 @@ export async function applyTaskDateCascade(
     /** Whether FamCal could read the edited task before this PATCH (read before the save). */
     rootWasVisible: boolean;
     /**
-     * When this PATCH saved the edited task's new date (the saved row's
-     * `updated_at`). The function replays, instead of logging again, a cascade of
-     * the same change that another session logged after this save (062 fix round 2).
+     * The change token this PATCH's own save gave the edited task
+     * (`tasks.due_change_id`, set by 062's trigger in the same UPDATE). Under its
+     * locks the function moves nothing when the task carries another token
+     * (another save since: `superseded`), and replays, instead of logging again,
+     * a cascade another session logged for this same token (062, 7).
      */
-    rootSavedAt?: string | null;
+    rootChangeId?: string | null;
   }
 ): Promise<CascadeApplyResult> {
   const { data, error } = await withCascadeRetry(() => supabase.rpc(CASCADE_APPLY_RPC, {
@@ -908,7 +919,7 @@ export async function applyTaskDateCascade(
     p_moves: input.moves,
     p_root_title: input.rootTitle,
     p_root_was_visible: input.rootWasVisible,
-    p_root_saved_at: input.rootSavedAt ?? null,
+    p_root_change_id: input.rootChangeId ?? null,
   }));
   if (error) {
     const err = error as { message?: string; code?: string };
@@ -925,7 +936,20 @@ export async function applyTaskDateCascade(
     skipped: Array.isArray(result.skipped) ? result.skipped : [],
     project_flags: Array.isArray(result.project_flags) ? result.project_flags : [],
     ...(result.adopted === true ? { adopted: true } : {}),
+    ...identityOf(result),
   };
+}
+
+/** The identity fields a cascade reply carries for its log row (062), when present. */
+export function identityOf(result: Partial<CascadeApplyResult>): Partial<CascadeApplyResult> {
+  const out: Partial<CascadeApplyResult> = {};
+  if (!result.cascade_id) return out;
+  if (typeof result.change_id === 'string') out.change_id = result.change_id;
+  if (result.mode === 'same_gap' || result.mode === 'only_collisions') out.mode = result.mode;
+  if (typeof result.delta_workdays === 'number') out.delta_workdays = result.delta_workdays;
+  if ('root_old_due_at' in result) out.root_old_due_at = result.root_old_due_at ?? null;
+  if (typeof result.root_new_due_at === 'string') out.root_new_due_at = result.root_new_due_at;
+  return out;
 }
 
 /** Plain-English one-liner for replies ("Moved 3 later tasks by 2 working days (same gap)."). */
@@ -1047,6 +1071,11 @@ export interface CascadeReply {
   /** Not-run reasons (cascadeTrigger), or for `failed` the plain "busy" / "error" (never database text). */
   reason: string | null;
   cascade_id: string | null;
+  /**
+   * The change token of the save this reply is about (062, `tasks.due_change_id`);
+   * Undo, "switch how far" and Try again send it back. Null when nothing was saved.
+   */
+  change_id: string | null;
   /** The edited task's due date before and after this change (S2: Undo and "switch how far" use them). */
   root_old_due_at: string | null;
   root_new_due_at: string | null;
@@ -1068,8 +1097,14 @@ export function buildCascadeReply(input: {
   projectFlags?: CascadeProjectFlag[];
   /** The edited task's dates when there is no plan (not_applicable, off). */
   root?: { old_due_at: string | null; new_due_at: string | null };
+  /** The change token of the caller's save (used when `applied` names none). */
+  changeId?: string | null;
 }): CascadeReply {
   const plan = input.plan ?? null;
+  // A replayed cascade (adopted) is described by its own log row, never by this
+  // caller's plan: root dates, mode, gap, moves, flags (062, 7).
+  const adopted = input.applied?.adopted === true && Boolean(input.applied.cascade_id);
+  const identity = adopted ? input.applied! : null;
   const titles = new Map<string, string>();
   for (const move of plan?.moves ?? []) titles.set(move.task_id, move.title);
   for (const skip of plan?.skipped ?? []) titles.set(skip.task_id, skip.title);
@@ -1087,7 +1122,7 @@ export function buildCascadeReply(input: {
       new_due_at: move.new_due_at,
     }));
     skipped = [
-      ...skipped,
+      ...(adopted ? [] : skipped),
       ...input.applied.skipped.map((skip) => ({ task_id: skip.task_id, title: titles.get(skip.task_id) ?? '', reason: skip.reason })),
     ];
   } else if (input.status === 'preview' || input.status === 'needs_confirm' || input.status === 'too_large') {
@@ -1101,23 +1136,26 @@ export function buildCascadeReply(input: {
     moves = [];
   }
 
-  const deltaWorkdays = plan?.deltaWorkdays ?? 0;
+  const deltaWorkdays = identity?.delta_workdays ?? plan?.deltaWorkdays ?? 0;
+  const mode = identity?.mode ?? input.mode;
   const status = input.status;
   const movedCount = status === 'moved' ? moves.length : (plan?.moves.length ?? 0);
   return {
     status,
-    mode: input.mode,
+    mode,
     delta_workdays: deltaWorkdays,
     reason: input.reason ?? (status === 'too_large' && plan?.tooLargeReason === 'links' ? 'links' : null),
     cascade_id: input.applied?.cascade_id ?? null,
-    root_old_due_at: plan ? plan.rootOldDueAt : (input.root?.old_due_at ?? null),
-    root_new_due_at: plan ? plan.rootNewDueAt : (input.root?.new_due_at ?? null),
+    change_id: input.applied?.change_id ?? input.changeId ?? null,
+    root_old_due_at: identity && identity.root_new_due_at ? (identity.root_old_due_at ?? null)
+      : plan ? plan.rootOldDueAt : (input.root?.old_due_at ?? null),
+    root_new_due_at: identity?.root_new_due_at ?? (plan ? plan.rootNewDueAt : (input.root?.new_due_at ?? null)),
     message: describeCascadeOutcome({
       status: status === 'moved' && moves.length === 0 ? 'nothing_moved'
         : status === 'failed' && input.reason === 'busy' ? 'failed_busy'
         : status === 'too_large' && plan?.tooLargeReason === 'links' ? 'too_large_links'
         : status,
-      mode: input.mode,
+      mode,
       deltaWorkdays,
       movedCount,
       skippedChanged: input.applied?.skipped.length ?? 0,

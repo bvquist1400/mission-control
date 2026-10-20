@@ -140,13 +140,16 @@ export function DateCascadeProvider({ children }: { children: ReactNode }) {
         }
         router.refresh();
         if (cascade) {
-          const choice: CascadeModeChoice = options.cascade === false ? "none" : cascade.mode;
+          // "Just this task" unless another session's switch of this same change
+          // moved the waiting tasks first (the reply then describes that cascade).
+          const choice: CascadeModeChoice = options.cascade === false && cascade.status !== "moved" ? "none" : cascade.mode;
           const session: ToastSession = {
             request,
             rootTitle: result.task.title,
             rootOld: cascade.root_old_due_at,
             rootNew: cascade.root_new_due_at,
             cascadeId: cascade.cascade_id,
+            changeId: cascade.change_id ?? null,
             choice,
             waitingCount: cascade.status === "moved" ? cascade.moves.length : cascade.planned_moves,
             askToConfirm,
@@ -176,6 +179,7 @@ export function DateCascadeProvider({ children }: { children: ReactNode }) {
         rootOld: null,
         rootNew: null,
         cascadeId: null,
+        changeId: null,
         choice: "same_gap",
         waitingCount: 0,
         askToConfirm,
@@ -218,6 +222,8 @@ interface ToastSession {
   rootOld: string | null;
   rootNew: string | null;
   cascadeId: string | null;
+  /** The change token of this date change's save: Undo / switch / Try again act only on that save. */
+  changeId: string | null;
   choice: CascadeModeChoice;
   waitingCount: number;
   askToConfirm: (rootTitle: string, cascade: CascadeReply) => Promise<ConfirmChoice>;
@@ -255,6 +261,7 @@ function CascadeToastCard({ session, initial, onClose }: { session: ToastSession
       mode: choice,
       from_due_at: session.rootOld,
       to_due_at: session.rootNew,
+      change_id: session.changeId,
       ...(options.confirm ? { confirm: true } : {}),
     });
     if (!result.ok) {
@@ -299,6 +306,7 @@ function CascadeToastCard({ session, initial, onClose }: { session: ToastSession
       cascade_id: stateRef.current.cascadeId,
       from_due_at: session.rootOld,
       to_due_at: session.rootNew,
+      change_id: session.changeId,
     });
     if (!result.ok) {
       adoptCurrentIdentity(result);

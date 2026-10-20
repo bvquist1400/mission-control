@@ -2173,6 +2173,7 @@ export type Database = {
           moved_count: number
           project_flags: Json
           replaces_cascade_id: string | null
+          root_change_id: string | null
           root_new_due_at: string
           root_old_due_at: string | null
           root_task_id: string
@@ -2190,6 +2191,7 @@ export type Database = {
           moved_count?: number
           project_flags?: Json
           replaces_cascade_id?: string | null
+          root_change_id?: string | null
           root_new_due_at: string
           root_old_due_at?: string | null
           root_task_id: string
@@ -2207,6 +2209,7 @@ export type Database = {
           moved_count?: number
           project_flags?: Json
           replaces_cascade_id?: string | null
+          root_change_id?: string | null
           root_new_due_at?: string
           root_old_due_at?: string | null
           root_task_id?: string
@@ -2335,6 +2338,7 @@ export type Database = {
           created_at: string
           description: string | null
           due_at: string | null
+          due_change_id: string | null
           estimate_source: Database["public"]["Enums"]["estimate_source"]
           estimated_minutes: number
           external_source_id: string | null
@@ -2380,6 +2384,7 @@ export type Database = {
           created_at?: string
           description?: string | null
           due_at?: string | null
+          due_change_id?: string | null
           estimate_source?: Database["public"]["Enums"]["estimate_source"]
           estimated_minutes?: number
           external_source_id?: string | null
@@ -2425,6 +2430,7 @@ export type Database = {
           created_at?: string
           description?: string | null
           due_at?: string | null
+          due_change_id?: string | null
           estimate_source?: Database["public"]["Enums"]["estimate_source"]
           estimated_minutes?: number
           external_source_id?: string | null
@@ -2675,9 +2681,9 @@ export type Database = {
           p_delta_workdays: number
           p_mode: string
           p_moves: Json
+          p_root_change_id?: string
           p_root_new_due_at: string
           p_root_old_due_at: string
-          p_root_saved_at?: string
           p_root_task_id: string
           p_root_title: string
           p_root_was_visible: boolean
@@ -2806,6 +2812,7 @@ export type Database = {
           p_moves: Json
           p_replace_cascade_id: string
           p_restore: Json
+          p_root_change_id?: string
           p_root_new_due_at: string
           p_root_old_due_at: string
           p_root_task_id: string
@@ -2830,13 +2837,14 @@ export type Database = {
       }
       task_date_cascade_apply_core: {
         Args: {
+          p_adopt: boolean
           p_delta_workdays: number
           p_mode: string
           p_moves: Json
           p_replaces_cascade_id: string
+          p_root_change_id: string
           p_root_new_due_at: string
           p_root_old_due_at: string
-          p_root_saved_at: string
           p_root_task_id: string
           p_root_title: string
           p_root_was_visible: boolean
@@ -2848,6 +2856,7 @@ export type Database = {
       }
       task_date_cascade_current: {
         Args: {
+          p_root_change_id?: string
           p_root_new_due_at: string
           p_root_task_id: string
           p_user_id: string
@@ -2889,6 +2898,7 @@ export type Database = {
           p_cascade_id: string
           p_restore: Json
           p_restore_root: boolean
+          p_root_change_id?: string
           p_root_expected_due_at: string
           p_root_priority: Json
           p_root_restore_due_at: string

@@ -727,10 +727,14 @@ export async function PATCH(
     // cascade.status "failed" and a system comment on the task says the later
     // tasks were not moved.
     const savedDueAt = (data as { due_at?: string | null }).due_at ?? null;
-    // When this save happened (the row's updated_at, set by the database): the
-    // function replays a cascade of this same change that another session logged
-    // after it (an id-less Try again, a switch) instead of logging a second one.
-    const rootSavedAt = (data as { updated_at?: string | null }).updated_at ?? null;
+    // The change token this save gave the task (062's trigger sets due_change_id in
+    // the same UPDATE that wrote due_at). The function moves nothing when the task
+    // carries another token by the time it runs (another save since), and replays,
+    // instead of logging a second one, a cascade another session logged for this
+    // same token (an id-less Try again, a switch). Undo / switch / Try again send
+    // it back (cascade.change_id).
+    const rootChangeId = (data as { due_change_id?: string | null }).due_change_id ?? null;
+    if (cascadeReply) cascadeReply = { ...cascadeReply, change_id: rootChangeId };
     if (cascadePending && savedDueAt) {
       const { plan, moves, rootTitle, rootWasVisible } = cascadePending;
       try {
@@ -746,19 +750,20 @@ export async function PATCH(
           moves,
           rootTitle,
           rootWasVisible,
-          rootSavedAt,
+          rootChangeId,
         });
         cascadeReply = buildCascadeReply({
           status: applied.status === 'superseded' ? 'superseded' : 'moved',
           mode: plan.mode,
           plan,
           applied,
+          changeId: rootChangeId,
         });
       } catch (cascadeError) {
         // The database text stays in the server log; replies carry only the plain
         // reason ("busy" for a lock wait, deadlock or retry, else "error").
         console.error('Cascade apply failed after the task saved:', cascadeError);
-        cascadeReply = buildCascadeReply({ status: 'failed', mode: plan.mode, plan, reason: cascadeFailureReason(cascadeError) });
+        cascadeReply = buildCascadeReply({ status: 'failed', mode: plan.mode, plan, reason: cascadeFailureReason(cascadeError), changeId: rootChangeId });
         await postCascadeRootNotice(supabase, userId, id, isFamcalKey, cascadeRootNotice('failed'));
       }
     } else if (famcalRootNotice && isFamcalKey) {
@@ -799,9 +804,22 @@ export async function PATCH(
               moves: [],
               rootTitle: String(saved.title ?? ''),
               rootWasVisible: false,
-              rootSavedAt,
+              rootChangeId,
             });
-            if (flagged.cascade_id) {
+            if (flagged.cascade_id && flagged.adopted) {
+              // Another session handled this same change first (e.g. a switch that
+              // moved the waiting tasks): the reply is that cascade, described by
+              // its own log row (mode, moves, flags), not this PATCH's choice.
+              const replayed = buildCascadeReply({
+                status: flagged.moved.length > 0 ? 'moved' : cascadeReply.status,
+                mode: cascadeReply.mode,
+                reason: flagged.moved.length > 0 ? null : cascadeReply.reason,
+                root: { old_due_at: cascadeReply.root_old_due_at, new_due_at: cascadeReply.root_new_due_at },
+                applied: flagged,
+                changeId: rootChangeId,
+              });
+              cascadeReply = { ...replayed, planned_moves: cascadeReply.planned_moves, depth_limited: cascadeReply.depth_limited };
+            } else if (flagged.cascade_id) {
               cascadeReply = { ...cascadeReply, cascade_id: flagged.cascade_id, project_flags: flagged.project_flags.map(publicProjectFlag) };
             }
           }

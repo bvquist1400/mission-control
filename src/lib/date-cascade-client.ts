@@ -8,6 +8,8 @@ export interface DateCascadeUndoBody {
   cascade_id: string | null;
   from_due_at: string | null;
   to_due_at: string | null;
+  /** The date change's token (PATCH reply `cascade.change_id`): acts only on that save. */
+  change_id?: string | null;
   restore_root?: boolean;
 }
 
@@ -17,6 +19,8 @@ export interface DateCascadeApplyBody {
   mode: "same_gap" | "only_collisions" | "none";
   from_due_at: string | null;
   to_due_at: string | null;
+  /** The date change's token (PATCH reply `cascade.change_id`): acts only on that save. */
+  change_id?: string | null;
   confirm?: boolean;
 }
 

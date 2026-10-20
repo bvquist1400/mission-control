@@ -55,6 +55,13 @@ import type { Task } from '@/types/database';
  * second move or put the edited task back. The database re-checks this under the
  * advisory lock (062); an id-less `apply` that finds a cascade appeared since it
  * looked is re-planned against that one, once.
+ *
+ * Change numbers (062, fix round 3): `change_id` is the change token the date
+ * change's own save gave the edited task (the PATCH reply's `cascade.change_id`).
+ * With it (or, given a `cascade_id`, that cascade's own token) the change's current
+ * identity is scoped to that save, the edited task must still carry it (another
+ * save since, even of the same date, is a 409 and nothing changes), and Undo puts
+ * the edited task back only while it does.
  */
 
 export const DATE_CASCADE_ACTIONS = ['undo', 'apply'] as const;
@@ -69,10 +76,12 @@ export interface DateCascadeRequest {
   mode: DateCascadeModeChoice | null;
   confirm: boolean;
   restoreRoot: boolean;
+  /** The change token of the date change (PATCH reply `cascade.change_id`); null: date-only (older callers). */
+  changeId: string | null;
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const REQUEST_KEYS = ['action', 'cascade_id', 'from_due_at', 'to_due_at', 'mode', 'confirm', 'restore_root'];
+const REQUEST_KEYS = ['action', 'cascade_id', 'from_due_at', 'to_due_at', 'mode', 'confirm', 'restore_root', 'change_id'];
 
 type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -91,6 +100,14 @@ export function parseDateCascadeRequest(body: Record<string, unknown>): ParseRes
       return { ok: false, error: 'cascade_id must be the cascade_id from the date change reply' };
     }
     cascadeId = body.cascade_id.trim();
+  }
+
+  let changeId: string | null = null;
+  if (body.change_id !== undefined && body.change_id !== null) {
+    if (typeof body.change_id !== 'string' || !UUID_RE.test(body.change_id.trim())) {
+      return { ok: false, error: 'change_id must be the change_id from the date change reply' };
+    }
+    changeId = body.change_id.trim();
   }
 
   const from = validateOptionalTimestamp(body.from_due_at, 'from_due_at');
@@ -135,6 +152,7 @@ export function parseDateCascadeRequest(body: Record<string, unknown>): ParseRes
       mode,
       confirm: body.confirm === true,
       restoreRoot,
+      changeId,
     },
   };
 }
@@ -241,6 +259,7 @@ interface CascadeLogRow {
   root_new_due_at: string;
   mode: CascadeMode;
   undone_at: string | null;
+  root_change_id: string | null;
 }
 
 interface CascadeLogMove {
@@ -259,7 +278,7 @@ async function readRoot(supabase: SupabaseClient, userId: string, taskId: string
 async function readLog(supabase: SupabaseClient, userId: string, taskId: string, cascadeId: string): Promise<{ row: CascadeLogRow; moves: CascadeLogMove[] }> {
   const { data, error } = await supabase
     .from('task_date_cascades')
-    .select('id, root_task_id, root_old_due_at, root_new_due_at, mode, undone_at')
+    .select('id, root_task_id, root_old_due_at, root_new_due_at, mode, undone_at, root_change_id')
     .eq('id', cascadeId)
     .eq('user_id', userId)
     .eq('root_task_id', taskId)
@@ -279,17 +298,20 @@ async function readLog(supabase: SupabaseClient, userId: string, taskId: string,
 
 /**
  * Without a cascade id: the newest cascade of this task that is not undone and
- * was made for the same date (so a repeated "Try again", or an MCP call that
- * leaves the id out, replaces it instead of moving the tasks a second time).
+ * was made for the same date and, given a change token, the same save (so a
+ * repeated "Try again", or an MCP call that leaves the id out, replaces it instead
+ * of moving the tasks a second time; never a cascade of another save).
  */
-async function findActiveCascadeId(supabase: SupabaseClient, userId: string, taskId: string, toDueAt: string | null): Promise<string | null> {
+async function findActiveCascadeId(supabase: SupabaseClient, userId: string, taskId: string, toDueAt: string | null, changeId: string | null = null): Promise<string | null> {
   if (!toDueAt) return null;
-  const { data, error } = await supabase
+  let query = supabase
     .from('task_date_cascades')
     .select('id, root_new_due_at')
     .eq('user_id', userId)
     .eq('root_task_id', taskId)
-    .is('undone_at', null)
+    .is('undone_at', null);
+  if (changeId) query = query.eq('root_change_id', changeId);
+  const { data, error } = await query
     .order('created_at', { ascending: false })
     .limit(20);
   if (error) throw error;
@@ -395,8 +417,10 @@ export async function undoDateChange(
   // Without an id the caller says the change has no active cascade (it moved
   // nothing else, or "just this task" was picked); the database checks that.
   const log = request.cascadeId ? await readLog(supabase, userId, taskId, request.cascadeId) : null;
+  // The change this Undo is about: the caller's token, else the cascade's own.
+  const changeId = request.changeId ?? log?.row.root_change_id ?? null;
   if (log?.row.undone_at) {
-    throw staleError(await findActiveCascadeId(supabase, userId, taskId, log.row.root_new_due_at));
+    throw staleError(await findActiveCascadeId(supabase, userId, taskId, log.row.root_new_due_at, changeId));
   }
   const pendingMoves = log ? log.moves : [];
   const rows = await readTasks(supabase, userId, pendingMoves.map((move) => move.task_id));
@@ -414,6 +438,7 @@ export async function undoDateChange(
     p_restore_root: request.restoreRoot,
     p_root_priority: rootPriority,
     p_restore: restore,
+    p_root_change_id: changeId,
   }));
   if (error) throw rpcFailure(error as { code?: string; message?: string }, 'undo');
   const result = (Array.isArray(data) ? data[0] : data) as {
@@ -502,16 +527,22 @@ async function applyDateChangeOnce(
   source: string
 ): Promise<DateCascadeApplyReply> {
   const root = await readRoot(supabase, userId, taskId);
-  const cascadeId = request.cascadeId ?? (await findActiveCascadeId(supabase, userId, taskId, request.toDueAt));
+  const cascadeId = request.cascadeId ?? (await findActiveCascadeId(supabase, userId, taskId, request.toDueAt, request.changeId));
   const log = cascadeId ? await readLog(supabase, userId, taskId, cascadeId) : null;
+  // The change this is about: the caller's token, else the cascade's own.
+  const changeId = request.changeId ?? log?.row.root_change_id ?? null;
   if (log?.row.undone_at) {
     // Already undone or replaced: never quietly treated as "no cascade" (that
     // stacked a second move on the one that replaced it).
-    throw new StaleAttempt(await findActiveCascadeId(supabase, userId, taskId, log.row.root_new_due_at));
+    throw new StaleAttempt(await findActiveCascadeId(supabase, userId, taskId, log.row.root_new_due_at, changeId));
   }
   const fromDueAt = log ? log.row.root_old_due_at : request.fromDueAt;
   const toDueAt = log ? log.row.root_new_due_at : (request.toDueAt as string);
   if (!sameInstant(root.due_at, toDueAt)) throw new DateCascadeHttpError(409, CHANGED_SINCE, { reason: 'changed' });
+  // Another save of the date since (even one that set the same date again) is a
+  // different change: nothing changes (the database checks it again under its lock).
+  const rootChangeId = (root as { due_change_id?: string | null }).due_change_id ?? null;
+  if (changeId && rootChangeId !== changeId) throw new DateCascadeHttpError(409, CHANGED_SINCE, { reason: 'changed' });
 
   const replaceId = log ? log.row.id : null;
   const undoMoves = log ? log.moves : [];
@@ -570,6 +601,7 @@ async function applyDateChangeOnce(
       p_root_title: root.title,
       p_root_was_visible: rootWasVisible,
       p_restore: restore,
+      p_root_change_id: changeId,
     }));
     if (error) throw rpcFailure(error as { code?: string; message?: string }, 'switch');
     const result = (Array.isArray(data) ? data[0] : data) as { status: string; current_cascade_id?: string | null; undo: RawUndoPart | null; apply: CascadeApplyResult | null } | null;
@@ -583,16 +615,18 @@ async function applyDateChangeOnce(
   }
 
   const rootDates = { old_due_at: fromDueAt, new_due_at: toDueAt };
+  // The token the change carries from here on: the log row's, else the edited task's.
+  const replyChangeId = changeId ?? rootChangeId;
   let cascade: CascadeReply;
   if (choice === 'none') {
     // `applied` carries the id and flag when the edited task itself is past its target.
-    cascade = buildCascadeReply({ status: 'off', mode, reason: 'off', root: rootDates, applied });
+    cascade = buildCascadeReply({ status: 'off', mode, reason: 'off', root: rootDates, applied, changeId: replyChangeId });
   } else if (!plan) {
-    cascade = buildCascadeReply({ status: 'not_applicable', mode, reason: notRun, root: rootDates, applied });
+    cascade = buildCascadeReply({ status: 'not_applicable', mode, reason: notRun, root: rootDates, applied, changeId: replyChangeId });
   } else if (applied && applied.status !== 'nothing_moved') {
-    cascade = buildCascadeReply({ status: applied.status === 'superseded' ? 'superseded' : 'moved', mode, plan, applied });
+    cascade = buildCascadeReply({ status: applied.status === 'superseded' ? 'superseded' : 'moved', mode, plan, applied, changeId: replyChangeId });
   } else {
-    cascade = buildCascadeReply({ status: 'nothing_to_move', mode, plan, applied });
+    cascade = buildCascadeReply({ status: 'nothing_to_move', mode, plan, applied, changeId: replyChangeId });
   }
 
   const titles = new Map<string, string>([...rows.values()].map((row) => [row.id, row.title]));
