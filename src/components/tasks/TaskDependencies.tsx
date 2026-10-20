@@ -10,10 +10,14 @@ import type {
 } from "@/types/database";
 import { Button } from "@/components/ui/Button";
 import { Input, Select } from "@/components/ui/Field";
+import { formatDay } from "@/lib/date-cascade-view";
+import type { TaskBlocksLink } from "@/lib/task-detail";
 
 interface TaskDependenciesProps {
   taskId: string;
   dependencies: TaskDependencySummary[];
+  /** Tasks that wait on this one (cascade S2 "Blocks" list); null = couldn't be read; omitted = not shown. */
+  blocks?: TaskBlocksLink[] | null;
   availableTasks?: TaskWithImplementation[];
   availableCommitments?: CommitmentSummary[];
   onDependencyAdded?: (dependency: TaskDependencySummary) => void;
@@ -62,6 +66,7 @@ function getDependencyOptionLabel(
 export function TaskDependencies({
   taskId,
   dependencies,
+  blocks,
   availableTasks = [],
   availableCommitments = [],
   onDependencyAdded,
@@ -339,6 +344,65 @@ export function TaskDependencies({
         >
           {error}
         </p>
+      )}
+
+      {blocks !== undefined ? <BlocksList blocks={blocks} /> : null}
+    </div>
+  );
+}
+
+/** Statuses whose task moves when the one it waits on moves later (S1's movable set). */
+const FOLLOWS = new Set(["Backlog", "Planned", "In Progress", "Blocked/Waiting"]);
+
+/**
+ * Cascade S2 panel 9: the tasks that wait on this one, each with its date. Done
+ * tasks are dimmed (they won't move); Parked or undated ones stay put too, but
+ * the tasks after them can still move.
+ */
+function BlocksList({ blocks }: { blocks: TaskBlocksLink[] | null }) {
+  return (
+    <div className="mt-4 space-y-2 border-t border-stroke pt-3.5">
+      <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        Blocks{blocks ? ` (${blocks.length})` : ""}
+      </h4>
+      {blocks === null ? (
+        <p className="text-xs text-muted-foreground">Couldn’t load the tasks that wait on this one.</p>
+      ) : blocks.length === 0 ? (
+        <p className="text-xs italic text-muted-foreground">Nothing waits on this task</p>
+      ) : (
+        <>
+          <p className="text-xs text-muted-foreground">These wait on this task. If its date moves later, the ones that can move will follow.</p>
+          <ul className="space-y-2">
+            {blocks.map((block) => {
+              const status = (block.status ?? "Backlog") as TaskStatus;
+              const stays = !FOLLOWS.has(status) || !block.due_at;
+              const done = status === "Done";
+              return (
+                <li key={block.dependency_id}>
+                  <div className={`rounded-lg border border-stroke bg-panel p-2.5 ${done ? "opacity-60" : ""}`}>
+                    <p className="truncate text-sm font-medium text-foreground">{block.title}</p>
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <span className="rounded bg-panel-muted px-1.5 py-0.5 text-xs font-semibold text-muted-foreground">Task</span>
+                      <span className={`rounded px-1.5 py-0.5 text-xs font-semibold ${taskStatusColors[status] ?? taskStatusColors.Backlog}`}>
+                        {block.status ?? "Unknown"}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {block.due_at ? (
+                          <>
+                            {done ? "Was due" : "Due"} <b className="font-semibold text-foreground">{formatDay(block.due_at)}</b>
+                            {stays ? " · stays put" : ""}
+                          </>
+                        ) : (
+                          "No due date · stays put"
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </>
       )}
     </div>
   );

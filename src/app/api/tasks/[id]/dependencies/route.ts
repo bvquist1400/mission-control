@@ -5,9 +5,11 @@ import {
   DependencyGraphTooLargeError,
   DependencyReadIncompleteError,
   describeDependencyCycle,
+  fetchTaskDependencyLinks,
   findDependencyPath,
   makeWaitsOnLoader,
   TASK_DEPENDENCY_LOOP_SQLSTATE,
+  type BlocksLink,
 } from '@/lib/task-dependency-links';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import type { CommitmentStatus, TaskStatus } from '@/types/database';
@@ -52,7 +54,20 @@ export async function GET(
 
     const dependencies = await fetchTaskDependenciesForTask(supabase, userId, id);
 
-    return NextResponse.json({ dependencies });
+    // Cascade S2: the tasks that wait on this one (the task window's "Blocks"
+    // list). Null when they can't all be read; the dependencies still load.
+    // (Not reachable with the FamCal key: its allowlist excludes this route.)
+    let blocks: BlocksLink[] | null = null;
+    if (auth.context.authSource !== 'famcal_api_key') {
+      try {
+        blocks = (await fetchTaskDependencyLinks(supabase, userId, id, { famcal: false })).blocks;
+      } catch (blocksError) {
+        if (!(blocksError instanceof DependencyReadIncompleteError)) throw blocksError;
+        console.error('Blocks list could not be read completely:', blocksError);
+      }
+    }
+
+    return NextResponse.json({ dependencies, blocks });
   } catch (error) {
     console.error('Error fetching dependencies:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

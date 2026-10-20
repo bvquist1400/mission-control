@@ -14,12 +14,16 @@ import {
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/Button";
 
-export type ToastTone = "success" | "danger" | "info";
+export type ToastTone = "success" | "warning" | "danger" | "info";
 
 export interface ToastAction {
   label: string;
   /** Awaited before the toast dismisses, so the button can show a pending state. */
   onClick: () => void | Promise<void>;
+}
+
+export interface ToastRenderApi {
+  dismiss: () => void;
 }
 
 export interface ToastOptions {
@@ -28,6 +32,14 @@ export interface ToastOptions {
   action?: ToastAction;
   /** Milliseconds before auto-dismiss. Pass 0 to require manual dismissal. */
   duration?: number;
+  /**
+   * Rich toast (cascade S2): renders its own card instead of the one-line
+   * message (which still names it for screen readers). The card owns its tone,
+   * buttons and dismiss button; the stack keeps placement and hover pause.
+   */
+  render?: (api: ToastRenderApi) => ReactNode;
+  /** A toast with the same key replaces the one on screen (in place) instead of stacking. */
+  key?: string;
 }
 
 interface ToastRecord {
@@ -36,6 +48,8 @@ interface ToastRecord {
   tone: ToastTone;
   action?: ToastAction;
   duration: number;
+  render?: (api: ToastRenderApi) => ReactNode;
+  key?: string;
 }
 
 interface ToastContextValue {
@@ -86,9 +100,21 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       action: options.action,
       duration:
         options.duration ?? (options.action ? DURATION_WITH_ACTION : DURATION_DEFAULT),
+      render: options.render,
+      key: options.key,
     };
 
-    setToasts((current) => [...current, record].slice(-MAX_VISIBLE));
+    setToasts((current) => {
+      if (record.key) {
+        const index = current.findIndex((item) => item.key === record.key);
+        if (index >= 0) {
+          const next = [...current];
+          next[index] = record;
+          return next;
+        }
+      }
+      return [...current, record].slice(-MAX_VISIBLE);
+    });
     return id;
   }, []);
 
@@ -119,14 +145,16 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   );
 }
 
-const TONE_STYLES: Record<ToastTone, string> = {
+export const TONE_STYLES: Record<ToastTone, string> = {
   success: "border-success-border",
+  warning: "border-warning-border",
   danger: "border-danger-border",
   info: "border-stroke",
 };
 
-const TONE_DOT: Record<ToastTone, string> = {
+export const TONE_DOT: Record<ToastTone, string> = {
   success: "bg-success",
+  warning: "bg-warning",
   danger: "bg-danger",
   info: "bg-muted-foreground",
 };
@@ -187,6 +215,20 @@ function ToastItem({
         setActionPending(false);
       }
     }
+  }
+
+  if (toast.render) {
+    return (
+      <div
+        onMouseEnter={() => setPaused(true)}
+        onMouseLeave={() => setPaused(false)}
+        onFocusCapture={() => setPaused(true)}
+        onBlurCapture={() => setPaused(false)}
+        className="pointer-events-auto w-full max-w-[27rem]"
+      >
+        {toast.render({ dismiss: () => onDismiss(toast.id) })}
+      </div>
+    );
   }
 
   return (

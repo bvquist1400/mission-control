@@ -976,6 +976,8 @@ export interface CascadeReply {
   skipped: Array<{ task_id: string; title: string; reason: string }>;
   project_flags: CascadeProjectFlag[];
   depth_limited: number;
+  /** How many moves the plan had (for `failed`, how many tasks did not move). */
+  planned_moves: number;
 }
 
 export function buildCascadeReply(input: {
@@ -1042,6 +1044,7 @@ export function buildCascadeReply(input: {
     skipped,
     project_flags: (input.applied ? input.applied.project_flags : (input.projectFlags ?? [])).map(publicProjectFlag),
     depth_limited: plan?.depthLimited ?? 0,
+    planned_moves: plan?.moves.length ?? 0,
   };
 }
 

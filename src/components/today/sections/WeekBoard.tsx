@@ -10,6 +10,7 @@ import { TaskCreateForm } from "@/components/tasks/TaskCreateForm";
 import { getTaskVisualState, TaskStateBadge } from "@/components/tasks/task-state";
 import { useTodayModal } from "@/components/today/TodayModalProvider";
 import { useTaskMutation } from "@/hooks/useTaskMutation";
+import { useDateCascade } from "@/components/tasks/DateCascadeProvider";
 import { useSprints } from "@/hooks/useSprints";
 import type { ImplementationSummary, TaskWithImplementation } from "@/types/database";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
@@ -676,6 +677,7 @@ export function WeekBoard({
   const { sprints } = useSprints();
 
   const { completeTask, updateTask } = useTaskMutation();
+  const dateCascade = useDateCascade();
   const [tasks, setTasks] = useState<TaskWithImplementation[]>(weekBoardTasks);
   const [waiting, setWaiting] = useState<TaskWithImplementation[]>(waitingTasks);
   const [completingIds, setCompletingIds] = useState<Set<string>>(new Set());
@@ -944,15 +946,34 @@ export function WeekBoard({
     const applyDueAt = (dueAt: string | null) =>
       setTasks((prev) => prev.map((item) => (item.id === taskId ? { ...item, due_at: dueAt } : item)));
 
-    await updateTask(
-      taskId,
-      { due_at: nextDueAt },
-      {
+    if (dateCascade) {
+      // Cascade S2: the date saves at once; the toast (bottom right) lists the
+      // tasks that moved with it, with Undo, "how far", and "Show next week"
+      // when they left this week's board.
+      await dateCascade.changeDueDate({
+        taskId,
+        title: task.title,
+        previousDueAt,
+        updates: { due_at: nextDueAt },
         onOptimistic: () => applyDueAt(nextDueAt),
         onRollback: () => applyDueAt(previousDueAt),
-        failureMessage: "Couldn't move the task.",
-      }
-    );
+        onDatesChanged: (changes) => {
+          const byId = new Map(changes.map((change) => [change.task_id, change.due_at]));
+          setTasks((prev) => prev.map((item) => (byId.has(item.id) ? { ...item, due_at: byId.get(item.id) ?? null } : item)));
+        },
+        week: { weekStart: selectedWeekStart, showNextWeek: () => setWeekOffset((current) => current + 1) },
+      });
+    } else {
+      await updateTask(
+        taskId,
+        { due_at: nextDueAt },
+        {
+          onOptimistic: () => applyDueAt(nextDueAt),
+          onRollback: () => applyDueAt(previousDueAt),
+          failureMessage: "Couldn't move the task.",
+        }
+      );
+    }
 
     setMovingIds((prev) => {
       const next = new Set(prev);

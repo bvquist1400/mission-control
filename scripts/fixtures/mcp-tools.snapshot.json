@@ -2653,6 +2653,31 @@
     }
   },
   {
+    "name": "undo_date_cascade",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "description": "UUID of the task whose due date was changed"
+        },
+        "cascade_id": {
+          "type": "string",
+          "description": "cascade.cascade_id from the update_task reply"
+        },
+        "restore_task": {
+          "description": "Also put the changed task back on its previous date (default true)",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "task_id",
+        "cascade_id"
+      ]
+    }
+  },
+  {
     "name": "unlink_note_from_entity",
     "inputSchema": {
       "$schema": "http://json-schema.org/draft-07/schema#",

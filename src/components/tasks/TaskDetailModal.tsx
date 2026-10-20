@@ -26,6 +26,8 @@ interface TaskDetailModalProps {
   onClose: () => void;
   onTaskUpdated: (taskId: string, updates: TaskUpdatePayload) => void;
   onTaskDeleted: (taskId: string) => void;
+  /** Other tasks' due dates changed by a cascade switch or Undo (optional; the page refreshes anyway). */
+  onDatesChanged?: (changes: Array<{ task_id: string; due_at: string | null }>) => void;
 }
 
 export function TaskDetailModal({
@@ -35,6 +37,7 @@ export function TaskDetailModal({
   onClose,
   onTaskUpdated,
   onTaskDeleted,
+  onDatesChanged,
 }: TaskDetailModalProps) {
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [handBackError, setHandBackError] = useState<string | null>(null);
@@ -45,6 +48,7 @@ export function TaskDetailModal({
     comments,
     checklist,
     dependencies,
+    blocks,
     isSaving,
     updateTask,
     addComment,
@@ -56,7 +60,7 @@ export function TaskDetailModal({
     deleteChecklistItem,
     addDependency,
     removeDependency,
-  } = useTaskDetail({ taskId: task?.id ?? null, onTaskUpdated });
+  } = useTaskDetail({ taskId: task?.id ?? null, onTaskUpdated, onDatesChanged });
 
   useEffect(() => {
     setDeleteError(null);
@@ -64,8 +68,16 @@ export function TaskDetailModal({
     setIsDeleting(false);
   }, [task?.id]);
 
-  async function handleUpdate(_taskId: string, updates: TaskUpdatePayload) {
-    await updateTask(updates);
+  async function handleUpdate(_taskId: string, updates: TaskUpdatePayload): Promise<boolean | "cancelled"> {
+    let cancelled = false;
+    const saved = await updateTask(updates, {
+      title: task?.title,
+      previousDueAt: task?.due_at ?? null,
+      onCancelled: () => {
+        cancelled = true;
+      },
+    });
+    return cancelled ? "cancelled" : saved;
   }
 
   async function handleHandBack(note: string): Promise<boolean> {
@@ -188,6 +200,7 @@ export function TaskDetailModal({
             isSaving={isSaving || isDeleting}
             onUpdate={handleUpdate}
             onReplaceTask={handleTaskReplace}
+            blocks={blocks}
           />
 
           {/* Detail sections */}
@@ -208,6 +221,7 @@ export function TaskDetailModal({
                 <TaskDependencies
                   taskId={task.id}
                   dependencies={dependencies}
+                  blocks={blocks}
                   availableTasks={allTasks}
                   availableCommitments={commitments}
                   onDependencyAdded={addDependency}
