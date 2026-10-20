@@ -145,8 +145,11 @@ assert.ok(
 assert.ok(
   mcpUpstreamRoute.includes("invokeStatic(taskExternalLookupRoute.POST, requestWithContext)")
 );
+// The router's scope rules live in src/lib/mcp/upstream-scopes.ts (since cascade S1).
+assert.ok(mcpUpstreamRoute.includes("import { getRequiredScopesForPath } from '@/lib/mcp/upstream-scopes';"));
+const upstreamScopes = fs.readFileSync(path.join(process.cwd(), "src/lib/mcp/upstream-scopes.ts"), "utf8");
 assert.match(
-  mcpUpstreamRoute,
+  upstreamScopes,
   /normalizedMethod === 'POST'[\s\S]*pathSegments\[1\] === 'lookup-external'[\s\S]*return \['mcp\.read'\]/,
   "batch lookup must require read scope even though its request body uses POST"
 );

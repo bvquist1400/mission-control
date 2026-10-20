@@ -42,6 +42,12 @@ class MemoryQueryBuilder {
     return this;
   }
 
+  // Keyset paging (dependency reads page on id since cascade S1).
+  gt(field, value) {
+    this.filters.push((row) => String(row[field] ?? "") > String(value));
+    return this;
+  }
+
   gte(field, value) {
     this.filters.push((row) => String(row[field] ?? "") >= String(value));
     return this;

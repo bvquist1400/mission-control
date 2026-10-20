@@ -13,6 +13,7 @@ import { queueTaskStatusTransition } from '@/lib/task-status-transitions';
 import { getHighPriorityStakeholderNames, recalculateTaskPriority } from '@/lib/priority';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import {
+  addFamcalTaskComment,
   checkFamcalStatusTransition,
   FAMCAL_ELIGIBLE_FIELD,
   FAMCAL_REQUIRED_TAG,
@@ -22,6 +23,30 @@ import {
   projectTaskForFamcal,
 } from '@/lib/famcal-api-key';
 import { validateOptionalTimestamp } from '@/lib/validate';
+import { DependencyReadIncompleteError, fetchTaskDependencyLinks } from '@/lib/task-dependency-links';
+import {
+  applyTaskDateCascade,
+  buildCascadeReply,
+  CASCADE_CONFIRM_THRESHOLD,
+  cascadeFailureReason,
+  cascadeRootNotice,
+  cascadeTrigger,
+  DEFAULT_CASCADE_MODE,
+  fetchCascadeProjects,
+  loadCascadeGraph,
+  parseCascadeOptions,
+  planTaskDateCascade,
+  prepareCascadeApplyMoves,
+  projectFlagsForMoves,
+  publicProjectFlag,
+  rootPastTargetCandidate,
+  type CascadeApplyMove,
+  type CascadeRootForFlag,
+  type CascadeOptions,
+  type CascadePlan,
+  type CascadeReply,
+} from '@/lib/task-date-cascade';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   externalSourceConflictPayload,
   isTaskExternalSourceUniqueViolation,
@@ -99,11 +124,17 @@ export async function GET(
       if (!isFamcalEligibleRow(data as Record<string, unknown>)) {
         return NextResponse.json({ error: 'Task not found' }, { status: 404 });
       }
-      return NextResponse.json(projectTaskForFamcal(data as Record<string, unknown>));
+      // Linked tasks the key can't read by id come back as "Another task" placeholders.
+      const famcalLinks = await fetchTaskDependencyLinks(supabase, userId, id, { famcal: true });
+      return NextResponse.json({ ...projectTaskForFamcal(data as Record<string, unknown>), ...famcalLinks });
     }
 
-    return NextResponse.json(normalizeTaskWithRelations(data as Record<string, unknown>));
+    const links = await fetchTaskDependencyLinks(supabase, userId, id, { famcal: false });
+    return NextResponse.json({ ...normalizeTaskWithRelations(data as Record<string, unknown>), ...links });
   } catch (error) {
+    if (error instanceof DependencyReadIncompleteError) {
+      return NextResponse.json({ error: error.message }, { status: 503 });
+    }
     console.error('Error fetching task:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
@@ -147,6 +178,19 @@ export async function PATCH(
         }
         famcalExpectedStatus = visibleTask.status;
       }
+    }
+
+    // Cascade due dates (S1): who waits on this task moves too when its due date
+    // moves later. The FamCal key can't send these keys (its allowlist refuses
+    // them); it always gets the default same-gap cascade over FamCal-eligible
+    // tasks, and its reply stays projectTaskForFamcal.
+    let cascadeOptions: CascadeOptions = { cascade: true, mode: DEFAULT_CASCADE_MODE, confirm: false, quiet: false };
+    if (!isFamcalKey) {
+      const parsedCascade = parseCascadeOptions(body);
+      if (!parsedCascade.ok) {
+        return NextResponse.json({ error: parsedCascade.error }, { status: 400 });
+      }
+      cascadeOptions = parsedCascade.value;
     }
 
     const allowedFields = [
@@ -465,6 +509,102 @@ export async function PATCH(
       }
     }
 
+    // Plan the cascade before anything is written, so a preview or a refusal
+    // (too many moves) leaves the task untouched.
+    let cascadeReply: CascadeReply | null = null;
+    let cascadePending: {
+      plan: CascadePlan;
+      moves: CascadeApplyMove[];
+      rootTitle: string;
+      rootWasVisible: boolean;
+      plannedFromDueAt: string | null;
+    } | null = null;
+    let famcalRootNotice: Parameters<typeof cascadeRootNotice>[0] | null = null;
+    if ('due_at' in updates && currentTask) {
+      const mode = cascadeOptions.mode;
+      const rootDates = { old_due_at: currentTask.due_at ?? null, new_due_at: (updates.due_at as string | null) ?? null };
+      if (cascadeOptions.cascade === false) {
+        cascadeReply = buildCascadeReply({ status: 'off', mode, reason: 'off', root: rootDates });
+      } else {
+        const trigger = cascadeTrigger(currentTask, { ...currentTask, ...updates } as Task, mode);
+        if (!trigger.run) {
+          if (cascadeOptions.cascade === 'preview') {
+            // A preview never saves, even when nothing would cascade.
+            return NextResponse.json({
+              preview: true,
+              task_id: id,
+              due_at: updates.due_at,
+              cascade: buildCascadeReply({ status: 'preview', mode, reason: trigger.reason, root: rootDates }),
+            });
+          }
+          cascadeReply = buildCascadeReply({ status: 'not_applicable', mode, reason: trigger.reason, root: rootDates });
+        } else {
+          let plan: CascadePlan | null = null;
+          let graph: Awaited<ReturnType<typeof loadCascadeGraph>> | null = null;
+          try {
+            graph = await loadCascadeGraph(supabase, userId, id, { famcal: isFamcalKey });
+            plan = planTaskDateCascade({
+              graph,
+              mode,
+              deltaWorkdays: trigger.deltaWorkdays,
+              rootOldDueAt: currentTask.due_at,
+              rootNewDueAt: updates.due_at as string,
+            });
+          } catch (planError) {
+            if (!isFamcalKey) {
+              if (planError instanceof DependencyReadIncompleteError) {
+                return NextResponse.json(
+                  { error: "Couldn't read all the tasks that wait on this one, so nothing was saved. Try again, or send cascade: false to move only this task." },
+                  { status: 503 }
+                );
+              }
+              throw planError;
+            }
+            // FamCal: the date move itself still goes through; say so on the task.
+            console.error('Cascade planning failed (FamCal key):', planError);
+            famcalRootNotice = 'unreadable';
+          }
+
+          if (plan && graph) {
+            const overCap = plan.moves.length > CASCADE_CONFIRM_THRESHOLD;
+            if (cascadeOptions.cascade === 'preview' || ((plan.tooLarge || (overCap && !cascadeOptions.confirm)) && !isFamcalKey)) {
+              const merged = { ...currentTask, ...updates } as Task;
+              const projects = await fetchCascadeProjects(supabase, userId, [...plan.moves.map((move) => move.project_id ?? ''), merged.project_id ?? '']);
+              const status = cascadeOptions.cascade === 'preview' ? 'preview' : plan.tooLarge ? 'too_large' : 'needs_confirm';
+              // The warning also counts the edited task itself when it lands past its own project's target.
+              const rootForFlag = isFamcalKey ? null : rootForTargetFlag(merged, currentTask.due_at ?? null);
+              const reply = buildCascadeReply({ status, mode, plan, projectFlags: projectFlagsForMoves(plan.moves, projects, rootForFlag) });
+              if (status === 'preview') {
+                return NextResponse.json({ preview: true, task_id: id, due_at: updates.due_at, cascade: reply });
+              }
+              return NextResponse.json({ error: reply.message, cascade: reply }, { status: 409 });
+            }
+            // Only the FamCal key gets here with tooLarge or over the cap (others
+            // were refused above unless they confirmed).
+            if (plan.tooLarge) {
+              famcalRootNotice = 'too_large';
+            } else if (overCap && !cascadeOptions.confirm) {
+              // FamCal can't confirm: only the task it moved moves.
+              famcalRootNotice = 'too_many';
+            } else if (plan.moves.length > 0) {
+              // Comments name the task as this PATCH saves it (a rename in the
+              // same edit must never publish the old title).
+              const rootTitle = String(('title' in updates ? updates.title : currentTask.title) ?? '');
+              const moves = await prepareCascadeApplyMoves(supabase, userId, { rootTitle, plan, graph });
+              // Could FamCal read this task BEFORE the edit? (Read before the
+              // save; the function also checks it again under its locks.)
+              const rootWasVisible = isFamcalKey ? true : await isFamcalVisibleNow(supabase, userId, id);
+              cascadePending = { plan, moves, rootTitle, rootWasVisible, plannedFromDueAt: currentTask.due_at ?? null };
+            } else {
+              cascadeReply = buildCascadeReply({ status: 'nothing_to_move', mode, plan });
+            }
+          }
+        }
+      }
+    } else if (cascadeOptions.cascade === 'preview') {
+      return NextResponse.json({ error: 'cascade: "preview" needs a due_at to preview' }, { status: 400 });
+    }
+
     const needsPriorityRecalc =
       'status' in updates
       || 'due_at' in updates
@@ -495,6 +635,13 @@ export async function PATCH(
       if (famcalExpectedStatus) {
         updateQuery = updateQuery.eq('status', famcalExpectedStatus);
       }
+    }
+    if (cascadePending) {
+      // Compare-and-set on the due date the cascade was planned from: if another
+      // edit moved this task meanwhile, its later tasks may already have moved,
+      // and this plan's gap would be applied on top (→ 409 below, nothing saved).
+      const plannedFrom = cascadePending.plannedFromDueAt;
+      updateQuery = plannedFrom ? updateQuery.eq('due_at', plannedFrom) : updateQuery.is('due_at', null);
     }
     const { data, error } = await updateQuery
       .select(TASK_WITH_RELATIONS_SELECT)
@@ -533,6 +680,20 @@ export async function PATCH(
           }
         }
       }
+      if (error.code === 'PGRST116' && cascadePending) {
+        let dueQuery = supabase.from('tasks').select('id, due_at').eq('id', id).eq('user_id', userId);
+        if (isFamcalKey) dueQuery = dueQuery.contains('tags', [FAMCAL_REQUIRED_TAG]).eq(FAMCAL_ELIGIBLE_FIELD, true);
+        const { data: nowRow } = await dueQuery.maybeSingle();
+        const nowDue = (nowRow as { due_at?: string | null } | null)?.due_at ?? null;
+        const plannedFrom = cascadePending.plannedFromDueAt;
+        const moved = nowRow && (nowDue === null || plannedFrom === null ? nowDue !== plannedFrom : Date.parse(nowDue) !== Date.parse(plannedFrom));
+        if (moved) {
+          return NextResponse.json(
+            { error: "The task's due date changed since it was read, so nothing was saved; reload it and try again" },
+            { status: 409 }
+          );
+        }
+      }
       if (error.code === 'PGRST116') {
         // FamCal: nothing was written. Say 409 only when the task is still
         // personal and its status moved away from the one validated; a task that
@@ -561,14 +722,173 @@ export async function PATCH(
       });
     }
 
+    // Apply the planned cascade now that the task's own date is saved. This is
+    // a second statement: if it fails, the task's date stands, the reply says
+    // cascade.status "failed" and a system comment on the task says the later
+    // tasks were not moved.
+    const savedDueAt = (data as { due_at?: string | null }).due_at ?? null;
+    // The change token this save gave the task (062's trigger sets due_change_id in
+    // the same UPDATE that wrote due_at). The function moves nothing when the task
+    // carries another token by the time it runs (another save since), and replays,
+    // instead of logging a second one, a cascade another session logged for this
+    // same token (an id-less Try again, a switch). Undo / switch / Try again send
+    // it back (cascade.change_id).
+    const rootChangeId = (data as { due_change_id?: string | null }).due_change_id ?? null;
+    if (cascadeReply) cascadeReply = { ...cascadeReply, change_id: rootChangeId };
+    if (cascadePending && savedDueAt) {
+      const { plan, moves, rootTitle, rootWasVisible } = cascadePending;
+      try {
+        const applied = await applyTaskDateCascade(supabase, {
+          userId,
+          rootTaskId: id,
+          rootOldDueAt: plan.rootOldDueAt,
+          rootNewDueAt: savedDueAt,
+          mode: plan.mode,
+          deltaWorkdays: plan.deltaWorkdays,
+          scope: isFamcalKey ? 'famcal' : 'all',
+          source: auth.context.authSource,
+          moves,
+          rootTitle,
+          rootWasVisible,
+          rootChangeId,
+        });
+        cascadeReply = buildCascadeReply({
+          status: applied.status === 'superseded' ? 'superseded' : 'moved',
+          mode: plan.mode,
+          plan,
+          applied,
+          changeId: rootChangeId,
+        });
+      } catch (cascadeError) {
+        // The database text stays in the server log; replies carry only the plain
+        // reason ("busy" for a lock wait, deadlock or retry, else "error").
+        console.error('Cascade apply failed after the task saved:', cascadeError);
+        cascadeReply = buildCascadeReply({ status: 'failed', mode: plan.mode, plan, reason: cascadeFailureReason(cascadeError), changeId: rootChangeId });
+        await postCascadeRootNotice(supabase, userId, id, isFamcalKey, cascadeRootNotice('failed'));
+      }
+    } else if (famcalRootNotice && isFamcalKey) {
+      await postCascadeRootNotice(supabase, userId, id, true, cascadeRootNotice(famcalRootNotice));
+    }
+
+    // The edited task itself past its project's target date with nothing else to
+    // move, or "just this task" (Brent 10/20, "Warn in the popup and turn the
+    // project Yellow, same as when linked tasks move."): the 062 function applies
+    // the same Green → Yellow rule, root comment and log row (Undo restores health
+    // from it). A cascade that moved tasks already did this itself. Bulk date sets
+    // (cascade_quiet) and the FamCal key stay quiet. A failure here is logged; the
+    // date stands and the reply just carries no flag.
+    if (
+      !isFamcalKey
+      && cascadeReply
+      && !cascadePending
+      && !cascadeOptions.quiet
+      && savedDueAt
+      && currentTask
+      && (cascadeReply.status === 'off' || cascadeReply.status === 'not_applicable' || cascadeReply.status === 'nothing_to_move')
+    ) {
+      const saved = data as unknown as Task;
+      const rootForFlag = rootForTargetFlag(saved, currentTask.due_at ?? null);
+      if (rootForFlag.project_id) {
+        try {
+          const [project] = await fetchCascadeProjects(supabase, userId, [rootForFlag.project_id]);
+          if (rootPastTargetCandidate(rootForFlag, project?.target_date)) {
+            const flagged = await applyTaskDateCascade(supabase, {
+              userId,
+              rootTaskId: id,
+              rootOldDueAt: currentTask.due_at ?? null,
+              rootNewDueAt: savedDueAt,
+              mode: cascadeReply.mode,
+              deltaWorkdays: cascadeReply.delta_workdays ?? 0,
+              scope: 'all',
+              source: auth.context.authSource,
+              moves: [],
+              rootTitle: String(saved.title ?? ''),
+              rootWasVisible: false,
+              rootChangeId,
+            });
+            if (flagged.cascade_id && flagged.adopted) {
+              // Another session handled this same change first (e.g. a switch that
+              // moved the waiting tasks): the reply is that cascade, described by
+              // its own log row (mode, moves, flags), not this PATCH's choice.
+              const replayed = buildCascadeReply({
+                status: flagged.moved.length > 0 ? 'moved' : cascadeReply.status,
+                mode: cascadeReply.mode,
+                reason: flagged.moved.length > 0 ? null : cascadeReply.reason,
+                root: { old_due_at: cascadeReply.root_old_due_at, new_due_at: cascadeReply.root_new_due_at },
+                applied: flagged,
+                changeId: rootChangeId,
+              });
+              cascadeReply = { ...replayed, planned_moves: cascadeReply.planned_moves, depth_limited: cascadeReply.depth_limited };
+            } else if (flagged.cascade_id) {
+              cascadeReply = { ...cascadeReply, cascade_id: flagged.cascade_id, project_flags: flagged.project_flags.map(publicProjectFlag) };
+            }
+          }
+        } catch (flagError) {
+          console.error('Flagging the project for the edited task failed after the task saved:', flagError);
+        }
+      }
+    }
+
     if (isFamcalKey) {
       return NextResponse.json(projectTaskForFamcal(data as Record<string, unknown>));
     }
 
-    return NextResponse.json(normalizeTaskWithRelations(data as Record<string, unknown>));
+    const task = normalizeTaskWithRelations(data as Record<string, unknown>);
+    return NextResponse.json(cascadeReply ? { ...task, cascade: cascadeReply } : task);
   } catch (error) {
     console.error('Error updating task:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  }
+}
+
+/** The edited task as the target-date flag reads it (after this PATCH's changes). */
+function rootForTargetFlag(task: Task, oldDueAt: string | null): CascadeRootForFlag {
+  return {
+    project_id: task.project_id ?? null,
+    new_due_at: task.due_at ?? null,
+    old_due_at: oldDueAt,
+    status: String(task.status),
+    is_recurring_template: task.is_recurring_template,
+    recurring_template_id: task.recurring_template_id,
+  };
+}
+
+/** Whether the FamCal key could read this task right now (one eligibility-filtered read). */
+async function isFamcalVisibleNow(supabase: SupabaseClient, userId: string, taskId: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('tasks')
+    .select('id')
+    .eq('id', taskId)
+    .eq('user_id', userId)
+    .contains('tags', [FAMCAL_REQUIRED_TAG])
+    .eq(FAMCAL_ELIGIBLE_FIELD, true)
+    .maybeSingle();
+  if (error) throw error;
+  return Boolean(data);
+}
+
+/**
+ * A system comment on the edited task saying the later tasks did not move. For
+ * the FamCal key it goes through the FamCal comment function (eligibility under
+ * the row lock). A failure here is logged, never turned into an error: the
+ * task's own date is already saved.
+ */
+async function postCascadeRootNotice(
+  supabase: SupabaseClient,
+  userId: string,
+  taskId: string,
+  famcal: boolean,
+  content: string
+): Promise<void> {
+  try {
+    if (famcal) {
+      await addFamcalTaskComment(supabase, userId, taskId, content, 'system');
+      return;
+    }
+    const { error } = await supabase.from('task_comments').insert({ task_id: taskId, user_id: userId, content, source: 'system' });
+    if (error) throw error;
+  } catch (noticeError) {
+    console.error('Failed to record the cascade notice on the task:', noticeError);
   }
 }
 

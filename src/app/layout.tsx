@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { AppShell } from "@/components/layout/AppShell";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { ToastProvider } from "@/components/ui/Toast";
+import { DateCascadeProvider } from "@/components/tasks/DateCascadeProvider";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getTodayBriefStatus } from "@/lib/briefs/service";
 import type { TodayBriefStatus } from "@/lib/briefs/button";
@@ -45,7 +46,9 @@ export default async function RootLayout({
     <html lang="en">
       <body className="antialiased">
         <ToastProvider>
-          <AppShell sidebar={<Sidebar userEmail={userEmail} defaultCollapsed={collapsed} todayBrief={todayBrief} />}>{children}</AppShell>
+          <DateCascadeProvider>
+            <AppShell sidebar={<Sidebar userEmail={userEmail} defaultCollapsed={collapsed} todayBrief={todayBrief} />}>{children}</AppShell>
+          </DateCascadeProvider>
         </ToastProvider>
       </body>
     </html>

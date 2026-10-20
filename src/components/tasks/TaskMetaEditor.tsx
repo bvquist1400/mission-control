@@ -13,6 +13,8 @@ import { useSprints } from "@/hooks/useSprints";
 import { RECURRENCE_FREQUENCIES } from "@/lib/recurrence";
 import { mergeTaskTags } from "@/lib/task-tags";
 import { hasPersonalTag, setPersonalTag } from "@/lib/personal-exclusion";
+import { followHint } from "@/lib/date-cascade-view";
+import type { TaskBlocksLink } from "@/lib/task-detail";
 import type {
   TaskRecurrenceFrequency,
   TaskType,
@@ -60,8 +62,11 @@ const WEEKDAY_OPTIONS = [
 interface TaskMetaEditorProps {
   task: TaskWithImplementation;
   isSaving: boolean;
-  onUpdate: (taskId: string, updates: TaskUpdatePayload) => Promise<void>;
+  /** Resolves "cancelled" when the "more than 25" box was cancelled (nothing saved): the due draft goes back. */
+  onUpdate: (taskId: string, updates: TaskUpdatePayload) => Promise<unknown>;
   onReplaceTask: (task: TaskWithImplementation) => void;
+  /** Tasks that wait on this one, for the "N tasks will follow" line under Due Date (cascade S2). */
+  blocks?: TaskBlocksLink[] | null;
 }
 
 function isGeneratedRecurringInstance(task: TaskWithImplementation): boolean {
@@ -103,7 +108,7 @@ function getDayOfMonthFromDate(value: string): number {
   return Number.parseInt(normalized.slice(-2), 10);
 }
 
-export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: TaskMetaEditorProps) {
+export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks = null }: TaskMetaEditorProps) {
   const { sprints, loading: sprintsLoading } = useSprints();
   const currentTags = task.tags ?? [];
   const generatedInstance = isGeneratedRecurringInstance(task);
@@ -290,6 +295,10 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
   const dueDateResolution = resolveDueDateInput(dueDateDraft);
   // An empty draft resolves to null; the saved "no due date" reads as "". Both mean none.
   const hasDueDateChange = dueDateResolution.error === null && (dueDateResolution.dateOnly ?? "") !== currentDueDate;
+  // Before saving (Brent 10/20): say how many waiting tasks a later date moves.
+  const followLine = hasDueDateChange
+    ? followHint({ currentDueAt: task.due_at, nextDateOnly: dueDateResolution.dateOnly, blocks })
+    : null;
   const nextTags = mergeTaskTags(tagsDraft, tagInput);
   const hasTagChanges = nextTags.length !== currentTags.length || nextTags.some((tag, index) => tag !== currentTags[index]);
   const isMutating = isSaving || isUpdatingRecurrence;
@@ -387,7 +396,10 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
     }
 
     if (Object.keys(updates).length > 0) {
-      void onUpdate(task.id, updates);
+      void onUpdate(task.id, updates).then((outcome) => {
+        // Cancelled in the "more than 25" box: nothing was saved; show the saved date again.
+        if (outcome === "cancelled") setDueDateDraft(currentDueDate);
+      });
     }
   }
 
@@ -525,6 +537,7 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask }: Task
               ?? (dueDateResolution.dateOnly
                 ? `Resolves to ${formatDateOnly(dueDateResolution.dateOnly)}.`
                 : "Leave blank to clear. Shortcuts: t+30, w+1, m+1, y+1.")}
+            {followLine ? <> <b className="font-semibold text-foreground">{followLine}</b>; you can change that after.</> : null}
           </p>
         </label>
 

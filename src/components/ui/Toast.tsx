@@ -13,13 +13,18 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/Button";
+import { nextToastStack } from "@/components/ui/toast-stack";
 
-export type ToastTone = "success" | "danger" | "info";
+export type ToastTone = "success" | "warning" | "danger" | "info";
 
 export interface ToastAction {
   label: string;
   /** Awaited before the toast dismisses, so the button can show a pending state. */
   onClick: () => void | Promise<void>;
+}
+
+export interface ToastRenderApi {
+  dismiss: () => void;
 }
 
 export interface ToastOptions {
@@ -28,6 +33,14 @@ export interface ToastOptions {
   action?: ToastAction;
   /** Milliseconds before auto-dismiss. Pass 0 to require manual dismissal. */
   duration?: number;
+  /**
+   * Rich toast (cascade S2): renders its own card instead of the one-line
+   * message (which still names it for screen readers). The card owns its tone,
+   * buttons and dismiss button; the stack keeps placement and hover pause.
+   */
+  render?: (api: ToastRenderApi) => ReactNode;
+  /** A toast with the same key replaces the one on screen (in place) instead of stacking. */
+  key?: string;
 }
 
 interface ToastRecord {
@@ -36,6 +49,8 @@ interface ToastRecord {
   tone: ToastTone;
   action?: ToastAction;
   duration: number;
+  render?: (api: ToastRenderApi) => ReactNode;
+  key?: string;
 }
 
 interface ToastContextValue {
@@ -48,8 +63,6 @@ const ToastContext = createContext<ToastContextValue | null>(null);
 /** Long enough to read the message and reach for Undo without rushing. */
 const DURATION_WITH_ACTION = 9000;
 const DURATION_DEFAULT = 5000;
-/** Older toasts are dropped past this so the stack never covers the page. */
-const MAX_VISIBLE = 3;
 
 export function useToast(): ToastContextValue {
   const ctx = useContext(ToastContext);
@@ -86,9 +99,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       action: options.action,
       duration:
         options.duration ?? (options.action ? DURATION_WITH_ACTION : DURATION_DEFAULT),
+      render: options.render,
+      key: options.key,
     };
 
-    setToasts((current) => [...current, record].slice(-MAX_VISIBLE));
+    // Same key replaces in place; past the cap the oldest ordinary toast goes,
+    // never one that stays until closed (the cascade toast with its Undo).
+    setToasts((current) => nextToastStack(current, record));
     return id;
   }, []);
 
@@ -104,7 +121,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         ? createPortal(
             <div
               // Sits above the tablet bottom nav bar, which occupies bottom-4 below lg.
-              className="pointer-events-none fixed inset-x-4 bottom-24 z-50 flex flex-col items-center gap-2 sm:items-end lg:bottom-6 lg:right-6 lg:left-auto lg:inset-x-auto"
+              // z-[60]: above an open task window (Modal is z-50), so a toast from
+              // a save in the editor (the cascade toast) is seen, not dimmed behind it.
+              className="pointer-events-none fixed inset-x-4 bottom-24 z-[60] flex flex-col items-center gap-2 sm:items-end lg:bottom-6 lg:right-6 lg:left-auto lg:inset-x-auto"
               aria-live="polite"
               aria-atomic="false"
             >
@@ -119,14 +138,16 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   );
 }
 
-const TONE_STYLES: Record<ToastTone, string> = {
+export const TONE_STYLES: Record<ToastTone, string> = {
   success: "border-success-border",
+  warning: "border-warning-border",
   danger: "border-danger-border",
   info: "border-stroke",
 };
 
-const TONE_DOT: Record<ToastTone, string> = {
+export const TONE_DOT: Record<ToastTone, string> = {
   success: "bg-success",
+  warning: "bg-warning",
   danger: "bg-danger",
   info: "bg-muted-foreground",
 };
@@ -187,6 +208,20 @@ function ToastItem({
         setActionPending(false);
       }
     }
+  }
+
+  if (toast.render) {
+    return (
+      <div
+        onMouseEnter={() => setPaused(true)}
+        onMouseLeave={() => setPaused(false)}
+        onFocusCapture={() => setPaused(true)}
+        onBlurCapture={() => setPaused(false)}
+        className="pointer-events-auto w-full max-w-[27rem]"
+      >
+        {toast.render({ dismiss: () => onDismiss(toast.id) })}
+      </div>
+    );
   }
 
   return (

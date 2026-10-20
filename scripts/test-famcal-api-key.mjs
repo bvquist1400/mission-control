@@ -256,8 +256,26 @@ function makeDb({ untagBeforeWrite = false, statusBeforeWrite = null, rpcError =
       return finish(sections.filter((row) => eqs.every(([column, value]) => row[column] === value)));
     }
     if (table === "task_dependencies") {
-      const inIds = op("in")?.[1]?.[1] ?? [];
-      return finish(dependencies.filter((row) => inIds.includes(row.task_id)));
+      // Keyset paging like PostgREST (cascade S1 pages every dependency read):
+      // in() on its column, eq() on the columns these rows carry, gt/order/limit on id.
+      const inOp = op("in")?.[1];
+      let rows = dependencies.filter((row) => !inOp || inOp[1].includes(row[inOp[0]]));
+      for (const [column, value] of eqs) {
+        if (column in (rows[0] ?? {})) rows = rows.filter((row) => row[column] === value);
+      }
+      // FamCal cascade link read: the waiting task joined (inner) and filtered on eligibility.
+      if (eqs.some(([column, value]) => column === "waiting.famcal_eligible" && value === true)) {
+        rows = rows.filter((row) => {
+          const waiting = tasks.get(row.task_id);
+          return Boolean(waiting && eligible(waiting));
+        });
+      }
+      const gtOp = op("gt")?.[1];
+      if (gtOp) rows = rows.filter((row) => String(row[gtOp[0]]) > String(gtOp[1]));
+      if (op("order")) rows = [...rows].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      const limit = op("limit")?.[1]?.[0];
+      if (typeof limit === "number") rows = rows.slice(0, limit);
+      return finish(rows);
     }
     return finish([]);
   }
@@ -299,7 +317,7 @@ function makeDb({ untagBeforeWrite = false, statusBeforeWrite = null, rpcError =
     },
   };
 
-  return { client, tasks, projects, comments, log, rpcCalls };
+  return { client, tasks, projects, comments, dependencies, log, rpcCalls };
 }
 
 function routeRequest(db, authSource, method, path, body) {
@@ -1306,6 +1324,51 @@ await test("resolveMachineKeySource: fixed order, empty keys never match", () =>
   assert.equal(routeAuth.resolveMachineKeySource("F", keys), "famcal_api_key");
   assert.equal(routeAuth.resolveMachineKeySource("X", keys), null);
   assert.equal(routeAuth.resolveMachineKeySource("", { legacy: "", actions: null, famcal: null }), null);
+});
+
+// ── Cascade due dates (S1), both directions ────────────────────────────────
+await test("S1 cascade, FamCal → work: a FamCal date move never reads a waiting work task's fields, never moves it, reply unchanged", async () => {
+  const db = makeDb();
+  db.tasks.get(PERSONAL_ID).due_at = "2026-10-20T21:00:00.000Z";
+  db.tasks.get(WORK_ID).due_at = "2026-10-22T21:00:00.000Z";
+  db.dependencies.push({ id: "d-rev", task_id: WORK_ID, depends_on_task_id: PERSONAL_ID, depends_on_commitment_id: null, resolved_at: null, is_resolved: false, created_at: "2026-10-01T00:00:00Z" });
+  const before = await famcalPatch(makeDb(), PERSONAL_ID, { due_at: "2026-10-22T21:00:00.000Z" });
+  const result = await famcalPatch(db, PERSONAL_ID, { due_at: "2026-10-22T21:00:00.000Z" });
+  assert.equal(result.status, 200);
+  assert.deepEqual(Object.keys(result.body).sort(), Object.keys(before.body).sort());
+  assert.equal("cascade" in result.body, false);
+  assert.equal(db.tasks.get(WORK_ID).due_at, "2026-10-22T21:00:00.000Z");
+  assert.equal(db.rpcCalls.some((call) => call.name === "apply_task_date_cascade"), false);
+  // The link read filters on the waiting task's eligibility in the database, and
+  // any task read that could touch the work task carries the FamCal filter too.
+  const linkReads = db.log.filter((entry) => entry.table === "task_dependencies" && entry.ops.some(([n, args]) => n === "in" && args[0] === "depends_on_task_id"));
+  assert.ok(linkReads.length > 0);
+  for (const entry of linkReads) {
+    assert.ok(entry.ops.some(([n, args]) => n === "eq" && args[0] === "waiting.famcal_eligible" && args[1] === true));
+  }
+  const reads = db.log.filter((entry) => entry.table === "tasks" && entry.ops.some(([n, args]) => n === "in" && args[1].includes(WORK_ID)));
+  for (const entry of reads) {
+    assert.ok(entry.ops.some(([n, args]) => n === "eq" && args[0] === "famcal_eligible" && args[1] === true));
+  }
+  assert.equal(JSON.stringify(result.body).includes("Day-job ticket"), false);
+});
+
+await test("S1 cascade, work → FamCal: moving a work task sends the personal follower's comment in a redacted form that never names the work task", async () => {
+  const db = makeDb();
+  db.tasks.get(WORK_DEP_ID).due_at = "2026-10-20T21:00:00.000Z";
+  db.tasks.get(PERSONAL_ID).due_at = "2026-10-21T21:00:00.000Z";
+  const response = await taskRoute.PATCH(
+    routeRequest(db, "legacy_api_key", "PATCH", `/api/tasks/${WORK_DEP_ID}`, { due_at: "2026-10-22T21:00:00.000Z" }),
+    params(WORK_DEP_ID)
+  );
+  assert.equal(response.status, 200);
+  const call = db.rpcCalls.find((entry) => entry.name === "apply_task_date_cascade");
+  assert.ok(call, "the cascade function was called");
+  assert.equal(call.args.p_scope, "all");
+  assert.deepEqual(call.args.p_moves.map((move) => move.task_id), [PERSONAL_ID]);
+  assert.match(call.args.p_moves[0].comment, /Secret work dependency/);
+  assert.match(call.args.p_moves[0].comment_redacted, /because a task it depends on moved later\./);
+  assert.equal(call.args.p_moves[0].comment_redacted.includes("Secret work dependency"), false);
 });
 
 console.log(`\n${passed} passed, ${failures.length} failed`);

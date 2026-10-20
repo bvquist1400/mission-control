@@ -113,6 +113,8 @@ export interface Task {
   work_type: string | null;
   /** A swatch / test piece / prototype: its speeds are labelled "sample". */
   is_sample: boolean;
+  /** Change token of the last due-date save (migration 062's trigger; never set by callers). */
+  due_change_id: string | null;
   created_at: string;
   updated_at: string;
 }

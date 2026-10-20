@@ -5,6 +5,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   type Dispatch,
@@ -16,6 +17,7 @@ import { ChecklistSection } from "@/components/tasks/ChecklistSection";
 import { TaskComments } from "@/components/tasks/TaskComments";
 import { TaskDependencies } from "@/components/tasks/TaskDependencies";
 import { TaskMetaEditor } from "@/components/tasks/TaskMetaEditor";
+import { useDateCascade } from "@/components/tasks/DateCascadeProvider";
 import { TaskTagChips } from "@/components/tasks/TaskTagChips";
 import { getTaskVisualState, TaskStateBadge } from "@/components/tasks/task-state";
 import {
@@ -24,6 +26,7 @@ import {
 } from "@/components/utils/dates";
 import { StatusSelector } from "@/components/ui/StatusSelector";
 import { fetchTaskDetails, type TaskDetailData } from "@/lib/task-detail";
+import { createDraftStore, draftCellHandlers } from "@/lib/cell-draft";
 import type {
   CommitmentSummary,
   ImplementationSummary,
@@ -155,7 +158,16 @@ export function TaskGrid({
   const [error, setError] = useState<string | null>(null);
   const [savingIds, setSavingIds] = useState<Record<string, number>>({});
   const [deletingIds, setDeletingIds] = useState<Record<string, boolean>>({});
-  const [estimateDrafts, setEstimateDrafts] = useState<Record<string, string>>({});
+  // The Due and Estimate cells keep what is typed as a draft and save it on blur
+  // or Enter only (cascade S2: a date typed piece by piece must not move the tasks
+  // after it at every valid keystroke). Escape drops the draft. The drafts live in
+  // a plain store, not React state: Escape's blur() runs the blur handler at once,
+  // before a state update would apply, so a state draft was still there and got
+  // saved (fix round 1). Changing a draft re-renders the grid.
+  const [, rerenderDrafts] = useReducer((count: number) => count + 1, 0);
+  const [estimateDrafts] = useState(() => createDraftStore<string>(rerenderDrafts));
+  const [dueDrafts] = useState(() => createDraftStore<string>(rerenderDrafts));
+  const dateCascade = useDateCascade();
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null);
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(() => new Set());
   const [bulkStatus, setBulkStatus] = useState<TaskStatus | "">("");
@@ -273,7 +285,7 @@ export function TaskGrid({
 
         setTaskDetailsById((current) => ({
           ...current,
-          [taskId]: { comments: [], checklist: [], dependencies: [] },
+          [taskId]: { comments: [], checklist: [], dependencies: [], blocks: null },
         }));
       })
       .finally(() => {
@@ -667,15 +679,8 @@ export function TaskGrid({
       delete next[taskId];
       return next;
     });
-    setEstimateDrafts((current) => {
-      if (!(taskId in current)) {
-        return current;
-      }
-
-      const next = { ...current };
-      delete next[taskId];
-      return next;
-    });
+    estimateDrafts.cancel(taskId);
+    dueDrafts.cancel(taskId);
 
     const nextRequests = { ...activeDetailRequestIdsRef.current };
     delete nextRequests[taskId];
@@ -697,8 +702,43 @@ export function TaskGrid({
     );
   }
 
-  async function updateTask(taskId: string, updates: TaskUpdatePayload): Promise<void> {
+  /** Due dates other tasks got from a cascade switch or Undo (rows on screen follow). */
+  function applyDateChanges(changes: Array<{ task_id: string; due_at: string | null }>) {
+    const byId = new Map(changes.map((change) => [change.task_id, change.due_at]));
+    setTasks((current) => current.map((task) => (byId.has(task.id) ? { ...task, due_at: byId.get(task.id) ?? null } : task)));
+  }
+
+  // requestOptions travel in the PATCH body only (never into the task row shown).
+  async function updateTask(
+    taskId: string,
+    updates: TaskUpdatePayload,
+    requestOptions: { cascade?: boolean; cascade_quiet?: boolean } = {}
+  ): Promise<void | "cancelled"> {
     const previousTask = tasks.find((task) => task.id === taskId);
+
+    // A single task's due-date change (the Due cell, the row editor) goes through
+    // the cascade provider: the toast lists what moved, with Undo and "how far";
+    // above 25 it asks first and nothing is saved meanwhile. Bulk sets send
+    // cascade:false and stay a plain PATCH.
+    if ("due_at" in updates && requestOptions.cascade !== false && dateCascade && previousTask) {
+      markSaving(taskId);
+      setError(null);
+      const result = await dateCascade.changeDueDate({
+        taskId,
+        title: previousTask.title,
+        previousDueAt: previousTask.due_at,
+        updates,
+        quietErrors: true,
+        onOptimistic: () => setTasks((current) => current.map((task) => (task.id === taskId ? { ...task, ...updates } : task))),
+        onRollback: () => setTasks((current) => current.map((task) => (task.id === taskId ? previousTask : task))),
+        onSaved: (task) => replaceTaskSnapshot(task),
+        onDatesChanged: applyDateChanges,
+      });
+      if (!result.ok && !result.cancelled) setError(result.error ?? "Failed to update task");
+      unmarkSaving(taskId);
+      return result.cancelled ? "cancelled" : undefined;
+    }
+
     markSaving(taskId);
     setError(null);
 
@@ -745,7 +785,7 @@ export function TaskGrid({
       const response = await fetch(`/api/tasks/${taskId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updates),
+        body: JSON.stringify({ ...updates, ...requestOptions }),
       });
 
       if (!response.ok) {
@@ -753,7 +793,8 @@ export function TaskGrid({
         throw new Error(typeof data.error === "string" ? data.error : "Update failed");
       }
 
-      const updatedTask = (await response.json()) as TaskWithImplementation;
+      const { cascade: _cascade, ...updatedTask } = (await response.json()) as TaskWithImplementation & { cascade?: unknown };
+      void _cascade;
       replaceTaskSnapshot(updatedTask);
     } catch (updateError) {
       if (previousTask) {
@@ -763,6 +804,12 @@ export function TaskGrid({
     } finally {
       unmarkSaving(taskId);
     }
+  }
+
+  /** Saves the Due cell's draft (blur or Enter, already taken from the store); nothing when it didn't change. */
+  function commitDueDraft(task: TaskWithImplementation, draft: string) {
+    if (draft === timestampToLocalDateInputValue(task.due_at)) return;
+    void updateTask(task.id, { due_at: draft ? localDateInputToEndOfDayIso(draft) : null });
   }
 
   function handleToggleDone(task: TaskWithImplementation) {
@@ -826,7 +873,10 @@ export function TaskGrid({
     }
 
     setBulkActionBusy(true);
-    await Promise.all(selectedIds.map((taskId) => updateTask(taskId, updates)));
+    // A bulk date set moves exactly the selected tasks: no cascade to the tasks
+    // that wait on them (the parallel PATCHes would otherwise each move chains).
+    const requestOptions = "due_at" in updates ? { cascade: false, cascade_quiet: true } : {};
+    await Promise.all(selectedIds.map((taskId) => updateTask(taskId, updates, requestOptions)));
     setBulkActionBusy(false);
 
     if (options.clearDueDate || "due_at" in updates) {
@@ -891,36 +941,13 @@ export function TaskGrid({
     }
   }
 
-  async function commitEstimatedMinutes(task: TaskWithImplementation): Promise<void> {
-    const draftValue = estimateDrafts[task.id];
-    if (typeof draftValue !== "string") {
-      return;
-    }
-
+  /** Saves the Estimate cell's draft (blur or Enter, already taken from the store); an empty or invalid value just shows the saved one again. */
+  async function commitEstimatedMinutes(task: TaskWithImplementation, draftValue: string): Promise<void> {
     const trimmedValue = draftValue.trim();
-    if (!trimmedValue) {
-      setEstimateDrafts((current) => {
-        const next = { ...current };
-        delete next[task.id];
-        return next;
-      });
-      return;
-    }
+    if (!trimmedValue) return;
 
     const parsed = Number.parseInt(trimmedValue, 10);
-    if (!Number.isFinite(parsed) || parsed < 1 || parsed > 480) {
-      setEstimateDrafts((current) => ({
-        ...current,
-        [task.id]: String(task.estimated_minutes),
-      }));
-      return;
-    }
-
-    setEstimateDrafts((current) => {
-      const next = { ...current };
-      delete next[task.id];
-      return next;
-    });
+    if (!Number.isFinite(parsed) || parsed < 1 || parsed > 480) return;
 
     if (parsed !== task.estimated_minutes && !savingIds[task.id]) {
       await updateTask(task.id, { estimated_minutes: parsed, estimate_source: "manual" });
@@ -1140,6 +1167,14 @@ export function TaskGrid({
           >
             Clear Due
           </Button>
+          {bulkDueDate ? (
+            <p className="flex w-full items-center gap-1.5 text-xs text-muted-foreground">
+              <svg className="h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13.8 10.2a4 4 0 0 1 0 5.6l-2 2a4 4 0 0 1-5.6-5.6l1-1M10.2 13.8a4 4 0 0 1 0-5.6l2-2a4 4 0 0 1 5.6 5.6l-1 1" />
+              </svg>
+              Bulk changes don’t move linked tasks.
+            </p>
+          ) : null}
 
           <Button
             variant="danger"
@@ -1267,6 +1302,8 @@ export function TaskGrid({
                 const isSaving = Boolean(savingIds[task.id]);
                 const isDeleting = Boolean(deletingIds[task.id]);
                 const isBusy = isSaving || isDeleting;
+                const dueCell = draftCellHandlers({ id: task.id, store: dueDrafts, commit: (draft) => commitDueDraft(task, draft) });
+                const estimateCell = draftCellHandlers({ id: task.id, store: estimateDrafts, commit: (draft) => void commitEstimatedMinutes(task, draft), enter: "blur" });
                 const isExpanded = expandedTaskId === task.id;
                 const isSelected = selectedTaskIds.has(task.id);
                 const details = taskDetailsById[task.id];
@@ -1419,29 +1456,10 @@ export function TaskGrid({
                           type="number"
                           min={1}
                           max={480}
-                          value={estimateDrafts[task.id] ?? String(task.estimated_minutes)}
-                          onChange={(event) => {
-                            const nextValue = event.target.value;
-                            setEstimateDrafts((current) => ({ ...current, [task.id]: nextValue }));
-                          }}
-                          onBlur={() => {
-                            void commitEstimatedMinutes(task);
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") {
-                              event.preventDefault();
-                              event.currentTarget.blur();
-                            }
-
-                            if (event.key === "Escape") {
-                              setEstimateDrafts((current) => {
-                                const next = { ...current };
-                                delete next[task.id];
-                                return next;
-                              });
-                              event.currentTarget.blur();
-                            }
-                          }}
+                          value={estimateDrafts.get(task.id) ?? String(task.estimated_minutes)}
+                          onChange={(event) => estimateCell.onChange(event.target.value)}
+                          onBlur={estimateCell.onBlur}
+                          onKeyDown={estimateCell.onKeyDown}
                           disabled={isBusy}
                           className="w-full rounded border border-stroke bg-transparent px-1.5 py-1 text-center text-xs text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
                         />
@@ -1450,11 +1468,11 @@ export function TaskGrid({
                       <td className={`${dueColumnWidthClass} px-2 py-2.5 align-middle`}>
                         <input
                           type="date"
-                          value={timestampToLocalDateInputValue(task.due_at)}
-                          onChange={(event) => {
-                            const nextDue = event.target.value;
-                            void updateTask(task.id, { due_at: nextDue ? localDateInputToEndOfDayIso(nextDue) : null });
-                          }}
+                          aria-label={`Due date for ${task.title}`}
+                          value={dueDrafts.get(task.id) ?? timestampToLocalDateInputValue(task.due_at)}
+                          onChange={(event) => dueCell.onChange(event.target.value)}
+                          onBlur={dueCell.onBlur}
+                          onKeyDown={dueCell.onKeyDown}
                           disabled={isBusy}
                           className="w-full rounded border border-stroke bg-transparent px-1 py-1 text-xs text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
                         />
@@ -1536,6 +1554,7 @@ export function TaskGrid({
                                 isSaving={isBusy}
                                 onUpdate={updateTask}
                                 onReplaceTask={replaceTaskSnapshot}
+                                blocks={details.blocks}
                               />
 
                               <div className="grid gap-6 xl:grid-cols-3">
@@ -1550,6 +1569,7 @@ export function TaskGrid({
                                 <TaskDependencies
                                   taskId={task.id}
                                   dependencies={details.dependencies}
+                                  blocks={details.blocks}
                                   availableTasks={tasks}
                                   availableCommitments={commitments}
                                   onDependencyAdded={(dependency) => handleDependencyAdded(task.id, dependency)}
@@ -1591,6 +1611,7 @@ export function TaskGrid({
           setModalTaskId(null);
           setTasks((current) => current.filter((item) => item.id !== taskId));
         }}
+        onDatesChanged={applyDateChanges}
       />
     </div>
   );

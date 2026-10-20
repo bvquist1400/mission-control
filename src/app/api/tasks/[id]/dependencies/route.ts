@@ -1,6 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isPostgrestNotFound } from '@/lib/supabase/errors';
 import { fetchTaskDependenciesForTask } from '@/lib/task-dependencies';
+import {
+  DependencyGraphTooLargeError,
+  DependencyReadIncompleteError,
+  describeDependencyCycle,
+  fetchTaskDependencyLinks,
+  findDependencyPath,
+  makeWaitsOnLoader,
+  TASK_DEPENDENCY_LOOP_SQLSTATE,
+  type BlocksLink,
+} from '@/lib/task-dependency-links';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import type { CommitmentStatus, TaskStatus } from '@/types/database';
 
@@ -44,7 +54,20 @@ export async function GET(
 
     const dependencies = await fetchTaskDependenciesForTask(supabase, userId, id);
 
-    return NextResponse.json({ dependencies });
+    // Cascade S2: the tasks that wait on this one (the task window's "Blocks"
+    // list). Null when they can't all be read; the dependencies still load.
+    // (Not reachable with the FamCal key: its allowlist excludes this route.)
+    let blocks: BlocksLink[] | null = null;
+    if (auth.context.authSource !== 'famcal_api_key') {
+      try {
+        blocks = (await fetchTaskDependencyLinks(supabase, userId, id, { famcal: false })).blocks;
+      } catch (blocksError) {
+        if (!(blocksError instanceof DependencyReadIncompleteError)) throw blocksError;
+        console.error('Blocks list could not be read completely:', blocksError);
+      }
+    }
+
+    return NextResponse.json({ dependencies, blocks });
   } catch (error) {
     console.error('Error fetching dependencies:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
@@ -68,7 +91,7 @@ export async function POST(
 
     const { data: task, error: taskError } = await supabase
       .from('tasks')
-      .select('id')
+      .select('id, title')
       .eq('id', id)
       .eq('user_id', userId)
       .single();
@@ -186,6 +209,41 @@ export async function POST(
       return NextResponse.json({ error: 'Dependency already exists' }, { status: 409 });
     }
 
+    // Refuse a loop: "this task waits on X" is a loop when X already waits on
+    // this task, directly or through other tasks.
+    if (type === 'task' && dependsOnTaskId) {
+      let cyclePath: string[] | null;
+      try {
+        cyclePath = await findDependencyPath(dependsOnTaskId, id, makeWaitsOnLoader(supabase, userId));
+      } catch (cycleError) {
+        if (cycleError instanceof DependencyGraphTooLargeError) {
+          return NextResponse.json({ error: cycleError.message }, { status: 409 });
+        }
+        if (cycleError instanceof DependencyReadIncompleteError) {
+          // Never treat a partial read as "no loop": refuse, nothing is added.
+          return NextResponse.json(
+            { error: "Couldn't read all the links to check for a loop, so nothing was added. Try again." },
+            { status: 503 }
+          );
+        }
+        throw cycleError;
+      }
+
+      if (cyclePath) {
+        return NextResponse.json(
+          {
+            error: describeDependencyCycle({
+              taskTitle: String((task as { title?: unknown }).title ?? 'this task'),
+              dependsOnTitle: targetTitle,
+              path: cyclePath,
+            }),
+            cycle_task_ids: cyclePath,
+          },
+          { status: 400 }
+        );
+      }
+    }
+
     const { data, error } = await supabase
       .from('task_dependencies')
       .insert({
@@ -198,16 +256,29 @@ export async function POST(
       .single();
 
     if (error) {
+      // Two identical adds at once: the partial unique index (038) lets one through.
+      if (error.code === '23505') {
+        return NextResponse.json({ error: 'Dependency already exists' }, { status: 409 });
+      }
+      // The database loop guard (061): an opposite link committed after the check
+      // above (two adds at once, or one behind the paging cursor). Nothing saved.
+      if (error.code === TASK_DEPENDENCY_LOOP_SQLSTATE) {
+        return NextResponse.json(
+          {
+            error: `That would make a loop: "${targetTitle}" already waits on "${String((task as { title?: unknown }).title ?? 'this task')}", directly or through other tasks. Remove one of those links first.`,
+          },
+          { status: 400 }
+        );
+      }
+      if (error.code === '55P03') {
+        return NextResponse.json({ error: 'Links are being changed right now; try again.' }, { status: 503 });
+      }
       throw error;
     }
 
-    const dependencies = await fetchTaskDependenciesForTask(supabase, userId, id);
-    const created = dependencies.find((dependency) => dependency.id === data.id);
-
-    if (created) {
-      return NextResponse.json(created, { status: 201 });
-    }
-
+    // Reply from the inserted row and the target read above. Re-reading all of
+    // this task's links here could fail on a task with very many links (an
+    // over-long id list) and turn a saved link into a 500.
     return NextResponse.json(
       {
         id: data.id,
@@ -218,6 +289,7 @@ export async function POST(
         title: targetTitle,
         status: targetStatus,
         unresolved: targetStatus !== 'Done',
+        resolved_at: null,
         created_at: data.created_at,
       },
       { status: 201 }

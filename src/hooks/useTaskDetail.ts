@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchTaskDetails } from "@/lib/task-detail";
+import { useDateCascade } from "@/components/tasks/DateCascadeProvider";
+import { fetchTaskDetails, type TaskBlocksLink } from "@/lib/task-detail";
 import type {
   TaskChecklistItem,
   TaskComment,
@@ -13,6 +14,16 @@ import type {
 interface UseTaskDetailOptions {
   taskId: string | null;
   onTaskUpdated?: (taskId: string, updates: TaskUpdatePayload) => void;
+  /** Other tasks' due dates changed by a cascade switch or Undo (lists on screen follow). */
+  onDatesChanged?: (changes: Array<{ task_id: string; due_at: string | null }>) => void;
+}
+
+export interface TaskUpdateOptions {
+  /** For a due-date change: the task as shown (the cascade toast and confirm box name it). */
+  title?: string;
+  previousDueAt?: string | null;
+  /** The "more than 25" box was cancelled: nothing was saved. */
+  onCancelled?: () => void;
 }
 
 interface UseTaskDetailResult {
@@ -21,9 +32,11 @@ interface UseTaskDetailResult {
   comments: TaskComment[];
   checklist: TaskChecklistItem[];
   dependencies: TaskDependencySummary[];
+  /** Tasks that wait on this one (null when they couldn't be read). */
+  blocks: TaskBlocksLink[] | null;
   isSaving: boolean;
   /** Resolves true when the PATCH succeeded; on failure `error` is set and it resolves false. */
-  updateTask: (updates: TaskUpdatePayload) => Promise<boolean>;
+  updateTask: (updates: TaskUpdatePayload, options?: TaskUpdateOptions) => Promise<boolean>;
   addComment: (comment: TaskComment) => void;
   updateComment: (comment: TaskComment) => void;
   deleteComment: (commentId: string) => void;
@@ -39,14 +52,16 @@ function getDependencyBlockedState(dependencies: TaskDependencySummary[]): boole
   return dependencies.some((d) => d.unresolved);
 }
 
-export function useTaskDetail({ taskId, onTaskUpdated }: UseTaskDetailOptions): UseTaskDetailResult {
+export function useTaskDetail({ taskId, onTaskUpdated, onDatesChanged }: UseTaskDetailOptions): UseTaskDetailResult {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [comments, setComments] = useState<TaskComment[]>([]);
   const [checklist, setChecklist] = useState<TaskChecklistItem[]>([]);
   const [dependencies, setDependencies] = useState<TaskDependencySummary[]>([]);
+  const [blocks, setBlocks] = useState<TaskBlocksLink[] | null>([]);
   const [isSaving, setIsSaving] = useState(false);
   const isMountedRef = useRef(true);
+  const dateCascade = useDateCascade();
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -62,6 +77,7 @@ export function useTaskDetail({ taskId, onTaskUpdated }: UseTaskDetailOptions): 
       setComments([]);
       setChecklist([]);
       setDependencies([]);
+      setBlocks([]);
       setError(null);
       return;
     }
@@ -77,6 +93,7 @@ export function useTaskDetail({ taskId, onTaskUpdated }: UseTaskDetailOptions): 
         setComments(data.comments);
         setChecklist(data.checklist);
         setDependencies(data.dependencies);
+        setBlocks(data.blocks);
       })
       .catch(() => {
         if (controller.signal.aborted) return;
@@ -93,11 +110,49 @@ export function useTaskDetail({ taskId, onTaskUpdated }: UseTaskDetailOptions): 
     };
   }, [taskId]);
 
+  // After a due-date change (or a cascade switch / Undo) the "Blocks" dates moved: read the links again.
+  const refreshLinks = useCallback(async () => {
+    if (!taskId) return;
+    try {
+      const data = await fetchTaskDetails(taskId);
+      if (!isMountedRef.current) return;
+      setDependencies(data.dependencies);
+      setBlocks(data.blocks);
+      setComments(data.comments);
+    } catch {
+      // The rest of the window stays as it was.
+    }
+  }, [taskId]);
+
   const updateTask = useCallback(
-    async (updates: TaskUpdatePayload): Promise<boolean> => {
+    async (updates: TaskUpdatePayload, options: TaskUpdateOptions = {}): Promise<boolean> => {
       if (!taskId) return false;
       setIsSaving(true);
       setError(null);
+
+      // A due-date change goes through the cascade provider: it saves at once,
+      // then the toast lists what moved (Undo, how far), or asks first above 25.
+      if ("due_at" in updates && dateCascade) {
+        const result = await dateCascade.changeDueDate({
+          taskId,
+          title: options.title ?? updates.title ?? "This task",
+          previousDueAt: options.previousDueAt ?? null,
+          updates,
+          quietErrors: true,
+          onSaved: (task) => onTaskUpdated?.(taskId, task as unknown as TaskUpdatePayload),
+          onDatesChanged: (changes) => {
+            onDatesChanged?.(changes);
+            void refreshLinks();
+          },
+        });
+        if (result.ok) void refreshLinks();
+        if (isMountedRef.current) {
+          setIsSaving(false);
+          if (!result.ok && !result.cancelled) setError(result.error ?? "Failed to update task");
+        }
+        if (result.cancelled) options.onCancelled?.();
+        return result.ok;
+      }
 
       try {
         const response = await fetch(`/api/tasks/${taskId}`, {
@@ -111,7 +166,8 @@ export function useTaskDetail({ taskId, onTaskUpdated }: UseTaskDetailOptions): 
           throw new Error(typeof data.error === "string" ? data.error : "Update failed");
         }
 
-        const updatedTask = (await response.json()) as TaskWithImplementation;
+        const { cascade: _cascade, ...updatedTask } = (await response.json()) as TaskWithImplementation & { cascade?: unknown };
+        void _cascade;
         onTaskUpdated?.(taskId, updatedTask as unknown as TaskUpdatePayload);
         return true;
       } catch (err) {
@@ -123,7 +179,7 @@ export function useTaskDetail({ taskId, onTaskUpdated }: UseTaskDetailOptions): 
         if (isMountedRef.current) setIsSaving(false);
       }
     },
-    [taskId, onTaskUpdated]
+    [taskId, onTaskUpdated, onDatesChanged, dateCascade, refreshLinks]
   );
 
   const addComment = useCallback((comment: TaskComment) => {
@@ -280,6 +336,7 @@ export function useTaskDetail({ taskId, onTaskUpdated }: UseTaskDetailOptions): 
     comments,
     checklist,
     dependencies,
+    blocks,
     isSaving,
     updateTask,
     addComment,

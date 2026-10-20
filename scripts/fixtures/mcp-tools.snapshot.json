@@ -110,6 +110,30 @@
     }
   },
   {
+    "name": "add_task_dependency",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "description": "UUID of the task that waits"
+        },
+        "depends_on_task_id": {
+          "description": "UUID of the task it waits on",
+          "type": "string"
+        },
+        "depends_on_commitment_id": {
+          "description": "UUID of the commitment it waits on (instead of a task)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id"
+      ]
+    }
+  },
+  {
     "name": "apply_artifact",
     "inputSchema": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -867,7 +891,7 @@
           "type": "boolean"
         },
         "blocked_by_task_id": {
-          "description": "Task UUID this new task should depend on",
+          "description": "Task UUID this new task waits on. If the link can't be saved, the task is not created and an error is returned.",
           "type": "string"
         },
         "initial_comment": {
@@ -2107,6 +2131,30 @@
     }
   },
   {
+    "name": "remove_task_dependency",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "description": "UUID of the task that waits"
+        },
+        "dependency_id": {
+          "description": "The link's dependency_id, from get_task blocked_by",
+          "type": "string"
+        },
+        "depends_on_task_id": {
+          "description": "UUID of the task it waits on (used when dependency_id is not given)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id"
+      ]
+    }
+  },
+  {
     "name": "save_brief",
     "inputSchema": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -2602,6 +2650,31 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "type": "object",
       "properties": {}
+    }
+  },
+  {
+    "name": "undo_date_cascade",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "description": "UUID of the task whose due date was changed"
+        },
+        "cascade_id": {
+          "type": "string",
+          "description": "cascade.cascade_id from the update_task reply"
+        },
+        "restore_task": {
+          "description": "Also put the changed task back on its previous date (default true)",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "task_id",
+        "cascade_id"
+      ]
     }
   },
   {
@@ -3698,6 +3771,30 @@
         },
         "is_sample": {
           "description": "Pace tracking: true for a swatch / test piece / prototype",
+          "type": "boolean"
+        },
+        "cascade": {
+          "description": "When due_at moves later: true (default) moves the tasks that wait on this one too; false moves only this task; \"preview\" saves nothing and returns what would move",
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "string",
+              "const": "preview"
+            }
+          ]
+        },
+        "cascade_mode": {
+          "description": "How later tasks move: \"same_gap\" (default) by the same number of working days; \"only_collisions\" only those that would be due before a task they wait on",
+          "type": "string",
+          "enum": [
+            "same_gap",
+            "only_collisions"
+          ]
+        },
+        "cascade_confirm": {
+          "description": "Required (true) when the cascade would move more than 25 tasks",
           "type": "boolean"
         }
       },

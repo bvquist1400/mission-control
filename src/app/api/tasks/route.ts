@@ -17,9 +17,10 @@ import {
   FAMCAL_ELIGIBLE_FIELD,
   famcalListParamError,
   projectTaskForFamcal,
-  redactDependencyForFamcal,
+  redactDependencyForFamcalList,
 } from '@/lib/famcal-api-key';
 import { fetchTaskDependencySummaries } from '@/lib/task-dependencies';
+import { DependencyReadIncompleteError, fetchFamcalVisibleLinkedTasks } from '@/lib/task-dependency-links';
 import {
   queryNeedsReviewCount,
   queryTopThreeTasks,
@@ -30,6 +31,7 @@ import { addDateOnlyDays, getDateStartInTimeZone } from '@/lib/today/week-board'
 import { DEFAULT_WORKDAY_CONFIG } from '@/lib/workday';
 import { filterTasksByScope, normalizeTaskScope } from '@/lib/personal-exclusion';
 import { validateOptionalTimestamp } from '@/lib/validate';
+import { isPostgrestNotFound } from '@/lib/supabase/errors';
 import {
   externalSourceConflictPayload,
   isTaskExternalSourceUniqueViolation,
@@ -80,6 +82,22 @@ function asStringOrNull(value: unknown): string | null {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
 }
+
+// Plain errors for a create whose extra parts failed (see failCreate in POST).
+const CREATE_PART_FAILED: Record<string, string> = {
+  'blocked_by_task_id link':
+    'The task could not be linked to blocked_by_task_id, so it was not created. Nothing was saved; try again.',
+  initial_comment: 'The task\'s initial_comment could not be saved, so the task was not created. Nothing was saved; try again.',
+  initial_checklist: 'The task\'s initial_checklist could not be saved, so the task was not created. Nothing was saved; try again.',
+};
+const CREATE_PART_ROLLBACK_FAILED: Record<string, string> = {
+  'blocked_by_task_id link':
+    'The task was created, but it could not be linked to blocked_by_task_id and could not be removed. Add the link with add_task_dependency, or delete the task.',
+  initial_comment:
+    'The task was created, but its initial_comment could not be saved and the task could not be removed. Add the comment with add_task_comment, or delete the task.',
+  initial_checklist:
+    'The task was created, but its initial_checklist could not be saved and the task could not be removed. Add the items with update_task_checklist, or delete the task.',
+};
 
 // GET /api/tasks - List tasks with optional filters
 export async function GET(request: NextRequest) {
@@ -305,9 +323,23 @@ export async function GET(request: NextRequest) {
     const taskIds = tasks.map((task) => task.id);
     const dependencyMap = await fetchTaskDependencySummaries(supabase, userId, taskIds);
 
+    // FamCal: prerequisite tasks it may read by id keep their fields (as on the
+    // task detail); those come from one eligibility-filtered read.
+    let famcalVisible = new Map<string, { title: string; status: string }>();
+    if (isFamcalKey) {
+      const linkedTaskIds = [...dependencyMap.values()]
+        .flat()
+        .map((dependency) => dependency.depends_on_task_id)
+        .filter((value): value is string => Boolean(value));
+      const visibleRows = await fetchFamcalVisibleLinkedTasks(supabase, userId, linkedTaskIds);
+      famcalVisible = new Map(visibleRows.map((row) => [row.id, { title: row.title, status: row.status }]));
+    }
+
     const enrichedTasks = tasks.map((task) => {
       const rawDependencies = dependencyMap.get(task.id) || [];
-      const dependencies = isFamcalKey ? rawDependencies.map(redactDependencyForFamcal) : rawDependencies;
+      const dependencies = isFamcalKey
+        ? rawDependencies.map((dependency) => redactDependencyForFamcalList(dependency, famcalVisible))
+        : rawDependencies;
       return {
         ...task,
         dependencies,
@@ -317,6 +349,9 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(enrichedTasks);
   } catch (error) {
+    if (error instanceof DependencyReadIncompleteError) {
+      return NextResponse.json({ error: error.message }, { status: 503 });
+    }
     console.error('Error fetching tasks:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
@@ -511,6 +546,10 @@ export async function POST(request: NextRequest) {
         .eq('user_id', userId)
         .single();
 
+      if (blockerError && !isPostgrestNotFound(blockerError)) {
+        throw blockerError;
+      }
+
       if (blockerError || !blockerTask) {
         return NextResponse.json({ error: 'blocked_by_task_id is invalid' }, { status: 400 });
       }
@@ -609,25 +648,64 @@ export async function POST(request: NextRequest) {
       throw error;
     }
 
-    // Create dependency if blocked_by_task_id was provided
+    // Everything the caller asked to create with the task (the blocked_by_task_id
+    // link, initial_comment, initial_checklist) must land, or the call fails: a
+    // failed write removes the new task (nothing else has been written for it,
+    // and its link/comment/checklist rows go with it) and reports the error, so a
+    // retry is clean and never leaves a task silently missing what was asked for.
+    const failCreate = async (what: string, writeError: unknown): Promise<NextResponse> => {
+      console.error(`Failed to save ${what} for a new task:`, writeError);
+      const { error: rollbackError } = await supabase
+        .from('tasks')
+        .delete()
+        .eq('id', data.id)
+        .eq('user_id', userId);
+
+      if (rollbackError) {
+        console.error(`Failed to remove task after its ${what} failed:`, rollbackError);
+        return NextResponse.json(
+          {
+            error: CREATE_PART_ROLLBACK_FAILED[what] ?? `The task was created, but its ${what} could not be saved and the task could not be removed. Fix it by hand, or delete the task.`,
+            task_id: data.id,
+          },
+          { status: 500 }
+        );
+      }
+
+      return NextResponse.json(
+        {
+          error: CREATE_PART_FAILED[what] ?? `The task's ${what} could not be saved, so the task was not created. Nothing was saved; try again.`,
+        },
+        { status: 500 }
+      );
+    };
+
     if (blockedByTaskId && data) {
-      await supabase.from('task_dependencies').insert({
+      const { error: linkError } = await supabase.from('task_dependencies').insert({
         user_id: userId,
         task_id: data.id,
         depends_on_task_id: blockedByTaskId,
         depends_on_commitment_id: null,
       });
+
+      if (linkError) {
+        return failCreate('blocked_by_task_id link', linkError);
+      }
     }
 
     // Create initial comment if provided (useful for "blocked - reason" workflow)
     const initialComment = asStringOrNull(body.initial_comment);
     if (initialComment && data) {
-      await supabase.from('task_comments').insert({
+      const { error: commentError } = await supabase.from('task_comments').insert({
         user_id: userId,
         task_id: data.id,
         content: initialComment,
         source: 'manual',
       });
+
+      if (commentError) {
+        return failCreate('initial_comment', commentError);
+      }
     }
 
     // Create initial checklist items if provided (from Quick Capture LLM extraction)
@@ -652,7 +730,7 @@ export async function POST(request: NextRequest) {
         );
 
       if (checklistError) {
-        console.error('Failed to create initial checklist items:', checklistError);
+        return failCreate('initial_checklist', checklistError);
       }
     }
 

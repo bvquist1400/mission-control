@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getRequiredScopesForPath } from '@/lib/mcp/upstream-scopes';
 import * as applicationsRoute from '@/app/api/applications/route';
 import * as applicationRoute from '@/app/api/applications/[id]/route';
 import * as applicationCopyUpdateRoute from '@/app/api/applications/[id]/copy-update/route';
@@ -49,7 +50,10 @@ import * as taskExternalLookupRoute from '@/app/api/tasks/lookup-external/route'
 import * as taskRoute from '@/app/api/tasks/[id]/route';
 import * as taskCommentsRoute from '@/app/api/tasks/[id]/comments/route';
 import * as taskChecklistRoute from '@/app/api/tasks/[id]/checklist/route';
+import * as taskDependenciesRoute from '@/app/api/tasks/[id]/dependencies/route';
+import * as taskDependencyRoute from '@/app/api/tasks/[id]/dependencies/[dep_id]/route';
 import * as taskRecurrenceRoute from '@/app/api/tasks/[id]/recur/route';
+import * as taskDateCascadeRoute from '@/app/api/tasks/[id]/date-cascade/route';
 import * as taskParkRoute from '@/app/api/tasks/park/[id]/route';
 import * as parkedTasksRoute from '@/app/api/tasks/parked/route';
 import * as recurringTasksRoute from '@/app/api/tasks/recurring/route';
@@ -87,52 +91,6 @@ async function invokeDynamic<TParams extends Record<string, string>>(
 
 function normalizeSegments(input: string[] | undefined): string[] {
   return (input || []).filter(Boolean);
-}
-
-function getRequiredScopesForPath(pathSegments: string[], method: string): readonly ('mcp.read' | 'mcp.write' | 'mcp.delete')[] {
-  const normalizedMethod = method.toUpperCase();
-
-  if (
-    normalizedMethod === 'POST' &&
-    pathSegments[0] === 'briefing' &&
-    pathSegments[1] === 'narrative'
-  ) {
-    return ['mcp.read'] as const;
-  }
-
-  if (
-    (normalizedMethod === 'GET' || normalizedMethod === 'POST') &&
-    pathSegments[0] === 'planner' &&
-    pathSegments[1] === 'plan'
-  ) {
-    return ['mcp.read'] as const;
-  }
-
-  if (
-    normalizedMethod === 'DELETE' &&
-    pathSegments[0] === 'tasks' &&
-    pathSegments[2] === 'recur'
-  ) {
-    return ['mcp.write'] as const;
-  }
-
-  if (
-    normalizedMethod === 'POST'
-    && pathSegments[0] === 'tasks'
-    && pathSegments[1] === 'lookup-external'
-  ) {
-    return ['mcp.read'] as const;
-  }
-
-  if (normalizedMethod === 'DELETE') {
-    return ['mcp.delete'] as const;
-  }
-
-  if (normalizedMethod === 'GET' || normalizedMethod === 'HEAD' || normalizedMethod === 'OPTIONS') {
-    return ['mcp.read'] as const;
-  }
-
-  return ['mcp.write'] as const;
 }
 
 export async function GET(
@@ -310,6 +268,24 @@ async function handleRequest(
     if (request.method === 'POST') return invokeDynamic(taskChecklistRoute.POST, requestWithContext, { id: segments[1] });
     if (request.method === 'PATCH') return invokeDynamic(taskChecklistRoute.PATCH, requestWithContext, { id: segments[1] });
     if (request.method === 'DELETE') return invokeDynamic(taskChecklistRoute.DELETE, requestWithContext, { id: segments[1] });
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'tasks' && segments[1] && segments[2] === 'dependencies' && segments.length === 3) {
+    if (request.method === 'GET') return invokeDynamic(taskDependenciesRoute.GET, requestWithContext, { id: segments[1] });
+    if (request.method === 'POST') return invokeDynamic(taskDependenciesRoute.POST, requestWithContext, { id: segments[1] });
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'tasks' && segments[1] && segments[2] === 'dependencies' && segments[3] && segments.length === 4) {
+    if (request.method === 'DELETE') {
+      return invokeDynamic(taskDependencyRoute.DELETE, requestWithContext, { id: segments[1], dep_id: segments[3] });
+    }
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'tasks' && segments[1] && segments[2] === 'date-cascade' && segments.length === 3) {
+    if (request.method === 'POST') return invokeDynamic(taskDateCascadeRoute.POST, requestWithContext, { id: segments[1] });
     return methodNotAllowed();
   }
 
