@@ -130,7 +130,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         ? createPortal(
             <div
               // Sits above the tablet bottom nav bar, which occupies bottom-4 below lg.
-              className="pointer-events-none fixed inset-x-4 bottom-24 z-50 flex flex-col items-center gap-2 sm:items-end lg:bottom-6 lg:right-6 lg:left-auto lg:inset-x-auto"
+              // z-[60]: above an open task window (Modal is z-50), so a toast from
+              // a save in the editor (the cascade toast) is seen, not dimmed behind it.
+              className="pointer-events-none fixed inset-x-4 bottom-24 z-[60] flex flex-col items-center gap-2 sm:items-end lg:bottom-6 lg:right-6 lg:left-auto lg:inset-x-auto"
               aria-live="polite"
               aria-atomic="false"
             >

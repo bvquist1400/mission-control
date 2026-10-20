@@ -385,7 +385,10 @@ export interface CascadeConfirmModel {
 
 export function confirmModel(input: { rootTitle: string; cascade: CascadeReply }): CascadeConfirmModel {
   const { cascade } = input;
-  const rows = moveLines(cascade);
+  // Earliest first (then by title), so the list reads like the plan.
+  const rows = [...(cascade.moves ?? [])]
+    .sort((a, b) => Date.parse(a.old_due_at) - Date.parse(b.old_due_at) || a.title.localeCompare(b.title))
+    .map((move) => ({ task_id: move.task_id, title: move.title || "A task", from: formatDay(move.old_due_at), to: formatDay(move.new_due_at) }));
   const total = rows.length;
   const tooLarge = cascade.status === "too_large";
   const how = cascade.mode === "same_gap"

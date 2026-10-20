@@ -132,8 +132,12 @@ export function DateCascadeProvider({ children }: { children: ReactNode }) {
 
       if (result.ok) {
         request.onSaved?.(result.task);
-        router.refresh();
         const cascade = result.cascade;
+        // The tasks that moved with it, so lists on screen (the grid) follow at once.
+        if (cascade?.status === "moved" && cascade.moves.length > 0) {
+          request.onDatesChanged?.(datesChangedBy({ cascade }));
+        }
+        router.refresh();
         if (cascade) {
           const choice: CascadeModeChoice = options.cascade === false ? "none" : cascade.mode;
           const session: ToastSession = {

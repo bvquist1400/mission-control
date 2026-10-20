@@ -110,6 +110,20 @@ export function useTaskDetail({ taskId, onTaskUpdated, onDatesChanged }: UseTask
     };
   }, [taskId]);
 
+  // After a due-date change (or a cascade switch / Undo) the "Blocks" dates moved: read the links again.
+  const refreshLinks = useCallback(async () => {
+    if (!taskId) return;
+    try {
+      const data = await fetchTaskDetails(taskId);
+      if (!isMountedRef.current) return;
+      setDependencies(data.dependencies);
+      setBlocks(data.blocks);
+      setComments(data.comments);
+    } catch {
+      // The rest of the window stays as it was.
+    }
+  }, [taskId]);
+
   const updateTask = useCallback(
     async (updates: TaskUpdatePayload, options: TaskUpdateOptions = {}): Promise<boolean> => {
       if (!taskId) return false;
@@ -126,8 +140,12 @@ export function useTaskDetail({ taskId, onTaskUpdated, onDatesChanged }: UseTask
           updates,
           quietErrors: true,
           onSaved: (task) => onTaskUpdated?.(taskId, task as unknown as TaskUpdatePayload),
-          onDatesChanged,
+          onDatesChanged: (changes) => {
+            onDatesChanged?.(changes);
+            void refreshLinks();
+          },
         });
+        if (result.ok) void refreshLinks();
         if (isMountedRef.current) {
           setIsSaving(false);
           if (!result.ok && !result.cancelled) setError(result.error ?? "Failed to update task");
@@ -161,7 +179,7 @@ export function useTaskDetail({ taskId, onTaskUpdated, onDatesChanged }: UseTask
         if (isMountedRef.current) setIsSaving(false);
       }
     },
-    [taskId, onTaskUpdated, onDatesChanged, dateCascade]
+    [taskId, onTaskUpdated, onDatesChanged, dateCascade, refreshLinks]
   );
 
   const addComment = useCallback((comment: TaskComment) => {
