@@ -53,6 +53,7 @@ import * as taskChecklistRoute from '@/app/api/tasks/[id]/checklist/route';
 import * as taskDependenciesRoute from '@/app/api/tasks/[id]/dependencies/route';
 import * as taskDependencyRoute from '@/app/api/tasks/[id]/dependencies/[dep_id]/route';
 import * as taskRecurrenceRoute from '@/app/api/tasks/[id]/recur/route';
+import * as taskDateCascadeRoute from '@/app/api/tasks/[id]/date-cascade/route';
 import * as taskParkRoute from '@/app/api/tasks/park/[id]/route';
 import * as parkedTasksRoute from '@/app/api/tasks/parked/route';
 import * as recurringTasksRoute from '@/app/api/tasks/recurring/route';
@@ -280,6 +281,11 @@ async function handleRequest(
     if (request.method === 'DELETE') {
       return invokeDynamic(taskDependencyRoute.DELETE, requestWithContext, { id: segments[1], dep_id: segments[3] });
     }
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'tasks' && segments[1] && segments[2] === 'date-cascade' && segments.length === 3) {
+    if (request.method === 'POST') return invokeDynamic(taskDateCascadeRoute.POST, requestWithContext, { id: segments[1] });
     return methodNotAllowed();
   }
 

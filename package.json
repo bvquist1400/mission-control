@@ -14,6 +14,8 @@
     "test:task-dependency-links": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-task-dependency-links.mjs",
     "test:task-date-cascade": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-task-date-cascade.mjs",
     "test:task-date-cascade-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-task-date-cascade-db.mjs",
+    "test:date-cascade-s2": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-date-cascade-s2.mjs",
+    "test:date-cascade-s2-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-date-cascade-s2-db.mjs",
     "test:personal-work-reviews": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-personal-work-reviews.mjs",
     "test:task-recurrence": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-task-recurrence.mjs",
     "test:calendar-sanitize": "node scripts/test-calendar-sanitizer.mjs",

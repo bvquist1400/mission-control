@@ -28,6 +28,7 @@ import {
   applyTaskDateCascade,
   buildCascadeReply,
   CASCADE_CONFIRM_THRESHOLD,
+  cascadeFailureReason,
   cascadeRootNotice,
   cascadeTrigger,
   DEFAULT_CASCADE_MODE,
@@ -518,8 +519,9 @@ export async function PATCH(
     let famcalRootNotice: Parameters<typeof cascadeRootNotice>[0] | null = null;
     if ('due_at' in updates && currentTask) {
       const mode = cascadeOptions.mode;
+      const rootDates = { old_due_at: currentTask.due_at ?? null, new_due_at: (updates.due_at as string | null) ?? null };
       if (cascadeOptions.cascade === false) {
-        cascadeReply = buildCascadeReply({ status: 'off', mode, reason: 'off' });
+        cascadeReply = buildCascadeReply({ status: 'off', mode, reason: 'off', root: rootDates });
       } else {
         const trigger = cascadeTrigger(currentTask, { ...currentTask, ...updates } as Task, mode);
         if (!trigger.run) {
@@ -529,10 +531,10 @@ export async function PATCH(
               preview: true,
               task_id: id,
               due_at: updates.due_at,
-              cascade: buildCascadeReply({ status: 'preview', mode, reason: trigger.reason }),
+              cascade: buildCascadeReply({ status: 'preview', mode, reason: trigger.reason, root: rootDates }),
             });
           }
-          cascadeReply = buildCascadeReply({ status: 'not_applicable', mode, reason: trigger.reason });
+          cascadeReply = buildCascadeReply({ status: 'not_applicable', mode, reason: trigger.reason, root: rootDates });
         } else {
           let plan: CascadePlan | null = null;
           let graph: Awaited<ReturnType<typeof loadCascadeGraph>> | null = null;
@@ -742,11 +744,10 @@ export async function PATCH(
           applied,
         });
       } catch (cascadeError) {
+        // The database text stays in the server log; replies carry only the plain
+        // reason ("busy" for a lock wait, deadlock or retry, else "error").
         console.error('Cascade apply failed after the task saved:', cascadeError);
-        cascadeReply = {
-          ...buildCascadeReply({ status: 'failed', mode: plan.mode, plan }),
-          reason: cascadeError instanceof Error ? cascadeError.message : 'unknown error',
-        };
+        cascadeReply = buildCascadeReply({ status: 'failed', mode: plan.mode, plan, reason: cascadeFailureReason(cascadeError) });
         await postCascadeRootNotice(supabase, userId, id, isFamcalKey, cascadeRootNotice('failed'));
       }
     } else if (famcalRootNotice && isFamcalKey) {

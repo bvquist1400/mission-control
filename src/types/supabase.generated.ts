@@ -2100,6 +2100,8 @@ export type Database = {
           new_priority_score: number | null
           old_due_at: string
           old_priority_score: number | null
+          restore_comment_id: string | null
+          restored_at: string | null
           task_id: string
           user_id: string
         }
@@ -2112,6 +2114,8 @@ export type Database = {
           new_priority_score?: number | null
           old_due_at: string
           old_priority_score?: number | null
+          restore_comment_id?: string | null
+          restored_at?: string | null
           task_id: string
           user_id: string
         }
@@ -2124,6 +2128,8 @@ export type Database = {
           new_priority_score?: number | null
           old_due_at?: string
           old_priority_score?: number | null
+          restore_comment_id?: string | null
+          restored_at?: string | null
           task_id?: string
           user_id?: string
         }
@@ -2138,6 +2144,13 @@ export type Database = {
           {
             foreignKeyName: "task_date_cascade_moves_comment_id_fkey"
             columns: ["comment_id"]
+            isOneToOne: false
+            referencedRelation: "task_comments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "task_date_cascade_moves_restore_comment_id_fkey"
+            columns: ["restore_comment_id"]
             isOneToOne: false
             referencedRelation: "task_comments"
             referencedColumns: ["id"]
@@ -2159,12 +2172,14 @@ export type Database = {
           mode: string
           moved_count: number
           project_flags: Json
+          replaces_cascade_id: string | null
           root_new_due_at: string
           root_old_due_at: string | null
           root_task_id: string
           scope: string
           source: string
           undone_at: string | null
+          undone_reason: string | null
           user_id: string
         }
         Insert: {
@@ -2174,12 +2189,14 @@ export type Database = {
           mode: string
           moved_count?: number
           project_flags?: Json
+          replaces_cascade_id?: string | null
           root_new_due_at: string
           root_old_due_at?: string | null
           root_task_id: string
           scope: string
           source: string
           undone_at?: string | null
+          undone_reason?: string | null
           user_id: string
         }
         Update: {
@@ -2189,15 +2206,24 @@ export type Database = {
           mode?: string
           moved_count?: number
           project_flags?: Json
+          replaces_cascade_id?: string | null
           root_new_due_at?: string
           root_old_due_at?: string | null
           root_task_id?: string
           scope?: string
           source?: string
           undone_at?: string | null
+          undone_reason?: string | null
           user_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "task_date_cascades_replaces_cascade_id_fkey"
+            columns: ["replaces_cascade_id"]
+            isOneToOne: false
+            referencedRelation: "task_date_cascades"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "task_date_cascades_root_task_id_fkey"
             columns: ["root_task_id"]
@@ -2772,6 +2798,23 @@ export type Database = {
         }[]
       }
       prune_llm_usage_events: { Args: { p_max_age?: string }; Returns: number }
+      replace_task_date_cascade: {
+        Args: {
+          p_delta_workdays: number
+          p_mode: string
+          p_moves: Json
+          p_replace_cascade_id: string
+          p_restore: Json
+          p_root_new_due_at: string
+          p_root_old_due_at: string
+          p_root_task_id: string
+          p_root_title: string
+          p_root_was_visible: boolean
+          p_source: string
+          p_user_id: string
+        }
+        Returns: Json
+      }
       sync_today_tasks: {
         Args: { p_task_ids: string[]; p_today?: string; p_user_id: string }
         Returns: {
@@ -2784,7 +2827,65 @@ export type Database = {
           sync_at: string
         }[]
       }
+      task_date_cascade_apply_core: {
+        Args: {
+          p_delta_workdays: number
+          p_mode: string
+          p_moves: Json
+          p_replaces_cascade_id: string
+          p_root_new_due_at: string
+          p_root_old_due_at: string
+          p_root_task_id: string
+          p_root_title: string
+          p_root_was_visible: boolean
+          p_scope: string
+          p_source: string
+          p_user_id: string
+        }
+        Returns: Json
+      }
+      task_date_cascade_lock: {
+        Args: {
+          p_extra_project_ids?: string[]
+          p_scope: string
+          p_task_ids: string[]
+          p_user_id: string
+        }
+        Returns: string[]
+      }
+      task_date_cascade_score_unchanged: {
+        Args: {
+          p_base_priority: number
+          p_mentions: string[]
+          p_planned: Json
+          p_status: string
+          p_title: string
+        }
+        Returns: boolean
+      }
+      task_date_cascade_undo_core: {
+        Args: {
+          p_cascade_id: string
+          p_reason: string
+          p_restore: Json
+          p_user_id: string
+        }
+        Returns: Json
+      }
       task_graph_lock_key: { Args: { p_user_id: string }; Returns: number }
+      undo_task_date_cascade: {
+        Args: {
+          p_cascade_id: string
+          p_restore: Json
+          p_restore_root: boolean
+          p_root_expected_due_at: string
+          p_root_priority: Json
+          p_root_restore_due_at: string
+          p_root_task_id: string
+          p_user_id: string
+        }
+        Returns: Json
+      }
       upsert_project_template: {
         Args: {
           p_default_rag?: Database["public"]["Enums"]["rag_status"]

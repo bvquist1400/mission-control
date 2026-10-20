@@ -49,6 +49,15 @@ export const CASCADE_MAX_DEPTH = 20;
 /** Tasks the walk may reach at all; past this the cascade is refused outright. */
 export const CASCADE_MAX_TASKS = 500;
 export const CASCADE_APPLY_RPC = 'apply_task_date_cascade';
+/** S2 (migration 062): Undo and "switch how far" / "try again". */
+export const CASCADE_UNDO_RPC = 'undo_task_date_cascade';
+export const CASCADE_REPLACE_RPC = 'replace_task_date_cascade';
+/** Database errors a cascade call may simply be retried after (it rolled back): a deadlock, or 062's "a task changed project while the locks were taken". */
+export const CASCADE_RETRYABLE_CODES: ReadonlyArray<string> = ['40P01', 'MC062'];
+/** Errors that mean "Baseline was busy" to the person (lock wait past lock_timeout, a cancelled statement, a deadlock). */
+export const CASCADE_BUSY_CODES: ReadonlyArray<string> = ['55P03', '57014', '40P01', 'MC062'];
+/** How many times a retryable cascade call is attempted in all. */
+export const CASCADE_MAX_ATTEMPTS = 3;
 export const CASCADE_MOVABLE_STATUSES: ReadonlyArray<string> = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting'];
 
 // ── ET date math ─────────────────────────────────────────────────────────
@@ -273,6 +282,8 @@ export function cascadeTrigger(
 // ── Graph ────────────────────────────────────────────────────────────────
 
 export type CascadeSkipReason = 'done' | 'missed' | 'recurring' | 'parked' | 'no_due_date' | 'not_needed' | 'other_status';
+/** Reasons the SQL function adds when it skips a planned move: the task changed, or a task on its planned path did (062). */
+export type CascadeApplySkipReason = 'changed' | 'path_changed';
 
 export type CascadeTaskRow = Pick<
   Task,
@@ -321,6 +332,12 @@ export interface CascadeMove {
   project_id: string | null;
   /** True when the floor (a task it waits on moved further) pushed it past the gap. */
   floor_raised: boolean;
+  /**
+   * The tasks between this one and the edited task on its planned path(s) (not
+   * the edited task). The function skips the move when one of them became Done,
+   * Missed or recurring (or, for FamCal, hidden) after planning (062).
+   */
+  via: string[];
 }
 
 export interface CascadeSkip {
@@ -429,6 +446,25 @@ export function planTaskDateCascade(input: {
     }
   }
 
+  // The tasks each move's date came through: prerequisites that carried a date
+  // (effective non-null), transitively, back to the root.
+  const viaCache = new Map<string, Set<string>>();
+  const viaOf = (taskId: string, stack: Set<string>): Set<string> => {
+    const cached = viaCache.get(taskId);
+    if (cached) return cached;
+    const out = new Set<string>();
+    if (stack.has(taskId)) return out;
+    stack.add(taskId);
+    for (const prerequisite of prerequisites.get(taskId) || []) {
+      if (prerequisite === graph.rootId || (effective.get(prerequisite) ?? null) === null) continue;
+      out.add(prerequisite);
+      for (const id of viaOf(prerequisite, stack)) out.add(id);
+    }
+    stack.delete(taskId);
+    viaCache.set(taskId, out);
+    return out;
+  };
+
   const moves: CascadeMove[] = [];
   const skipped: CascadeSkip[] = [];
   for (const task of order) {
@@ -443,6 +479,7 @@ export function planTaskDateCascade(input: {
         depth: task.depth,
         project_id: task.project_id ?? null,
         floor_raised: floorRaised.has(task.id),
+        via: [...viaOf(task.id, new Set())].sort(),
       });
     } else {
       skipped.push({ task_id: task.id, title: task.title, reason: reason ?? 'not_needed' });
@@ -725,6 +762,39 @@ export interface CascadeApplyResult {
   project_flags: CascadeProjectFlag[];
 }
 
+/** Whether a failed cascade call may be retried as is (it rolled back: deadlock, or 062's MC062). */
+export function isRetryableCascadeError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && CASCADE_RETRYABLE_CODES.includes(code);
+}
+
+/**
+ * Runs a cascade RPC, retrying a bounded number of times when the database
+ * aborted it as a deadlock (40P01) or 062's lock protocol asked for a retry
+ * (MC062). Each attempt is its own transaction and rolled back completely, so a
+ * retry can never apply anything twice. Other errors are returned at once.
+ */
+export async function withCascadeRetry<T extends { error: unknown }>(
+  call: () => PromiseLike<T>,
+  options: { attempts?: number; sleep?: (ms: number) => Promise<void> } = {}
+): Promise<T> {
+  const attempts = Math.max(1, options.attempts ?? CASCADE_MAX_ATTEMPTS);
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  let result = await call();
+  for (let attempt = 1; attempt < attempts && result.error && isRetryableCascadeError(result.error); attempt += 1) {
+    console.warn(`Cascade call rolled back (${(result.error as { code?: string }).code}); retrying (attempt ${attempt + 1} of ${attempts}).`);
+    await sleep(40 + Math.floor(Math.random() * 120) * attempt);
+    result = await call();
+  }
+  return result;
+}
+
+/** The plain reason a failed cascade carries in replies ("busy" or "error"); the database text stays in the server log. */
+export function cascadeFailureReason(error: unknown): 'busy' | 'error' {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && CASCADE_BUSY_CODES.includes(code) ? 'busy' : 'error';
+}
+
 export class CascadeApplyError extends Error {
   code: string | null;
   constructor(message: string, code: string | null) {
@@ -752,7 +822,7 @@ export async function applyTaskDateCascade(
     rootWasVisible: boolean;
   }
 ): Promise<CascadeApplyResult> {
-  const { data, error } = await supabase.rpc(CASCADE_APPLY_RPC, {
+  const { data, error } = await withCascadeRetry(() => supabase.rpc(CASCADE_APPLY_RPC, {
     p_user_id: input.userId,
     p_root_task_id: input.rootTaskId,
     p_root_old_due_at: input.rootOldDueAt,
@@ -764,7 +834,7 @@ export async function applyTaskDateCascade(
     p_moves: input.moves,
     p_root_title: input.rootTitle,
     p_root_was_visible: input.rootWasVisible,
-  });
+  }));
   if (error) {
     const err = error as { message?: string; code?: string };
     throw new CascadeApplyError(err.message || 'The later tasks could not be moved', err.code ?? null);
@@ -813,6 +883,8 @@ export function describeCascadeOutcome(input: {
       return 'The due date changed again before the later tasks moved, so they were left as they were.';
     case 'failed':
       return "This task's date was saved, but the later tasks could not be moved. A comment on the task says so; move them by hand or try again.";
+    case 'failed_busy':
+      return "This task's date was saved, but the later tasks could not be moved because Baseline was busy. A comment on the task says so; try again in a moment.";
     default:
       return '';
   }
@@ -825,11 +897,19 @@ export interface CascadeApplyMove {
   old_due_at: string;
   new_due_at: string;
   priority_score: number;
-  /** base_priority the score was computed from; the function keeps the current score if it changed. */
+  /** The score inputs the new priority_score was computed from; the function keeps the current score when any of them changed (062). */
   base_priority: number;
+  status: string;
+  title: string;
+  stakeholder_mentions: string[];
+  /** Tasks on the planned path (062 skips the move when one became Done/Missed/recurring meanwhile). */
+  via?: string[];
   comment: string;
   comment_redacted: string;
 }
+
+/** Above this many `via` ids in one cascade the paths are not sent (the function then checks each move on its own, as in 061). */
+const CASCADE_MAX_VIA_IDS = 20000;
 
 /** The moves as the SQL function takes them: new priority and both comment texts. */
 export async function prepareCascadeApplyMoves(
@@ -838,6 +918,8 @@ export async function prepareCascadeApplyMoves(
   input: { rootTitle: string; plan: CascadePlan; graph: CascadeGraph }
 ): Promise<CascadeApplyMove[]> {
   const priorities = await priorityForMoves(supabase, userId, input.graph, input.plan.moves);
+  const viaTotal = input.plan.moves.reduce((sum, move) => sum + move.via.length, 0);
+  const sendVia = viaTotal <= CASCADE_MAX_VIA_IDS;
   return input.plan.moves.map((move) => {
     const comments = buildCascadeMoveComments({
       rootTitle: input.rootTitle,
@@ -853,6 +935,10 @@ export async function prepareCascadeApplyMoves(
       new_due_at: move.new_due_at,
       priority_score: priorities.get(move.task_id) ?? task?.priority_score ?? 50,
       base_priority: typeof task?.base_priority === 'number' ? task.base_priority : (task?.priority_score ?? 50),
+      status: String(task?.status ?? ''),
+      title: String(task?.title ?? move.title),
+      stakeholder_mentions: Array.isArray(task?.stakeholder_mentions) ? (task.stakeholder_mentions as string[]) : [],
+      ...(sendVia ? { via: move.via } : {}),
       comment: comments.named,
       comment_redacted: comments.redacted,
     };
@@ -879,8 +965,12 @@ export interface CascadeReply {
   status: CascadeReplyStatus;
   mode: CascadeMode;
   delta_workdays: number;
+  /** Not-run reasons (cascadeTrigger), or for `failed` the plain "busy" / "error" (never database text). */
   reason: string | null;
   cascade_id: string | null;
+  /** The edited task's due date before and after this change (S2: Undo and "switch how far" use them). */
+  root_old_due_at: string | null;
+  root_new_due_at: string | null;
   message: string;
   moves: Array<{ task_id: string; title: string; old_due_at: string; new_due_at: string }>;
   skipped: Array<{ task_id: string; title: string; reason: string }>;
@@ -895,6 +985,8 @@ export function buildCascadeReply(input: {
   reason?: string | null;
   applied?: CascadeApplyResult | null;
   projectFlags?: CascadeProjectFlag[];
+  /** The edited task's dates when there is no plan (not_applicable, off). */
+  root?: { old_due_at: string | null; new_due_at: string | null };
 }): CascadeReply {
   const plan = input.plan ?? null;
   const titles = new Map<string, string>();
@@ -937,8 +1029,10 @@ export function buildCascadeReply(input: {
     delta_workdays: deltaWorkdays,
     reason: input.reason ?? null,
     cascade_id: input.applied?.cascade_id ?? null,
+    root_old_due_at: plan ? plan.rootOldDueAt : (input.root?.old_due_at ?? null),
+    root_new_due_at: plan ? plan.rootNewDueAt : (input.root?.new_due_at ?? null),
     message: describeCascadeOutcome({
-      status: status === 'moved' && moves.length === 0 ? 'nothing_moved' : status,
+      status: status === 'moved' && moves.length === 0 ? 'nothing_moved' : status === 'failed' && input.reason === 'busy' ? 'failed_busy' : status,
       mode: input.mode,
       deltaWorkdays,
       movedCount,
@@ -946,8 +1040,21 @@ export function buildCascadeReply(input: {
     }) || describeNotApplicable(input.reason ?? null),
     moves,
     skipped,
-    project_flags: input.applied ? input.applied.project_flags : (input.projectFlags ?? []),
+    project_flags: (input.applied ? input.applied.project_flags : (input.projectFlags ?? [])).map(publicProjectFlag),
     depth_limited: plan?.depthLimited ?? 0,
+  };
+}
+
+/** A project flag as replies show it (062's internal `rag_set_at` stays in the log). */
+export function publicProjectFlag(flag: CascadeProjectFlag): CascadeProjectFlag {
+  return {
+    project_id: flag.project_id,
+    name: flag.name,
+    target_date: flag.target_date,
+    latest_due_date: flag.latest_due_date,
+    tasks_past_target: flag.tasks_past_target,
+    rag_before: flag.rag_before,
+    rag_after: flag.rag_after,
   };
 }
 

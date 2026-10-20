@@ -16,6 +16,9 @@ function withNormalizedProjectStage<T extends Record<string, unknown>>(project: 
 }
 
 // GET /api/projects/[id] - Get a single project with stats
+/** A project UPDATE the database aborted as a deadlock is sent again at most this many times in all. */
+const PROJECT_UPDATE_MAX_ATTEMPTS = 3;
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -207,13 +210,28 @@ export async function PATCH(
       return NextResponse.json({ error: 'No valid fields to update' }, { status: 400 });
     }
 
-    const { data, error } = await supabase
+    // Re-pointing the application also updates the project's tasks (046's
+    // trigger). If the database aborts that as a deadlock (40P01) the whole
+    // statement rolled back, so it is safe to send again (bounded). Cascades take
+    // the project before its tasks since 062, so this should not happen with them.
+    let { data, error } = await supabase
       .from('projects')
       .update(updates)
       .eq('id', id)
       .eq('user_id', userId)
       .select()
       .single();
+    for (let attempt = 2; error?.code === '40P01' && attempt <= PROJECT_UPDATE_MAX_ATTEMPTS; attempt += 1) {
+      console.warn(`Project update ${id} hit a deadlock; retrying (attempt ${attempt} of ${PROJECT_UPDATE_MAX_ATTEMPTS}).`);
+      await new Promise((resolve) => setTimeout(resolve, 40 + Math.floor(Math.random() * 120) * attempt));
+      ({ data, error } = await supabase
+        .from('projects')
+        .update(updates)
+        .eq('id', id)
+        .eq('user_id', userId)
+        .select()
+        .single());
+    }
 
     if (error) {
       if (error.code === 'PGRST116') {

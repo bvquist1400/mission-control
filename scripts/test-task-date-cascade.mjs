@@ -664,7 +664,10 @@ await test("The two-statement seam: the function fails after the task saved → 
   assert.equal(result.status, 200);
   assert.equal(etDate(result.body.due_at), "2026-10-22");
   assert.equal(result.body.cascade.status, "failed");
-  assert.equal(result.body.cascade.reason, "lock timeout");
+  // S2: the database text stays in the server log; the reply says only "busy" (or "error").
+  assert.equal(result.body.cascade.reason, "busy");
+  assert.equal(JSON.stringify(result.body).includes("lock timeout"), false);
+  assert.match(result.body.cascade.message, /Baseline was busy/);
   assert.equal(etDate(dueOf(db, ONCORE_IDS[1])), "2026-10-21");
   assert.deepEqual(commentsOn(db, ONCORE_IDS[0]), [cascade.cascadeRootNotice("failed")]);
   assert.equal(db.state.task_comments.find((c) => c.task_id === ONCORE_IDS[0]).source, "system");

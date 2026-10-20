@@ -40,6 +40,10 @@ if (!["127.0.0.1", "localhost", "[::1]"].includes(new URL(url).hostname)) {
 
 const MIGRATION = readFileSync(new URL("../supabase/migrations/061_task_date_cascade.sql", import.meta.url), "utf8");
 const ROLLBACK = readFileSync(new URL("../supabase/rollbacks/061_task_date_cascade.down.sql", import.meta.url), "utf8");
+// 062 (S2) builds on 061: roll it back first and re-apply it after, so this suite
+// leaves the database at the latest migration.
+const MIGRATION_062 = readFileSync(new URL("../supabase/migrations/062_task_date_cascade_undo.sql", import.meta.url), "utf8");
+const ROLLBACK_062 = readFileSync(new URL("../supabase/rollbacks/062_task_date_cascade_undo.down.sql", import.meta.url), "utf8");
 const FN = "apply_task_date_cascade";
 const FN_SIG = "public.apply_task_date_cascade(uuid, uuid, timestamptz, timestamptz, text, integer, text, text, jsonb, text, boolean)";
 
@@ -184,6 +188,7 @@ async function test(name, fn) {
 try {
   // ── Part 1: migration 061 ───────────────────────────────────────────────
   await test("061 rollback drops the trigger, function and log tables; re-apply restores them; a second apply is a no-op", async () => {
+    psql(ROLLBACK_062);
     psql(ROLLBACK);
     assert.equal(psql(`SELECT count(*) FROM pg_proc WHERE proname IN ('${FN}', 'task_dependencies_guard_loop', 'task_graph_lock_key');`), "0");
     assert.equal(psql("SELECT count(*) FROM pg_tables WHERE tablename IN ('task_date_cascades', 'task_date_cascade_moves');"), "0");
@@ -192,6 +197,7 @@ try {
     psql(MIGRATION);
     psql(MIGRATION);
     assert.equal(psql(`SELECT count(*) FROM pg_proc WHERE proname IN ('${FN}', 'task_dependencies_guard_loop', 'task_graph_lock_key');`), "3");
+    psql(MIGRATION_062);
     assert.equal(psql("SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_task_dependencies_guard_loop';"), "1");
     await waitForFunction(true);
   });
@@ -366,7 +372,7 @@ try {
     const f = await insert("tasks", { user_id: userA, title: "Refusal follower", tags: ["work"], due_at: etAt("2026-10-23") });
     for (const [label, args] of [
       ["earlier", rpcArgs(r, { p_moves: [move(f, etAt("2026-10-22"))] })],
-      ["unknown key", rpcArgs(r, { p_moves: [move(f, etAt("2026-10-26"), { status: "Done" })] })],
+      ["unknown key", rpcArgs(r, { p_moves: [move(f, etAt("2026-10-26"), { colour: "red" })] })], // (062 accepts status/title/mentions/via as score and path inputs)
       ["duplicate", rpcArgs(r, { p_moves: [move(f, etAt("2026-10-26")), move(f, etAt("2026-10-27"))] })],
       ["root", rpcArgs(r, { p_moves: [move(r, etAt("2026-10-26"))] })],
       ["mode", rpcArgs(r, { p_mode: "everything" })],

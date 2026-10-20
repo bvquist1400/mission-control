@@ -729,7 +729,7 @@ function createMcpServer(): McpServer {
   // ── UPDATE TASK ───────────────────────────────────────────────────────
   mcp.tool(
     'update_task',
-    'Update an existing task. Provide task_id and any fields to change. Moving due_at LATER also moves the tasks that wait on this one (cascade): cascade_mode "same_gap" (default) moves them by the same number of working days (Mon-Fri, ET); "only_collisions" moves only a task that would now be due before a task it waits on, to that day. Pass cascade:false to move only this task, or cascade:"preview" to see what would move without saving anything. Done tasks stop the walk (nothing after them moves); Missed and recurring tasks never move; Parked and undated tasks never move but the walk goes past them. Moving a date earlier never moves other tasks. More than 25 moves are refused (nothing saved, the preview comes back) unless cascade_confirm:true. The reply\'s cascade object says which mode ran and lists every task that moved (old and new due date), what was left alone and why, and any project now past its target date (its RAG goes Green to Yellow). Each moved task gets a comment saying why.',
+    'Update an existing task. Provide task_id and any fields to change. Moving due_at LATER also moves the tasks that wait on this one (cascade): cascade_mode "same_gap" (default) moves them by the same number of working days (Mon-Fri, ET); "only_collisions" moves only a task that would now be due before a task it waits on, to that day. Pass cascade:false to move only this task, or cascade:"preview" to see what would move without saving anything. Done tasks stop the walk (nothing after them moves); Missed and recurring tasks never move; Parked and undated tasks never move but the walk goes past them. Moving a date earlier never moves other tasks. More than 25 moves are refused (nothing saved, the preview comes back) unless cascade_confirm:true. The reply\'s cascade object says which mode ran and lists every task that moved (old and new due date), what was left alone and why, and any project now past its target date (its RAG goes Green to Yellow). Each moved task gets a comment saying why. To take a date change back, call undo_date_cascade with the reply\'s cascade.cascade_id.',
     {
       task_id: z.string().describe('Task UUID'),
       title: z.string().optional(),
@@ -778,6 +778,32 @@ function createMcpServer(): McpServer {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify(updates),
+        }
+      );
+      const data = await res.json();
+      return { ...toMcpResponse(data), ...(res.ok ? {} : { isError: true }) };
+    }
+  );
+
+  // ── UNDO DATE CASCADE ─────────────────────────────────────────────────
+  mcp.tool(
+    'undo_date_cascade',
+    'Undo a due-date change that moved later tasks (the cascade from update_task). Give task_id (the task whose date was changed) and cascade_id (from that update_task reply\'s cascade object). Every task the cascade moved goes back to its old date, but only if its date is still the one the cascade gave it (a task changed since is left alone and listed under kept). By default the task you changed also goes back to its previous date, again only if it still has the date the change set; pass restore_task:false to keep it. A project the cascade turned Yellow goes back to Green only if it is still Yellow, nothing else on the project changed since, and all its moved tasks went back. Each task put back gets a comment. Nothing else changes.',
+    {
+      task_id: z.string().describe('UUID of the task whose due date was changed'),
+      cascade_id: z.string().describe('cascade.cascade_id from the update_task reply'),
+      restore_task: z.boolean().optional().describe('Also put the changed task back on its previous date (default true)'),
+    },
+    async ({ task_id, cascade_id, restore_task }) => {
+      const res = await fetch(
+        `https://mission-control-orpin-chi.vercel.app/api/tasks/${encodeURIComponent(task_id)}/date-cascade`,
+        {
+          method: 'POST',
+          headers: {
+            'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY!,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ action: 'undo', cascade_id, restore_root: restore_task !== false }),
         }
       );
       const data = await res.json();
