@@ -1,6 +1,7 @@
 -- Rollback for 062_task_date_cascade_undo.sql: drops the undo / replace / lock /
 -- current-identity functions and the columns 062 added, and puts back 061's
--- apply_task_date_cascade body (same 11 arguments, 061's lock order) and its grants.
+-- apply_task_date_cascade (its 11 arguments, in place of 062's 12, and 061's lock
+-- order) and its grants.
 --
 -- ORDER (deploy contract): roll the S2 APP back FIRST, then run this. The S2 app
 -- sends 062's move fields (status, title, stakeholder_mentions, via) to
@@ -25,6 +26,9 @@ DROP FUNCTION IF EXISTS undo_task_date_cascade(UUID, UUID, UUID, TIMESTAMPTZ, TI
 DROP FUNCTION IF EXISTS task_date_cascade_undo_core(UUID, UUID, JSONB, TEXT, BOOLEAN);
 DROP FUNCTION IF EXISTS task_date_cascade_undo_core(UUID, UUID, JSONB, TEXT);
 DROP FUNCTION IF EXISTS task_date_cascade_current(UUID, UUID, TIMESTAMPTZ);
+-- 062's 12-argument apply (p_root_saved_at) first: next to it, 061's 11-argument
+-- one would make every call ambiguous.
+DROP FUNCTION IF EXISTS apply_task_date_cascade(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN, TIMESTAMPTZ);
 
 -- 061's apply function, verbatim (it no longer calls the 062 core).
 CREATE OR REPLACE FUNCTION apply_task_date_cascade(
@@ -339,6 +343,7 @@ $$;
 COMMENT ON FUNCTION apply_task_date_cascade(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN) IS
   'Applies a planned due-date cascade in one transaction: root re-check, compare-and-set per task, system comments, project flags, log (061).';
 
+DROP FUNCTION IF EXISTS task_date_cascade_apply_core(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN, UUID, TIMESTAMPTZ);
 DROP FUNCTION IF EXISTS task_date_cascade_apply_core(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN, UUID);
 DROP FUNCTION IF EXISTS task_date_cascade_score_unchanged(INTEGER, TEXT, TEXT, TEXT[], JSONB);
 DROP FUNCTION IF EXISTS task_date_cascade_lock(UUID, UUID[], TEXT, UUID[]);

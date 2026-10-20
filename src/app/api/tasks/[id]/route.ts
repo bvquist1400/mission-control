@@ -727,6 +727,10 @@ export async function PATCH(
     // cascade.status "failed" and a system comment on the task says the later
     // tasks were not moved.
     const savedDueAt = (data as { due_at?: string | null }).due_at ?? null;
+    // When this save happened (the row's updated_at, set by the database): the
+    // function replays a cascade of this same change that another session logged
+    // after it (an id-less Try again, a switch) instead of logging a second one.
+    const rootSavedAt = (data as { updated_at?: string | null }).updated_at ?? null;
     if (cascadePending && savedDueAt) {
       const { plan, moves, rootTitle, rootWasVisible } = cascadePending;
       try {
@@ -742,6 +746,7 @@ export async function PATCH(
           moves,
           rootTitle,
           rootWasVisible,
+          rootSavedAt,
         });
         cascadeReply = buildCascadeReply({
           status: applied.status === 'superseded' ? 'superseded' : 'moved',
@@ -794,6 +799,7 @@ export async function PATCH(
               moves: [],
               rootTitle: String(saved.title ?? ''),
               rootWasVisible: false,
+              rootSavedAt,
             });
             if (flagged.cascade_id) {
               cascadeReply = { ...cascadeReply, cascade_id: flagged.cascade_id, project_flags: flagged.project_flags.map(publicProjectFlag) };

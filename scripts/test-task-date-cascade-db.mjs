@@ -45,7 +45,9 @@ const ROLLBACK = readFileSync(new URL("../supabase/rollbacks/061_task_date_casca
 const MIGRATION_062 = readFileSync(new URL("../supabase/migrations/062_task_date_cascade_undo.sql", import.meta.url), "utf8");
 const ROLLBACK_062 = readFileSync(new URL("../supabase/rollbacks/062_task_date_cascade_undo.down.sql", import.meta.url), "utf8");
 const FN = "apply_task_date_cascade";
-const FN_SIG = "public.apply_task_date_cascade(uuid, uuid, timestamptz, timestamptz, text, integer, text, text, jsonb, text, boolean)";
+// The live signature after 062 (061's 11 arguments + 062's optional p_root_saved_at);
+// test:date-cascade-s2-db checks 061's 11-argument one under 062's rollback.
+const FN_SIG = "public.apply_task_date_cascade(uuid, uuid, timestamptz, timestamptz, text, integer, text, text, jsonb, text, boolean, timestamptz)";
 
 function psql(sql) {
   return execFileSync(

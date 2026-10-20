@@ -818,9 +818,16 @@ export async function fetchCascadeProjects(
 export interface CascadeApplyResult {
   status: 'moved' | 'nothing_moved' | 'superseded';
   cascade_id: string | null;
-  moved: Array<{ task_id: string; old_due_at: string; new_due_at: string; project_id: string | null }>;
+  /** `title` only on a replayed cascade (`adopted`), whose moves may not all be in this plan. */
+  moved: Array<{ task_id: string; old_due_at: string; new_due_at: string; project_id: string | null; title?: string }>;
   skipped: Array<{ task_id: string; reason: string }>;
   project_flags: CascadeProjectFlag[];
+  /**
+   * 062 fix round 2: another session handled this change (same edited task, same
+   * new date) after this PATCH saved it; nothing was written and this is that
+   * change's current cascade replayed (or nothing, when it was undone since).
+   */
+  adopted?: boolean;
 }
 
 /** Whether a failed cascade call may be retried as is (it rolled back: deadlock, or 062's MC062). */
@@ -881,6 +888,12 @@ export async function applyTaskDateCascade(
     rootTitle: string;
     /** Whether FamCal could read the edited task before this PATCH (read before the save). */
     rootWasVisible: boolean;
+    /**
+     * When this PATCH saved the edited task's new date (the saved row's
+     * `updated_at`). The function replays, instead of logging again, a cascade of
+     * the same change that another session logged after this save (062 fix round 2).
+     */
+    rootSavedAt?: string | null;
   }
 ): Promise<CascadeApplyResult> {
   const { data, error } = await withCascadeRetry(() => supabase.rpc(CASCADE_APPLY_RPC, {
@@ -895,6 +908,7 @@ export async function applyTaskDateCascade(
     p_moves: input.moves,
     p_root_title: input.rootTitle,
     p_root_was_visible: input.rootWasVisible,
+    p_root_saved_at: input.rootSavedAt ?? null,
   }));
   if (error) {
     const err = error as { message?: string; code?: string };
@@ -910,6 +924,7 @@ export async function applyTaskDateCascade(
     moved: result.moved,
     skipped: Array.isArray(result.skipped) ? result.skipped : [],
     project_flags: Array.isArray(result.project_flags) ? result.project_flags : [],
+    ...(result.adopted === true ? { adopted: true } : {}),
   };
 }
 
@@ -1067,7 +1082,7 @@ export function buildCascadeReply(input: {
     const ordered = [...input.applied.moved].sort((a, b) => (rank.get(a.task_id) ?? 1e9) - (rank.get(b.task_id) ?? 1e9));
     moves = ordered.map((move) => ({
       task_id: move.task_id,
-      title: titles.get(move.task_id) ?? '',
+      title: titles.get(move.task_id) ?? move.title ?? '',
       old_due_at: move.old_due_at,
       new_due_at: move.new_due_at,
     }));

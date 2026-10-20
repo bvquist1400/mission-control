@@ -326,6 +326,40 @@ await test("Cascade replies carry the edited task's dates and planned count; pro
   assert.match(failed.message, /Baseline was busy/);
 });
 
+await test("FR2 P2-1: the PATCH sends when it saved the edited task (p_root_saved_at) on both apply calls; a replayed (adopted) cascade keeps its id, moves and titles", async () => {
+  const calls = [];
+  const replay = {
+    status: "moved", cascade_id: "winner", adopted: true, skipped: [], project_flags: [],
+    moved: [{ task_id: "c", old_due_at: "2026-10-23T21:00:00Z", new_due_at: "2026-10-27T21:00:00Z", project_id: null, title: "Child (from the log)" }],
+  };
+  const fakeDb = { rpc: async (name, args) => { calls.push({ name, args }); return { data: replay, error: null }; } };
+  const applied = await cascade.applyTaskDateCascade(fakeDb, {
+    userId: "u", rootTaskId: "r", rootOldDueAt: null, rootNewDueAt: "2026-10-26T21:00:00Z", mode: "same_gap", deltaWorkdays: 2,
+    scope: "all", source: "session", moves: [], rootTitle: "R", rootWasVisible: false, rootSavedAt: "2026-10-20T16:00:00.123456+00:00",
+  });
+  assert.equal(calls[0].name, "apply_task_date_cascade");
+  assert.equal(calls[0].args.p_root_saved_at, "2026-10-20T16:00:00.123456+00:00");
+  assert.equal(applied.adopted, true);
+  assert.equal(applied.cascade_id, "winner");
+  const reply = cascade.buildCascadeReply({ status: "moved", mode: "same_gap", applied });
+  assert.deepEqual(reply.moves.map((m) => [m.task_id, m.title]), [["c", "Child (from the log)"]]);
+  assert.equal(reply.cascade_id, "winner");
+  // Without a save time (direct callers) the argument is sent as null: 061's behaviour.
+  await cascade.applyTaskDateCascade(fakeDb, { userId: "u", rootTaskId: "r", rootOldDueAt: null, rootNewDueAt: "x", mode: "same_gap", deltaWorkdays: 0, scope: "all", source: "s", moves: [], rootTitle: "R", rootWasVisible: false });
+  assert.equal(calls[1].args.p_root_saved_at, null);
+  // Both PATCH apply calls (the cascade and the edited task's own flag) pass the saved row's updated_at.
+  const route = readFileSync(new URL("../src/app/api/tasks/[id]/route.ts", import.meta.url), "utf8");
+  assert.match(route, /const rootSavedAt = \(data as \{ updated_at\?: string \| null \}\)\.updated_at \?\? null;/);
+  assert.equal((route.match(/^\s+rootSavedAt,$/gm) ?? []).length, 2);
+  // 062: the initial apply checks the change's identity under the lock, stamps log rows under the locks.
+  const sql = readFileSync(new URL("../supabase/migrations/062_task_date_cascade_undo.sql", import.meta.url), "utf8");
+  const core = sql.slice(sql.indexOf("CREATE OR REPLACE FUNCTION task_date_cascade_apply_core"), sql.indexOf("CREATE OR REPLACE FUNCTION apply_task_date_cascade"));
+  assert.ok(core.indexOf("task_date_cascade_current(") > core.indexOf("PERFORM task_date_cascade_lock("), "identity read after the locks");
+  assert.ok(core.indexOf("task_date_cascade_current(") < core.indexOf("INSERT INTO public.task_date_cascades"), "and before any log row");
+  assert.match(core, /c\.created_at > p_root_saved_at/);
+  assert.match(core, /clock_timestamp\(\)\)\s+RETURNING id INTO v_cascade_id/);
+});
+
 await test("Project PATCH: a deadlock (40P01) from 046's re-point trigger is sent again (bounded, 3 tries); other errors are not retried", async () => {
   const fakeProjects = (codes) => {
     const calls = [];

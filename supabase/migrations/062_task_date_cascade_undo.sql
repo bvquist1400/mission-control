@@ -17,8 +17,9 @@
 --    project ids are read before the task locks; if a task moved to another
 --    project in between, the function raises MC062 and rolls back (the app retries
 --    a bounded number of times; nothing was written).
--- 2. apply_task_date_cascade (061's 11 arguments, unchanged for callers) now takes
---    those locks; its body moved to task_date_cascade_apply_core, which also:
+-- 2. apply_task_date_cascade (061's 11 arguments plus an optional 12th,
+--    p_root_saved_at, see 7) now takes those locks; its body moved to
+--    task_date_cascade_apply_core, which also:
 --    - skips a move whose planned path changed (a task between it and the edited
 --      task became Done or Missed, recurring, or, for FamCal, hidden, after
 --      planning): reason 'path_changed' (S1 re-check L1). The move carries `via`,
@@ -55,6 +56,22 @@
 --    task, also with nothing else to move or "just this task" (a log row with no
 --    moves records it, so Undo's health rule covers it). App scope only; FamCal's
 --    cascades and bulk date sets (which never call these functions) stay quiet.
+-- 7. The initial apply joins the one-identity rule (fix round 2, Codex fix-1
+--    re-check P2-1). The PATCH saves the edited task and then, in a second
+--    statement, applies its plan; another session (an id-less Try again, a switch)
+--    can handle the same change in between. The PATCH passes p_root_saved_at (the
+--    updated_at of its own save). Under the advisory lock, after the root
+--    re-check, a cascade of the same change (same edited task, same new date)
+--    logged AFTER that save means the change was already handled: the late apply
+--    writes nothing and replays the change's current cascade (its id, moves and
+--    flags; 'adopted': true), or, when that cascade was undone since, answers
+--    nothing_moved with no id. It never logs a second, newer identity (a flag-only
+--    row with zero moves) over the winner, and never re-applies an undone change.
+--    A cascade logged BEFORE the save belongs to an earlier change that set the
+--    same date (the task left it and came back): as in S1, the apply goes on.
+--    Log rows are stamped with clock_timestamp() taken under the locks, so a
+--    winner whose transaction began before the PATCH's save is still "after" it.
+--    p_root_saved_at NULL (direct calls) keeps the 061 behaviour.
 -- Deploy contract: the S2 app sends 062's move fields (status, title,
 -- stakeholder_mentions, via) and calls 062's functions, so with 061 alone EVERY
 -- cascade fails (22023 "unknown move field": the edited task saves, nothing else
@@ -73,6 +90,11 @@
 BEGIN;
 
 DROP FUNCTION IF EXISTS apply_task_date_cascade(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB);
+-- 061's 11-argument apply: replaced by the 12-argument one below (a 12th argument
+-- with a default next to the 11-argument one would make every call ambiguous).
+DROP FUNCTION IF EXISTS apply_task_date_cascade(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN);
+-- Fix round 1's 12-argument core on local databases that applied it.
+DROP FUNCTION IF EXISTS task_date_cascade_apply_core(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN, UUID);
 -- The first S2 draft's undo core (4 arguments) on local databases that applied it.
 DROP FUNCTION IF EXISTS task_date_cascade_undo_core(UUID, UUID, JSONB, TEXT);
 
@@ -231,7 +253,8 @@ CREATE OR REPLACE FUNCTION task_date_cascade_apply_core(
   p_moves JSONB,
   p_root_title TEXT,
   p_root_was_visible BOOLEAN,
-  p_replaces_cascade_id UUID
+  p_replaces_cascade_id UUID,
+  p_root_saved_at TIMESTAMPTZ
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -267,6 +290,8 @@ DECLARE
   v_root_title TEXT;
   v_path_ok BOOLEAN;
   v_root_past BOOLEAN := false;
+  v_current UUID;
+  v_winner RECORD;
 BEGIN
   -- Caller and arguments.
   IF p_user_id IS NULL OR p_root_task_id IS NULL OR p_root_new_due_at IS NULL THEN
@@ -367,6 +392,49 @@ BEGIN
     );
   END IF;
 
+  -- One current identity per change, for the initial apply too (fix round 2, see
+  -- the header, 7): a cascade of this change logged after the caller saved the
+  -- edited task means another session already handled it while this call waited.
+  -- Write nothing; replay the change's current cascade, or nothing when it was
+  -- undone since. Read under the advisory lock every cascade writer takes.
+  IF p_root_saved_at IS NOT NULL AND EXISTS (
+    SELECT 1 FROM public.task_date_cascades c
+     WHERE c.user_id = p_user_id
+       AND c.root_task_id = p_root_task_id
+       AND c.root_new_due_at = p_root_new_due_at
+       AND c.created_at > p_root_saved_at
+  ) THEN
+    v_current := public.task_date_cascade_current(p_user_id, p_root_task_id, p_root_new_due_at);
+    SELECT c.id, c.moved_count, c.project_flags
+      INTO v_winner
+      FROM public.task_date_cascades c
+     WHERE c.id = v_current
+       AND c.created_at > p_root_saved_at;
+    IF v_winner.id IS NULL THEN
+      RETURN jsonb_build_object(
+        'status', 'nothing_moved', 'cascade_id', NULL,
+        'moved', '[]'::jsonb, 'skipped', '[]'::jsonb, 'project_flags', '[]'::jsonb, 'adopted', true
+      );
+    END IF;
+    RETURN jsonb_build_object(
+      'status', CASE WHEN COALESCE(v_winner.moved_count, 0) > 0 THEN 'moved' ELSE 'nothing_moved' END,
+      'cascade_id', v_winner.id,
+      'moved', COALESCE((
+        SELECT jsonb_agg(
+                 jsonb_build_object('task_id', m.task_id, 'old_due_at', m.old_due_at, 'new_due_at', m.new_due_at, 'project_id', t.project_id)
+                 || CASE WHEN p_scope = 'all' THEN jsonb_build_object('title', t.title) ELSE '{}'::jsonb END
+                 ORDER BY m.task_id)
+          FROM public.task_date_cascade_moves m
+          LEFT JOIN public.tasks t ON t.id = m.task_id AND t.user_id = p_user_id
+         WHERE m.cascade_id = v_winner.id
+           AND m.restored_at IS NULL
+      ), '[]'::jsonb),
+      'skipped', '[]'::jsonb,
+      'project_flags', COALESCE(v_winner.project_flags, '[]'::jsonb),
+      'adopted', true
+    );
+  END IF;
+
   -- The edited task itself past its own project's target date (Brent 10/20): an
   -- open, non-recurring task moved later (or given its first date) to an ET date
   -- after the target. App scope only (FamCal's cascades stay as in S1).
@@ -402,8 +470,10 @@ BEGIN
   END IF;
   v_name_ok := COALESCE(p_root_was_visible, false) AND v_root_visible AND v_root_title IS NOT DISTINCT FROM p_root_title;
 
-  INSERT INTO public.task_date_cascades (user_id, root_task_id, root_old_due_at, root_new_due_at, mode, delta_workdays, scope, source, replaces_cascade_id)
-  VALUES (p_user_id, p_root_task_id, p_root_old_due_at, p_root_new_due_at, p_mode, p_delta_workdays, p_scope, p_source, p_replaces_cascade_id)
+  -- Stamped under the locks (clock_timestamp, not the transaction's start), so a
+  -- log row is always later than any save it saw (see the header, 7).
+  INSERT INTO public.task_date_cascades (user_id, root_task_id, root_old_due_at, root_new_due_at, mode, delta_workdays, scope, source, replaces_cascade_id, created_at)
+  VALUES (p_user_id, p_root_task_id, p_root_old_due_at, p_root_new_due_at, p_mode, p_delta_workdays, p_scope, p_source, p_replaces_cascade_id, clock_timestamp())
   RETURNING id INTO v_cascade_id;
 
   FOR v_move IN
@@ -576,10 +646,12 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION task_date_cascade_apply_core(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN, UUID) IS
-  'Applies a planned due-date cascade under the 062 lock protocol: root re-check, path + compare-and-set per task, system comments, project flags, log (062).';
+COMMENT ON FUNCTION task_date_cascade_apply_core(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN, UUID, TIMESTAMPTZ) IS
+  'Applies a planned due-date cascade under the 062 lock protocol: root re-check, the change''s identity (replays a cascade logged after p_root_saved_at), path + compare-and-set per task, system comments, project flags, log (062).';
 
--- 061's signature, same arguments and reply; now under the lock protocol.
+-- 061's arguments and reply, plus p_root_saved_at (when the caller saved the edited
+-- task's new date: its updated_at; NULL skips the identity check, 061's
+-- behaviour); now under the lock protocol.
 CREATE OR REPLACE FUNCTION apply_task_date_cascade(
   p_user_id UUID,
   p_root_task_id UUID,
@@ -591,7 +663,8 @@ CREATE OR REPLACE FUNCTION apply_task_date_cascade(
   p_source TEXT,
   p_moves JSONB,
   p_root_title TEXT,
-  p_root_was_visible BOOLEAN
+  p_root_was_visible BOOLEAN,
+  p_root_saved_at TIMESTAMPTZ DEFAULT NULL
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -602,13 +675,13 @@ AS $$
 BEGIN
   RETURN public.task_date_cascade_apply_core(
     p_user_id, p_root_task_id, p_root_old_due_at, p_root_new_due_at, p_mode, p_delta_workdays,
-    p_scope, p_source, p_moves, p_root_title, p_root_was_visible, NULL
+    p_scope, p_source, p_moves, p_root_title, p_root_was_visible, NULL, p_root_saved_at
   );
 END;
 $$;
 
-COMMENT ON FUNCTION apply_task_date_cascade(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN) IS
-  'Applies a planned due-date cascade in one transaction (061 signature; 062 lock protocol via task_date_cascade_apply_core).';
+COMMENT ON FUNCTION apply_task_date_cascade(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN, TIMESTAMPTZ) IS
+  'Applies a planned due-date cascade in one transaction (061 arguments + p_root_saved_at; 062 lock protocol and change identity via task_date_cascade_apply_core).';
 
 -- ── 3. Undo ──────────────────────────────────────────────────────────────
 
@@ -983,7 +1056,7 @@ BEGIN
     CASE WHEN p_mode IS NULL THEN 0 ELSE COALESCE(p_delta_workdays, 0) END,
     'all', p_source,
     CASE WHEN p_mode IS NULL THEN '[]'::jsonb ELSE COALESCE(p_moves, '[]'::jsonb) END,
-    p_root_title, p_root_was_visible, p_replace_cascade_id
+    p_root_title, p_root_was_visible, p_replace_cascade_id, NULL
   );
 
   RETURN jsonb_build_object('status', 'replaced', 'undo', v_undo, 'apply', v_apply);
@@ -999,10 +1072,10 @@ REVOKE ALL ON FUNCTION task_date_cascade_lock(UUID, UUID[], TEXT, UUID[]) FROM P
 GRANT EXECUTE ON FUNCTION task_date_cascade_lock(UUID, UUID[], TEXT, UUID[]) TO authenticated, service_role;
 REVOKE ALL ON FUNCTION task_date_cascade_score_unchanged(INTEGER, TEXT, TEXT, TEXT[], JSONB) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION task_date_cascade_score_unchanged(INTEGER, TEXT, TEXT, TEXT[], JSONB) TO authenticated, service_role;
-REVOKE ALL ON FUNCTION task_date_cascade_apply_core(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN, UUID) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION task_date_cascade_apply_core(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN, UUID) TO authenticated, service_role;
-REVOKE ALL ON FUNCTION apply_task_date_cascade(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION apply_task_date_cascade(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN) TO authenticated, service_role;
+REVOKE ALL ON FUNCTION task_date_cascade_apply_core(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN, UUID, TIMESTAMPTZ) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION task_date_cascade_apply_core(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN, UUID, TIMESTAMPTZ) TO authenticated, service_role;
+REVOKE ALL ON FUNCTION apply_task_date_cascade(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN, TIMESTAMPTZ) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION apply_task_date_cascade(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN, TIMESTAMPTZ) TO authenticated, service_role;
 REVOKE ALL ON FUNCTION task_date_cascade_undo_core(UUID, UUID, JSONB, TEXT, BOOLEAN) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION task_date_cascade_undo_core(UUID, UUID, JSONB, TEXT, BOOLEAN) TO authenticated, service_role;
 REVOKE ALL ON FUNCTION task_date_cascade_current(UUID, UUID, TIMESTAMPTZ) FROM PUBLIC, anon;
