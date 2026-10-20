@@ -13,6 +13,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/Button";
+import { nextToastStack } from "@/components/ui/toast-stack";
 
 export type ToastTone = "success" | "warning" | "danger" | "info";
 
@@ -62,8 +63,6 @@ const ToastContext = createContext<ToastContextValue | null>(null);
 /** Long enough to read the message and reach for Undo without rushing. */
 const DURATION_WITH_ACTION = 9000;
 const DURATION_DEFAULT = 5000;
-/** Older toasts are dropped past this so the stack never covers the page. */
-const MAX_VISIBLE = 3;
 
 export function useToast(): ToastContextValue {
   const ctx = useContext(ToastContext);
@@ -104,17 +103,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       key: options.key,
     };
 
-    setToasts((current) => {
-      if (record.key) {
-        const index = current.findIndex((item) => item.key === record.key);
-        if (index >= 0) {
-          const next = [...current];
-          next[index] = record;
-          return next;
-        }
-      }
-      return [...current, record].slice(-MAX_VISIBLE);
-    });
+    // Same key replaces in place; past the cap the oldest ordinary toast goes,
+    // never one that stays until closed (the cascade toast with its Undo).
+    setToasts((current) => nextToastStack(current, record));
     return id;
   }, []);
 

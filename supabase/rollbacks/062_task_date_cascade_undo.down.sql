@@ -1,19 +1,30 @@
--- Rollback for 062_task_date_cascade_undo.sql: drops the undo / replace / lock
--- functions and the columns 062 added, and puts back 061's apply_task_date_cascade
--- body (same 11 arguments, 061's lock order) and its grants.
+-- Rollback for 062_task_date_cascade_undo.sql: drops the undo / replace / lock /
+-- current-identity functions and the columns 062 added, and puts back 061's
+-- apply_task_date_cascade body (same 11 arguments, 061's lock order) and its grants.
+--
+-- ORDER (deploy contract): roll the S2 APP back FIRST, then run this. The S2 app
+-- sends 062's move fields (status, title, stakeholder_mentions, via) to
+-- apply_task_date_cascade on every cascade; 061's body refuses them (22023
+-- "unknown move field"), so with this rollback applied under the S2 app EVERY date
+-- move that should cascade saves only the edited task, moves nothing else, answers
+-- cascade.status "failed" and leaves a "could not be moved" comment on the task;
+-- Undo / switch / Try again fail too. Likewise 062 must be live before the S2 app
+-- is deployed.
 --
 -- Data: dates that an Undo or a switch put back stay where they are, and the
 -- "moved back" system comments stay (ordinary task_comments rows). The log loses
 -- replaces_cascade_id, undone_reason, restored_at and restore_comment_id; undone_at
--- (061) stays. After this the app's Undo / switch / Try again calls fail with a
--- plain "couldn't" message until 062 is re-applied or the app is rolled back too;
--- date moves themselves keep working on 061. Re-running is safe.
+-- (061) stays, and so do log rows with no moves that only recorded the edited
+-- task's own target-date flag (061 never reads them). A project 062 turned Yellow
+-- stays Yellow. Re-running is safe.
 
 BEGIN;
 
 DROP FUNCTION IF EXISTS replace_task_date_cascade(UUID, UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, JSONB, TEXT, BOOLEAN, JSONB);
 DROP FUNCTION IF EXISTS undo_task_date_cascade(UUID, UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, BOOLEAN, JSONB, JSONB);
+DROP FUNCTION IF EXISTS task_date_cascade_undo_core(UUID, UUID, JSONB, TEXT, BOOLEAN);
 DROP FUNCTION IF EXISTS task_date_cascade_undo_core(UUID, UUID, JSONB, TEXT);
+DROP FUNCTION IF EXISTS task_date_cascade_current(UUID, UUID, TIMESTAMPTZ);
 
 -- 061's apply function, verbatim (it no longer calls the 062 core).
 CREATE OR REPLACE FUNCTION apply_task_date_cascade(

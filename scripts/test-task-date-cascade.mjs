@@ -271,9 +271,9 @@ await test("cascadeTrigger: earlier, same day, cleared, no change, Done or recur
 });
 
 await test("parseCascadeOptions: defaults, values, and plain 400 messages", () => {
-  assert.deepEqual(cascade.parseCascadeOptions({ due_at: "x" }), { ok: true, value: { cascade: true, mode: "same_gap", confirm: false } });
+  assert.deepEqual(cascade.parseCascadeOptions({ due_at: "x" }), { ok: true, value: { cascade: true, mode: "same_gap", confirm: false, quiet: false } });
   assert.deepEqual(cascade.parseCascadeOptions({ due_at: "x", cascade: "preview", cascade_mode: "only_collisions", cascade_confirm: true }), {
-    ok: true, value: { cascade: "preview", mode: "only_collisions", confirm: true },
+    ok: true, value: { cascade: "preview", mode: "only_collisions", confirm: true, quiet: false },
   });
   assert.equal(cascade.parseCascadeOptions({ cascade: "yes" }).ok, false);
   assert.equal(cascade.parseCascadeOptions({ cascade_mode: "all" }).ok, false);

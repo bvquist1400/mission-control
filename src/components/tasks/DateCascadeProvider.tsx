@@ -23,6 +23,7 @@ import {
   toastForSaveFailure,
   toastForUndo,
   TOAST_MOVES_SHOWN,
+  warnSentenceParts,
   type CascadeModeChoice,
   type CascadeToastAction,
   type CascadeToastModel,
@@ -238,6 +239,13 @@ function CascadeToastCard({ session, initial, onClose }: { session: ToastSession
     [session]
   );
 
+  /** A 409 "stale": this toast's id was already undone or replaced elsewhere; follow the change's current one. */
+  function adoptCurrentIdentity(result: { status: number; reason?: string | null; currentCascadeId?: string | null }) {
+    if (result.status !== 409 || result.reason !== "stale") return;
+    stateRef.current = { ...stateRef.current, cascadeId: result.currentCascadeId ?? null };
+    session.refresh();
+  }
+
   async function switchTo(choice: CascadeModeChoice, options: { confirm?: boolean; again?: boolean } = {}) {
     // Picking the choice already shown does nothing (Try again re-runs it on purpose).
     if (pending || (choice === stateRef.current.choice && !options.again && !options.confirm)) return;
@@ -257,13 +265,16 @@ function CascadeToastCard({ session, initial, onClose }: { session: ToastSession
         if (answer === "only") return switchTo("none", { again: true });
         return;
       }
+      adoptCurrentIdentity(result);
       setModel((current) => ({ ...current, error: result.error }));
       setPending(false);
       return;
     }
     const reply = result.reply;
     stateRef.current = {
-      cascadeId: reply.cascade.cascade_id ?? stateRef.current.cascadeId,
+      // The reply's id is the change's current identity, null included (after "Just
+      // this task" nothing else is moved): never the id it replaced (fix round 1).
+      cascadeId: reply.cascade.cascade_id,
       choice,
       waiting: reply.cascade.status === "moved" && reply.cascade.moves.length > 0 ? reply.cascade.moves.length : stateRef.current.waiting,
     };
@@ -290,6 +301,7 @@ function CascadeToastCard({ session, initial, onClose }: { session: ToastSession
       to_due_at: session.rootNew,
     });
     if (!result.ok) {
+      adoptCurrentIdentity(result);
       setModel((current) => ({ ...current, error: result.error }));
       setPending(false);
       return;
@@ -374,7 +386,10 @@ function CascadeToastCard({ session, initial, onClose }: { session: ToastSession
           <div key={warn.name} className="ml-5 grid gap-1.5 rounded-lg border border-warning-border bg-warning-soft px-2.5 py-2 text-xs text-foreground">
             <div>
               <strong className="font-semibold text-warning">Past the target date.</strong>{" "}
-              This pushes {warn.count} {warn.count === 1 ? "task" : "tasks"} in <b className="font-semibold">{warn.name}</b> after its target ({warn.target}). The latest is now {warn.latest}.
+              {(() => {
+                const parts = warnSentenceParts(warn);
+                return <>{parts.lead}<b className="font-semibold">{parts.name}</b>{parts.tail}</>;
+              })()}
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <span>{warn.name}</span>

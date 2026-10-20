@@ -5,6 +5,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   type Dispatch,
@@ -25,6 +26,7 @@ import {
 } from "@/components/utils/dates";
 import { StatusSelector } from "@/components/ui/StatusSelector";
 import { fetchTaskDetails, type TaskDetailData } from "@/lib/task-detail";
+import { createDraftStore, draftCellHandlers } from "@/lib/cell-draft";
 import type {
   CommitmentSummary,
   ImplementationSummary,
@@ -156,10 +158,15 @@ export function TaskGrid({
   const [error, setError] = useState<string | null>(null);
   const [savingIds, setSavingIds] = useState<Record<string, number>>({});
   const [deletingIds, setDeletingIds] = useState<Record<string, boolean>>({});
-  const [estimateDrafts, setEstimateDrafts] = useState<Record<string, string>>({});
-  // The Due cell saves on blur or Enter only (cascade S2: a date typed piece by
-  // piece must not move the tasks after it at every valid keystroke).
-  const [dueDrafts, setDueDrafts] = useState<Record<string, string>>({});
+  // The Due and Estimate cells keep what is typed as a draft and save it on blur
+  // or Enter only (cascade S2: a date typed piece by piece must not move the tasks
+  // after it at every valid keystroke). Escape drops the draft. The drafts live in
+  // a plain store, not React state: Escape's blur() runs the blur handler at once,
+  // before a state update would apply, so a state draft was still there and got
+  // saved (fix round 1). Changing a draft re-renders the grid.
+  const [, rerenderDrafts] = useReducer((count: number) => count + 1, 0);
+  const [estimateDrafts] = useState(() => createDraftStore<string>(rerenderDrafts));
+  const [dueDrafts] = useState(() => createDraftStore<string>(rerenderDrafts));
   const dateCascade = useDateCascade();
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null);
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(() => new Set());
@@ -672,15 +679,8 @@ export function TaskGrid({
       delete next[taskId];
       return next;
     });
-    setEstimateDrafts((current) => {
-      if (!(taskId in current)) {
-        return current;
-      }
-
-      const next = { ...current };
-      delete next[taskId];
-      return next;
-    });
+    estimateDrafts.cancel(taskId);
+    dueDrafts.cancel(taskId);
 
     const nextRequests = { ...activeDetailRequestIdsRef.current };
     delete nextRequests[taskId];
@@ -712,7 +712,7 @@ export function TaskGrid({
   async function updateTask(
     taskId: string,
     updates: TaskUpdatePayload,
-    requestOptions: { cascade?: boolean } = {}
+    requestOptions: { cascade?: boolean; cascade_quiet?: boolean } = {}
   ): Promise<void | "cancelled"> {
     const previousTask = tasks.find((task) => task.id === taskId);
 
@@ -806,15 +806,8 @@ export function TaskGrid({
     }
   }
 
-  /** Saves the Due cell's draft (blur or Enter); nothing when it didn't change. */
-  function commitDueDraft(task: TaskWithImplementation) {
-    const draft = dueDrafts[task.id];
-    if (draft === undefined) return;
-    setDueDrafts((current) => {
-      const next = { ...current };
-      delete next[task.id];
-      return next;
-    });
+  /** Saves the Due cell's draft (blur or Enter, already taken from the store); nothing when it didn't change. */
+  function commitDueDraft(task: TaskWithImplementation, draft: string) {
     if (draft === timestampToLocalDateInputValue(task.due_at)) return;
     void updateTask(task.id, { due_at: draft ? localDateInputToEndOfDayIso(draft) : null });
   }
@@ -882,7 +875,7 @@ export function TaskGrid({
     setBulkActionBusy(true);
     // A bulk date set moves exactly the selected tasks: no cascade to the tasks
     // that wait on them (the parallel PATCHes would otherwise each move chains).
-    const requestOptions = "due_at" in updates ? { cascade: false } : {};
+    const requestOptions = "due_at" in updates ? { cascade: false, cascade_quiet: true } : {};
     await Promise.all(selectedIds.map((taskId) => updateTask(taskId, updates, requestOptions)));
     setBulkActionBusy(false);
 
@@ -948,36 +941,13 @@ export function TaskGrid({
     }
   }
 
-  async function commitEstimatedMinutes(task: TaskWithImplementation): Promise<void> {
-    const draftValue = estimateDrafts[task.id];
-    if (typeof draftValue !== "string") {
-      return;
-    }
-
+  /** Saves the Estimate cell's draft (blur or Enter, already taken from the store); an empty or invalid value just shows the saved one again. */
+  async function commitEstimatedMinutes(task: TaskWithImplementation, draftValue: string): Promise<void> {
     const trimmedValue = draftValue.trim();
-    if (!trimmedValue) {
-      setEstimateDrafts((current) => {
-        const next = { ...current };
-        delete next[task.id];
-        return next;
-      });
-      return;
-    }
+    if (!trimmedValue) return;
 
     const parsed = Number.parseInt(trimmedValue, 10);
-    if (!Number.isFinite(parsed) || parsed < 1 || parsed > 480) {
-      setEstimateDrafts((current) => ({
-        ...current,
-        [task.id]: String(task.estimated_minutes),
-      }));
-      return;
-    }
-
-    setEstimateDrafts((current) => {
-      const next = { ...current };
-      delete next[task.id];
-      return next;
-    });
+    if (!Number.isFinite(parsed) || parsed < 1 || parsed > 480) return;
 
     if (parsed !== task.estimated_minutes && !savingIds[task.id]) {
       await updateTask(task.id, { estimated_minutes: parsed, estimate_source: "manual" });
@@ -1332,6 +1302,8 @@ export function TaskGrid({
                 const isSaving = Boolean(savingIds[task.id]);
                 const isDeleting = Boolean(deletingIds[task.id]);
                 const isBusy = isSaving || isDeleting;
+                const dueCell = draftCellHandlers({ id: task.id, store: dueDrafts, commit: (draft) => commitDueDraft(task, draft) });
+                const estimateCell = draftCellHandlers({ id: task.id, store: estimateDrafts, commit: (draft) => void commitEstimatedMinutes(task, draft), enter: "blur" });
                 const isExpanded = expandedTaskId === task.id;
                 const isSelected = selectedTaskIds.has(task.id);
                 const details = taskDetailsById[task.id];
@@ -1484,29 +1456,10 @@ export function TaskGrid({
                           type="number"
                           min={1}
                           max={480}
-                          value={estimateDrafts[task.id] ?? String(task.estimated_minutes)}
-                          onChange={(event) => {
-                            const nextValue = event.target.value;
-                            setEstimateDrafts((current) => ({ ...current, [task.id]: nextValue }));
-                          }}
-                          onBlur={() => {
-                            void commitEstimatedMinutes(task);
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") {
-                              event.preventDefault();
-                              event.currentTarget.blur();
-                            }
-
-                            if (event.key === "Escape") {
-                              setEstimateDrafts((current) => {
-                                const next = { ...current };
-                                delete next[task.id];
-                                return next;
-                              });
-                              event.currentTarget.blur();
-                            }
-                          }}
+                          value={estimateDrafts.get(task.id) ?? String(task.estimated_minutes)}
+                          onChange={(event) => estimateCell.onChange(event.target.value)}
+                          onBlur={estimateCell.onBlur}
+                          onKeyDown={estimateCell.onKeyDown}
                           disabled={isBusy}
                           className="w-full rounded border border-stroke bg-transparent px-1.5 py-1 text-center text-xs text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
                         />
@@ -1516,26 +1469,10 @@ export function TaskGrid({
                         <input
                           type="date"
                           aria-label={`Due date for ${task.title}`}
-                          value={dueDrafts[task.id] ?? timestampToLocalDateInputValue(task.due_at)}
-                          onChange={(event) => {
-                            const nextDue = event.target.value;
-                            setDueDrafts((current) => ({ ...current, [task.id]: nextDue }));
-                          }}
-                          onBlur={() => commitDueDraft(task)}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") {
-                              event.preventDefault();
-                              commitDueDraft(task);
-                            }
-                            if (event.key === "Escape") {
-                              setDueDrafts((current) => {
-                                const next = { ...current };
-                                delete next[task.id];
-                                return next;
-                              });
-                              event.currentTarget.blur();
-                            }
-                          }}
+                          value={dueDrafts.get(task.id) ?? timestampToLocalDateInputValue(task.due_at)}
+                          onChange={(event) => dueCell.onChange(event.target.value)}
+                          onBlur={dueCell.onBlur}
+                          onKeyDown={dueCell.onKeyDown}
                           disabled={isBusy}
                           className="w-full rounded border border-stroke bg-transparent px-1 py-1 text-xs text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
                         />

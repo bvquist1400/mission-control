@@ -106,7 +106,7 @@ await test("Panel 3: past the target date — warning tone and block (Green → 
   const flags = [{ project_id: "p", name: "Menu & Market 1.0", target_date: "2026-10-23", latest_due_date: "2026-10-27", tasks_past_target: 3, rag_before: "Green", rag_after: "Yellow" }];
   const model = view.toastForChange({ rootTitle: ROOT, choice: "same_gap", origin: "patch", cascade: reply({ project_flags: flags }) });
   assert.equal(model.tone, "warning");
-  assert.deepEqual(model.warn, [{ name: "Menu & Market 1.0", target: "Fri 10/23", latest: "Tue 10/27", count: 3, ragBefore: "Green", ragAfter: "Yellow" }]);
+  assert.deepEqual(model.warn, [{ name: "Menu & Market 1.0", target: "Fri 10/23", latest: "Tue 10/27", count: 3, ragBefore: "Green", ragAfter: "Yellow", includesRoot: false }]);
   const red = view.toastForChange({ rootTitle: ROOT, choice: "same_gap", origin: "patch", cascade: reply({ project_flags: [{ ...flags[0], rag_before: "Red", rag_after: "Red" }] }) });
   assert.equal(red.warn[0].ragBefore, red.warn[0].ragAfter);
 });
@@ -363,17 +363,54 @@ await test("Project PATCH: a deadlock (40P01) from 046's re-point trigger is sen
 });
 
 // ── UI wiring that must not regress (source checks) ────────────────────────
-await test("Grid Due cell: typing only sets a draft; the save is on blur or Enter (Escape drops it); bulk Apply Due still sends cascade:false and shows the quiet line", () => {
+await test("Grid Due and Estimate cells (FR1 #1): Escape drops the draft and a synchronous blur right after saves nothing; blur or Enter saves once; bulk Apply Due sends cascade:false + cascade_quiet", async () => {
+  const { createDraftStore, draftCellHandlers } = await import("../src/lib/cell-draft.ts");
+  // The browser runs the blur handler synchronously inside blur(), during the keydown event.
+  const cell = (enter) => {
+    const saves = [];
+    let renders = 0;
+    const store = createDraftStore(() => { renders += 1; });
+    const handlers = draftCellHandlers({ id: "r", store, commit: (draft) => saves.push(draft), enter });
+    const key = (name) => handlers.onKeyDown({ key: name, preventDefault() {}, currentTarget: { blur: () => handlers.onBlur() } });
+    return { saves, store, handlers, key, renders: () => renders };
+  };
+  for (const enter of ["commit", "blur"]) {
+    const escape = cell(enter);
+    escape.handlers.onChange("2026-10-26");
+    assert.equal(escape.store.get("r"), "2026-10-26");
+    escape.key("Escape");
+    assert.deepEqual(escape.saves, [], `${enter}: Escape then the blur it triggers saves nothing`);
+    assert.equal(escape.store.get("r"), undefined, "the cell shows the saved value again");
+    escape.handlers.onBlur();
+    assert.deepEqual(escape.saves, [], "a later blur has nothing to save either");
+    assert.ok(escape.renders() >= 2);
+
+    const enterKey = cell(enter);
+    enterKey.handlers.onChange("2026-10-26");
+    enterKey.key("Enter");
+    enterKey.handlers.onBlur();
+    assert.deepEqual(enterKey.saves, ["2026-10-26"], `${enter}: Enter saves exactly once`);
+
+    const blur = cell(enter);
+    blur.handlers.onChange("2026-10-2");
+    blur.handlers.onChange("2026-10-26");
+    assert.deepEqual(blur.saves, [], "typing never saves");
+    blur.handlers.onBlur();
+    blur.handlers.onBlur();
+    assert.deepEqual(blur.saves, ["2026-10-26"], "blur saves once");
+  }
+
+  // TaskGrid wires both cells through these handlers (no React-state drafts left to go stale).
   const grid = readFileSync(new URL("../src/components/tasks/TaskGrid.tsx", import.meta.url), "utf8");
-  const cell = grid.slice(grid.indexOf('aria-label={`Due date for ${task.title}`}'), grid.indexOf("disabled={isBusy}", grid.indexOf('aria-label={`Due date for ${task.title}`}')));
-  assert.ok(cell.length > 0);
-  const onChange = cell.slice(cell.indexOf("onChange"), cell.indexOf("onBlur"));
-  assert.doesNotMatch(onChange, /updateTask|commitDueDraft/);
-  assert.match(onChange, /setDueDrafts/);
-  assert.match(cell, /onBlur=\{\(\) => commitDueDraft\(task\)\}/);
-  assert.match(cell, /event\.key === "Enter"[\s\S]*commitDueDraft\(task\)/);
-  assert.match(cell, /event\.key === "Escape"/);
-  assert.match(grid, /const requestOptions = "due_at" in updates \? \{ cascade: false \} : \{\};/);
+  assert.doesNotMatch(grid, /setDueDrafts|setEstimateDrafts|useState<Record<string, string>>\(\{\}\)/);
+  const due = grid.slice(grid.indexOf('aria-label={`Due date for ${task.title}`}'), grid.indexOf("disabled={isBusy}", grid.indexOf('aria-label={`Due date for ${task.title}`}')));
+  assert.match(due, /onChange=\{\(event\) => dueCell\.onChange\(event\.target\.value\)\}/);
+  assert.match(due, /onBlur=\{dueCell\.onBlur\}/);
+  assert.match(due, /onKeyDown=\{dueCell\.onKeyDown\}/);
+  assert.match(grid, /const dueCell = draftCellHandlers\(\{ id: task\.id, store: dueDrafts, commit: \(draft\) => commitDueDraft\(task, draft\) \}\)/);
+  assert.match(grid, /const estimateCell = draftCellHandlers\(\{ id: task\.id, store: estimateDrafts, commit: \(draft\) => void commitEstimatedMinutes\(task, draft\), enter: "blur" \}\)/);
+  assert.match(grid, /onBlur=\{estimateCell\.onBlur\}/);
+  assert.match(grid, /const requestOptions = "due_at" in updates \? \{ cascade: false, cascade_quiet: true \} : \{\};/);
   assert.match(grid, /Bulk changes don’t move linked tasks\./);
   assert.match(grid, /requestOptions\.cascade !== false && dateCascade/);
 });
@@ -437,6 +474,206 @@ await test("MCP undo_date_cascade: in the tool list with task_id, cascade_id, re
   responder = () => json({ error: "That date change wasn't found for this task." }, 404);
   const missing = await mcpRpc({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "undo_date_cascade", arguments: { task_id: "r1", cascade_id: "c9" } } });
   assert.equal(missing.result.isError, true);
+});
+
+// ── Fix round 1 (FR1) ──────────────────────────────────────────────────────
+await test("FR1 #6 toast: the edited task alone past its target shows the warning with Undo (patch: nothing else to move, or Just this task); no flag, no toast", () => {
+  const flag = { project_id: "p", name: "Menu & Market 1.0", target_date: "2026-10-23", latest_due_date: "2026-10-26", tasks_past_target: 1, rag_before: "Green", rag_after: "Yellow", includes_edited_task: true };
+  for (const [status, choice, title] of [["nothing_to_move", "same_gap", "Moved only this task"], ["not_applicable", "same_gap", "Moved only this task"], ["off", "none", "Moved only this task"]]) {
+    const model = view.toastForChange({ rootTitle: ROOT, choice, origin: "patch", cascade: reply({ status, moves: [], cascade_id: "c9", project_flags: [flag] }) });
+    assert.ok(model, status);
+    assert.equal(model.tone, "warning", status);
+    assert.equal(model.title, title, status);
+    assert.deepEqual(model.primary, { label: "Undo", action: "undo" }, status);
+    assert.deepEqual(model.warn, [{ name: "Menu & Market 1.0", target: "Fri 10/23", latest: "Mon 10/26", count: 1, ragBefore: "Green", ragAfter: "Yellow", includesRoot: true }], status);
+    assert.equal(view.warnSentence(model.warn[0]), "This puts this task in Menu & Market 1.0 after its target (Fri 10/23). The latest is now Mon 10/26.");
+  }
+  const alone = view.toastForChange({ rootTitle: ROOT, choice: "same_gap", origin: "patch", cascade: reply({ status: "nothing_to_move", moves: [], skipped: [], planned_moves: 0, cascade_id: "c9", project_flags: [flag] }) });
+  assert.equal(alone.modes, null, "nothing waits on it: no How far row");
+  const roomy = view.toastForChange({ rootTitle: ROOT, choice: "same_gap", origin: "patch", cascade: reply({ status: "nothing_to_move", moves: [], skipped: [{ task_id: "w", title: "W", reason: "not_needed" }], cascade_id: "c9", project_flags: [flag] }) });
+  assert.equal(roomy.modes, "same_gap");
+  assert.equal(view.warnSentence({ name: "P", target: "Fri 10/23", latest: "Tue 10/27", count: 4, includesRoot: true }), "This puts this task and 3 more in P after its target (Fri 10/23). The latest is now Tue 10/27.");
+  assert.equal(view.warnSentence({ name: "P", target: "Fri 10/23", latest: "Tue 10/27", count: 3, includesRoot: false }), "This pushes 3 tasks in P after its target (Fri 10/23). The latest is now Tue 10/27.");
+  const provider = readFileSync(new URL("../src/components/tasks/DateCascadeProvider.tsx", import.meta.url), "utf8");
+  assert.match(provider, /warnSentenceParts\(warn\)/);
+});
+
+await test("FR1 #6 options: cascade_quiet (bulk date sets) means just this task and no project flag; MCP update_task does not offer it", async () => {
+  assert.deepEqual(cascade.parseCascadeOptions({ due_at: "x", cascade: false, cascade_quiet: true }), { ok: true, value: { cascade: false, mode: "same_gap", confirm: false, quiet: true } });
+  assert.deepEqual(cascade.parseCascadeOptions({ due_at: "x", cascade_quiet: true }), { ok: true, value: { cascade: false, mode: "same_gap", confirm: false, quiet: true } });
+  assert.deepEqual(cascade.parseCascadeOptions({ due_at: "x", cascade: false }), { ok: true, value: { cascade: false, mode: "same_gap", confirm: false, quiet: false } });
+  assert.equal(cascade.parseCascadeOptions({ cascade_quiet: "yes" }).ok, false);
+  assert.equal(cascade.parseCascadeOptions({ due_at: "x", cascade: "preview", cascade_quiet: true }).ok, false);
+  const list = await mcpRpc({ jsonrpc: "2.0", id: 50, method: "tools/list", params: {} });
+  const update = list.result.tools.find((t) => t.name === "update_task");
+  assert.equal("cascade_quiet" in update.inputSchema.properties, false);
+  assert.ok("cascade" in update.inputSchema.properties);
+});
+
+await test("FR1 LOW: the >25 box lists rows by date, then by title in natural order (1, 2, 10 — not 1, 10, 2)", () => {
+  const moves = [10, 2, 1, 11].map((n) => ({ task_id: `m${n}`, title: `Big follower ${n}`, old_due_at: etAt("2026-10-23"), new_due_at: etAt("2026-10-27") }));
+  moves.push({ task_id: "early", title: "Big follower 99", old_due_at: etAt("2026-10-22"), new_due_at: etAt("2026-10-26") });
+  const model = view.confirmModel({ rootTitle: ROOT, cascade: reply({ status: "needs_confirm", moves }) });
+  assert.deepEqual(model.rows.map((row) => row.title), ["Big follower 99", "Big follower 1", "Big follower 2", "Big follower 10", "Big follower 11"]);
+});
+
+await test("FR1 LOW: the persistent cascade toast is never pushed out by other toasts; ordinary ones still cap at 3", async () => {
+  const { nextToastStack } = await import("../src/components/ui/toast-stack.ts");
+  let stack = [];
+  const add = (record) => { stack = nextToastStack(stack, record); };
+  add({ id: 1, duration: 0, key: "date-cascade" });
+  for (let id = 2; id <= 6; id += 1) add({ id, duration: 5000 });
+  assert.deepEqual(stack.map((t) => t.id), [1, 5, 6]);
+  add({ id: 7, duration: 0, key: "date-cascade" });
+  assert.deepEqual(stack.map((t) => t.id), [7, 5, 6], "a newer date change replaces it in place");
+  stack = [];
+  for (let id = 1; id <= 5; id += 1) add({ id, duration: 5000 });
+  assert.deepEqual(stack.map((t) => t.id), [3, 4, 5]);
+  const toastSource = readFileSync(new URL("../src/components/ui/Toast.tsx", import.meta.url), "utf8");
+  assert.match(toastSource, /setToasts\(\(current\) => nextToastStack\(current, record\)\)/);
+});
+
+await test("FR1 LOW (L1): a plan whose paths would exceed 20,000 ids is too large (plain too-large reply, nothing saved); paths are never silently dropped", async () => {
+  const task = (id, due) => ({ id, user_id: "u", title: id, status: "Planned", due_at: due, project_id: null, is_recurring_template: false, recurring_template_id: null, base_priority: 50, priority_score: 50, stakeholder_mentions: [] });
+  // Codex's valid 226-task, depth-16 graph: one bottleneck, then 15 layers of 15 (23,850 path ids).
+  const graph = { rootId: "R", tasks: new Map(), edges: [], tooLarge: false, depthLimited: 0 };
+  graph.tasks.set("bottleneck", { ...task("bottleneck", etAt("2026-10-23")), depth: 1 });
+  graph.edges.push({ task_id: "bottleneck", depends_on_task_id: "R" });
+  let previous = ["bottleneck"];
+  for (let depth = 1; depth <= 15; depth += 1) {
+    const ids = Array.from({ length: 15 }, (_, i) => `layer${depth}-${i}`);
+    for (const id of ids) {
+      graph.tasks.set(id, { ...task(id, etAt("2026-10-23")), depth: depth + 1 });
+      for (const prerequisite of previous) graph.edges.push({ task_id: id, depends_on_task_id: prerequisite });
+    }
+    previous = ids;
+  }
+  const plan = cascade.planTaskDateCascade({ graph, mode: "same_gap", deltaWorkdays: 2, rootOldDueAt: etAt("2026-10-22"), rootNewDueAt: etAt("2026-10-26") });
+  assert.equal(plan.moves.length, 226);
+  assert.equal(plan.moves.reduce((sum, move) => sum + move.via.length, 0), 23850);
+  assert.equal(plan.tooLarge, true);
+  assert.equal(plan.tooLargeReason, "links");
+  const reply409 = cascade.buildCascadeReply({ status: "too_large", mode: "same_gap", plan });
+  assert.equal(reply409.reason, "links");
+  assert.doesNotMatch(reply409.message, /500/);
+  assert.match(text(view.confirmModel({ rootTitle: ROOT, cascade: reply409 }).lead), /too many links between them/);
+  const fakeDb = { from: () => ({ select: () => ({ eq: () => ({ eq: () => Promise.resolve({ data: [], error: null }) }) }) }) };
+  await assert.rejects(() => cascade.prepareCascadeApplyMoves(fakeDb, "u", { rootTitle: "R", plan, graph }), /too many/i);
+  const small = cascade.planTaskDateCascade({ graph: { ...graph, tasks: new Map([...graph.tasks].slice(0, 16)) }, mode: "same_gap", deltaWorkdays: 2, rootOldDueAt: etAt("2026-10-22"), rootNewDueAt: etAt("2026-10-26") });
+  assert.equal(small.tooLarge, false);
+  assert.equal(small.tooLargeReason, null);
+});
+
+// A model of 062's identity rule for the service tests: replace/undo answer
+// "stale" unless the id they were given is the newest active cascade of the
+// change (none = no active one).
+function identityFixture() {
+  const U = API_USER_ID;
+  const R = "00000000-0000-4000-8000-0000000000aa";
+  const C = "00000000-0000-4000-8000-0000000000bb";
+  const tables = {
+    tasks: [
+      { id: R, user_id: U, title: "Root", due_at: etAt("2026-10-26"), project_id: null, tags: ["work"], status: "Planned", base_priority: 50, priority_score: 50, stakeholder_mentions: [], is_recurring_template: false, recurring_template_id: null },
+      { id: C, user_id: U, title: "Child", due_at: etAt("2026-10-23"), project_id: null, tags: ["work"], status: "Planned", base_priority: 50, priority_score: 50, stakeholder_mentions: [], is_recurring_template: false, recurring_template_id: null },
+    ],
+    task_dependencies: [{ id: "00000000-0000-4000-8000-0000000000cc", user_id: U, task_id: C, depends_on_task_id: R, is_resolved: false }],
+    stakeholders: [], projects: [], task_date_cascades: [], task_date_cascade_moves: [],
+  };
+  const rpcCalls = [];
+  let seq = 1;
+  let pause = null;
+  const current = () => tables.task_date_cascades.filter((c) => !c.undone_at).sort((a, b) => b.seq - a.seq)[0]?.id ?? null;
+  const undoLog = (id) => {
+    const log = tables.task_date_cascades.find((c) => c.id === id);
+    for (const move of tables.task_date_cascade_moves.filter((m) => m.cascade_id === id)) {
+      const row = tables.tasks.find((t) => t.id === move.task_id);
+      if (row.due_at === move.new_due_at) row.due_at = move.old_due_at;
+    }
+    log.undone_at = "x";
+    return { status: "undone", cascade_id: id, restored: [], kept: [], projects: [] };
+  };
+  class Query {
+    constructor(table) { this.table = table; this.filters = []; this.one = false; }
+    select() { return this; }
+    eq(k, v) { this.filters.push((r) => r[k] === v); return this; }
+    is(k, v) { return this.eq(k, v); }
+    in(k, v) { this.filters.push((r) => v.includes(r[k])); return this; }
+    gt(k, v) { this.filters.push((r) => r[k] > v); return this; }
+    contains(k, v) { this.filters.push((r) => v.every((x) => (r[k] || []).includes(x))); return this; }
+    order() { return this; }
+    limit() { return this; }
+    maybeSingle() { this.one = true; return this; }
+    async run() {
+      const rows = (tables[this.table] || []).filter((r) => this.filters.every((f) => f(r))).map((r) => structuredClone(r));
+      if (this.table === "task_date_cascades" && !this.one && pause) { const fn = pause; pause = null; await fn(); }
+      return { data: this.one ? rows[0] ?? null : this.table === "task_date_cascades" ? rows.sort((a, b) => b.seq - a.seq) : rows, error: null };
+    }
+    then(resolve, reject) { return this.run().then(resolve, reject); }
+  }
+  const db = {
+    from: (table) => new Query(table),
+    async rpc(name, p) {
+      rpcCalls.push({ name, p: structuredClone(p) });
+      if (name === "undo_task_date_cascade") {
+        if ((p.p_cascade_id ?? null) !== current()) return { data: { status: "stale", current_cascade_id: current() }, error: null };
+        if (p.p_cascade_id) undoLog(p.p_cascade_id);
+        return { data: { status: "undone", cascade: null, root: { restored: false, due_at: null, restore_due_at: null } }, error: null };
+      }
+      if ((p.p_replace_cascade_id ?? null) !== current()) return { data: { status: "stale", current_cascade_id: current(), undo: null, apply: null }, error: null };
+      const undone = p.p_replace_cascade_id ? undoLog(p.p_replace_cascade_id) : null;
+      const moved = [];
+      for (const move of p.p_moves || []) {
+        const row = tables.tasks.find((t) => t.id === move.task_id);
+        if (row.due_at === move.old_due_at) { row.due_at = move.new_due_at; moved.push({ task_id: row.id, old_due_at: move.old_due_at, new_due_at: move.new_due_at, project_id: null }); }
+      }
+      let id = null;
+      if (moved.length) {
+        id = `00000000-0000-4000-8000-${String(seq).padStart(12, "0")}`;
+        tables.task_date_cascades.push({ id, seq: seq++, user_id: U, root_task_id: R, root_old_due_at: p.p_root_old_due_at, root_new_due_at: p.p_root_new_due_at, mode: p.p_mode, undone_at: null });
+        for (const m of moved) tables.task_date_cascade_moves.push({ cascade_id: id, user_id: U, task_id: m.task_id, old_due_at: m.old_due_at, new_due_at: m.new_due_at });
+      }
+      return { data: { status: "replaced", undo: undone, apply: p.p_mode ? { status: moved.length ? "moved" : "nothing_moved", cascade_id: id, moved, skipped: [], project_flags: [] } : null }, error: null };
+    },
+  };
+  return { db, tables, rpcCalls, R, C, child: () => tables.tasks.find((t) => t.id === C).due_at, pause: (fn) => { pause = fn; } };
+}
+const parsed = (body) => { const out = undo.parseDateCascadeRequest(body); assert.equal(out.ok, true, JSON.stringify(out)); return out.value; };
+
+await test("FR1 P2-1 (service): an id that was already undone or replaced is refused before any write (409 stale with the current id); Undo with it restores nothing", async () => {
+  const f = identityFixture();
+  const body = { action: "apply", mode: "same_gap", from_due_at: etAt("2026-10-22"), to_due_at: etAt("2026-10-26") };
+  const first = await undo.applyDateChange(f.db, API_USER_ID, f.R, parsed(body), "session");
+  const c1 = first.cascade.cascade_id;
+  assert.equal(f.child(), etAt("2026-10-27"));
+  const second = await undo.applyDateChange(f.db, API_USER_ID, f.R, parsed({ ...body, cascade_id: c1 }), "session");
+  const c2 = second.cascade.cascade_id;
+  assert.equal(f.child(), etAt("2026-10-27"));
+  const calls = f.rpcCalls.length;
+  for (const mode of ["same_gap", "only_collisions", "none"]) {
+    await assert.rejects(() => undo.applyDateChange(f.db, API_USER_ID, f.R, parsed({ ...body, mode, cascade_id: c1 }), "session"), (error) => {
+      assert.equal(error.status, 409);
+      assert.equal(error.body.reason, "stale");
+      assert.equal(error.body.current_cascade_id, c2);
+      return true;
+    });
+  }
+  await assert.rejects(() => undo.undoDateChange(f.db, API_USER_ID, f.R, parsed({ action: "undo", cascade_id: c1 })), (error) => error.status === 409 && error.body.reason === "stale");
+  assert.equal(f.rpcCalls.length, calls, "no RPC for a stale id");
+  assert.equal(f.child(), etAt("2026-10-27"));
+  const provider = readFileSync(new URL("../src/components/tasks/DateCascadeProvider.tsx", import.meta.url), "utf8");
+  assert.match(provider, /cascadeId: reply\.cascade\.cascade_id,/, "the toast keeps the reply's id, null included");
+  assert.doesNotMatch(provider, /cascade_id \?\? stateRef\.current\.cascadeId/);
+});
+
+await test("FR1 P2-2 (service): an id-less Try again that finds a cascade appeared since its lookup is re-planned against it once (moves once)", async () => {
+  const f = identityFixture();
+  const body = { action: "apply", mode: "same_gap", from_due_at: etAt("2026-10-22"), to_due_at: etAt("2026-10-26") };
+  f.pause(async () => { await undo.applyDateChange(f.db, API_USER_ID, f.R, parsed(body), "session"); });
+  const result = await undo.applyDateChange(f.db, API_USER_ID, f.R, parsed(body), "session");
+  assert.equal(result.status, "replaced");
+  assert.equal(f.child(), etAt("2026-10-27"), "Tue 10/27, never Thu 10/29");
+  assert.equal(f.tables.task_date_cascades.filter((c) => !c.undone_at).length, 1);
+  assert.equal(f.rpcCalls.filter((c) => c.name === "replace_task_date_cascade").length, 3, "B, A (stale), A again");
 });
 
 console.log(`\n${passed} passed, ${failures.length} failed`);

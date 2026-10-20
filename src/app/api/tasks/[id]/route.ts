@@ -38,7 +38,10 @@ import {
   planTaskDateCascade,
   prepareCascadeApplyMoves,
   projectFlagsForMoves,
+  publicProjectFlag,
+  rootPastTargetCandidate,
   type CascadeApplyMove,
+  type CascadeRootForFlag,
   type CascadeOptions,
   type CascadePlan,
   type CascadeReply,
@@ -181,7 +184,7 @@ export async function PATCH(
     // moves later. The FamCal key can't send these keys (its allowlist refuses
     // them); it always gets the default same-gap cascade over FamCal-eligible
     // tasks, and its reply stays projectTaskForFamcal.
-    let cascadeOptions: CascadeOptions = { cascade: true, mode: DEFAULT_CASCADE_MODE, confirm: false };
+    let cascadeOptions: CascadeOptions = { cascade: true, mode: DEFAULT_CASCADE_MODE, confirm: false, quiet: false };
     if (!isFamcalKey) {
       const parsedCascade = parseCascadeOptions(body);
       if (!parsedCascade.ok) {
@@ -565,9 +568,12 @@ export async function PATCH(
           if (plan && graph) {
             const overCap = plan.moves.length > CASCADE_CONFIRM_THRESHOLD;
             if (cascadeOptions.cascade === 'preview' || ((plan.tooLarge || (overCap && !cascadeOptions.confirm)) && !isFamcalKey)) {
-              const projects = await fetchCascadeProjects(supabase, userId, plan.moves.map((move) => move.project_id ?? ''));
+              const merged = { ...currentTask, ...updates } as Task;
+              const projects = await fetchCascadeProjects(supabase, userId, [...plan.moves.map((move) => move.project_id ?? ''), merged.project_id ?? '']);
               const status = cascadeOptions.cascade === 'preview' ? 'preview' : plan.tooLarge ? 'too_large' : 'needs_confirm';
-              const reply = buildCascadeReply({ status, mode, plan, projectFlags: projectFlagsForMoves(plan.moves, projects) });
+              // The warning also counts the edited task itself when it lands past its own project's target.
+              const rootForFlag = isFamcalKey ? null : rootForTargetFlag(merged, currentTask.due_at ?? null);
+              const reply = buildCascadeReply({ status, mode, plan, projectFlags: projectFlagsForMoves(plan.moves, projects, rootForFlag) });
               if (status === 'preview') {
                 return NextResponse.json({ preview: true, task_id: id, due_at: updates.due_at, cascade: reply });
               }
@@ -754,6 +760,51 @@ export async function PATCH(
       await postCascadeRootNotice(supabase, userId, id, true, cascadeRootNotice(famcalRootNotice));
     }
 
+    // The edited task itself past its project's target date with nothing else to
+    // move, or "just this task" (Brent 10/20, "Warn in the popup and turn the
+    // project Yellow, same as when linked tasks move."): the 062 function applies
+    // the same Green → Yellow rule, root comment and log row (Undo restores health
+    // from it). A cascade that moved tasks already did this itself. Bulk date sets
+    // (cascade_quiet) and the FamCal key stay quiet. A failure here is logged; the
+    // date stands and the reply just carries no flag.
+    if (
+      !isFamcalKey
+      && cascadeReply
+      && !cascadePending
+      && !cascadeOptions.quiet
+      && savedDueAt
+      && currentTask
+      && (cascadeReply.status === 'off' || cascadeReply.status === 'not_applicable' || cascadeReply.status === 'nothing_to_move')
+    ) {
+      const saved = data as unknown as Task;
+      const rootForFlag = rootForTargetFlag(saved, currentTask.due_at ?? null);
+      if (rootForFlag.project_id) {
+        try {
+          const [project] = await fetchCascadeProjects(supabase, userId, [rootForFlag.project_id]);
+          if (rootPastTargetCandidate(rootForFlag, project?.target_date)) {
+            const flagged = await applyTaskDateCascade(supabase, {
+              userId,
+              rootTaskId: id,
+              rootOldDueAt: currentTask.due_at ?? null,
+              rootNewDueAt: savedDueAt,
+              mode: cascadeReply.mode,
+              deltaWorkdays: cascadeReply.delta_workdays ?? 0,
+              scope: 'all',
+              source: auth.context.authSource,
+              moves: [],
+              rootTitle: String(saved.title ?? ''),
+              rootWasVisible: false,
+            });
+            if (flagged.cascade_id) {
+              cascadeReply = { ...cascadeReply, cascade_id: flagged.cascade_id, project_flags: flagged.project_flags.map(publicProjectFlag) };
+            }
+          }
+        } catch (flagError) {
+          console.error('Flagging the project for the edited task failed after the task saved:', flagError);
+        }
+      }
+    }
+
     if (isFamcalKey) {
       return NextResponse.json(projectTaskForFamcal(data as Record<string, unknown>));
     }
@@ -764,6 +815,18 @@ export async function PATCH(
     console.error('Error updating task:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
+}
+
+/** The edited task as the target-date flag reads it (after this PATCH's changes). */
+function rootForTargetFlag(task: Task, oldDueAt: string | null): CascadeRootForFlag {
+  return {
+    project_id: task.project_id ?? null,
+    new_due_at: task.due_at ?? null,
+    old_due_at: oldDueAt,
+    status: String(task.status),
+    is_recurring_template: task.is_recurring_template,
+    recurring_template_id: task.recurring_template_id,
+  };
 }
 
 /** Whether the FamCal key could read this task right now (one eligibility-filtered read). */

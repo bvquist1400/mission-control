@@ -40,6 +40,26 @@
 --    transaction: undo the cascade being replaced (if any, dependents only), then
 --    apply the new plan (none for "just this task"). The edited task must still
 --    have the date the edit set, else nothing changes ('superseded').
+-- 5. One current identity per date change (fix round 1, Codex P2-1/P2-2): undo and
+--    replace act only when the cascade id they were given is the NEWEST not-undone
+--    cascade of that change (task_date_cascade_current: same edited task, same new
+--    date), or, without an id, when there is none. Checked under the advisory lock,
+--    inside the transaction; otherwise they change nothing and answer 'stale' with
+--    the current id. So an id that was already replaced or undone can't stack a
+--    second move or put the edited task back, and two id-less "try again" calls
+--    can't both apply the gap.
+-- 6. The edited task itself (Brent 10/20, "Warn in the popup and turn the project
+--    Yellow, same as when linked tasks move."): when a date change moves the edited
+--    task later (or gives it its first date) past its own project's target date,
+--    the same Green -> Yellow rule, flag and root comment apply as for a moved
+--    task, also with nothing else to move or "just this task" (a log row with no
+--    moves records it, so Undo's health rule covers it). App scope only; FamCal's
+--    cascades and bulk date sets (which never call these functions) stay quiet.
+-- Deploy contract: the S2 app sends 062's move fields (status, title,
+-- stakeholder_mentions, via) and calls 062's functions, so with 061 alone EVERY
+-- cascade fails (22023 "unknown move field": the edited task saves, nothing else
+-- moves, a "could not be moved" comment is left). 062 must be live BEFORE the S2
+-- app deploys, and rolling 062 back requires rolling the app back first.
 -- All of them: SECURITY INVOKER (RLS applies; a signed-in user may only pass their
 -- own id), lock_timeout 5s, all or nothing. FamCal can't reach them (its key is
 -- limited to its own routes); undo/replace always run with scope 'all'.
@@ -47,11 +67,14 @@
 -- on some local databases (never on production).
 --
 -- Rollback: supabase/rollbacks/062_task_date_cascade_undo.down.sql (restores 061's
--- apply function and drops the new columns and functions).
+-- apply function and drops the new columns and functions). Roll the S2 app back
+-- BEFORE running it (see the deploy contract above).
 
 BEGIN;
 
 DROP FUNCTION IF EXISTS apply_task_date_cascade(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB);
+-- The first S2 draft's undo core (4 arguments) on local databases that applied it.
+DROP FUNCTION IF EXISTS task_date_cascade_undo_core(UUID, UUID, JSONB, TEXT);
 
 -- ── Log columns ──────────────────────────────────────────────────────────
 
@@ -169,6 +192,31 @@ AS $$
           OR COALESCE(p_mentions, '{}'::TEXT[]) = ARRAY(SELECT jsonb_array_elements_text(COALESCE(p_planned->'stakeholder_mentions', '[]'::jsonb))));
 $$;
 
+-- The current identity of one date change: its newest cascade that is not undone
+-- (same edited task, same new date), or NULL when there is none. Callers read it
+-- under the advisory lock.
+CREATE OR REPLACE FUNCTION task_date_cascade_current(
+  p_user_id UUID,
+  p_root_task_id UUID,
+  p_root_new_due_at TIMESTAMPTZ
+)
+RETURNS UUID
+LANGUAGE sql
+STABLE
+SECURITY INVOKER
+SET search_path = public
+SET lock_timeout = '5s'
+AS $$
+  SELECT c.id
+    FROM public.task_date_cascades c
+   WHERE c.user_id = p_user_id
+     AND c.root_task_id = p_root_task_id
+     AND c.undone_at IS NULL
+     AND c.root_new_due_at = p_root_new_due_at
+   ORDER BY c.created_at DESC, c.id DESC
+   LIMIT 1;
+$$;
+
 -- ── 2. Apply ─────────────────────────────────────────────────────────────
 
 CREATE OR REPLACE FUNCTION task_date_cascade_apply_core(
@@ -218,6 +266,7 @@ DECLARE
   v_name_ok BOOLEAN;
   v_root_title TEXT;
   v_path_ok BOOLEAN;
+  v_root_past BOOLEAN := false;
 BEGIN
   -- Caller and arguments.
   IF p_user_id IS NULL OR p_root_task_id IS NULL OR p_root_new_due_at IS NULL THEN
@@ -318,7 +367,21 @@ BEGIN
     );
   END IF;
 
-  IF jsonb_array_length(p_moves) = 0 THEN
+  -- The edited task itself past its own project's target date (Brent 10/20): an
+  -- open, non-recurring task moved later (or given its first date) to an ET date
+  -- after the target. App scope only (FamCal's cascades stay as in S1).
+  SELECT (p_scope = 'all'
+          AND t.status IN ('Backlog', 'Planned', 'In Progress', 'Blocked/Waiting')
+          AND p.target_date IS NOT NULL
+          AND (p_root_new_due_at AT TIME ZONE 'America/New_York')::date > p.target_date
+          AND (p_root_old_due_at IS NULL OR p_root_new_due_at > p_root_old_due_at))
+    INTO v_root_past
+    FROM public.tasks t
+    JOIN public.projects p ON p.id = t.project_id AND p.user_id = p_user_id
+   WHERE t.id = p_root_task_id AND t.user_id = p_user_id;
+  v_root_past := COALESCE(v_root_past, false);
+
+  IF jsonb_array_length(p_moves) = 0 AND NOT v_root_past THEN
     RETURN jsonb_build_object(
       'status', 'nothing_moved', 'cascade_id', NULL,
       'moved', '[]'::jsonb, 'skipped', '[]'::jsonb, 'project_flags', '[]'::jsonb
@@ -415,7 +478,7 @@ BEGIN
     v_count := v_count + 1;
   END LOOP;
 
-  IF v_count = 0 THEN
+  IF v_count = 0 AND NOT v_root_past THEN
     DELETE FROM public.task_date_cascades WHERE id = v_cascade_id;
     RETURN jsonb_build_object(
       'status', 'nothing_moved', 'cascade_id', NULL,
@@ -423,18 +486,26 @@ BEGIN
     );
   END IF;
 
-  -- Projects a moved task now runs past (ET date after target_date).
+  -- Projects a moved task (or the edited task itself) now runs past (ET date
+  -- after target_date).
   FOR v_project IN
     SELECT p.id, p.name, p.target_date,
            COALESCE(p.tags, '{}'::TEXT[]) @> ARRAY['personal']::TEXT[] AS personal,
-           max((m.new_due_at AT TIME ZONE 'America/New_York')::date) AS latest,
-           count(*)::integer AS n
-      FROM public.task_date_cascade_moves m
-      JOIN public.tasks t ON t.id = m.task_id AND t.user_id = p_user_id
-      JOIN public.projects p ON p.id = t.project_id AND p.user_id = p_user_id
-     WHERE m.cascade_id = v_cascade_id
-       AND p.target_date IS NOT NULL
-       AND (m.new_due_at AT TIME ZONE 'America/New_York')::date > p.target_date
+           max(x.d) AS latest,
+           count(*)::integer AS n,
+           bool_or(x.is_root) AS has_root
+      FROM (
+        SELECT t.project_id, (m.new_due_at AT TIME ZONE 'America/New_York')::date AS d, false AS is_root
+          FROM public.task_date_cascade_moves m
+          JOIN public.tasks t ON t.id = m.task_id AND t.user_id = p_user_id
+         WHERE m.cascade_id = v_cascade_id
+        UNION ALL
+        SELECT v_root.project_id, (p_root_new_due_at AT TIME ZONE 'America/New_York')::date, true
+         WHERE v_root_past
+      ) x
+      JOIN public.projects p ON p.id = x.project_id AND p.user_id = p_user_id
+     WHERE p.target_date IS NOT NULL
+       AND x.d > p.target_date
      GROUP BY p.id, p.name, p.target_date, p.tags
      ORDER BY p.name, p.id
   LOOP
@@ -455,6 +526,7 @@ BEGIN
       'tasks_past_target', v_project.n,
       'rag_before', v_rag_before,
       'rag_after', v_rag_after,
+      'includes_edited_task', v_project.has_root,
       'rag_set_at', v_rag_set_at
     )));
 
@@ -464,8 +536,16 @@ BEGIN
       VALUES (
         p_root_task_id,
         p_user_id,
-        'Moving this task pushed ' || v_project.n || CASE WHEN v_project.n = 1 THEN ' task' ELSE ' tasks' END
-          || ' in "' || v_project.name || '" past the project''s target date ('
+        CASE
+          WHEN v_project.has_root AND v_project.n = 1 THEN
+            'Moving this task put it past the target date of "' || v_project.name || '" ('
+          WHEN v_project.has_root THEN
+            'Moving this task put it and ' || (v_project.n - 1) || CASE WHEN v_project.n = 2 THEN ' other task' ELSE ' other tasks' END
+              || ' in "' || v_project.name || '" past the project''s target date ('
+          ELSE
+            'Moving this task pushed ' || v_project.n || CASE WHEN v_project.n = 1 THEN ' task' ELSE ' tasks' END
+              || ' in "' || v_project.name || '" past the project''s target date ('
+        END
           || to_char(v_project.target_date, 'Dy FMMM/FMDD') || '; latest now '
           || to_char(v_project.latest, 'Dy FMMM/FMDD') || ')'
           || CASE WHEN v_rag_before = 'Green' THEN '. The project went from Green to Yellow.' ELSE '.' END,
@@ -474,10 +554,20 @@ BEGIN
     END IF;
   END LOOP;
 
+  IF v_count = 0 AND jsonb_array_length(v_flags) = 0 THEN
+    DELETE FROM public.task_date_cascades WHERE id = v_cascade_id;
+    RETURN jsonb_build_object(
+      'status', 'nothing_moved', 'cascade_id', NULL,
+      'moved', '[]'::jsonb, 'skipped', v_skipped, 'project_flags', '[]'::jsonb
+    );
+  END IF;
+
   UPDATE public.task_date_cascades SET moved_count = v_count, project_flags = v_flags WHERE id = v_cascade_id;
 
+  -- With nothing moved the row only records the edited task's own flag (Undo's
+  -- health rule reads it); it is still this change's current identity.
   RETURN jsonb_build_object(
-    'status', 'moved',
+    'status', CASE WHEN v_count > 0 THEN 'moved' ELSE 'nothing_moved' END,
     'cascade_id', v_cascade_id,
     'moved', v_moved,
     'skipped', v_skipped,
@@ -525,12 +615,15 @@ COMMENT ON FUNCTION apply_task_date_cascade(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ
 -- Puts back the dependents of one cascade (locks already taken by the caller, or
 -- taken here). p_restore: [{task_id, priority_score, base_priority, status, title,
 -- stakeholder_mentions}] (the score the app computed for the old date and what it
--- was computed from).
+-- was computed from). p_root_kept: the edited task stays where the change put it
+-- (an Undo that didn't, or couldn't, put it back), so a flag that counted it keeps
+-- its project Yellow.
 CREATE OR REPLACE FUNCTION task_date_cascade_undo_core(
   p_user_id UUID,
   p_cascade_id UUID,
   p_restore JSONB,
-  p_reason TEXT
+  p_reason TEXT,
+  p_root_kept BOOLEAN
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -642,7 +735,8 @@ BEGIN
     CONTINUE WHEN v_project.id IS NULL;
     SELECT EXISTS (
       SELECT 1 FROM jsonb_array_elements(v_kept) k WHERE k.value->>'project_id' = v_project.id::text
-    ) INTO v_kept_in_project;
+    ) OR (COALESCE((v_flag->>'includes_edited_task')::boolean, false) AND COALESCE(p_root_kept, false))
+      INTO v_kept_in_project;
     v_why := CASE
       WHEN v_project.rag <> 'Yellow' THEN 'changed_since'
       WHEN NOT (v_flag ? 'rag_set_at') OR v_project.updated_at IS DISTINCT FROM (v_flag->>'rag_set_at')::timestamptz THEN 'changed_since'
@@ -664,13 +758,15 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION task_date_cascade_undo_core(UUID, UUID, JSONB, TEXT) IS
+COMMENT ON FUNCTION task_date_cascade_undo_core(UUID, UUID, JSONB, TEXT, BOOLEAN) IS
   'Puts back the tasks one cascade moved, where their due date still equals what it set; health rule; marks the cascade undone (062).';
 
--- Undo from the app or MCP: the dependents of p_cascade_id (when given and not yet
--- undone) and, with p_restore_root, the edited task itself (only while it still has
--- the date the edit set). With a cascade id the dates come from its log row; without
--- one (a "just this task" change) from p_root_expected_due_at / p_root_restore_due_at.
+-- Undo from the app or MCP: the dependents of p_cascade_id and, with p_restore_root,
+-- the edited task itself (only while it still has the date the edit set). With a
+-- cascade id the dates come from its log row; without one (the change moved nothing
+-- else) from p_root_expected_due_at / p_root_restore_due_at. The id must be the
+-- change's current identity (task_date_cascade_current; none without an id), read
+-- under the lock: otherwise nothing changes and the answer is 'stale'.
 CREATE OR REPLACE FUNCTION undo_task_date_cascade(
   p_user_id UUID,
   p_root_task_id UUID,
@@ -696,6 +792,7 @@ DECLARE
   v_undo JSONB := NULL;
   v_root_restored BOOLEAN := false;
   v_root_due TIMESTAMPTZ;
+  v_current UUID;
 BEGIN
   IF p_user_id IS NULL OR p_root_task_id IS NULL THEN
     RAISE EXCEPTION 'user id and root task id are required' USING ERRCODE = '22023';
@@ -728,8 +825,13 @@ BEGIN
 
   PERFORM public.task_date_cascade_lock(p_user_id, array_append(COALESCE(v_ids, '{}'), p_root_task_id), 'all', COALESCE(v_flag_projects, '{}'));
 
-  IF p_cascade_id IS NOT NULL THEN
-    v_undo := public.task_date_cascade_undo_core(p_user_id, p_cascade_id, p_restore, 'undo');
+  -- One current identity per change: an id already undone or replaced (or, without
+  -- an id, a cascade that is active after all) changes nothing.
+  IF v_expected IS NOT NULL OR p_cascade_id IS NOT NULL THEN
+    v_current := public.task_date_cascade_current(p_user_id, p_root_task_id, v_expected);
+    IF v_current IS DISTINCT FROM p_cascade_id THEN
+      RETURN jsonb_build_object('status', 'stale', 'current_cascade_id', v_current, 'cascade', NULL, 'root', NULL);
+    END IF;
   END IF;
 
   IF COALESCE(p_restore_root, false) THEN
@@ -748,6 +850,10 @@ BEGIN
        AND t.due_at IS NOT DISTINCT FROM v_expected
        AND v_expected IS NOT NULL;
     v_root_restored := FOUND;
+  END IF;
+
+  IF p_cascade_id IS NOT NULL THEN
+    v_undo := public.task_date_cascade_undo_core(p_user_id, p_cascade_id, p_restore, 'undo', NOT v_root_restored);
   END IF;
 
   SELECT t.due_at INTO v_root_due FROM public.tasks t WHERE t.id = p_root_task_id AND t.user_id = p_user_id;
@@ -798,6 +904,8 @@ DECLARE
   v_root RECORD;
   v_undo JSONB := NULL;
   v_apply JSONB := NULL;
+  v_current UUID;
+  v_prev_mode TEXT := NULL;
 BEGIN
   IF p_user_id IS NULL OR p_root_task_id IS NULL OR p_root_new_due_at IS NULL THEN
     RAISE EXCEPTION 'user id, root task id and root due date are required' USING ERRCODE = '22023';
@@ -836,6 +944,7 @@ BEGIN
     -- Read again under the locks (a concurrent undo or switch may have won).
     SELECT c.* INTO v_cascade FROM public.task_date_cascades c
      WHERE c.id = p_replace_cascade_id AND c.user_id = p_user_id AND c.root_task_id = p_root_task_id;
+    v_prev_mode := v_cascade.mode;
   END IF;
 
   -- The edited task must still have the date the edit set (else another edit won).
@@ -847,23 +956,35 @@ BEGIN
     RETURN jsonb_build_object('status', 'superseded', 'undo', NULL, 'apply', NULL);
   END IF;
 
+  -- One current identity per change (fix round 1): the cascade being replaced must
+  -- be the change's newest active one, and without an id there must be none. An id
+  -- already undone or replaced, or a cascade that appeared after the caller looked,
+  -- changes nothing: 'stale' with the current id (the app re-plans against it).
+  v_current := public.task_date_cascade_current(p_user_id, p_root_task_id, p_root_new_due_at);
+  IF v_current IS DISTINCT FROM p_replace_cascade_id THEN
+    RETURN jsonb_build_object('status', 'stale', 'current_cascade_id', v_current, 'undo', NULL, 'apply', NULL);
+  END IF;
+
   IF p_replace_cascade_id IS NOT NULL THEN
-    IF v_cascade.undone_at IS NOT NULL THEN
-      RETURN jsonb_build_object('status', 'stale', 'undo', NULL, 'apply', NULL);
-    END IF;
-    v_undo := public.task_date_cascade_undo_core(p_user_id, p_replace_cascade_id, p_restore, 'replaced');
+    -- The edited task stays where the change put it, but the new plan flags it
+    -- again below, so the replaced cascade's health goes back first.
+    v_undo := public.task_date_cascade_undo_core(p_user_id, p_replace_cascade_id, p_restore, 'replaced', false);
     IF v_undo->>'status' <> 'undone' THEN
       -- A concurrent undo won: nothing else changes.
       RAISE EXCEPTION 'the cascade was already undone' USING ERRCODE = 'MC063';
     END IF;
   END IF;
 
-  IF p_mode IS NOT NULL THEN
-    v_apply := public.task_date_cascade_apply_core(
-      p_user_id, p_root_task_id, p_root_old_due_at, p_root_new_due_at, p_mode, COALESCE(p_delta_workdays, 0),
-      'all', p_source, COALESCE(p_moves, '[]'::jsonb), p_root_title, p_root_was_visible, p_replace_cascade_id
-    );
-  END IF;
+  -- The new plan; for "just this task" (p_mode NULL) no moves, only the edited
+  -- task's own flag when it is past its project's target (a row then records it).
+  v_apply := public.task_date_cascade_apply_core(
+    p_user_id, p_root_task_id, p_root_old_due_at, p_root_new_due_at,
+    COALESCE(p_mode, v_prev_mode, 'same_gap'),
+    CASE WHEN p_mode IS NULL THEN 0 ELSE COALESCE(p_delta_workdays, 0) END,
+    'all', p_source,
+    CASE WHEN p_mode IS NULL THEN '[]'::jsonb ELSE COALESCE(p_moves, '[]'::jsonb) END,
+    p_root_title, p_root_was_visible, p_replace_cascade_id
+  );
 
   RETURN jsonb_build_object('status', 'replaced', 'undo', v_undo, 'apply', v_apply);
 END;
@@ -882,8 +1003,10 @@ REVOKE ALL ON FUNCTION task_date_cascade_apply_core(UUID, UUID, TIMESTAMPTZ, TIM
 GRANT EXECUTE ON FUNCTION task_date_cascade_apply_core(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN, UUID) TO authenticated, service_role;
 REVOKE ALL ON FUNCTION apply_task_date_cascade(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION apply_task_date_cascade(UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, TEXT, JSONB, TEXT, BOOLEAN) TO authenticated, service_role;
-REVOKE ALL ON FUNCTION task_date_cascade_undo_core(UUID, UUID, JSONB, TEXT) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION task_date_cascade_undo_core(UUID, UUID, JSONB, TEXT) TO authenticated, service_role;
+REVOKE ALL ON FUNCTION task_date_cascade_undo_core(UUID, UUID, JSONB, TEXT, BOOLEAN) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION task_date_cascade_undo_core(UUID, UUID, JSONB, TEXT, BOOLEAN) TO authenticated, service_role;
+REVOKE ALL ON FUNCTION task_date_cascade_current(UUID, UUID, TIMESTAMPTZ) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION task_date_cascade_current(UUID, UUID, TIMESTAMPTZ) TO authenticated, service_role;
 REVOKE ALL ON FUNCTION undo_task_date_cascade(UUID, UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, BOOLEAN, JSONB, JSONB) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION undo_task_date_cascade(UUID, UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, BOOLEAN, JSONB, JSONB) TO authenticated, service_role;
 REVOKE ALL ON FUNCTION replace_task_date_cascade(UUID, UUID, UUID, TIMESTAMPTZ, TIMESTAMPTZ, TEXT, INTEGER, TEXT, JSONB, TEXT, BOOLEAN, JSONB) FROM PUBLIC, anon;

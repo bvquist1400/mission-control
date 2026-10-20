@@ -30,6 +30,22 @@ export interface WarnBlock {
   count: number;
   ragBefore: string;
   ragAfter: string;
+  /** The edited task itself is one of `count` (Brent 10/20: it flags its own project too). */
+  includesRoot: boolean;
+}
+
+/** The warning block's sentence in three parts (the project name is shown bold). */
+export function warnSentenceParts(warn: Pick<WarnBlock, "name" | "target" | "latest" | "count" | "includesRoot">): { lead: string; name: string; tail: string } {
+  const lead = warn.includesRoot
+    ? `This puts ${warn.count > 1 ? `this task and ${warn.count - 1} more` : "this task"} in `
+    : `This pushes ${plural(warn.count, "task")} in `;
+  return { lead, name: warn.name, tail: ` after its target (${warn.target}). The latest is now ${warn.latest}.` };
+}
+
+/** "This pushes 3 tasks in P after its target (Fri 10/23). The latest is now Tue 10/27." */
+export function warnSentence(warn: Pick<WarnBlock, "name" | "target" | "latest" | "count" | "includesRoot">): string {
+  const parts = warnSentenceParts(warn);
+  return `${parts.lead}${parts.name}${parts.tail}`;
 }
 
 export type CascadeToastAction = "undo" | "retry" | "retry_patch" | "only_this";
@@ -135,6 +151,7 @@ function warnBlocks(cascade: Pick<CascadeReply, "project_flags">): WarnBlock[] {
     count: flag.tasks_past_target,
     ragBefore: flag.rag_before,
     ragAfter: flag.rag_after,
+    includesRoot: flag.includes_edited_task === true,
   }));
 }
 
@@ -221,26 +238,38 @@ export function toastForChange(input: ChangeToastInput): CascadeToastModel | nul
       };
     }
     case "nothing_to_move":
-      if (input.origin === "patch") return null;
-      return {
-        ...base,
-        tone: "info",
-        title: "Nothing else needed to move",
-        left: input.choice === "only_collisions"
-          ? "The tasks waiting on it are already due on or after its new date."
-          : "None of the tasks waiting on it can move.",
-      };
     case "off":
     case "not_applicable": {
-      if (input.origin === "patch") return null;
+      // Nothing else moved. After the first save there is only a toast when the
+      // edited task itself went past its project's target (Brent 10/20: warn, the
+      // project turned Yellow, Undo puts it back).
+      const warn = warnBlocks(cascade);
+      if (input.origin === "patch") {
+        if (warn.length === 0) return null;
+        // "How far" only when something waits on it (or "Just this task" was the pick).
+        const waits = cascade.status === "off" || (cascade.skipped ?? []).length > 0 || (cascade.planned_moves ?? 0) > 0;
+        return { ...base, tone: "warning", title: "Moved only this task", warn, modes: waits ? input.choice : null };
+      }
+      if (cascade.status === "nothing_to_move") {
+        return {
+          ...base,
+          tone: warn.length > 0 ? "warning" : "info",
+          title: "Nothing else needed to move",
+          left: input.choice === "only_collisions"
+            ? "The tasks waiting on it are already due on or after its new date."
+            : "None of the tasks waiting on it can move.",
+          warn,
+        };
+      }
       const waiting = input.waitingCount ?? 0;
       return {
         ...base,
-        tone: "success",
+        tone: warn.length > 0 ? "warning" : "success",
         title: "Moved only this task",
         left: waiting > 0
           ? `The ${plural(waiting, "task")} waiting on it ${waiting === 1 ? "was" : "were"} not moved.`
           : "The tasks waiting on it were not moved.",
+        warn,
         modes: input.choice,
       };
     }
@@ -387,7 +416,7 @@ export function confirmModel(input: { rootTitle: string; cascade: CascadeReply }
   const { cascade } = input;
   // Earliest first (then by title), so the list reads like the plan.
   const rows = [...(cascade.moves ?? [])]
-    .sort((a, b) => Date.parse(a.old_due_at) - Date.parse(b.old_due_at) || a.title.localeCompare(b.title))
+    .sort((a, b) => Date.parse(a.old_due_at) - Date.parse(b.old_due_at) || a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: "base" }))
     .map((move) => ({ task_id: move.task_id, title: move.title || "A task", from: formatDay(move.old_due_at), to: formatDay(move.new_due_at) }));
   const total = rows.length;
   const tooLarge = cascade.status === "too_large";
@@ -396,7 +425,11 @@ export function confirmModel(input: { rootTitle: string; cascade: CascadeReply }
     : ", each just far enough not to be due before the task it waits on";
   const lead: TextPart[] = tooLarge
     ? [
-        { text: `Too many tasks wait on ${quote(input.rootTitle)} to move them all at once (more than 500). ` },
+        {
+          text: cascade.reason === "links"
+            ? `Too many tasks wait on ${quote(input.rootTitle)}, with too many links between them, to move them all at once. `
+            : `Too many tasks wait on ${quote(input.rootTitle)} to move them all at once (more than 500). `,
+        },
         { text: "Nothing has been saved yet. You can move only this task." },
       ]
     : [

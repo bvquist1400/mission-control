@@ -46,6 +46,15 @@ import type { Task } from '@/types/database';
  *   preview and nothing changed, unless `confirm: true`.
  * The edited task must still have the date the change set; otherwise nothing
  * changes and the reply is a 409.
+ *
+ * One current identity per date change (fix round 1): `cascade_id` must be the
+ * change's newest cascade that is not undone; without one, there must be none
+ * (the change moved nothing else, or "just this task" was picked). An id that was
+ * already undone or replaced is a 409 `stale` (with `current_cascade_id`) and
+ * changes nothing, so a lost reply sent again, or an old toast, can't stack a
+ * second move or put the edited task back. The database re-checks this under the
+ * advisory lock (062); an id-less `apply` that finds a cascade appeared since it
+ * looked is re-planned against that one, once.
  */
 
 export const DATE_CASCADE_ACTIONS = ['undo', 'apply'] as const;
@@ -212,6 +221,10 @@ function sameInstant(a: string | null | undefined, b: string | null | undefined)
 }
 
 /** A database error from the undo/replace call as the plain HTTP error the caller sees (the text itself stays in the server log). */
+function staleError(currentCascadeId: string | null): DateCascadeHttpError {
+  return new DateCascadeHttpError(409, ALREADY_SWITCHED, { reason: 'stale', current_cascade_id: currentCascadeId });
+}
+
 function rpcFailure(error: { code?: string; message?: string }, what: string): DateCascadeHttpError {
   console.error(`Date cascade ${what} failed:`, error);
   if (error.code && CASCADE_BUSY_CODES.includes(error.code)) return new DateCascadeHttpError(503, BUSY, { reason: 'busy' });
@@ -379,9 +392,13 @@ export async function undoDateChange(
   request: DateCascadeRequest
 ): Promise<DateCascadeUndoReply> {
   const root = await readRoot(supabase, userId, taskId);
-  const cascadeId = request.cascadeId ?? (await findActiveCascadeId(supabase, userId, taskId, request.toDueAt));
-  const log = cascadeId ? await readLog(supabase, userId, taskId, cascadeId) : null;
-  const pendingMoves = log && !log.row.undone_at ? log.moves : [];
+  // Without an id the caller says the change has no active cascade (it moved
+  // nothing else, or "just this task" was picked); the database checks that.
+  const log = request.cascadeId ? await readLog(supabase, userId, taskId, request.cascadeId) : null;
+  if (log?.row.undone_at) {
+    throw staleError(await findActiveCascadeId(supabase, userId, taskId, log.row.root_new_due_at));
+  }
+  const pendingMoves = log ? log.moves : [];
   const rows = await readTasks(supabase, userId, pendingMoves.map((move) => move.task_id));
   const restore = await restoresFor(supabase, userId, pendingMoves, rows);
   const restoreDue = log ? log.row.root_old_due_at : request.fromDueAt;
@@ -401,10 +418,12 @@ export async function undoDateChange(
   if (error) throw rpcFailure(error as { code?: string; message?: string }, 'undo');
   const result = (Array.isArray(data) ? data[0] : data) as {
     status: string;
+    current_cascade_id?: string | null;
     cascade: RawUndoPart | null;
     root: { restored: boolean; due_at: string | null; restore_due_at: string | null };
   } | null;
   if (!result || result.status === 'not_found') throw new DateCascadeHttpError(404, NOT_FOUND);
+  if (result.status === 'stale') throw staleError(result.current_cascade_id ?? null);
 
   const titles = new Map<string, string>([...rows.values()].map((row) => [row.id, row.title]));
   const reply: DateCascadeUndoReply = {
@@ -441,7 +460,41 @@ export function overlayRestoredDates(graph: CascadeGraph, moves: CascadeLogMove[
   return { ...graph, tasks };
 }
 
+/** The database found a newer current identity than the one this attempt planned against. */
+class StaleAttempt extends Error {
+  currentCascadeId: string | null;
+  constructor(currentCascadeId: string | null) {
+    super('stale');
+    this.currentCascadeId = currentCascadeId;
+  }
+}
+
 export async function applyDateChange(
+  supabase: SupabaseClient,
+  userId: string,
+  taskId: string,
+  request: DateCascadeRequest,
+  source: string
+): Promise<DateCascadeApplyReply> {
+  try {
+    return await applyDateChangeOnce(supabase, userId, taskId, request, source);
+  } catch (error) {
+    if (!(error instanceof StaleAttempt)) throw error;
+    // An explicit id is the caller's view of the change: refuse, change nothing.
+    if (request.cascadeId) throw staleError(error.currentCascadeId);
+    // Without an id ("Try again"): a cascade for this change appeared after this
+    // call looked (another Try again won). Re-plan once against it, so the tasks
+    // move from their original dates once, never twice.
+    try {
+      return await applyDateChangeOnce(supabase, userId, taskId, request, source);
+    } catch (again) {
+      if (again instanceof StaleAttempt) throw staleError(again.currentCascadeId);
+      throw again;
+    }
+  }
+}
+
+async function applyDateChangeOnce(
   supabase: SupabaseClient,
   userId: string,
   taskId: string,
@@ -451,12 +504,17 @@ export async function applyDateChange(
   const root = await readRoot(supabase, userId, taskId);
   const cascadeId = request.cascadeId ?? (await findActiveCascadeId(supabase, userId, taskId, request.toDueAt));
   const log = cascadeId ? await readLog(supabase, userId, taskId, cascadeId) : null;
+  if (log?.row.undone_at) {
+    // Already undone or replaced: never quietly treated as "no cascade" (that
+    // stacked a second move on the one that replaced it).
+    throw new StaleAttempt(await findActiveCascadeId(supabase, userId, taskId, log.row.root_new_due_at));
+  }
   const fromDueAt = log ? log.row.root_old_due_at : request.fromDueAt;
   const toDueAt = log ? log.row.root_new_due_at : (request.toDueAt as string);
   if (!sameInstant(root.due_at, toDueAt)) throw new DateCascadeHttpError(409, CHANGED_SINCE, { reason: 'changed' });
 
-  const replaceId = log && !log.row.undone_at ? log.row.id : null;
-  const undoMoves = replaceId && log ? log.moves : [];
+  const replaceId = log ? log.row.id : null;
+  const undoMoves = log ? log.moves : [];
   const choice = request.mode as DateCascadeModeChoice;
   const mode: CascadeMode = choice === 'none' ? (log?.row.mode ?? 'same_gap') : choice;
 
@@ -479,8 +537,9 @@ export async function applyDateChange(
       plan = planTaskDateCascade({ graph, mode, deltaWorkdays: trigger.deltaWorkdays, rootOldDueAt: fromDueAt, rootNewDueAt: toDueAt });
       const overCap = plan.moves.length > CASCADE_CONFIRM_THRESHOLD;
       if (plan.tooLarge || (overCap && !request.confirm)) {
-        const projects = await fetchCascadeProjects(supabase, userId, plan.moves.map((move) => move.project_id ?? ''));
-        const reply = buildCascadeReply({ status: plan.tooLarge ? 'too_large' : 'needs_confirm', mode, plan, projectFlags: projectFlagsForMoves(plan.moves, projects) });
+        const projects = await fetchCascadeProjects(supabase, userId, [...plan.moves.map((move) => move.project_id ?? ''), root.project_id ?? '']);
+        const rootForFlag = { project_id: root.project_id ?? null, new_due_at: toDueAt, old_due_at: fromDueAt, status: String(root.status), is_recurring_template: root.is_recurring_template, recurring_template_id: root.recurring_template_id };
+        const reply = buildCascadeReply({ status: plan.tooLarge ? 'too_large' : 'needs_confirm', mode, plan, projectFlags: projectFlagsForMoves(plan.moves, projects, rootForFlag) });
         throw new DateCascadeHttpError(409, reply.message, { cascade: reply });
       }
     }
@@ -491,9 +550,12 @@ export async function applyDateChange(
   const moves = plan && graph && plan.moves.length > 0 ? await prepareCascadeApplyMoves(supabase, userId, { rootTitle: root.title, plan, graph }) : [];
   const applyMode = plan ? mode : null;
 
+  // Always one call: the database checks this change's current identity under its
+  // lock even when nothing else would move, and flags the edited task's own
+  // project when it is past the target.
   let applied: CascadeApplyResult | null = null;
   let undone: RawUndoPart | null = null;
-  if (replaceId || (applyMode && moves.length > 0)) {
+  {
     const rootWasVisible = moves.length > 0 ? await isFamcalVisibleNow(supabase, userId, taskId) : false;
     const { data, error } = await withCascadeRetry(() => supabase.rpc(CASCADE_REPLACE_RPC, {
       p_user_id: userId,
@@ -510,10 +572,10 @@ export async function applyDateChange(
       p_restore: restore,
     }));
     if (error) throw rpcFailure(error as { code?: string; message?: string }, 'switch');
-    const result = (Array.isArray(data) ? data[0] : data) as { status: string; undo: RawUndoPart | null; apply: CascadeApplyResult | null } | null;
+    const result = (Array.isArray(data) ? data[0] : data) as { status: string; current_cascade_id?: string | null; undo: RawUndoPart | null; apply: CascadeApplyResult | null } | null;
     if (!result || result.status === 'not_found') throw new DateCascadeHttpError(404, NOT_FOUND);
     if (result.status === 'superseded') throw new DateCascadeHttpError(409, CHANGED_SINCE, { reason: 'changed' });
-    if (result.status === 'stale') throw new DateCascadeHttpError(409, ALREADY_SWITCHED, { reason: 'stale' });
+    if (result.status === 'stale') throw new StaleAttempt(result.current_cascade_id ?? null);
     undone = result.undo;
     applied = result.apply && Array.isArray(result.apply.moved)
       ? { ...result.apply, skipped: result.apply.skipped ?? [], project_flags: result.apply.project_flags ?? [] }
@@ -523,13 +585,14 @@ export async function applyDateChange(
   const rootDates = { old_due_at: fromDueAt, new_due_at: toDueAt };
   let cascade: CascadeReply;
   if (choice === 'none') {
-    cascade = buildCascadeReply({ status: 'off', mode, reason: 'off', root: rootDates });
+    // `applied` carries the id and flag when the edited task itself is past its target.
+    cascade = buildCascadeReply({ status: 'off', mode, reason: 'off', root: rootDates, applied });
   } else if (!plan) {
-    cascade = buildCascadeReply({ status: 'not_applicable', mode, reason: notRun, root: rootDates });
-  } else if (applied) {
+    cascade = buildCascadeReply({ status: 'not_applicable', mode, reason: notRun, root: rootDates, applied });
+  } else if (applied && applied.status !== 'nothing_moved') {
     cascade = buildCascadeReply({ status: applied.status === 'superseded' ? 'superseded' : 'moved', mode, plan, applied });
   } else {
-    cascade = buildCascadeReply({ status: 'nothing_to_move', mode, plan });
+    cascade = buildCascadeReply({ status: 'nothing_to_move', mode, plan, applied });
   }
 
   const titles = new Map<string, string>([...rows.values()].map((row) => [row.id, row.title]));

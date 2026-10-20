@@ -182,6 +182,11 @@ export interface CascadeOptions {
   cascade: true | false | 'preview';
   mode: CascadeMode;
   confirm: boolean;
+  /**
+   * `cascade_quiet: true` (the grid's bulk date set; not offered over MCP): just
+   * this task AND no project flag when it lands past its project's target date.
+   */
+  quiet: boolean;
 }
 
 type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -220,7 +225,16 @@ export function parseCascadeOptions(body: Record<string, unknown>): ParseResult<
     return { ok: false, error: 'cascade: "preview" needs a due_at to preview' };
   }
 
-  return { ok: true, value: { cascade, mode, confirm: rawConfirm === true } };
+  const rawQuiet = body.cascade_quiet;
+  if (rawQuiet !== undefined && rawQuiet !== null && typeof rawQuiet !== 'boolean') {
+    return { ok: false, error: 'cascade_quiet must be true or false' };
+  }
+  const quiet = rawQuiet === true;
+  if (quiet && cascade === 'preview') {
+    return { ok: false, error: 'cascade_quiet can\'t be combined with cascade: "preview"' };
+  }
+
+  return { ok: true, value: { cascade: quiet ? false : cascade, mode, confirm: rawConfirm === true, quiet } };
 }
 
 // ── When a cascade runs at all ───────────────────────────────────────────
@@ -323,6 +337,13 @@ export interface CascadeGraph {
   tooLarge: boolean;
 }
 
+/**
+ * At most this many `via` ids (path tasks, summed over the moves) in one cascade.
+ * A plan over it is refused as too large (nothing saved; "just this task" still
+ * works) rather than sent without its path checks.
+ */
+export const CASCADE_MAX_VIA_IDS = 20000;
+
 export interface CascadeMove {
   task_id: string;
   title: string;
@@ -355,6 +376,8 @@ export interface CascadePlan {
   skipped: CascadeSkip[];
   depthLimited: number;
   tooLarge: boolean;
+  /** Why it is too large: more than CASCADE_MAX_TASKS tasks, or too many links between them (path ids over CASCADE_MAX_VIA_IDS). */
+  tooLargeReason: 'tasks' | 'links' | null;
 }
 
 function maxDate(a: string | null, b: string | null): string | null {
@@ -486,6 +509,8 @@ export function planTaskDateCascade(input: {
     }
   }
 
+  const viaTotal = moves.reduce((sum, move) => sum + move.via.length, 0);
+  const tooLargeReason = graph.tooLarge ? 'tasks' : viaTotal > CASCADE_MAX_VIA_IDS ? 'links' : null;
   return {
     mode,
     deltaWorkdays,
@@ -494,7 +519,8 @@ export function planTaskDateCascade(input: {
     moves,
     skipped,
     depthLimited: graph.depthLimited,
-    tooLarge: graph.tooLarge,
+    tooLarge: tooLargeReason !== null,
+    tooLargeReason,
   };
 }
 
@@ -702,20 +728,53 @@ export interface CascadeProjectFlag {
   tasks_past_target: number;
   rag_before: string;
   rag_after: string;
+  /** The edited task itself is one of tasks_past_target (Brent 10/20: it flags its project too). */
+  includes_edited_task?: boolean;
+}
+
+/** The edited task, for its own target-date flag (see rootPastTargetCandidate). */
+export interface CascadeRootForFlag {
+  project_id: string | null;
+  new_due_at: string | null;
+  old_due_at: string | null;
+  status: string;
+  is_recurring_template?: boolean | null;
+  recurring_template_id?: string | null;
 }
 
 /**
- * Projects a set of moves would push past their target date (ET date after
- * target_date). RAG goes Green → Yellow; Yellow and Red are left alone. The
- * target date itself and status_summary are never changed.
+ * Whether the edited task itself would count toward its project's target-date
+ * flag (Brent 10/20, "Warn in the popup and turn the project Yellow, same as when
+ * linked tasks move."): it is open and not recurring, the change moved it later
+ * (or gave it its first date), and its new ET date is after the project's target.
+ * The 062 function decides for real under its locks; this only says whether to
+ * call it when nothing else moves, and fills previews.
+ */
+export function rootPastTargetCandidate(root: CascadeRootForFlag, targetDate: string | null | undefined): boolean {
+  if (!root.project_id || !targetDate || !root.new_due_at) return false;
+  if (!CASCADE_MOVABLE_STATUSES.includes(root.status) || isRecurringTask(root)) return false;
+  if (root.old_due_at && !(Date.parse(root.new_due_at) > Date.parse(root.old_due_at))) return false;
+  const date = etDateOf(root.new_due_at);
+  return Boolean(date && date > targetDate);
+}
+
+/**
+ * Projects a set of moves (and, when given, the edited task itself) would push
+ * past their target date (ET date after target_date). RAG goes Green → Yellow;
+ * Yellow and Red are left alone. The target date itself and status_summary are
+ * never changed.
  */
 export function projectFlagsForMoves(
   moves: Array<Pick<CascadeMove, 'project_id' | 'new_due_at'>>,
-  projects: Array<{ id: string; name: string; target_date: string | null; rag: string }>
+  projects: Array<{ id: string; name: string; target_date: string | null; rag: string }>,
+  root: CascadeRootForFlag | null = null
 ): CascadeProjectFlag[] {
   const byId = new Map(projects.map((project) => [project.id, project]));
   const flags = new Map<string, CascadeProjectFlag>();
-  for (const move of moves) {
+  const rootCounts = root && root.project_id ? rootPastTargetCandidate(root, byId.get(root.project_id)?.target_date) : false;
+  const entries: Array<{ project_id: string | null; new_due_at: string; isRoot: boolean }> = moves.map((move) => ({ project_id: move.project_id, new_due_at: move.new_due_at, isRoot: false }));
+  if (rootCounts && root) entries.push({ project_id: root.project_id, new_due_at: root.new_due_at as string, isRoot: true });
+  for (const move of entries) {
     if (!move.project_id) continue;
     const project = byId.get(move.project_id);
     if (!project || !project.target_date) continue;
@@ -729,7 +788,9 @@ export function projectFlagsForMoves(
       tasks_past_target: 0,
       rag_before: project.rag,
       rag_after: project.rag === 'Green' ? 'Yellow' : project.rag,
+      includes_edited_task: false,
     };
+    if (move.isRoot) flag.includes_edited_task = true;
     flag.tasks_past_target += 1;
     if (date > flag.latest_due_date) flag.latest_due_date = date;
     flags.set(project.id, flag);
@@ -876,6 +937,8 @@ export function describeCascadeOutcome(input: {
       return `This would also move ${plural(input.movedCount, 'later task')}, more than ${CASCADE_CONFIRM_THRESHOLD}. Nothing was saved. Send it again with cascade_confirm: true, or cascade: false to move only this task.`;
     case 'too_large':
       return `Too many linked tasks to move at once (more than ${CASCADE_MAX_TASKS}). Nothing was saved. Send cascade: false to move only this task.`;
+    case 'too_large_links':
+      return 'Too many links between the tasks to move them all at once. Nothing was saved. Send cascade: false to move only this task.';
     case 'nothing_to_move':
     case 'nothing_moved':
       return `Nothing after this task needed to move (${modeLabel}).`;
@@ -908,18 +971,19 @@ export interface CascadeApplyMove {
   comment_redacted: string;
 }
 
-/** Above this many `via` ids in one cascade the paths are not sent (the function then checks each move on its own, as in 061). */
-const CASCADE_MAX_VIA_IDS = 20000;
-
 /** The moves as the SQL function takes them: new priority and both comment texts. */
 export async function prepareCascadeApplyMoves(
   supabase: SupabaseClient,
   userId: string,
   input: { rootTitle: string; plan: CascadePlan; graph: CascadeGraph }
 ): Promise<CascadeApplyMove[]> {
-  const priorities = await priorityForMoves(supabase, userId, input.graph, input.plan.moves);
+  // Paths are always sent (L1): a plan with too many is refused as too large
+  // before it gets here (planTaskDateCascade), never sent without its checks.
   const viaTotal = input.plan.moves.reduce((sum, move) => sum + move.via.length, 0);
-  const sendVia = viaTotal <= CASCADE_MAX_VIA_IDS;
+  if (viaTotal > CASCADE_MAX_VIA_IDS) {
+    throw new CascadeApplyError('Too many links between the tasks to move them at once', null);
+  }
+  const priorities = await priorityForMoves(supabase, userId, input.graph, input.plan.moves);
   return input.plan.moves.map((move) => {
     const comments = buildCascadeMoveComments({
       rootTitle: input.rootTitle,
@@ -938,7 +1002,7 @@ export async function prepareCascadeApplyMoves(
       status: String(task?.status ?? ''),
       title: String(task?.title ?? move.title),
       stakeholder_mentions: Array.isArray(task?.stakeholder_mentions) ? (task.stakeholder_mentions as string[]) : [],
-      ...(sendVia ? { via: move.via } : {}),
+      via: move.via,
       comment: comments.named,
       comment_redacted: comments.redacted,
     };
@@ -1029,12 +1093,15 @@ export function buildCascadeReply(input: {
     status,
     mode: input.mode,
     delta_workdays: deltaWorkdays,
-    reason: input.reason ?? null,
+    reason: input.reason ?? (status === 'too_large' && plan?.tooLargeReason === 'links' ? 'links' : null),
     cascade_id: input.applied?.cascade_id ?? null,
     root_old_due_at: plan ? plan.rootOldDueAt : (input.root?.old_due_at ?? null),
     root_new_due_at: plan ? plan.rootNewDueAt : (input.root?.new_due_at ?? null),
     message: describeCascadeOutcome({
-      status: status === 'moved' && moves.length === 0 ? 'nothing_moved' : status === 'failed' && input.reason === 'busy' ? 'failed_busy' : status,
+      status: status === 'moved' && moves.length === 0 ? 'nothing_moved'
+        : status === 'failed' && input.reason === 'busy' ? 'failed_busy'
+        : status === 'too_large' && plan?.tooLargeReason === 'links' ? 'too_large_links'
+        : status,
       mode: input.mode,
       deltaWorkdays,
       movedCount,
@@ -1058,6 +1125,7 @@ export function publicProjectFlag(flag: CascadeProjectFlag): CascadeProjectFlag 
     tasks_past_target: flag.tasks_past_target,
     rag_before: flag.rag_before,
     rag_after: flag.rag_after,
+    includes_edited_task: flag.includes_edited_task === true,
   };
 }
 

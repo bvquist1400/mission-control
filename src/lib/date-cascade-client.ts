@@ -22,7 +22,15 @@ export interface DateCascadeApplyBody {
 
 export type DateCascadeCallResult<T> =
   | { ok: true; reply: T }
-  | { ok: false; status: number; error: string; cascade: CascadeReply | null };
+  | {
+      ok: false;
+      status: number;
+      error: string;
+      cascade: CascadeReply | null;
+      /** "stale": the id was already undone or replaced; `currentCascadeId` is the change's current one (null: none). */
+      reason?: string | null;
+      currentCascadeId?: string | null;
+    };
 
 async function post<T>(taskId: string, body: DateCascadeUndoBody | DateCascadeApplyBody, doFetch: typeof fetch): Promise<DateCascadeCallResult<T>> {
   let response: Response;
@@ -33,14 +41,21 @@ async function post<T>(taskId: string, body: DateCascadeUndoBody | DateCascadeAp
       body: JSON.stringify(body),
     });
   } catch {
-    return { ok: false, status: 0, error: "Couldn’t reach Baseline, so nothing was changed. Try again.", cascade: null };
+    return { ok: false, status: 0, error: "Couldn’t reach Baseline, so nothing was changed. Try again.", cascade: null, reason: null, currentCascadeId: null };
   }
   const data = (await response.json().catch(() => null)) as Record<string, unknown> | null;
   if (!response.ok) {
     const error = data && typeof data.error === "string" && response.status < 500 ? data.error
       : response.status === 503 && data && typeof data.error === "string" ? data.error
       : "Couldn’t do that, so nothing was changed. Try again.";
-    return { ok: false, status: response.status, error, cascade: data && typeof data.cascade === "object" ? (data.cascade as CascadeReply) : null };
+    return {
+      ok: false,
+      status: response.status,
+      error,
+      cascade: data && typeof data.cascade === "object" ? (data.cascade as CascadeReply) : null,
+      reason: data && typeof data.reason === "string" ? data.reason : null,
+      currentCascadeId: data && typeof data.current_cascade_id === "string" ? data.current_cascade_id : null,
+    };
   }
   return { ok: true, reply: data as T };
 }
