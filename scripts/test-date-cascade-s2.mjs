@@ -41,6 +41,9 @@ const undo = await import("../src/lib/task-date-cascade-undo.ts");
 const famcal = await import("../src/lib/famcal-api-key.ts");
 const scopes = await import("../src/lib/mcp/upstream-scopes.ts");
 const mcpRoute = await import("../src/app/api/mcp/route.ts");
+const projectRoute = await import("../src/app/api/projects/[id]/route.ts");
+const { NextRequest } = await import("next/server");
+const { writeInternalAuthContext } = await import("../src/lib/supabase/internal-auth.ts");
 
 let passed = 0;
 const failures = [];
@@ -321,6 +324,42 @@ await test("Cascade replies carry the edited task's dates and planned count; pro
   assert.equal("rag_set_at" in moved.project_flags[0], false);
   const failed = cascade.buildCascadeReply({ status: "failed", mode: "same_gap", reason: "busy" });
   assert.match(failed.message, /Baseline was busy/);
+});
+
+await test("Project PATCH: a deadlock (40P01) from 046's re-point trigger is sent again (bounded, 3 tries); other errors are not retried", async () => {
+  const fakeProjects = (codes) => {
+    const calls = [];
+    const client = {
+      from(table) {
+        const ops = [];
+        const proxy = new Proxy({}, {
+          get(_t, prop) {
+            if (prop === "then") {
+              const code = codes[Math.min(calls.length, codes.length - 1)];
+              calls.push({ table, ops: [...ops] });
+              const result = code ? { data: null, error: { code, message: "deadlock detected" } } : { data: { id: "p", name: "x", stage: "Build" }, error: null };
+              return (resolve) => resolve(result);
+            }
+            return (...args) => { ops.push([prop, args]); return proxy; };
+          },
+        });
+        return proxy;
+      },
+    };
+    return { client, calls };
+  };
+  const send = async (codes) => {
+    const db = fakeProjects(codes);
+    const request = writeInternalAuthContext(
+      new NextRequest("http://localhost/api/projects/p", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "x" }) }),
+      { supabase: db.client, user: { id: API_USER_ID }, userId: API_USER_ID, authSource: "legacy_api_key" }
+    );
+    const response = await projectRoute.PATCH(request, { params: Promise.resolve({ id: "p" }) });
+    return { status: response.status, updates: db.calls.filter((c) => c.ops.some(([op]) => op === "update")).length };
+  };
+  assert.deepEqual(await send(["40P01", null]), { status: 200, updates: 2 });
+  assert.deepEqual(await send(["40P01", "40P01", "40P01", null]), { status: 500, updates: 3 });
+  assert.deepEqual(await send(["23505"]), { status: 500, updates: 1 });
 });
 
 // ── UI wiring that must not regress (source checks) ────────────────────────

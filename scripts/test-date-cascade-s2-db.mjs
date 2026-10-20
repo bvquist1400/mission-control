@@ -113,7 +113,6 @@ const { NextRequest } = await import("next/server.js");
 const { writeInternalAuthContext } = await import("../src/lib/supabase/internal-auth.ts");
 const taskRoute = await import("../src/app/api/tasks/[id]/route.ts");
 const dateCascadeRoute = await import("../src/app/api/tasks/[id]/date-cascade/route.ts");
-const projectRoute = await import("../src/app/api/projects/[id]/route.ts");
 
 const MIGRATION_062 = readFileSync(new URL("../supabase/migrations/062_task_date_cascade_undo.sql", import.meta.url), "utf8");
 const ROLLBACK_062 = readFileSync(new URL("../supabase/rollbacks/062_task_date_cascade_undo.down.sql", import.meta.url), "utf8");
