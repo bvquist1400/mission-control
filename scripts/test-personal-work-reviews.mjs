@@ -310,6 +310,25 @@ await test("briefing digest: personal tasks, their commitments and their review 
   assert.ok(JSON.stringify(digest).includes("w-open"), "the work task is still in the digest");
 });
 
+await test("briefing digest: new_comments (since the last brief) lists work tasks only", async () => {
+  const comment = (id, taskId, content) => ({ id, task_id: taskId, content, created_at: "2026-03-23T23:30:00.000Z", updated_at: "2026-03-23T23:30:00.000Z" });
+  const tables = allTables({
+    // Monday's EOD saved 4:18 PM ET; the comments came that evening.
+    briefs: [{ code: "EOD-0323", edition: "eod", brief_date: "2026-03-23", created_at: "2026-03-23T20:18:00.000Z" }],
+    task_comments: [
+      comment("c-w", "w-blocked", "Brent (handed back): go with the vendor's date."),
+      comment("c-p1", "p-open-tag", "Brent (handed back): Title of p-open-tag notes."),
+      comment("c-p2", "p-stalled-proj", "HANDOFF Christmas Tree Blanket rows 11-15."),
+    ],
+  });
+  const digest = await buildDailyBriefDigest({ supabase: makeSupabase(tables), userId: "user-1", mode: "morning", date: DAY });
+  assertNoPersonal(digest, "briefing digest with comments");
+  assert.equal(digest.new_comments.source, "previous_brief");
+  assert.equal(digest.new_comments.previous_brief_code, "EOD-0323");
+  assert.deepEqual(digest.new_comments.tasks.map((task) => task.id), ["w-blocked"]);
+  assert.equal(digest.new_comments.total_comments, 1);
+});
+
 // Pace tracking (migration 059) rolls work-session minutes into tasks.actual_minutes,
 // which feeds the capacity estimate's estimation accuracy. A hobby project's
 // sessions must never move the work numbers.
