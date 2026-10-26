@@ -388,7 +388,8 @@ function makeDb({ rowCap = 1000, rpcFails = null, hook = null, state: given = nu
       if (name === "eq") return value(table, r, args[0]) === args[1];
       if (name === "neq") return value(table, r, args[0]) !== args[1];
       if (name === "in") return args[1].includes(value(table, r, args[0]));
-      if (name === "is") return value(table, r, args[0]) === args[1];
+      // IS NULL: a column the fixture row leaves out (start_at, 063) is NULL in the database.
+      if (name === "is") return args[1] === null ? value(table, r, args[0]) == null : value(table, r, args[0]) === args[1];
       if (name === "gt") return String(value(table, r, args[0])) > String(args[1]);
       if (name === "gte") return String(value(table, r, args[0])) >= String(args[1]);
       if (name === "not" && args[1] === "is") return value(table, r, args[0]) !== args[2];

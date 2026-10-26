@@ -94,13 +94,44 @@ const tasksRoute = await import("../src/app/api/tasks/route.ts");
 const dateCascadeRoute = await import("../src/app/api/tasks/[id]/date-cascade/route.ts");
 const range = await import("../src/lib/task-range.ts");
 
-function routeRequest(method, path, body) {
+function routeRequest(method, path, body, supabase = admin) {
   const request = new NextRequest(`http://localhost${path}`, {
     method,
     headers: body === undefined ? {} : { "content-type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  return writeInternalAuthContext(request, { supabase: admin, user: { id: userA }, userId: userA, authSource: "legacy_api_key" });
+  return writeInternalAuthContext(request, { supabase, user: { id: userA }, userId: userA, authSource: "legacy_api_key" });
+}
+/**
+ * The same client, except that `onTaskUpdate` runs (once) right before the
+ * route's tasks UPDATE is sent: another session's write commits between the
+ * route's read and its UPDATE (fix round 1, F1). psql is synchronous, so the
+ * other write has committed when the UPDATE goes out.
+ */
+function pausedBeforeTaskUpdate(onTaskUpdate) {
+  let fired = false;
+  const bindAll = (target, override) => new Proxy(target, {
+    get(t, prop) {
+      if (prop in override) return override[prop];
+      const value = t[prop];
+      return typeof value === "function" ? value.bind(t) : value;
+    },
+  });
+  return bindAll(admin, {
+    from: (table) => {
+      const builder = admin.from(table);
+      if (table !== "tasks") return builder;
+      return bindAll(builder, {
+        update: (...args) => {
+          if (!fired) {
+            fired = true;
+            onTaskUpdate(args[0]);
+          }
+          return builder.update(...args);
+        },
+      });
+    },
+  });
 }
 const params = (id) => ({ params: Promise.resolve({ id }) });
 const reply = async (response) => ({ status: response.status, body: await response.json() });
@@ -269,6 +300,49 @@ try {
     const fixed = await patch(b.id, { start_at: startOf("2026-10-20") });
     assert.equal(fixed.status, 200);
   });
+  // ── Fix round 1, F1: two sessions writing the two dates of one task ─────
+  await test("F1: start committed by another session between the due-only PATCH's read and its UPDATE → 409, nothing saved (was: both saved, start after due)", async () => {
+    const t = await insertTask("Race: due-only vs start", { start_at: startOf("2026-10-26"), due_at: etAt("2026-10-30", "23:59") });
+    const client = pausedBeforeTaskUpdate(() => {
+      // The other session (an MCP agent, a second tab): start Thu, valid against Friday's due.
+      psql(`UPDATE tasks SET start_at = '${startOf("2026-10-29")}' WHERE id = '${t.id}';`);
+    });
+    const moved = await reply(await taskRoute.PATCH(routeRequest("PATCH", `/api/tasks/${t.id}`, { due_at: etAt("2026-10-28", "23:59"), cascade: false }, client), params(t.id)));
+    assert.equal(moved.status, 409, JSON.stringify(moved.body));
+    assert.equal(moved.body.error, range.TASK_DATES_CHANGED_ERROR);
+    sameInstant(row(t.id).start_at, startOf("2026-10-29"));
+    sameInstant(row(t.id).due_at, etAt("2026-10-30", "23:59"));
+    assert.equal(range.startIsAfterDue(row(t.id).start_at, row(t.id).due_at), false);
+  });
+
+  await test("F1: the other order (due moved by another session before a start-only PATCH's UPDATE) → 409, nothing saved", async () => {
+    const t = await insertTask("Race: start-only vs due", { start_at: startOf("2026-10-26"), due_at: etAt("2026-10-30", "23:59") });
+    const client = pausedBeforeTaskUpdate(() => {
+      psql(`UPDATE tasks SET due_at = '${etAt("2026-10-28", "23:59")}' WHERE id = '${t.id}';`);
+    });
+    const started = await reply(await taskRoute.PATCH(routeRequest("PATCH", `/api/tasks/${t.id}`, { start_at: startOf("2026-10-29") }, client), params(t.id)));
+    assert.equal(started.status, 409, JSON.stringify(started.body));
+    sameInstant(row(t.id).start_at, startOf("2026-10-26"));
+    sameInstant(row(t.id).due_at, etAt("2026-10-28", "23:59"));
+  });
+
+  await test("F1 controls: serial (start saved first, then the due-only PATCH reads it) is still the plain 400; an unrelated write meanwhile doesn't block the due move", async () => {
+    const t = await insertTask("Race: serial control", { start_at: startOf("2026-10-26"), due_at: etAt("2026-10-30", "23:59") });
+    assert.equal((await patch(t.id, { start_at: startOf("2026-10-29") })).status, 200);
+    const late = await patch(t.id, { due_at: etAt("2026-10-28", "23:59"), cascade: false });
+    assert.equal(late.status, 400);
+    assert.equal(late.body.error, "The start date can't be after the due date.");
+    sameInstant(row(t.id).due_at, etAt("2026-10-30", "23:59"));
+
+    const u = await insertTask("Race: unrelated write", { start_at: startOf("2026-10-26"), due_at: etAt("2026-10-30", "23:59") });
+    const client = pausedBeforeTaskUpdate(() => {
+      psql(`UPDATE tasks SET title = 'Renamed meanwhile' WHERE id = '${u.id}';`);
+    });
+    const moved = await reply(await taskRoute.PATCH(routeRequest("PATCH", `/api/tasks/${u.id}`, { due_at: etAt("2026-10-29", "23:59"), cascade: false }, client), params(u.id)));
+    assert.equal(moved.status, 200, JSON.stringify(moved.body));
+    sameInstant(row(u.id).due_at, etAt("2026-10-29", "23:59"));
+  });
+
   // ── Part S2: the Today queries on a real PostgREST (quoted or= filters, the embedded checklist under RLS) ──
   await test("S2: weekly board + top priorities include ranges overlapping the week, embed checklist rows, and run under the user's own session (RLS)", async () => {
     const queries = await import("../src/lib/today/queries.ts");
@@ -313,6 +387,17 @@ try {
     const topIds = top.map((task) => task.id);
     assert.ok(!topIds.includes(nextWeekOnly), "a range starting 11/10 isn't a priority on 11/6");
     assert.ok(topIds.includes(spansIntoNext) || topIds.length === 3);
+
+    // Fix round 1, F5: an overdue task whose start was left after its due (an
+    // Undo; written directly here, as the due-only cascade write does) stays a
+    // top priority; a genuine future range at the same priority stays out.
+    const reversedOverdue = await insert("reversed overdue (start left after due)", { due_at: etAt("2026-11-06"), priority_score: 100 });
+    psql(`UPDATE tasks SET start_at = '${startOf("2026-11-05")}' WHERE id = '${reversedOverdue}';`);
+    psql(`UPDATE tasks SET due_at = '${etAt("2026-11-03")}' WHERE id = '${reversedOverdue}';`);
+    const futureTop = await insert("future range, top priority", { start_at: startOf("2026-11-09"), due_at: etAt("2026-11-12"), priority_score: 100 });
+    const top2 = (await queries.queryTopThreeTasks(userClient, owner, "all", new Date(etAt("2026-11-04", "10:00")))).map((task) => task.id);
+    assert.ok(top2.includes(reversedOverdue), "the reversed overdue task is a top priority");
+    assert.ok(!top2.includes(futureTop), "a range starting 11/9 isn't a priority on 11/4");
 
     // Another user's session sees none of it (RLS on tasks and the embedded rows).
     const otherEmail = `range-s2o-${randomUUID().slice(0, 8)}@example.test`;

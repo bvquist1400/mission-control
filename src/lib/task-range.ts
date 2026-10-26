@@ -101,6 +101,8 @@ export function isTaskLate(task: Pick<RangeTaskInput, 'due_at' | 'status'>, now:
 
 /** The plain error for a start date after the due date (API 400, task window). */
 export const START_AFTER_DUE_ERROR = "The start date can't be after the due date.";
+/** Task window hint for a start already saved after the due (an Undo or a FamCal due move). */
+export const SAVED_START_AFTER_DUE_HINT = "The start date is after the due date, so this reads as a one-day task. Change either date to fix it.";
 /** The name 063's trigger reports with errcode 23514. */
 export const START_AT_GUARD_CONSTRAINT = 'tasks_start_at_before_due_at';
 
@@ -117,6 +119,33 @@ export function isStartAfterDueViolation(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const { code, message } = error as { code?: unknown; message?: unknown };
   return code === '23514' && typeof message === 'string' && message.includes('start_at must be on or before due_at');
+}
+
+/** PATCH /api/tasks/[id] when the date it didn't write changed after it was read (409). */
+export const TASK_DATES_CHANGED_ERROR = "The task's dates changed since it was read, so nothing was saved; reload it and try again";
+
+/**
+ * The compare-and-set a date PATCH adds to its UPDATE: the date it doesn't
+ * write, as it was read (the start ≤ due check used it). A due move keys on the
+ * start, a start move on the due; a PATCH with both dates (or neither), or no
+ * task read (the FamCal key passes null), keys on nothing.
+ */
+export function expectedOtherDate(
+  current: { start_at?: string | null; due_at?: string | null } | null,
+  updates: Record<string, unknown>
+): Array<['start_at' | 'due_at', string | null]> {
+  if (!current) return [];
+  const writesStart = 'start_at' in updates;
+  const writesDue = 'due_at' in updates;
+  if (writesDue && !writesStart) return [['start_at', current.start_at ?? null]];
+  if (writesStart && !writesDue) return [['due_at', current.due_at ?? null]];
+  return [];
+}
+
+/** Two stored instants (or both null) are the same moment. */
+export function sameInstant(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (a == null || b == null) return a == null && b == null;
+  return Date.parse(a) === Date.parse(b);
 }
 
 // ── Day counting ──────────────────────────────────────────────────────────

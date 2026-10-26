@@ -22,7 +22,7 @@
 
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
-import { registerHooks } from "node:module";
+import { createRequire, registerHooks } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
@@ -301,7 +301,7 @@ await test("top priorities query: embeds checklist rows; a range that starts aft
   const { calls, client } = fakeSupabase([]);
   await queries.queryTopThreeTasks(client, "user-1", "all", at("2026-10-26", "10:00"));
   assert.match(calls.find((call) => call[0] === "select")[1], /checklist_rows:task_checklist_items/);
-  assert.ok(calls.some((call) => call[0] === "or" && call[1] === 'start_at.is.null,start_at.lte."2026-10-27T03:59:59.999Z"'));
+  assert.ok(calls.some((call) => call[0] === "or" && call[1] === 'start_at.is.null,start_at.lte."2026-10-27T03:59:59.999Z",due_at.lte."2026-10-27T03:59:59.999Z"'));
   assert.equal(queries.endOfEtDay(new Date("2026-11-02T03:30:00Z"), "America/New_York").toISOString(), "2026-11-02T04:59:59.999Z");
 });
 
@@ -451,6 +451,266 @@ await test("rendered: a late range is red on the board and keeps its fill; it ca
   assert.match(html, /data-range-fill="40"/);
   assert.doesNotMatch(html, /data-range-elapsed/);
   assert.match(html, /draggable="true"/);
+});
+
+// ── Fix round 1 ──────────────────────────────────────────────────────────
+
+// F5: Top priorities. The query's or= filter, evaluated on synthetic rows the
+// way PostgREST reads it (comma-separated operands, quoted values; is.null / lte).
+function orFilterMatches(filter, row) {
+  const operands = filter.match(/(?:[^,"]|"(?:[^"\\]|\\.)*")+/g) ?? [];
+  return operands.some((operand) => {
+    const [column, op, ...rest] = operand.split(".");
+    const raw = rest.join(".");
+    const value = raw.startsWith('"') ? JSON.parse(raw) : raw;
+    if (op === "is" && value === "null") return row[column] == null;
+    if (op === "lte") return row[column] != null && Date.parse(row[column]) <= Date.parse(value);
+    throw new Error(`operand not modelled: ${operand}`);
+  });
+}
+
+await test("F5 top priorities: an overdue task whose start was left after its due (Undo/FamCal) stays eligible; a genuine future range is still left out", async () => {
+  const now = at("2026-10-28", "08:00"); // Wed 10/28
+  const { calls, client } = fakeSupabase([]);
+  await queries.queryTopThreeTasks(client, "user-1", "all", now);
+  const filter = calls.find((call) => call[0] === "or")[1];
+  const reversedOverdue = { start_at: startOf("2026-10-29"), due_at: endOf("2026-10-27") }; // Codex's case
+  const reversedDueToday = { start_at: startOf("2026-10-29"), due_at: endOf("2026-10-28") };
+  const plainOverdue = { start_at: null, due_at: endOf("2026-10-27") };
+  const startedRange = { start_at: startOf("2026-10-26"), due_at: endOf("2026-10-30") };
+  const startsToday = { start_at: startOf("2026-10-28"), due_at: endOf("2026-10-30") };
+  const futureRange = { start_at: startOf("2026-10-29"), due_at: endOf("2026-10-31") };
+  assert.equal(orFilterMatches(filter, reversedOverdue), true, "the reversed overdue task is kept");
+  assert.equal(orFilterMatches(filter, reversedDueToday), true, "due today with a stale later start is kept");
+  assert.equal(orFilterMatches(filter, plainOverdue), true);
+  assert.equal(orFilterMatches(filter, startedRange), true);
+  assert.equal(orFilterMatches(filter, startsToday), true);
+  assert.equal(orFilterMatches(filter, futureRange), false, "a range starting tomorrow is still left out");
+});
+
+// F2 / F4: the components' own handlers, run with a small hook harness (the
+// TSX transpiled to CommonJS, React's hooks replaced by slots; no browser).
+const requireCjs = createRequire(import.meta.url);
+let activeHooks = null;
+const harnessReact = {
+  useState(initial) {
+    const hooks = activeHooks;
+    const index = hooks.cursor++;
+    if (!(index in hooks.slots)) hooks.slots[index] = typeof initial === "function" ? initial() : initial;
+    return [hooks.slots[index], (value) => { hooks.slots[index] = typeof value === "function" ? value(hooks.slots[index]) : value; }];
+  },
+  useRef(initial) {
+    const hooks = activeHooks;
+    const index = hooks.cursor++;
+    if (!(index in hooks.slots)) hooks.slots[index] = { current: initial };
+    return hooks.slots[index];
+  },
+  useEffect(fn) {
+    const hooks = activeHooks;
+    const index = hooks.cursor++;
+    if (!(index in hooks.slots)) {
+      hooks.slots[index] = true;
+      if (hooks.runEffects) hooks.effects.push(fn);
+    }
+  },
+  useMemo: (fn) => fn(),
+  useCallback: (fn) => fn,
+};
+const harnessJsx = (type, props) => ({ type, props: props ?? {} });
+function loadWithHarness(relative, stubs) {
+  const cache = new Map();
+  const load = (file) => {
+    if (cache.has(file)) return cache.get(file).exports;
+    const module = { exports: {} };
+    cache.set(file, module);
+    const code = ts.transpileModule(readFileSync(file, "utf8"), {
+      compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+      fileName: file,
+    }).outputText;
+    const localRequire = (spec) => {
+      if (spec === "react") return harnessReact;
+      if (spec === "react/jsx-runtime") return { jsx: harnessJsx, jsxs: harnessJsx, Fragment: "Fragment" };
+      if (spec in stubs) return stubs[spec];
+      if (spec.startsWith("@/") || spec.startsWith(".")) {
+        const stem = spec.startsWith("@/") ? path.join(ROOT, "src", spec.slice(2)) : path.resolve(path.dirname(file), spec);
+        for (const candidate of [`${stem}.ts`, `${stem}.tsx`, path.join(stem, "index.ts")]) {
+          try {
+            readFileSync(candidate);
+            return load(candidate);
+          } catch {}
+        }
+      }
+      return requireCjs(spec);
+    };
+    new Function("require", "module", "exports", code)(localRequire, module, module.exports);
+    return module.exports;
+  };
+  return load(path.join(ROOT, relative));
+}
+function mountHarness(Component, props, { runEffects = false } = {}) {
+  const hooks = { slots: [], cursor: 0, effects: [], runEffects };
+  return {
+    render() {
+      hooks.cursor = 0;
+      activeHooks = hooks;
+      return Component(props);
+    },
+    runEffects() {
+      for (const fn of hooks.effects.splice(0)) fn();
+    },
+  };
+}
+function findNodes(tree, predicate) {
+  const out = [];
+  const visit = (node) => {
+    if (Array.isArray(node)) return node.forEach(visit);
+    if (!node || typeof node !== "object") return;
+    if (predicate(node)) out.push(node);
+    visit(node.props?.children);
+  };
+  visit(tree);
+  return out;
+}
+function nodeText(node) {
+  if (Array.isArray(node)) return node.map(nodeText).join("");
+  if (node == null || typeof node === "boolean") return "";
+  return typeof node === "object" ? nodeText(node.props?.children) : String(node);
+}
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+const { InlineSteps } = loadWithHarness("src/components/tasks/InlineSteps.tsx", { "@/components/ui/Button": { Button: "Button" } });
+async function mountSteps(initialDone = false) {
+  const loaded = [{ id: "row-1", task_id: "task-1", text: "Only step", is_done: initialDone, unit_count: null }];
+  const requests = [];
+  let reported = loaded.map(({ is_done, unit_count }) => ({ is_done, unit_count }));
+  let saved = 0;
+  let done = 0;
+  globalThis.fetch = async (_url, init = {}) => {
+    if (!init.method) return { ok: true, json: async () => loaded };
+    return new Promise((resolve) => requests.push({ body: JSON.parse(init.body), resolve }));
+  };
+  const props = {
+    id: "steps", taskId: "task-1", view: { allStepsDone: false, note: null, behindPace: false },
+    onRowsChange: (next) => { reported = next; }, onSaved: () => { saved += 1; }, onDone: () => { done += 1; },
+  };
+  const harness = mountHarness(InlineSteps, props, { runEffects: true });
+  harness.render();
+  harness.runEffects();
+  await settle();
+  const tree = () => harness.render();
+  const checkbox = () => findNodes(tree(), (node) => node.type === "input" && node.props.type === "checkbox")[0];
+  const alert = () => findNodes(tree(), (node) => node.props?.role === "alert").map(nodeText).join("");
+  const ok = (rows) => ({ ok: true, status: 200, json: async () => rows });
+  return { requests, checkbox, alert, ok, reported: () => reported, saved: () => saved, done: () => done };
+}
+
+await test("F2 steps: a row is disabled while its save is pending; a second click then sends nothing; that save failing puts back the confirmed value", async () => {
+  const steps = await mountSteps();
+  const first = steps.checkbox().props.onChange();
+  assert.equal(steps.checkbox().props.checked, true, "optimistic tick");
+  assert.equal(steps.checkbox().props.disabled, true, "disabled while saving");
+  const second = steps.checkbox().props.onChange(); // a double-click (a real browser won't fire it on a disabled box)
+  assert.equal(steps.requests.length, 1, "one save per row at a time");
+  steps.requests[0].resolve({ ok: false, status: 500, json: async () => ({ error: "x" }) });
+  await first;
+  await second;
+  assert.equal(steps.checkbox().props.checked, false, "back to the confirmed value (Codex: two failures left it ticked)");
+  assert.equal(steps.reported()[0].is_done, false, "the fill moves back too");
+  assert.equal(steps.checkbox().props.disabled, false);
+  assert.match(steps.alert(), /Couldn't save that step/);
+  assert.equal(steps.saved(), 0);
+  assert.equal(steps.done(), 0, "nothing completes on its own");
+});
+
+await test("F2 steps: rapid toggles can't commit out of order — the next click waits for the first save, and the last click is what's stored", async () => {
+  const steps = await mountSteps();
+  const first = steps.checkbox().props.onChange();
+  steps.checkbox().props.onChange(); // ignored while pending
+  assert.deepEqual(steps.requests.map((request) => request.body.items[0].is_done), [true]);
+  steps.requests[0].resolve(steps.ok([{ id: "row-1", task_id: "task-1", text: "Only step", is_done: true, unit_count: null }]));
+  await first;
+  assert.equal(steps.checkbox().props.checked, true);
+  assert.equal(steps.checkbox().props.disabled, false);
+  const third = steps.checkbox().props.onChange();
+  assert.deepEqual(steps.requests.map((request) => request.body.items[0].is_done), [true, false]);
+  steps.requests[1].resolve(steps.ok([{ id: "row-1", task_id: "task-1", text: "Only step", is_done: false, unit_count: null }]));
+  await third;
+  assert.equal(steps.checkbox().props.checked, false, "the last click is the stored value");
+  assert.equal(steps.saved(), 2);
+  assert.equal(steps.done(), 0);
+});
+
+await test("F2 steps: a saved row takes the value from the reply; a 207 that lists the row as failed is a failure", async () => {
+  const steps = await mountSteps();
+  const first = steps.checkbox().props.onChange();
+  // The server answered with the row unticked (e.g. another tab unticked it in between).
+  steps.requests[0].resolve(steps.ok([{ id: "row-1", task_id: "task-1", text: "Only step (renamed)", is_done: false, unit_count: null }]));
+  await first;
+  assert.equal(steps.checkbox().props.checked, false, "reconciled from the reply");
+  assert.equal(steps.reported()[0].is_done, false);
+  const second = steps.checkbox().props.onChange();
+  steps.requests[1].resolve({ ok: true, status: 207, json: async () => ({ updated: [], failed: [{ id: "row-1", error: "update failed" }] }) });
+  await second;
+  assert.equal(steps.checkbox().props.checked, false, "a 207 failure puts the row back");
+  assert.match(steps.alert(), /Couldn't save that step/);
+});
+
+const { TaskMetaEditor } = loadWithHarness("src/components/tasks/TaskMetaEditor.tsx", {
+  "@/hooks/useSprints": { useSprints: () => ({ sprints: [], loading: false }) },
+  "@/components/ui/Button": { Button: "Button" },
+  "@/components/ui/Field": { Input: "Input", Select: "Select", Textarea: "Textarea" },
+  "@/components/tasks/TaskTagChips": { TaskTagChips: "TaskTagChips" },
+});
+// Saved instants from local dates, the way the task window saves them (start of the
+// local day, due at the end of it), so the test holds in any timezone.
+const localStart = (y, m, d) => new Date(y, m - 1, d, 0, 0, 0, 0).toISOString();
+const localEnd = (y, m, d) => new Date(y, m - 1, d, 23, 59, 59, 999).toISOString();
+function mountEditor(task) {
+  const harness = mountHarness(TaskMetaEditor, { task, isSaving: false, onUpdate: async () => "saved", onReplaceTask: () => {}, blocks: null });
+  const tree = () => harness.render();
+  const input = (predicate) => findNodes(tree(), (node) => (node.type === "Input" || node.type === "input") && predicate(node.props))[0];
+  return {
+    title: () => input((p) => p.value === task.title || p.value === "Renamed"),
+    start: () => input((p) => p.placeholder === "Optional, e.g. t or 10/26"),
+    due: () => input((p) => p.placeholder === "YYYY-MM-DD or t+7"),
+    save: () => findNodes(tree(), (node) => node.type === "Button" && nodeText(node).includes("Save edits"))[0],
+    text: () => nodeText(tree()),
+  };
+}
+const editorTask = (start_at, due_at) => ({
+  id: "task-1", title: "Original title", description: null, task_type: "Task", status: "Planned", tags: [], recurrence: null,
+  recurring_template_id: null, implementation_id: null, project_id: null, section_id: null, sprint_id: null, waiting_on: null,
+  start_at, due_at, updated_at: "2026-10-26T12:00:00Z",
+});
+
+await test("F4 task window: with a start saved after the due (Undo/FamCal), a title-only edit can be saved; the hint says how to fix it", () => {
+  const editor = mountEditor(editorTask(localStart(2026, 10, 29), localEnd(2026, 10, 28)));
+  editor.title().props.onChange({ target: { value: "Renamed" } });
+  assert.equal(editor.save().props.disabled, false, "Save edits is enabled (Codex: it stayed disabled)");
+  assert.match(editor.text(), /The start date is after the due date, so this reads as a one-day task\. Change either date to fix it\./);
+  assert.doesNotMatch(editor.text(), /The start date can't be after the due date\./);
+  assert.notEqual(editor.start().props["aria-invalid"], "true");
+});
+
+await test("F4 task window: editing a date while the range would stay reversed is still blocked; fixing it saves; a valid range with a title edit saves", () => {
+  const reversed = mountEditor(editorTask(localStart(2026, 10, 29), localEnd(2026, 10, 28)));
+  reversed.start().props.onChange({ target: { value: "2026-10-30" } });
+  assert.equal(reversed.save().props.disabled, true, "a start edit that stays after the due");
+  assert.match(reversed.text(), /The start date can't be after the due date\./);
+  assert.equal(reversed.start().props["aria-invalid"], "true");
+  reversed.start().props.onChange({ target: { value: "2026-10-27" } });
+  assert.equal(reversed.save().props.disabled, false, "a start edit that fixes it");
+
+  const dueEdit = mountEditor(editorTask(localStart(2026, 10, 29), localEnd(2026, 10, 28)));
+  dueEdit.due().props.onChange({ target: { value: "2026-10-27" } });
+  assert.equal(dueEdit.save().props.disabled, true, "a due edit that keeps it reversed");
+
+  const valid = mountEditor(editorTask(localStart(2026, 10, 26), localEnd(2026, 10, 30)));
+  valid.due().props.onChange({ target: { value: "2026-10-23" } });
+  assert.equal(valid.save().props.disabled, true, "a due edit before a valid start");
+  const validTitle = mountEditor(editorTask(localStart(2026, 10, 26), localEnd(2026, 10, 30)));
+  validTitle.title().props.onChange({ target: { value: "Renamed" } });
+  assert.equal(validTitle.save().props.disabled, false);
 });
 
 console.log(`\n${passed} passed, ${failures.length} failed`);

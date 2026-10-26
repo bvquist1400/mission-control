@@ -10,9 +10,12 @@ import type { TaskChecklistItem } from "@/types/database";
  * ticked in place through the existing checklist route
  * (`GET`/`PATCH /api/tasks/[id]/checklist`). Rows load when the pill opens
  * (one request per open card, never per card at page load). Every tick is
- * optimistic and reported up (`onRowsChange`) so the fill moves at once; a
- * failed save puts the row back. Ticking the last step only lights up Done:
- * the task closes when Done is pressed (`onDone`), never on its own.
+ * optimistic and reported up (`onRowsChange`) so the fill moves at once. A row
+ * is disabled while its save is in flight (one save per row at a time, so two
+ * quick clicks can't race or roll back over each other); a saved row takes the
+ * value from the reply, a failed save puts back the last value the server
+ * confirmed. Ticking the last step only lights up Done: the task closes when
+ * Done is pressed (`onDone`), never on its own.
  */
 export function InlineSteps({
   id,
@@ -41,6 +44,18 @@ export function InlineSteps({
     itemsRef.current = next;
     setItemsState(next);
   };
+  // Rows with a save in flight (disabled until it answers).
+  const [pending, setPendingState] = useState<ReadonlySet<string>>(() => new Set());
+  const pendingRef = useRef<Set<string>>(new Set());
+  const setPending = (itemId: string, on: boolean) => {
+    const next = new Set(pendingRef.current);
+    if (on) next.add(itemId);
+    else next.delete(itemId);
+    pendingRef.current = next;
+    setPendingState(next);
+  };
+  // Each row's last value the server confirmed (the load, then each saved reply).
+  const ackedRef = useRef<Map<string, boolean>>(new Map());
 
   useEffect(() => {
     const controller = new AbortController();
@@ -49,7 +64,11 @@ export function InlineSteps({
         if (!response.ok) throw new Error("load");
         return (await response.json()) as TaskChecklistItem[];
       })
-      .then((rows) => setItems(Array.isArray(rows) ? rows : []))
+      .then((rows) => {
+        const loaded = Array.isArray(rows) ? rows : [];
+        ackedRef.current = new Map(loaded.map((row) => [row.id, row.is_done]));
+        setItems(loaded);
+      })
       .catch((loadError: unknown) => {
         if ((loadError as { name?: string }).name !== "AbortError") {
           setError("Couldn't load the steps.");
@@ -58,27 +77,37 @@ export function InlineSteps({
     return () => controller.abort();
   }, [taskId]);
 
-  async function toggle(item: TaskChecklistItem) {
-    if (!itemsRef.current) return;
-    const nextDone = !item.is_done;
-    const apply = (done: boolean) => {
-      const next = (itemsRef.current ?? []).map((row) => (row.id === item.id ? { ...row, is_done: done } : row));
+  async function toggle(itemId: string) {
+    const current = itemsRef.current?.find((row) => row.id === itemId);
+    // One save per row at a time: a click while it is saving does nothing.
+    if (!current || pendingRef.current.has(itemId)) return;
+    const nextDone = !current.is_done;
+    const replaceRow = (patch: Partial<TaskChecklistItem>) => {
+      const next = (itemsRef.current ?? []).map((row) => (row.id === itemId ? { ...row, ...patch, id: row.id } : row));
       setItems(next);
       onRowsChange(next.map((row) => ({ is_done: row.is_done, unit_count: row.unit_count })));
     };
-    apply(nextDone);
+    setPending(itemId, true);
+    replaceRow({ is_done: nextDone });
     setError(null);
     try {
       const response = await fetch(`/api/tasks/${taskId}/checklist`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: [{ id: item.id, is_done: nextDone }] }),
+        body: JSON.stringify({ items: [{ id: itemId, is_done: nextDone }] }),
       });
       if (!response.ok) throw new Error("save");
+      const saved = savedRowFromReply(await readReply(response), itemId);
+      if (saved === "failed") throw new Error("save");
+      const savedDone = typeof saved?.is_done === "boolean" ? saved.is_done : nextDone;
+      ackedRef.current.set(itemId, savedDone);
+      replaceRow(saved ? { ...saved, is_done: savedDone } : { is_done: savedDone });
       onSaved?.();
     } catch {
-      apply(item.is_done);
+      replaceRow({ is_done: ackedRef.current.get(itemId) ?? current.is_done });
       setError("Couldn't save that step. Try again.");
+    } finally {
+      setPending(itemId, false);
     }
   }
 
@@ -100,7 +129,9 @@ export function InlineSteps({
                 <input
                   type="checkbox"
                   checked={item.is_done}
-                  onChange={() => toggle(item)}
+                  disabled={pending.has(item.id)}
+                  aria-busy={pending.has(item.id) ? true : undefined}
+                  onChange={() => toggle(item.id)}
                   className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--accent)]"
                 />
                 <span className={`text-sm ${item.is_done ? "text-muted-foreground line-through" : "text-foreground"}`}>
@@ -131,4 +162,29 @@ export function InlineSteps({
       ) : null}
     </div>
   );
+}
+
+async function readReply(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The saved row from a checklist PATCH reply: the row itself (200, an array of
+ * saved rows), "failed" when the reply lists it as failed (207), or null when
+ * the reply doesn't say (the request's own value then stands).
+ */
+function savedRowFromReply(reply: unknown, itemId: string): Partial<TaskChecklistItem> | "failed" | null {
+  const isRow = (value: unknown): value is Partial<TaskChecklistItem> =>
+    Boolean(value) && typeof value === "object" && (value as { id?: unknown }).id === itemId;
+  if (Array.isArray(reply)) return reply.find(isRow) ?? null;
+  if (reply && typeof reply === "object") {
+    const { updated, failed } = reply as { updated?: unknown; failed?: unknown };
+    if (Array.isArray(failed) && failed.some(isRow)) return "failed";
+    if (Array.isArray(updated)) return updated.find(isRow) ?? null;
+  }
+  return null;
 }

@@ -23,7 +23,14 @@ import {
   projectTaskForFamcal,
 } from '@/lib/famcal-api-key';
 import { validateOptionalTimestamp } from '@/lib/validate';
-import { isStartAfterDueViolation, START_AFTER_DUE_ERROR, startIsAfterDue } from '@/lib/task-range';
+import {
+  expectedOtherDate,
+  isStartAfterDueViolation,
+  sameInstant,
+  START_AFTER_DUE_ERROR,
+  startIsAfterDue,
+  TASK_DATES_CHANGED_ERROR,
+} from '@/lib/task-range';
 import { DependencyReadIncompleteError, fetchTaskDependencyLinks } from '@/lib/task-dependency-links';
 import {
   applyTaskDateCascade,
@@ -652,6 +659,17 @@ export async function PATCH(
         updateQuery = updateQuery.eq('status', famcalExpectedStatus);
       }
     }
+    // Multi-day tasks (063), compare-and-set on the date this PATCH doesn't write:
+    // the start/due check above used it as read, and 063's guard can't see a
+    // due-only UPDATE. A due move keys on the start as read, a start move on the
+    // due as read (null-aware); another edit of that date meanwhile matches no
+    // row (→ 409 below, nothing saved). A PATCH carrying both dates writes the
+    // pair it checked. The FamCal key keeps its contract (it can't see the start);
+    // cascade apply, Undo and switch are SQL functions and never come here.
+    const dateCas = expectedOtherDate(isFamcalKey ? null : currentTask, updates);
+    for (const [column, expected] of dateCas) {
+      updateQuery = expected === null ? updateQuery.is(column, null) : updateQuery.eq(column, expected);
+    }
     if (cascadePending) {
       // Compare-and-set on the due date the cascade was planned from: if another
       // edit moved this task meanwhile, its later tasks may already have moved,
@@ -713,6 +731,18 @@ export async function PATCH(
             { error: "The task's due date changed since it was read, so nothing was saved; reload it and try again" },
             { status: 409 }
           );
+        }
+      }
+      if (error.code === 'PGRST116' && dateCas.length > 0) {
+        const { data: nowRow } = await supabase
+          .from('tasks')
+          .select('id, start_at, due_at')
+          .eq('id', id)
+          .eq('user_id', userId)
+          .maybeSingle();
+        const now = nowRow as { start_at?: string | null; due_at?: string | null } | null;
+        if (now && dateCas.some(([column, expected]) => !sameInstant(now[column] ?? null, expected))) {
+          return NextResponse.json({ error: TASK_DATES_CHANGED_ERROR }, { status: 409 });
         }
       }
       if (error.code === 'PGRST116') {

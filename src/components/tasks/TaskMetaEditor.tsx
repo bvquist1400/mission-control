@@ -15,7 +15,7 @@ import { RECURRENCE_FREQUENCIES } from "@/lib/recurrence";
 import { mergeTaskTags } from "@/lib/task-tags";
 import { hasPersonalTag, setPersonalTag } from "@/lib/personal-exclusion";
 import { followHint } from "@/lib/date-cascade-view";
-import { START_AFTER_DUE_ERROR } from "@/lib/task-range";
+import { SAVED_START_AFTER_DUE_HINT, START_AFTER_DUE_ERROR } from "@/lib/task-range";
 import type { TaskBlocksLink } from "@/lib/task-detail";
 import type {
   TaskRecurrenceFrequency,
@@ -313,7 +313,13 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
   // The start and due dates as they would be saved (a draft that doesn't parse keeps the saved one).
   const nextStartDate = startDateResolution.error === null ? startDateResolution.dateOnly : currentStartDate || null;
   const nextDueDate = dueDateResolution.error === null ? dueDateResolution.dateOnly : currentDueDate || null;
-  const rangeError = nextStartDate && nextDueDate && nextStartDate > nextDueDate ? START_AFTER_DUE_ERROR : null;
+  const rangeReversed = Boolean(nextStartDate && nextDueDate && nextStartDate > nextDueDate);
+  // A start left after the due by an Undo or a FamCal due move is allowed as
+  // saved (it reads as a one-day task): it blocks Save only when this edit
+  // changes a date, so a title, tag or project edit still saves.
+  const editsADate = hasStartDateChange || hasDueDateChange;
+  const rangeError = rangeReversed && editsADate ? START_AFTER_DUE_ERROR : null;
+  const savedRangeHint = rangeReversed && !editsADate ? SAVED_START_AFTER_DUE_HINT : null;
   const nextTags = mergeTaskTags(tagsDraft, tagInput);
   const hasTagChanges = nextTags.length !== currentTags.length || nextTags.some((tag, index) => tag !== currentTags[index]);
   const isMutating = isSaving || isUpdatingRecurrence;
@@ -576,9 +582,10 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
                 : "border-stroke focus:border-accent"
             }`}
           />
-          <p className={`text-xs ${startDateResolution.error || rangeError ? "text-danger" : "text-muted-foreground"}`}>
+          <p className={`text-xs ${startDateResolution.error || rangeError ? "text-danger" : savedRangeHint ? "text-warning" : "text-muted-foreground"}`}>
             {startDateResolution.error
               ?? rangeError
+              ?? savedRangeHint
               ?? (startDateResolution.dateOnly
                 ? `Starts ${formatDateOnly(startDateResolution.dateOnly)}. Not late until after the due date.`
                 : "For a task that takes more than a day. Leave blank for none.")}

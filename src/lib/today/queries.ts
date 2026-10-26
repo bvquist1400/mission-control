@@ -121,7 +121,10 @@ function getDateInTimeZone(date: Date, timeZone: string): string {
  * Top 3 actionable tasks: Planned/In Progress ordered by priority_score DESC.
  * Mirrors the `view=top3` branch. A multi-day task whose start date is after
  * today (ET) isn't actionable yet and stays out (it shows on the board on its
- * days); tasks without a start date are unaffected.
+ * days); tasks without a start date are unaffected. A task due by the end of
+ * today is never left out by its start: a start left after the due (an Undo or
+ * a FamCal due move, read as a one-day task) is overdue or due today, not a
+ * future range.
  */
 export async function queryTopThreeTasks(
   supabase: SupabaseClient,
@@ -135,7 +138,7 @@ export async function queryTopThreeTasks(
     .select(TODAY_TASK_SELECT)
     .eq('user_id', userId)
     .in('status', ['Planned', 'In Progress'])
-    .or(`start_at.is.null,start_at.lte.${quotedFilterValue(startedBy)}`)
+    .or(`start_at.is.null,start_at.lte.${quotedFilterValue(startedBy)},due_at.lte.${quotedFilterValue(startedBy)}`)
     .order('priority_score', { ascending: false })
     .order('id', { ascending: true });
 

@@ -274,7 +274,7 @@ function seed() {
   };
 }
 
-function makeDb({ updateError = null } = {}) {
+function makeDb({ updateError = null, beforeTaskUpdate = null } = {}) {
   const state = seed();
   const rpcCalls = [];
   const updates = [];
@@ -287,7 +287,7 @@ function makeDb({ updateError = null } = {}) {
     return table === "tasks" && column === "famcal_eligible" ? famcalEligible(r) : r[column];
   };
 
-  function run(table, ops) {
+  async function run(table, ops) {
     const op = (name) => ops.find(([n]) => n === name);
     const mode = op("single") ? "single" : op("maybeSingle") ? "maybeSingle" : "many";
     const finish = (found, error = null) => {
@@ -321,7 +321,12 @@ function makeDb({ updateError = null } = {}) {
     }
     const update = op("update")?.[1][0];
     if (update) {
-      if (table === "tasks") updates.push({ ...update });
+      if (table === "tasks") {
+        // A paused schedule: another session's write lands between this
+        // request's read and its UPDATE (fix round 1, F1).
+        if (beforeTaskUpdate) await beforeTaskUpdate(update);
+        updates.push({ ...update });
+      }
       if (table === "tasks" && updateError) return finish([], updateError);
       const hit = rowsOf().filter(matches);
       for (const r of hit) Object.assign(r, update);
@@ -474,6 +479,118 @@ await test("PATCH maps 063's guard (23514, a race with another due-date edit) to
   const result = await patch(db, T.work, { start_at: etAt("2026-10-27", "00:00") });
   assert.equal(result.status, 400);
   assert.equal(result.body.error, "The start date can't be after the due date.");
+});
+
+// Fix round 1, F1 (Codex api-race): the date a PATCH doesn't write is
+// compare-and-set in its UPDATE, so two clients writing the two dates of one
+// task can't both pass their checks and leave the start after the due.
+function pausedOnce(predicate, otherWrite) {
+  let fired = false;
+  return async (update) => {
+    if (fired || !predicate(update)) return;
+    fired = true;
+    await otherWrite();
+  };
+}
+
+await test("F1: a due-only move paused while another session sets the start → 409, nothing saved, never start after due (Codex's schedule)", async () => {
+  let other;
+  const db = makeDb({
+    beforeTaskUpdate: pausedOnce((update) => "due_at" in update, async () => {
+      other = await patch(db, T.work, { start_at: etAt("2026-10-29", "00:00") });
+    }),
+  });
+  const moved = await patch(db, T.work, { due_at: etAt("2026-10-28", "23:59"), cascade: false });
+  assert.equal(other.status, 200, "the start write (checked against Friday's due) saves");
+  assert.equal(moved.status, 409, JSON.stringify(moved.body));
+  assert.equal(moved.body.error, range.TASK_DATES_CHANGED_ERROR);
+  const row = rowOf(db, T.work);
+  assert.equal(row.start_at, etAt("2026-10-29", "00:00"));
+  assert.equal(row.due_at, etAt("2026-10-30", "23:59"), "the due move was not written");
+  assert.equal(range.startIsAfterDue(row.start_at, row.due_at), false);
+});
+
+await test("F1: the other order (start-only paused while another session moves the due) → 409, nothing saved", async () => {
+  let other;
+  const db = makeDb({
+    beforeTaskUpdate: pausedOnce((update) => "start_at" in update, async () => {
+      other = await patch(db, T.work, { due_at: etAt("2026-10-28", "23:59"), cascade: false });
+    }),
+  });
+  const started = await patch(db, T.work, { start_at: etAt("2026-10-29", "00:00") });
+  assert.equal(other.status, 200, "the due move (checked against Monday's start) saves");
+  assert.equal(started.status, 409, JSON.stringify(started.body));
+  assert.equal(started.body.error, range.TASK_DATES_CHANGED_ERROR);
+  const row = rowOf(db, T.work);
+  assert.equal(row.start_at, etAt("2026-10-26", "00:00"), "the start was not written");
+  assert.equal(range.startIsAfterDue(row.start_at, row.due_at), false);
+});
+
+await test("F1: a no-start task — a start set meanwhile still stops the due-only move (null-aware); an unrelated edit meanwhile doesn't", async () => {
+  let other;
+  const db = makeDb({
+    beforeTaskUpdate: pausedOnce((update) => "due_at" in update, async () => {
+      other = await patch(db, T.waiter, { start_at: etAt("2026-11-03", "00:00") });
+    }),
+  });
+  rowOf(db, T.waiter).start_at = null;
+  const moved = await patch(db, T.waiter, { due_at: etAt("2026-11-02", "23:59"), cascade: false });
+  assert.equal(other.status, 200);
+  assert.equal(moved.status, 409, JSON.stringify(moved.body));
+  assert.equal(range.etDate(rowOf(db, T.waiter).due_at), "2026-11-04");
+
+  const db2 = makeDb({
+    beforeTaskUpdate: pausedOnce((update) => "due_at" in update, async () => {
+      other = await patch(db2, T.work, { title: "Renamed meanwhile" });
+    }),
+  });
+  const moved2 = await patch(db2, T.work, { due_at: etAt("2026-10-29", "23:59"), cascade: false });
+  assert.equal(other.status, 200);
+  assert.equal(moved2.status, 200, JSON.stringify(moved2.body));
+  assert.equal(range.etDate(rowOf(db2, T.work).due_at), "2026-10-29");
+});
+
+await test("F1: a PATCH carrying both dates writes the pair it checked (no compare-and-set); the serial control is still the plain 400", async () => {
+  let other;
+  const db = makeDb({
+    beforeTaskUpdate: pausedOnce((update) => "due_at" in update && "start_at" in update, async () => {
+      other = await patch(db, T.work, { start_at: etAt("2026-10-29", "00:00") });
+    }),
+  });
+  const both = await patch(db, T.work, { start_at: etAt("2026-10-27", "00:00"), due_at: etAt("2026-10-28", "23:59"), cascade: false });
+  assert.equal(other.status, 200);
+  assert.equal(both.status, 200, JSON.stringify(both.body));
+  assert.equal(rowOf(db, T.work).start_at, etAt("2026-10-27", "00:00"));
+  assert.equal(rowOf(db, T.work).due_at, etAt("2026-10-28", "23:59"));
+
+  const serial = makeDb();
+  assert.equal((await patch(serial, T.work, { start_at: etAt("2026-10-29", "00:00") })).status, 200);
+  const late = await patch(serial, T.work, { due_at: etAt("2026-10-28", "23:59"), cascade: false });
+  assert.equal(late.status, 400);
+  assert.equal(late.body.error, "The start date can't be after the due date.");
+});
+
+await test("F1: the FamCal key keeps its contract — its due move isn't keyed on the start it can't see", async () => {
+  const db = makeDb({
+    beforeTaskUpdate: pausedOnce((update) => "due_at" in update, async () => {
+      rowOf(db, T.personal).start_at = etAt("2026-10-29", "00:00");
+    }),
+  });
+  const moved = await patch(db, T.personal, { due_at: etAt("2026-10-30", "23:59") }, "famcal_api_key");
+  assert.equal(moved.status, 200, JSON.stringify(moved.body));
+  assert.equal(range.etDate(rowOf(db, T.personal).due_at), "2026-10-30");
+});
+
+await test("F1: expectedOtherDate keys a due move on the start, a start move on the due, both/neither/no task on nothing", () => {
+  const current = { start_at: "2026-10-26T04:00:00+00:00", due_at: null };
+  assert.deepEqual(range.expectedOtherDate(current, { due_at: "x" }), [["start_at", "2026-10-26T04:00:00+00:00"]]);
+  assert.deepEqual(range.expectedOtherDate(current, { start_at: "x" }), [["due_at", null]]);
+  assert.deepEqual(range.expectedOtherDate(current, { start_at: "x", due_at: "y" }), []);
+  assert.deepEqual(range.expectedOtherDate(current, { title: "t" }), []);
+  assert.deepEqual(range.expectedOtherDate(null, { due_at: "x" }), []);
+  assert.equal(range.sameInstant("2026-10-26T04:00:00+00:00", "2026-10-26T04:00:00.000Z"), true);
+  assert.equal(range.sameInstant(null, null), true);
+  assert.equal(range.sameInstant(null, "2026-10-26T04:00:00Z"), false);
 });
 
 await test("Cascade: moving a ranged task's due date later moves its waiting task's due date only; both start dates stay (the range lengthens)", async () => {
