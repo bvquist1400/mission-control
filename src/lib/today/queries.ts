@@ -15,6 +15,33 @@ import {
   type TaskScope,
 } from '@/lib/personal-exclusion';
 import type { TaskWithImplementation } from '@/types/database';
+import { addDateOnlyDays, getDateStartInTimeZone } from '@/lib/today/week-board';
+
+/**
+ * Multi-day tasks S2: the Today page's task reads also embed each task's
+ * checklist rows (`is_done`, `unit_count`) so the card fill and "3/5 steps"
+ * come from the same query (one request, no per-task reads). Exposed on the
+ * task as `checklist_rows`.
+ */
+export const TODAY_TASK_SELECT = `${TASK_WITH_RELATIONS_SELECT}, checklist_rows:task_checklist_items(is_done, unit_count)`;
+
+/** A PostgREST filter value in double quotes (timestamps carry ':' and '.', reserved inside or=()). */
+function quotedFilterValue(value: string): string {
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function normalizeTodayTasks(rows: Array<Record<string, unknown>>): TaskWithImplementation[] {
+  return normalizeTaskWithRelationsList(rows).map((task) => ({
+    ...task,
+    checklist_rows: Array.isArray(task.checklist_rows) ? task.checklist_rows : [],
+  }));
+}
+
+/** The last instant of today's ET date (a task whose start is on or before it has started). */
+export function endOfEtDay(now: Date, timeZone: string): Date {
+  const today = getDateInTimeZone(now, timeZone);
+  return new Date(getDateStartInTimeZone(addDateOnlyDays(today, 1), timeZone).getTime() - 1);
+}
 
 /**
  * Shared query layer for the Today page and the `/api/tasks?view=...` branches.
@@ -92,18 +119,23 @@ function getDateInTimeZone(date: Date, timeZone: string): string {
 
 /**
  * Top 3 actionable tasks: Planned/In Progress ordered by priority_score DESC.
- * Mirrors the `view=top3` branch.
+ * Mirrors the `view=top3` branch. A multi-day task whose start date is after
+ * today (ET) isn't actionable yet and stays out (it shows on the board on its
+ * days); tasks without a start date are unaffected.
  */
 export async function queryTopThreeTasks(
   supabase: SupabaseClient,
   userId: string,
-  scope: TaskScope = 'all'
+  scope: TaskScope = 'all',
+  now: Date = new Date()
 ): Promise<TaskWithImplementation[]> {
+  const startedBy = endOfEtDay(now, DEFAULT_WORKDAY_CONFIG.timezone).toISOString();
   let query = supabase
     .from('tasks')
-    .select(TASK_WITH_RELATIONS_SELECT)
+    .select(TODAY_TASK_SELECT)
     .eq('user_id', userId)
     .in('status', ['Planned', 'In Progress'])
+    .or(`start_at.is.null,start_at.lte.${quotedFilterValue(startedBy)}`)
     .order('priority_score', { ascending: false })
     .order('id', { ascending: true });
 
@@ -115,14 +147,17 @@ export async function queryTopThreeTasks(
   }
 
   return filterTasksByScope(
-    normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>),
+    normalizeTodayTasks((data || []) as Array<Record<string, unknown>>),
     scope
   ).slice(0, 3);
 }
 
 /**
- * Tasks with a due date on or before `weekEnd`, excluding Done/Parked/Missed.
- * Mirrors the `view=weekly_board` branch.
+ * Tasks with a due date on or before `weekEnd`, excluding Done/Parked/Missed,
+ * plus (multi-day tasks S2) tasks whose start→due range overlaps the week: a
+ * start on or before `weekEnd` with the due date later. With `weekStart`, the
+ * due date must also be on or after it (so both kinds overlap the week).
+ * Mirrors the `view=weekly_board` branch; rows carry `checklist_rows`.
  */
 export async function queryWeeklyBoardTasks(
   supabase: SupabaseClient,
@@ -132,12 +167,13 @@ export async function queryWeeklyBoardTasks(
   weekStart?: Date,
   scope: TaskScope = 'all'
 ): Promise<TaskWithImplementation[]> {
+  const weekEndValue = quotedFilterValue(weekEnd.toISOString());
   let query = supabase
     .from('tasks')
-    .select(TASK_WITH_RELATIONS_SELECT)
+    .select(TODAY_TASK_SELECT)
     .eq('user_id', userId)
     .not('due_at', 'is', null)
-    .lte('due_at', weekEnd.toISOString())
+    .or(`due_at.lte.${weekEndValue},start_at.lte.${weekEndValue}`)
     .neq('status', 'Done')
     .neq('status', 'Parked')
     .neq('status', 'Missed')
@@ -157,7 +193,7 @@ export async function queryWeeklyBoardTasks(
   }
 
   return filterTasksByScope(
-    normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>),
+    normalizeTodayTasks((data || []) as Array<Record<string, unknown>>),
     scope
   ).slice(0, limit);
 }

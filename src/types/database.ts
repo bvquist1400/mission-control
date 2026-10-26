@@ -362,6 +362,8 @@ export interface TaskWithImplementation extends Task {
   section_name?: string | null;
   dependencies?: TaskDependencySummary[];
   dependency_blocked?: boolean;
+  /** Today page reads only (multi-day tasks S2): the checklist rows' tick + units, for the card fill. */
+  checklist_rows?: Array<Pick<TaskChecklistItem, 'is_done' | 'unit_count'>>;
 }
 
 // Allowed fields for task updates via API
