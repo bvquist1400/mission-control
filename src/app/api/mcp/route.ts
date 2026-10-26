@@ -25,6 +25,8 @@ const TASK_STATUS_LINE_DESCRIPTION =
 const SECTION_PLANNED_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const WORK_TYPE_DESCRIPTION =
   'Pace tracking work type: a lowercase slug such as "sc", "plain-dc", "waffle", "colorwork-dc", "chain".';
+const TASK_START_AT_DESCRIPTION =
+  'Start date of a multi-day task as ISO string (optional; the due date is the end). It can\'t be after the due date. A task is late only after its due date, never because of its start; a cascade moves only the due date.';
 const SECTION_PLANNED_START_DESCRIPTION =
   'Planned start date YYYY-MM-DD (timeline only: never changes due dates, overdue, priority or briefs).';
 const SECTION_PLANNED_END_DESCRIPTION =
@@ -684,6 +686,7 @@ function createMcpServer(): McpServer {
       task_type: z.enum(['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build']).default('Task'),
       estimated_minutes: z.number().min(1).max(480).optional().describe('Time estimate in minutes'),
       estimate_source: z.enum(['default', 'llm', 'manual']).optional().describe('How the estimate was chosen'),
+      start_at: z.string().optional().describe(TASK_START_AT_DESCRIPTION),
       due_at: z.string().optional().describe('Due date as ISO string'),
       follow_up_at: z.string().optional().describe('Follow-up date as ISO string'),
       priority_score: z.number().min(0).max(100).optional().describe('Priority 0-100'),
@@ -739,6 +742,7 @@ function createMcpServer(): McpServer {
       estimated_minutes: z.number().min(1).max(480).optional(),
       estimate_source: z.enum(['default', 'llm', 'manual']).optional(),
       actual_minutes: z.number().int().min(0).nullable().optional(),
+      start_at: z.string().nullable().optional().describe(`${TASK_START_AT_DESCRIPTION} Null clears it.`),
       due_at: z.string().nullable().optional(),
       needs_review: z.boolean().optional(),
       blocker: z.boolean().optional(),

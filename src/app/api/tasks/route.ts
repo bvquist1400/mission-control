@@ -31,6 +31,7 @@ import { addDateOnlyDays, getDateStartInTimeZone } from '@/lib/today/week-board'
 import { DEFAULT_WORKDAY_CONFIG } from '@/lib/workday';
 import { filterTasksByScope, normalizeTaskScope } from '@/lib/personal-exclusion';
 import { validateOptionalTimestamp } from '@/lib/validate';
+import { isStartAfterDueViolation, START_AFTER_DUE_ERROR, startIsAfterDue } from '@/lib/task-range';
 import { isPostgrestNotFound } from '@/lib/supabase/errors';
 import {
   externalSourceConflictPayload,
@@ -468,6 +469,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: followUpAtResult.error }, { status: 400 });
     }
 
+    // Multi-day tasks (063): an optional start date, never after the due date.
+    const startAtResult = validateOptionalTimestamp(body.start_at, 'start_at');
+    if (!startAtResult.ok) {
+      return NextResponse.json({ error: startAtResult.error }, { status: 400 });
+    }
+    if (startIsAfterDue(startAtResult.value, dueAtResult.value)) {
+      return NextResponse.json({ error: START_AFTER_DUE_ERROR }, { status: 400 });
+    }
+
     // Validate blocked_reason if provided
     const blockedReasonInput = asStringOrNull(body.blocked_reason);
     let blockedReason: BlockedReason | null = null;
@@ -603,6 +613,7 @@ export async function POST(request: NextRequest) {
         priority_score: calculateFinalPriorityScore(priorityScore, priorityBoosts),
         estimated_minutes: estimatedMinutes,
         estimate_source: estimateSource,
+        start_at: startAtResult.value,
         due_at: dueAtResult.value,
         follow_up_at: followUpAtResult.value,
         needs_review: typeof body.needs_review === 'boolean' ? body.needs_review : false,
@@ -625,6 +636,9 @@ export async function POST(request: NextRequest) {
       .single();
 
     if (error) {
+      if (isStartAfterDueViolation(error)) {
+        return NextResponse.json({ error: START_AFTER_DUE_ERROR }, { status: 400 });
+      }
       if (isTaskExternalSourceUniqueViolation(error) && externalSourceSystem && externalSourceId) {
         const { data: conflictingTask } = await supabase
           .from('tasks')

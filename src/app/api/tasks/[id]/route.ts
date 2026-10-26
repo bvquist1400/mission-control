@@ -23,6 +23,7 @@ import {
   projectTaskForFamcal,
 } from '@/lib/famcal-api-key';
 import { validateOptionalTimestamp } from '@/lib/validate';
+import { isStartAfterDueViolation, START_AFTER_DUE_ERROR, startIsAfterDue } from '@/lib/task-range';
 import { DependencyReadIncompleteError, fetchTaskDependencyLinks } from '@/lib/task-dependency-links';
 import {
   applyTaskDateCascade,
@@ -205,6 +206,7 @@ export async function PATCH(
       'estimated_minutes',
       'actual_minutes',
       'estimate_source',
+      'start_at',
       'due_at',
       'needs_review',
       'blocker',
@@ -265,7 +267,7 @@ export async function PATCH(
         updates[field] = normalizeExternalSourceValue(value);
       } else if (field === 'external_source_id') {
         updates[field] = normalizeExternalSourceId(value);
-      } else if (field === 'due_at' || field === 'follow_up_at') {
+      } else if (field === 'start_at' || field === 'due_at' || field === 'follow_up_at') {
         const result = validateOptionalTimestamp(value, field);
         if (!result.ok) {
           return NextResponse.json({ error: result.error }, { status: 400 });
@@ -374,6 +376,7 @@ export async function PATCH(
       'project_id' in updates
       || 'section_id' in updates
       || 'status' in updates
+      || 'start_at' in updates
       || 'due_at' in updates
       || 'base_priority' in updates
       || 'stakeholder_mentions' in updates
@@ -506,6 +509,19 @@ export async function PATCH(
 
       if (sprintError || !sprint) {
         return NextResponse.json({ error: 'sprint_id is invalid' }, { status: 400 });
+      }
+    }
+
+    // Multi-day tasks (063): the start date can't end up after the due date,
+    // whether this PATCH moves the start or the due date. The FamCal key can't
+    // send start_at and its due-date moves keep their contract (a start left
+    // after the due reads as a one-day task, task-range.ts); 063's trigger
+    // refuses any write that sets the start after the due.
+    if (!isFamcalKey && currentTask && ('start_at' in updates || 'due_at' in updates)) {
+      const nextStartAt = ('start_at' in updates ? updates.start_at : currentTask.start_at) as string | null;
+      const nextDueAt = ('due_at' in updates ? updates.due_at : currentTask.due_at) as string | null;
+      if (startIsAfterDue(nextStartAt, nextDueAt)) {
+        return NextResponse.json({ error: START_AFTER_DUE_ERROR }, { status: 400 });
       }
     }
 
@@ -654,6 +670,11 @@ export async function PATCH(
       // the same moment; no pre-check here (it would race and build long URLs).
       if (error.code === '55006') {
         return NextResponse.json({ error: TASK_MOVE_WITH_SESSIONS_ERROR }, { status: 409 });
+      }
+      // 063's guard: the start date was saved after the due date (a race with
+      // another edit of the due date since the check above).
+      if (isStartAfterDueViolation(error)) {
+        return NextResponse.json({ error: START_AFTER_DUE_ERROR }, { status: 400 });
       }
       if (isTaskExternalSourceUniqueViolation(error)) {
         const externalSourceSystem = (updates.external_source_system ?? currentTask?.external_source_system) as string | null;

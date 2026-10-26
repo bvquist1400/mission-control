@@ -757,6 +757,10 @@
             "manual"
           ]
         },
+        "start_at": {
+          "description": "Start date of a multi-day task as ISO string (optional; the due date is the end). It can't be after the due date. A task is late only after its due date, never because of its start; a cascade moves only the due date.",
+          "type": "string"
+        },
         "due_at": {
           "description": "Due date as ISO string",
           "type": "string"
@@ -3533,6 +3537,17 @@
               "type": "integer",
               "minimum": 0,
               "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "start_at": {
+          "description": "Start date of a multi-day task as ISO string (optional; the due date is the end). It can't be after the due date. A task is late only after its due date, never because of its start; a cascade moves only the due date. Null clears it.",
+          "anyOf": [
+            {
+              "type": "string"
             },
             {
               "type": "null"
