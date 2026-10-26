@@ -1,14 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { getTaskVisualState, TaskStateBadge } from "@/components/tasks/task-state";
+import { useRouter } from "next/navigation";
 import { useTodayModal } from "@/components/today/TodayModalProvider";
 import { useTaskMutation } from "@/hooks/useTaskMutation";
 import type { TaskWithImplementation } from "@/types/database";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
-import { isPersonalTaskOrProject } from "@/lib/personal-exclusion";
-import { PersonalBadge } from "@/components/ui/PersonalBadge";
-import { Button } from "@/components/ui/Button";
+import { buildRangeCardView } from "@/lib/task-range-view";
+import { NowTaskCard, nowStepsId } from "@/components/today/cards/NowTaskCard";
+import { InlineSteps } from "@/components/tasks/InlineSteps";
+
+type ChecklistRows = NonNullable<TaskWithImplementation["checklist_rows"]>;
 
 const TIME_ZONE = DEFAULT_WORKDAY_CONFIG.timezone;
 
@@ -60,28 +62,13 @@ function formatCountdown(meeting: NowPanelMeeting, nowMs: number): string {
   return mins > 0 ? `in ${hours}h ${mins}m` : `in ${hours}h`;
 }
 
-function getDueLabel(dueAt: string | null, nowMs: number): string | null {
-  if (!dueAt) {
-    return null;
-  }
-  const dueMs = Date.parse(dueAt);
-  if (!Number.isFinite(dueMs)) {
-    return null;
-  }
-  if (dueMs < nowMs) {
-    return "Overdue";
-  }
-  const dueDay = new Intl.DateTimeFormat("en-CA", { timeZone: TIME_ZONE }).format(new Date(dueMs));
-  const today = new Intl.DateTimeFormat("en-CA", { timeZone: TIME_ZONE }).format(new Date(nowMs));
-  if (dueDay === today) {
-    return "Due today";
-  }
-  return "Due soon";
-}
-
 export function NowPanel({ topTasks, nextMeeting, syncNote }: NowPanelProps) {
+  const router = useRouter();
   const { openTask, registerTasks } = useTodayModal();
   const { completeTask } = useTaskMutation();
+  // Multi-day tasks S2: the open steps, and rows ticked here until fresh props land.
+  const [openStepsId, setOpenStepsId] = useState<string | null>(null);
+  const [rowOverrides, setRowOverrides] = useState<Map<string, ChecklistRows>>(new Map());
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [completingIds, setCompletingIds] = useState<Set<string>>(new Set());
   // Locally hidden while the server re-streams; cleared whenever fresh props land
@@ -92,6 +79,7 @@ export function NowPanel({ topTasks, nextMeeting, syncNote }: NowPanelProps) {
   if (renderedTasks !== topTasks) {
     setRenderedTasks(topTasks);
     setCompletedIds(new Set());
+    setRowOverrides(new Map());
   }
 
   useEffect(() => {
@@ -173,54 +161,36 @@ export function NowPanel({ topTasks, nextMeeting, syncNote }: NowPanelProps) {
         ) : (
           <ul className="mt-2 space-y-2.5">
             {visibleTasks.map((task) => {
-              const dueLabel = getDueLabel(task.due_at, nowMs);
-              const state = getTaskVisualState({
-                status: task.status,
-                dependencyBlocked: Boolean(task.dependency_blocked),
-                updatedAt: task.updated_at ?? null,
-              });
-              const completing = completingIds.has(task.id);
+              const rows = rowOverrides.get(task.id) ?? task.checklist_rows ?? [];
+              const range = buildRangeCardView(task, rows, new Date(nowMs));
+              const stepsOpen = openStepsId === task.id;
               return (
-                <li
+                <NowTaskCard
                   key={task.id}
-                  className="rounded-xl border border-l-4 border-stroke border-l-accent bg-panel-muted/40 p-3"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <button
-                      type="button"
-                      onClick={() => openTask(task)}
-                      className="min-w-0 flex-1 text-left focus:outline-none focus-visible:rounded-lg focus-visible:ring-2 focus-visible:ring-accent/50"
-                    >
-                      <p className="text-base font-semibold leading-snug text-foreground">{task.title}</p>
-                      <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                        {isPersonalTaskOrProject(task) ? <PersonalBadge /> : null}
-                        {dueLabel ? (
-                          <span
-                            className={`inline-flex rounded px-1.5 py-0.5 text-xs font-semibold ${
-                              dueLabel === "Overdue"
-                                ? "bg-red-500/15 text-red-300"
-                                : dueLabel === "Due today"
-                                  ? "bg-accent-soft text-red-100"
-                                  : "bg-panel text-muted-foreground"
-                            }`}
-                          >
-                            {dueLabel}
-                          </span>
-                        ) : null}
-                        {state ? <TaskStateBadge state={state} /> : null}
-                        {task.implementation?.name ? (
-                          <span className="text-xs text-muted-foreground">{task.implementation.name}</span>
-                        ) : null}
-                      </div>
-                    </button>
-                    <Button variant="success" size="sm" className="shrink-0"
-                      onClick={() => handleDone(task)}
-                      disabled={completing}
-                      aria-label="Mark task complete">
-                      {completing ? "Marking..." : "✓ Done"}
-                    </Button>
-                  </div>
-                </li>
+                  task={task}
+                  nowMs={nowMs}
+                  completing={completingIds.has(task.id)}
+                  onOpen={() => openTask(task)}
+                  onDone={() => handleDone(task)}
+                  range={range}
+                  stepsOpen={stepsOpen}
+                  onToggleSteps={() => setOpenStepsId((current) => (current === task.id ? null : task.id))}
+                  steps={
+                    range && stepsOpen ? (
+                      <InlineSteps
+                        id={nowStepsId(task.id)}
+                        taskId={task.id}
+                        view={range}
+                        onRowsChange={(next) =>
+                          setRowOverrides((prev) => new Map(prev).set(task.id, next))
+                        }
+                        onSaved={() => router.refresh()}
+                        onDone={() => handleDone(task)}
+                        doneDisabled={completingIds.has(task.id)}
+                      />
+                    ) : null
+                  }
+                />
               );
             })}
           </ul>

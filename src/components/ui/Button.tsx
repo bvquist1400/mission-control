@@ -1,7 +1,7 @@
 import type { ButtonHTMLAttributes, ReactNode, Ref } from "react";
 import { cn } from "@/lib/cn";
 
-export type ButtonVariant = "primary" | "secondary" | "danger" | "success" | "ghost" | "toggle";
+export type ButtonVariant = "primary" | "secondary" | "danger" | "success" | "ready" | "ghost" | "toggle";
 export type ButtonSize = "icon" | "xs" | "sm" | "md" | "lg";
 
 const BASE =
@@ -25,6 +25,9 @@ const VARIANTS: Record<Exclude<ButtonVariant, "toggle">, string> = {
     "rounded-lg border border-danger-border bg-danger-soft text-danger hover:bg-danger-soft-hover",
   success:
     "rounded-lg border border-success-border bg-success-soft text-success hover:bg-success-soft-hover",
+  /** A lit-up Done: every step of the task is ticked (multi-day tasks S2). Still a plain button; nothing auto-completes. */
+  ready:
+    "rounded-lg border border-success bg-success-soft-hover text-success shadow-[0_0_0_3px_var(--success-soft)] hover:bg-success-soft-hover",
   ghost: "rounded-lg text-muted-foreground hover:bg-panel-muted hover:text-foreground",
 };
 

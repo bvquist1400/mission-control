@@ -116,6 +116,13 @@ export function TodayModalProvider({ children }: { children: ReactNode }) {
     [router]
   );
 
+  // Multi-day tasks S2: checklist ticks in the task window don't report back as
+  // task updates, so closing it re-reads the page and the card fill catches up.
+  const handleClose = useCallback(() => {
+    setSelectedId(null);
+    router.refresh();
+  }, [router]);
+
   const selectedTask = selectedId ? tasksById.get(selectedId) ?? null : null;
   const allTasks = useMemo(() => Array.from(tasksById.values()), [tasksById]);
   const contextValue = useMemo<TodayModalContextValue>(
@@ -130,7 +137,7 @@ export function TodayModalProvider({ children }: { children: ReactNode }) {
         task={selectedTask}
         allTasks={allTasks}
         commitments={commitments}
-        onClose={() => setSelectedId(null)}
+        onClose={handleClose}
         onTaskUpdated={handleTaskUpdated}
         onTaskDeleted={handleTaskDeleted}
       />

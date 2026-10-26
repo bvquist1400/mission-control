@@ -1,13 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ErrorBanner } from "@/components/ui/ErrorBanner";
 import { Modal } from "@/components/ui/Modal";
 import type { TaskCardData } from "@/components/tasks/TaskCard";
 import { TaskCreateForm } from "@/components/tasks/TaskCreateForm";
-import { getTaskVisualState, TaskStateBadge } from "@/components/tasks/task-state";
 import { useTodayModal } from "@/components/today/TodayModalProvider";
 import { useTaskMutation } from "@/hooks/useTaskMutation";
 import { useDateCascade } from "@/components/tasks/DateCascadeProvider";
@@ -22,20 +21,28 @@ import {
   isDueAtInWeekStarting,
 } from "@/lib/today/week-board";
 import { Button } from "@/components/ui/Button";
+import { isPastDue } from "@/lib/task-range";
+import { buildRangeCardView, type RangeCardView } from "@/lib/task-range-view";
+import {
+  dayStrip,
+  laneContinuesText,
+  laneCountsByColumn,
+  laneElapsedPercent,
+  laneStartedText,
+  mergeTasksById,
+  placeWeekTasks,
+  rangeOverlapsWeek,
+  type LanePlacement,
+} from "@/lib/today/multi-day-board";
+import { boardStepsId, WeeklyTaskCard, type WeekBoardTaskData } from "@/components/today/cards/BoardTaskCard";
+import { DayStrip } from "@/components/tasks/TaskRangeParts";
+import { InlineSteps } from "@/components/tasks/InlineSteps";
 
 const TIME_ZONE = DEFAULT_WORKDAY_CONFIG.timezone;
 
 type WeekColumnKey = "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "weekend";
 
-interface WeekBoardTaskData extends TaskCardData {
-  priorityScore: number;
-  projectName: string | null;
-  waitingOn: string | null;
-  followUpAt: string | null;
-  needsReview: boolean;
-  dependencyBlocked: boolean;
-  isPersonal: boolean;
-}
+type ChecklistRows = NonNullable<TaskWithImplementation["checklist_rows"]>;
 
 interface WeekBoardColumn {
   key: WeekColumnKey;
@@ -44,6 +51,19 @@ interface WeekBoardColumn {
   tasks: WeekBoardTaskData[];
   dueDate: string;
   isCurrentDay: boolean;
+  /** Multi-day tasks covering this day (shown in the lane above, counted here). */
+  laneCount: number;
+}
+
+/** Extra props a ranged card gets (steps pill + open steps); empty for other tasks. */
+type RangeCardProps = (
+  task: WeekBoardTaskData,
+  context: string
+) => Pick<ComponentProps<typeof WeeklyTaskCard>, "stepsOpen" | "onToggleSteps" | "steps" | "canDrag" | "context">;
+
+interface LaneCard {
+  placement: LanePlacement<TaskWithImplementation>;
+  data: WeekBoardTaskData;
 }
 
 interface WaitingTask {
@@ -89,10 +109,12 @@ function taskToCardData(
 function taskToWeekBoardData(
   task: TaskWithImplementation,
   dueState: TaskCardData["dueState"],
-  syncedToday: boolean
+  syncedToday: boolean,
+  range: RangeCardView | null = null
 ): WeekBoardTaskData {
   return {
     ...taskToCardData(task, dueState, syncedToday),
+    range,
     priorityScore: task.priority_score,
     projectName: task.project?.name ?? null,
     waitingOn: task.waiting_on,
@@ -138,7 +160,7 @@ function getDueState(dueAt: string | null, now: Date, timeZone: string): TaskCar
   }
 
   const dueDate = new Date(dueAt);
-  if (dueDate.getTime() < now.getTime()) {
+  if (isPastDue(dueAt, now)) {
     return "Overdue";
   }
 
@@ -182,7 +204,9 @@ function compareTasksByDueThenPriority(a: WeekBoardTaskData, b: WeekBoardTaskDat
 function buildWeekBoardColumns(
   tasks: WeekBoardTaskData[],
   weekStart: string,
-  todayDate: string
+  todayDate: string,
+  weekendRanges: WeekBoardTaskData[] = [],
+  laneCounts: number[] = [0, 0, 0, 0, 0]
 ): WeekBoardColumn[] {
   const monday = weekStart;
   const tuesday = addDateOnlyDays(weekStart, 1);
@@ -220,6 +244,8 @@ function buildWeekBoardColumns(
       grouped.weekend.push(task);
     }
   }
+  // Multi-day ranges that touch this week only on Sat/Sun.
+  grouped.weekend.push(...weekendRanges);
 
   return [
     {
@@ -229,6 +255,7 @@ function buildWeekBoardColumns(
       tasks: grouped.monday.sort(compareTasksByDueThenPriority),
       dueDate: monday,
       isCurrentDay: monday === todayDate,
+      laneCount: laneCounts[0] ?? 0,
     },
     {
       key: "tuesday",
@@ -237,6 +264,7 @@ function buildWeekBoardColumns(
       tasks: grouped.tuesday.sort(compareTasksByDueThenPriority),
       dueDate: tuesday,
       isCurrentDay: tuesday === todayDate,
+      laneCount: laneCounts[1] ?? 0,
     },
     {
       key: "wednesday",
@@ -245,6 +273,7 @@ function buildWeekBoardColumns(
       tasks: grouped.wednesday.sort(compareTasksByDueThenPriority),
       dueDate: wednesday,
       isCurrentDay: wednesday === todayDate,
+      laneCount: laneCounts[2] ?? 0,
     },
     {
       key: "thursday",
@@ -253,6 +282,7 @@ function buildWeekBoardColumns(
       tasks: grouped.thursday.sort(compareTasksByDueThenPriority),
       dueDate: thursday,
       isCurrentDay: thursday === todayDate,
+      laneCount: laneCounts[3] ?? 0,
     },
     {
       key: "friday",
@@ -261,6 +291,7 @@ function buildWeekBoardColumns(
       tasks: grouped.friday.sort(compareTasksByDueThenPriority),
       dueDate: friday,
       isCurrentDay: friday === todayDate,
+      laneCount: laneCounts[4] ?? 0,
     },
     {
       key: "weekend",
@@ -269,6 +300,7 @@ function buildWeekBoardColumns(
       tasks: grouped.weekend.sort(compareTasksByDueThenPriority),
       dueDate: saturday,
       isCurrentDay: saturday === todayDate || sunday === todayDate,
+      laneCount: 0,
     },
   ];
 }
@@ -290,103 +322,6 @@ function formatUpdatedTime(updatedAt: string, timeZone: string): string {
   }).format(updatedDate);
 }
 
-function getBoardEdgeClass(task: WeekBoardTaskData): string {
-  if (task.dueState === "Overdue") {
-    return "border-l-red-400";
-  }
-
-  if (task.dueState === "Due Today") {
-    return "border-l-accent";
-  }
-
-  if (task.status === "Blocked/Waiting" || task.blocker || task.dependencyBlocked || task.needsReview) {
-    return "border-l-amber-400";
-  }
-
-  return "border-l-stroke";
-}
-
-
-
-
-function WeeklyTaskCard({
-  task,
-  completing,
-  pinning,
-  moving,
-  dragging,
-  onOpen,
-  onDone,
-  onTogglePinned,
-  onDragStart,
-  onDragEnd,
-}: {
-  task: WeekBoardTaskData;
-  completing: boolean;
-  pinning: boolean;
-  moving: boolean;
-  dragging: boolean;
-  onOpen: () => void;
-  onDone: () => void;
-  onTogglePinned: (taskId: string, nextPinned: boolean) => void | Promise<void>;
-  onDragStart: (taskId: string) => void;
-  onDragEnd: () => void;
-}) {
-  return (
-    <article
-      draggable={!completing && !pinning && !moving}
-      onDragStart={(event) => {
-        event.dataTransfer.effectAllowed = "move";
-        event.dataTransfer.setData("text/plain", task.id);
-        onDragStart(task.id);
-      }}
-      onDragEnd={onDragEnd}
-      className={`cursor-grab rounded-xl border border-l-4 border-stroke bg-panel p-2.5 shadow-sm transition-colors hover:border-foreground/20 hover:bg-panel-muted/50 active:cursor-grabbing ${
-        dragging ? "opacity-50" : ""
-      } ${moving ? "opacity-60" : ""} ${getBoardEdgeClass(task)}`}
-    >
-      <button
-        type="button"
-        onClick={onOpen}
-        className="block w-full text-left focus:outline-none focus-visible:rounded-lg focus-visible:ring-2 focus-visible:ring-accent/50"
-      >
-        <h3 className="text-sm font-semibold leading-snug text-foreground">{task.title}</h3>
-        {task.isPersonal ? <PersonalBadge className="mt-1" /> : null}
-        {(() => {
-          const state = getTaskVisualState({
-            status: task.status,
-            dependencyBlocked: task.dependencyBlocked,
-            updatedAt: task.updatedAt,
-          });
-          return state ? <TaskStateBadge state={state} className="mt-1" /> : null;
-        })()}
-      </button>
-
-      <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
-        <Button variant="success" size="sm"
-          onClick={onDone}
-          disabled={completing}
-          aria-label="Mark task complete">
-          {moving ? "Moving..." : completing ? "Marking..." : "✓ Done"}
-        </Button>
-        <button
-          type="button"
-          onClick={() => onTogglePinned(task.id, !task.pinned)}
-          disabled={pinning}
-          aria-label={task.pinned ? "Unpin task from Today" : "Pin task to Today"}
-          className={`rounded-md border px-2.5 py-1.5 text-xs font-semibold transition disabled:opacity-50 ${
-            task.pinned
-              ? "border-amber-500/40 bg-amber-500/15 text-amber-300 hover:bg-amber-500/20"
-              : "border-stroke bg-panel-muted text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          {pinning ? "..." : "Pin"}
-        </button>
-      </div>
-    </article>
-  );
-}
-
 function WeeklyBoardColumn({
   column,
   completingIds,
@@ -402,6 +337,7 @@ function WeeklyBoardColumn({
   onDropTask,
   onDropTargetChange,
   onCreateTask,
+  rangeCardProps,
 }: {
   column: WeekBoardColumn;
   completingIds: Set<string>;
@@ -417,6 +353,7 @@ function WeeklyBoardColumn({
   onDropTask: (taskId: string, dueDate: string) => void;
   onDropTargetChange: (key: WeekColumnKey | null) => void;
   onCreateTask?: (dueDate: string) => void;
+  rangeCardProps: RangeCardProps;
 }) {
   const isDropTarget = dropTargetKey === column.key;
 
@@ -460,7 +397,7 @@ function WeeklyBoardColumn({
         </div>
         <div className="flex items-center gap-1.5">
           <span className="rounded-full border border-stroke bg-panel px-2 py-0.5 text-xs font-bold text-foreground">
-            {column.tasks.length}
+            {column.tasks.length + column.laneCount}
           </span>
           {onCreateTask ? (
             <button
@@ -478,7 +415,7 @@ function WeeklyBoardColumn({
 
       {column.tasks.length === 0 ? (
         <p className="rounded-lg border border-dashed border-stroke bg-panel/50 px-3 py-5 text-center text-xs text-muted-foreground">
-          No tasks here.
+          {column.laneCount > 0 ? "No single-day tasks." : "No tasks here."}
         </p>
       ) : (
         <div className="space-y-3">
@@ -495,6 +432,7 @@ function WeeklyBoardColumn({
               onTogglePinned={onTogglePinned}
               onDragStart={onDragStartTask}
               onDragEnd={onDragEndTask}
+              {...rangeCardProps(task, `col-${column.key}`)}
             />
           ))}
         </div>
@@ -518,6 +456,7 @@ function OverdueQueueSection({
   onDragEndTask,
   onHide,
   sectionRef,
+  rangeCardProps,
 }: {
   tasks: WeekBoardTaskData[];
   updatedAt: string;
@@ -533,6 +472,7 @@ function OverdueQueueSection({
   onDragEndTask: () => void;
   onHide: () => void;
   sectionRef: { current: HTMLElement | null };
+  rangeCardProps: RangeCardProps;
 }) {
   return (
     <section
@@ -579,6 +519,8 @@ function OverdueQueueSection({
             onTogglePinned={onTogglePinned}
             onDragStart={onDragStartTask}
             onDragEnd={onDragEndTask}
+            {...rangeCardProps(task, "overdue")}
+            canDrag
           />
         ))}
       </div>
@@ -696,20 +638,35 @@ export function WeekBoard({
   const [implementationsLoadRequest, setImplementationsLoadRequest] = useState(0);
   const [implementationsError, setImplementationsError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [openStepsKey, setOpenStepsKey] = useState<string | null>(null);
   const overdueQueueRef = useRef<HTMLElement | null>(null);
+
+  // A tick in a card's open steps: move the fill at once (the refresh that
+  // follows brings the same rows from the server).
+  const applyChecklistRows = useCallback((taskId: string, rows: ChecklistRows) => {
+    setTasks((current) => current.map((task) => (task.id === taskId ? { ...task, checklist_rows: rows } : task)));
+  }, []);
 
   // Reconcile local optimistic state with freshly streamed server props.
   useEffect(() => {
-    const currentWeekEnd = getDisplayedWeekRange(new Date(), TIME_ZONE).end;
-    setTasks((current) => [
-      ...current.filter((task) => {
-        if (!task.due_at) {
-          return false;
-        }
-        return getDateInTimeZone(new Date(task.due_at), TIME_ZONE) > currentWeekEnd;
-      }),
-      ...weekBoardTasks,
-    ]);
+    const currentWeek = getDisplayedWeekRange(new Date(), TIME_ZONE);
+    // Keep tasks loaded for later weeks; the streamed props own this week. A
+    // multi-day task overlapping this week comes back in the props, so it's
+    // dropped from the kept set and the merge never shows it twice.
+    setTasks((current) =>
+      mergeTasksById(
+        current.filter((task) => {
+          if (!task.due_at) {
+            return false;
+          }
+          return (
+            getDateInTimeZone(new Date(task.due_at), TIME_ZONE) > currentWeek.end &&
+            !rangeOverlapsWeek(task, currentWeek.start)
+          );
+        }),
+        weekBoardTasks
+      )
+    );
   }, [weekBoardTasks]);
 
   useEffect(() => {
@@ -735,24 +692,80 @@ export function WeekBoard({
   const selectedWeekLabel = `${formatDateOnlyLabel(selectedWeekStart)} – ${formatDateOnlyLabel(selectedWeekEnd, true)}`;
 
   const weekBoard = useMemo(
-    () => tasks.map((task) => taskToWeekBoardData(task, getDueState(task.due_at, now, TIME_ZONE), syncedSet.has(task.id))),
+    () =>
+      tasks.map((task) =>
+        taskToWeekBoardData(
+          task,
+          getDueState(task.due_at, now, TIME_ZONE),
+          syncedSet.has(task.id),
+          buildRangeCardView(task, task.checklist_rows ?? [], now)
+        )
+      ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [tasks, syncedSet, nowMs]
   );
+  const weekBoardById = useMemo(() => new Map(weekBoard.map((task) => [task.id, task])), [weekBoard]);
 
   const waitingOn = useMemo(() => waiting.map(taskToWaitingTask), [waiting]);
 
   const overdueTasks = weekBoard.filter((task) => task.dueState === "Overdue");
-  const scheduledWeekTasks = weekBoard.filter((task) =>
-    isDueAtInWeekStarting(task.dueAt, selectedWeekStart, TIME_ZONE)
+  // Multi-day tasks S2: ranges overlapping Mon–Fri go in the lane (each once),
+  // weekend-only ranges in the Weekend column, other tasks by due date as before.
+  const placement = placeWeekTasks(tasks, selectedWeekStart, (task) =>
+    isDueAtInWeekStarting(task.due_at, selectedWeekStart, TIME_ZONE)
   );
-  const weekColumns = buildWeekBoardColumns(scheduledWeekTasks, selectedWeekStart, todayDate);
+  const toBoardData = (task: TaskWithImplementation) => weekBoardById.get(task.id);
+  const scheduledWeekTasks = placement.single.map(toBoardData).filter((task): task is WeekBoardTaskData => Boolean(task));
+  const weekendRangeTasks = placement.weekendRanges.map(toBoardData).filter((task): task is WeekBoardTaskData => Boolean(task));
+  const laneCards: LaneCard[] = placement.lane.flatMap((item) => {
+    const data = weekBoardById.get(item.task.id);
+    return data ? [{ placement: item, data }] : [];
+  });
+  const weekColumns = buildWeekBoardColumns(
+    scheduledWeekTasks,
+    selectedWeekStart,
+    todayDate,
+    weekendRangeTasks,
+    laneCountsByColumn(placement.lane)
+  );
   const weekdayColumns = weekColumns.filter((column) => column.key !== "weekend");
   const weekendColumn = weekColumns.find((column) => column.key === "weekend") ?? null;
-  const boardTaskCount = scheduledWeekTasks.length;
+  const shownWeekTasks = [...scheduledWeekTasks, ...weekendRangeTasks, ...laneCards.map((card) => card.data)];
+  const boardTaskCount = shownWeekTasks.length;
   const overdueCount = overdueTasks.length;
-  const todayDueCount = scheduledWeekTasks.filter((task) => task.dueState === "Due Today").length;
-  const boardMinutes = scheduledWeekTasks.reduce((sum, task) => sum + task.estimatedMinutes, 0);
+  const todayDueCount = shownWeekTasks.filter((task) => task.dueState === "Due Today").length;
+  const boardMinutes = shownWeekTasks.reduce((sum, task) => sum + task.estimatedMinutes, 0);
+  const multiDayInProgress = laneCards.filter(
+    (card) => card.data.range?.kind === "in_range" || card.data.range?.kind === "due_today"
+  );
+  const multiDayBehind = multiDayInProgress.filter((card) => card.data.range?.behindPace).length;
+
+  const rangeCardProps: RangeCardProps = (task, context) => {
+    const view = task.range;
+    if (!view) {
+      return {};
+    }
+    const key = `${context}:${task.id}`;
+    const open = openStepsKey === key;
+    return {
+      context,
+      canDrag: false,
+      stepsOpen: open,
+      onToggleSteps: view.steps ? () => setOpenStepsKey((current) => (current === key ? null : key)) : undefined,
+      steps: open ? (
+        <InlineSteps
+          id={boardStepsId(context, task.id)}
+          taskId={task.id}
+          view={view}
+          compact
+          onRowsChange={(rows) => applyChecklistRows(task.id, rows)}
+          onSaved={() => router.refresh()}
+          onDone={() => handleQuickComplete(task.id)}
+          doneDisabled={completingIds.has(task.id)}
+        />
+      ) : undefined,
+    };
+  };
 
   useEffect(() => {
     if (isCurrentWeek) {
@@ -779,10 +792,16 @@ export function WeekBoard({
         return response.json() as Promise<TaskWithImplementation[]>;
       })
       .then((selectedTasks) => {
-        setTasks((current) => [
-          ...current.filter((task) => !isDueAtInWeekStarting(task.due_at, selectedWeekStart, TIME_ZONE)),
-          ...selectedTasks,
-        ]);
+        setTasks((current) =>
+          mergeTasksById(
+            current.filter(
+              (task) =>
+                !isDueAtInWeekStarting(task.due_at, selectedWeekStart, TIME_ZONE) &&
+                !rangeOverlapsWeek(task, selectedWeekStart)
+            ),
+            selectedTasks
+          )
+        );
       })
       .catch((loadError: unknown) => {
         if ((loadError as { name?: string }).name !== "AbortError") {
@@ -1042,6 +1061,17 @@ export function WeekBoard({
                 : selectedWeekLabel}
             </p>
           </article>
+          {laneCards.length > 0 ? (
+            <article className="rounded-xl border border-range-border bg-range-soft px-3 py-2 shadow-sm">
+              <p className="text-xs font-bold uppercase tracking-[0.12em] text-range-text">Multi-day</p>
+              <p className="mt-0.5 text-sm font-semibold text-foreground">
+                {multiDayInProgress.length} in progress{" "}
+                <span className="font-medium text-muted-foreground">
+                  · {multiDayBehind > 0 ? `${multiDayBehind} behind pace` : "all on pace"}
+                </span>
+              </p>
+            </article>
+          ) : null}
         </div>
 
         <div className="flex flex-wrap items-end justify-between gap-4">
@@ -1080,6 +1110,13 @@ export function WeekBoard({
           <span className="rounded-full border border-red-500/30 bg-red-500/10 px-2 py-1 text-red-300">Red queue = overdue</span>
           <span className="rounded-full border border-accent/40 bg-accent-soft px-2 py-1 text-red-100">Accent = due today</span>
           <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-200">Amber = blocked / waiting / review</span>
+          {laneCards.length > 0 ? (
+            <>
+              <span className="rounded-full border border-range-border bg-range-soft px-2 py-1 text-range-text">Violet = multi-day, inside its dates</span>
+              <span className="rounded-full border border-success-border bg-success-soft px-2 py-1 text-success">Green fill = steps done</span>
+              <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-200">Dashed mark = time gone (amber = behind pace)</span>
+            </>
+          ) : null}
         </div>
 
         {hasError ? (
@@ -1092,6 +1129,92 @@ export function WeekBoard({
           <p className="rounded-md border border-stroke bg-panel-muted px-3 py-2 text-xs text-muted-foreground" role="status">
             Loading {selectedWeekLabel}…
           </p>
+        ) : null}
+
+        {laneCards.length > 0 ? (
+          <>
+            {/* Desktop: each multi-day task spans the day columns it covers. */}
+            <section aria-label="Multi-day tasks this week" className="hidden xl:block">
+              <h3 className="mb-2 px-1 text-xs font-bold uppercase tracking-[0.12em] text-range-text">Multi-day</h3>
+              <div className="grid grid-cols-5 gap-x-4 gap-y-2">
+                {laneCards.map(({ placement: item, data }) => {
+                  const continues = laneContinuesText(item, selectedWeekStart);
+                  const started = laneStartedText(item);
+                  return (
+                    <div
+                      key={data.id}
+                      data-lane-span={`${item.startCol}-${item.endCol}`}
+                      style={{ gridColumn: `${item.startCol + 1} / ${item.endCol + 2}` }}
+                    >
+                      <WeeklyTaskCard
+                        task={data}
+                        completing={completingIds.has(data.id)}
+                        pinning={pinningIds.has(data.id)}
+                        moving={movingIds.has(data.id)}
+                        dragging={draggingTaskId === data.id}
+                        onOpen={() => handleOpenTask(data.id)}
+                        onDone={() => handleQuickComplete(data.id)}
+                        onTogglePinned={handleTogglePinned}
+                        onDragStart={setDraggingTaskId}
+                        onDragEnd={() => {
+                          setDraggingTaskId(null);
+                          setDropTargetKey(null);
+                        }}
+                        elapsedPercent={
+                          data.range?.elapsedPercent === null
+                            ? null
+                            : laneElapsedPercent(item, selectedWeekStart, todayDate)
+                        }
+                        footer={
+                          continues || started ? (
+                            <p className="mt-1 text-xs font-bold text-range-text">
+                              {[started, continues].filter(Boolean).join(" · ")}
+                            </p>
+                          ) : null
+                        }
+                        {...rangeCardProps(data, "lane")}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+
+            {/* Phone and tablet: the multi-day tasks stacked, each with an M–S strip. */}
+            <section
+              aria-label="Multi-day tasks this week"
+              className="rounded-card border border-range-border bg-violet-500/5 p-3 xl:hidden"
+            >
+              <h3 className="mb-3 flex items-center justify-between text-sm font-semibold text-foreground">
+                Multi-day this week
+                <span className="rounded-full border border-stroke bg-panel px-2 py-0.5 text-xs font-bold text-foreground">
+                  {laneCards.length}
+                </span>
+              </h3>
+              <div className="space-y-3">
+                {laneCards.map(({ placement: item, data }) => (
+                  <WeeklyTaskCard
+                    key={data.id}
+                    task={data}
+                    completing={completingIds.has(data.id)}
+                    pinning={pinningIds.has(data.id)}
+                    moving={movingIds.has(data.id)}
+                    dragging={draggingTaskId === data.id}
+                    onOpen={() => handleOpenTask(data.id)}
+                    onDone={() => handleQuickComplete(data.id)}
+                    onTogglePinned={handleTogglePinned}
+                    onDragStart={setDraggingTaskId}
+                    onDragEnd={() => {
+                      setDraggingTaskId(null);
+                      setDropTargetKey(null);
+                    }}
+                    footer={<DayStrip cells={dayStrip(item.startDate, item.dueDate, selectedWeekStart, todayDate)} />}
+                    {...rangeCardProps(data, "phone")}
+                  />
+                ))}
+              </div>
+            </section>
+          </>
         ) : null}
 
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
@@ -1115,6 +1238,7 @@ export function WeekBoard({
               onDropTask={handleMoveTask}
               onDropTargetChange={setDropTargetKey}
               onCreateTask={setCreateDueDate}
+              rangeCardProps={rangeCardProps}
             />
           ))}
         </div>
@@ -1138,6 +1262,7 @@ export function WeekBoard({
             }}
             onHide={() => setShowOverdueQueue(false)}
             sectionRef={overdueQueueRef}
+            rangeCardProps={rangeCardProps}
           />
         ) : null}
 
@@ -1160,6 +1285,7 @@ export function WeekBoard({
               }}
               onDropTask={handleMoveTask}
               onDropTargetChange={setDropTargetKey}
+              rangeCardProps={rangeCardProps}
             />
           ) : null}
           <WaitingReviewColumn

@@ -27,6 +27,14 @@
   --success-soft: rgba(63, 185, 80, 0.12);
   --success-soft-hover: rgba(63, 185, 80, 0.22);
   --success-border: rgba(63, 185, 80, 0.4);
+  /* Multi-day tasks (S2): violet = inside its dates; green fill = steps done. */
+  --range: #a78bfa;
+  --range-text: #c4b5fd;
+  --range-soft: rgba(139, 92, 246, 0.14);
+  --range-border: rgba(139, 92, 246, 0.4);
+  --progress-fill: rgba(63, 185, 80, 0.13);
+  --progress-fill-edge: rgba(63, 185, 80, 0.55);
+  --progress-fill-full: rgba(63, 185, 80, 0.2);
   --scrollbar-track: color-mix(in oklab, var(--panel) 88%, black);
   --scrollbar-thumb: color-mix(in oklab, var(--accent) 52%, var(--panel-muted));
   --scrollbar-thumb-hover: color-mix(in oklab, var(--accent) 68%, var(--panel-muted));
@@ -53,6 +61,13 @@
   --color-success-soft: var(--success-soft);
   --color-success-soft-hover: var(--success-soft-hover);
   --color-success-border: var(--success-border);
+  --color-range: var(--range);
+  --color-range-text: var(--range-text);
+  --color-range-soft: var(--range-soft);
+  --color-range-border: var(--range-border);
+  --color-progress-fill: var(--progress-fill);
+  --color-progress-fill-edge: var(--progress-fill-edge);
+  --color-progress-fill-full: var(--progress-fill-full);
   --font-sans: "Avenir Next", "Trebuchet MS", "Segoe UI", sans-serif;
   --font-mono: "IBM Plex Mono", "SFMono-Regular", "Menlo", monospace;
   --radius-card: 1rem;
