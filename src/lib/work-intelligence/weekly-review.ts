@@ -12,6 +12,7 @@ import {
 } from "@/lib/briefing/intelligence";
 import { computeImplementationHealthScores, persistImplementationHealthSnapshots } from "@/lib/health-scores";
 import { normalizeDateOnly } from "@/lib/date-only";
+import { isPastDue } from "@/lib/task-range";
 import {
   excludePersonalCommitments,
   excludePersonalProjectUpdates,
@@ -202,18 +203,10 @@ interface BuildWorkWeeklyReviewInput {
   includeNarrativeHints?: boolean;
 }
 
+/** Late only after the due date (task-range.ts): a start date never makes a task overdue. */
 function isOverdue(referenceIso: string, dueAt: string | null): boolean {
-  if (!dueAt) {
-    return false;
-  }
-
-  const dueTimestamp = new Date(dueAt).getTime();
-  const referenceTimestamp = new Date(referenceIso).getTime();
-  if (!Number.isFinite(dueTimestamp) || !Number.isFinite(referenceTimestamp)) {
-    return false;
-  }
-
-  return dueTimestamp < referenceTimestamp;
+  const reference = new Date(referenceIso);
+  return Number.isFinite(reference.getTime()) && isPastDue(dueAt, reference);
 }
 
 function isStalledTask(task: TaskWithImplementation, referenceNow: Date, referenceIso: string): boolean {

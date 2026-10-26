@@ -4,6 +4,7 @@ import {
   type IntelligenceCommitment,
 } from "@/lib/briefing/intelligence";
 import { readBriefingOpenReviewItems } from "@/lib/briefing/open-review-items";
+import { isPastDue } from "@/lib/task-range";
 import type {
   BriefingOpenReviewItem,
   DailyBriefStatusUpdateRecommendation,
@@ -392,7 +393,8 @@ function formatEtDueLabel(dueAt: string | null, now: Date, requestedDate: string
     hour12: true,
   });
 
-  if (dueMs < now.getTime()) {
+  // Late only after the due date (task-range.ts), never because of a start date.
+  if (isPastDue(dueAt, now)) {
     if (dateEt === requestedDate) {
       return `Overdue since ${timeEt} ET`;
     }

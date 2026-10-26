@@ -1,6 +1,7 @@
 import { calculateCapacity } from "../capacity";
 import { calculateStalenessBoost } from "../planner/scoring";
 import { calculateSprintProgressMetrics } from "../today/sprint-progress";
+import { isPastDue } from "../task-range";
 import type { WorkIntelligenceFreshnessSourceInput } from "./metadata";
 import type {
   WorkIntelligenceCommentActivity,
@@ -325,10 +326,9 @@ export function buildWorkIntelligenceSnapshot(input: BuildWorkIntelligenceSnapsh
     })
     .sort(compareByDueThenPriority);
   const dueSoonTaskIds = new Set(dueSoonTasks.map((task) => task.id));
-  const overdueTasks = dueSoonTasks.filter((task) => {
-    const dueMs = task.due_at ? new Date(task.due_at).getTime() : Number.NaN;
-    return Number.isFinite(dueMs) && dueMs < nowMs;
-  });
+  // Late only after the due date (multi-day tasks, task-range.ts): a task inside
+  // its start → due range is never counted overdue.
+  const overdueTasks = dueSoonTasks.filter((task) => isPastDue(task.due_at, input.now));
   const blockedTasks = openTasks
     .filter((task) => task.status === "Blocked/Waiting" && !dueSoonTaskIds.has(task.id))
     .sort(compareByPriorityThenUpdate);

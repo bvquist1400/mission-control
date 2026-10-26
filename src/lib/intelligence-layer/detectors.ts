@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { isDueWithinHours } from "@/lib/planner/scoring";
+import { isPastDue } from "@/lib/task-range";
 import { readIntelligenceTaskContexts } from "./context";
 import type {
   AmbiguousTaskContract,
@@ -45,9 +46,9 @@ function hoursSince(now: Date, iso: string | null | undefined): number | null {
   return Math.max(0, Math.floor((now.getTime() - parsed) / (60 * 60 * 1000)));
 }
 
+/** Late only after the due date (task-range.ts): a start date never makes a task overdue. */
 function isOverdue(dueAt: string | null | undefined, now: Date): boolean {
-  const parsed = parseIso(dueAt);
-  return parsed !== null && parsed < now.getTime();
+  return isPastDue(dueAt, now);
 }
 
 function normalizeIdentityToken(value: string): string {
