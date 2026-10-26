@@ -269,6 +269,64 @@ try {
     const fixed = await patch(b.id, { start_at: startOf("2026-10-20") });
     assert.equal(fixed.status, 200);
   });
+  // ── Part S2: the Today queries on a real PostgREST (quoted or= filters, the embedded checklist under RLS) ──
+  await test("S2: weekly board + top priorities include ranges overlapping the week, embed checklist rows, and run under the user's own session (RLS)", async () => {
+    const queries = await import("../src/lib/today/queries.ts");
+    const email = `range-s2-${randomUUID().slice(0, 8)}@example.test`;
+    const password = randomUUID();
+    const { data: created, error: createError } = await admin.auth.admin.createUser({ email, password, email_confirm: true });
+    if (createError) throw createError;
+    users.push(created.user.id);
+    const owner = created.user.id;
+    const userClient = createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } });
+    const { error: signInError } = await userClient.auth.signInWithPassword({ email, password });
+    if (signInError) throw signInError;
+    const insert = async (title, extra) => {
+      const { data, error } = await admin.from("tasks").insert({ user_id: owner, title, status: "In Progress", tags: ["work"], ...extra }).select("id").single();
+      if (error) throw error;
+      return data.id;
+    };
+    // Week of Mon 11/2/2026 (EST).
+    const weekStart = new Date(startOf("2026-11-02"));
+    const weekEnd = new Date(Date.parse(startOf("2026-11-09")) - 1);
+    const inWeek = await insert("one-day in week", { due_at: etAt("2026-11-04") });
+    const spansIntoNext = await insert("range Thu -> next Tue", { start_at: startOf("2026-11-05"), due_at: etAt("2026-11-10") });
+    const fromLastWeek = await insert("range last Thu -> Tue", { start_at: startOf("2026-10-29"), due_at: etAt("2026-11-03") });
+    const nextWeekOnly = await insert("range next week", { start_at: startOf("2026-11-10"), due_at: etAt("2026-11-12") });
+    const laterOneDay = await insert("one-day next week", { due_at: etAt("2026-11-11") });
+    const { error: checklistError } = await admin.from("task_checklist_items").insert([
+      { user_id: owner, task_id: spansIntoNext, text: "a", is_done: true, sort_order: 0, unit_count: 100 },
+      { user_id: owner, task_id: spansIntoNext, text: "b", is_done: false, sort_order: 1, unit_count: 300 },
+    ]);
+    if (checklistError) throw checklistError;
+
+    const board = await queries.queryWeeklyBoardTasks(userClient, owner, weekEnd, 200, weekStart, "all");
+    const ids = board.map((task) => task.id);
+    assert.ok(ids.includes(inWeek) && ids.includes(spansIntoNext) && ids.includes(fromLastWeek), JSON.stringify(board.map((task) => task.title)));
+    assert.ok(!ids.includes(nextWeekOnly) && !ids.includes(laterOneDay));
+    const ranged = board.find((task) => task.id === spansIntoNext);
+    assert.deepEqual(ranged.checklist_rows.map((r) => [r.is_done, Number(r.unit_count)]).sort(), [[false, 300], [true, 100]]);
+    assert.deepEqual(board.find((task) => task.id === inWeek).checklist_rows, []);
+
+    // Top priorities: a range not started by "today" stays out; started or start-less tasks stay in.
+    const top = await queries.queryTopThreeTasks(userClient, owner, "all", new Date(etAt("2026-11-06", "10:00")));
+    const topIds = top.map((task) => task.id);
+    assert.ok(!topIds.includes(nextWeekOnly), "a range starting 11/10 isn't a priority on 11/6");
+    assert.ok(topIds.includes(spansIntoNext) || topIds.length === 3);
+
+    // Another user's session sees none of it (RLS on tasks and the embedded rows).
+    const otherEmail = `range-s2o-${randomUUID().slice(0, 8)}@example.test`;
+    const { data: other, error: otherError } = await admin.auth.admin.createUser({ email: otherEmail, password, email_confirm: true });
+    if (otherError) throw otherError;
+    users.push(other.user.id);
+    const otherClient = createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } });
+    await otherClient.auth.signInWithPassword({ email: otherEmail, password });
+    assert.deepEqual(await queries.queryWeeklyBoardTasks(otherClient, owner, weekEnd, 200, weekStart, "all"), []);
+
+    // The API view the board fetches for another week goes through the same query.
+    const viaRoute = await listTasks("view=weekly_board&week_start_date=2026-11-02&week_end_date=2026-11-08&limit=300");
+    assert.equal(viaRoute.status, 200, JSON.stringify(viaRoute.body));
+  });
 } finally {
   for (const id of users) {
     await admin.auth.admin.deleteUser(id).catch(() => null);

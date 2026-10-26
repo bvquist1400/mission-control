@@ -18,6 +18,7 @@
     "test:date-cascade-s2-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-date-cascade-s2-db.mjs",
     "test:task-range": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-task-range.mjs",
     "test:task-range-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-task-range-db.mjs",
+    "test:multiday-cards": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-multiday-cards.mjs",
     "test:personal-work-reviews": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-personal-work-reviews.mjs",
     "test:task-recurrence": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-task-recurrence.mjs",
     "test:calendar-sanitize": "node scripts/test-calendar-sanitizer.mjs",
