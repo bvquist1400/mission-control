@@ -20,6 +20,15 @@ import { buildCalendarEntityId } from "@/lib/calendar-event-identity";
 import { detectBriefingMode, formatETTime, getTodayET, getTomorrowET, type BriefingMode } from "@/lib/briefing";
 import { identifyPrepTasks, type TaskInput } from "@/lib/briefing/prep-tasks";
 import {
+  briefEditionForDigestMode,
+  buildNewCommentsSection,
+  pickPreviousBrief,
+  resolveCommentWindow,
+  type NewCommentsSection,
+  type PreviousBriefRef,
+} from "@/lib/briefing/comment-window";
+import { listRecentBriefSaves } from "@/lib/briefs/service";
+import {
   buildListTotals,
   describeDuplicates,
   groupByIdenticalTitle,
@@ -248,6 +257,7 @@ export interface DailyBriefDigestResponse {
   mode: BriefingMode;
   currentTimeET: string;
   generatedAt: string;
+  /** Start of the activity window: the previous brief's save (see `new_comments.source`), capped, else the day start. */
   since: string | null;
   subject: string;
   markdown: string;
@@ -282,6 +292,12 @@ export interface DailyBriefDigestResponse {
     ours: DailyBriefDigestCommitmentGroup[];
   };
   open_review_items: DailyBriefOpenReviewItem[];
+  /**
+   * Every work task with a comment written since the window start (hand-backs,
+   * REVIEW and HANDOFF first), with the window it used. Read the full thread
+   * with list_task_comments before saying what a comment means.
+   */
+  new_comments: NewCommentsSection;
   status_update_recommendations: DailyBriefStatusUpdateRecommendation[];
   guidance_title: "Where to Start" | "Afternoon Focus" | "Tomorrow Prep";
   guidance: string[];
@@ -1669,18 +1685,18 @@ async function fetchStakeholders(supabase: SupabaseClient, userId: string): Prom
   return (data || []) as StakeholderNameRow[];
 }
 
-async function fetchTaskCommentsForDay(
+async function fetchTaskCommentsInWindow(
   supabase: SupabaseClient,
   userId: string,
-  dayStartIso: string,
-  dayEndExclusiveIso: string
+  sinceIso: string,
+  untilExclusiveIso: string
 ): Promise<TaskCommentRow[]> {
   const { data, error } = await supabase
     .from("task_comments")
     .select("id, task_id, content, created_at, updated_at")
     .eq("user_id", userId)
-    .gte("created_at", dayStartIso)
-    .lt("created_at", dayEndExclusiveIso)
+    .gte("created_at", sinceIso)
+    .lt("created_at", untilExclusiveIso)
     .order("created_at", { ascending: false });
 
   if (error) {
@@ -1688,6 +1704,27 @@ async function fetchTaskCommentsForDay(
   }
 
   return (data || []) as TaskCommentRow[];
+}
+
+/**
+ * The brief saved last before this digest's moment (now, or the requested
+ * day's end for a past date), skipping the brief this digest is for. A read
+ * failure falls back to the day start rather than failing the digest.
+ */
+async function fetchPreviousBrief(
+  supabase: SupabaseClient,
+  userId: string,
+  mode: BriefingMode,
+  requestedDate: string,
+  before: Date
+): Promise<PreviousBriefRef | null> {
+  try {
+    const recent = await listRecentBriefSaves(supabase, userId, { before });
+    return pickPreviousBrief(recent, { edition: briefEditionForDigestMode(mode), brief_date: requestedDate });
+  } catch (err) {
+    console.error("[digest] previous brief lookup failed; comment window falls back to the day start:", err);
+    return null;
+  }
 }
 
 async function fetchCurrentSprint(
@@ -1838,15 +1875,26 @@ export async function buildDailyBriefDigest({
   const dayRange = normalizeRequestedRange(requestedDate, requestedDate);
   const dayWindows = buildDayWindows(dayRange, DEFAULT_WORKDAY_CONFIG);
   const sinceIso = safeIso(since);
-  const effectiveSince = sinceIso ?? dayWindows.utcRangeStart;
+  // Activity (comments, task updates) is read since the previous brief, not
+  // since midnight: evening and weekend comments otherwise reach no brief.
+  const dayEndMs = new Date(dayWindows.utcRangeEndExclusive).getTime();
+  const previousBrief = sinceIso
+    ? null
+    : await fetchPreviousBrief(supabase, userId, resolvedMode, requestedDate, new Date(Math.min(now.getTime(), dayEndMs)));
+  const activityWindow = resolveCommentWindow({
+    explicitSince: sinceIso,
+    previousBrief,
+    dayStartIso: dayWindows.utcRangeStart,
+  });
+  const effectiveSince = activityWindow.since;
 
-  const [todayEvents, tomorrowEvents, allTasks, openCommitments, stakeholders, commentsToday, currentSprint, openReviewItems] = await Promise.all([
+  const [todayEvents, tomorrowEvents, allTasks, openCommitments, stakeholders, windowComments, currentSprint, openReviewItems] = await Promise.all([
     fetchCalendarEvents(supabase, userId, requestedDate),
     resolvedMode === "eod" ? fetchCalendarEvents(supabase, userId, tomorrowDate) : Promise.resolve([]),
     fetchTasks(supabase, userId),
     fetchOpenCommitments(supabase, userId),
     fetchStakeholders(supabase, userId),
-    fetchTaskCommentsForDay(supabase, userId, dayWindows.utcRangeStart, dayWindows.utcRangeEndExclusive),
+    fetchTaskCommentsInWindow(supabase, userId, effectiveSince, dayWindows.utcRangeEndExclusive),
     fetchCurrentSprint(supabase, userId, requestedDate),
     resolvedMode === "morning" || resolvedMode === "eod"
       ? readBriefingOpenReviewItems(supabase, userId)
@@ -1866,7 +1914,7 @@ export async function buildDailyBriefDigest({
     },
     tasks: allTasks,
     events: todayEvents,
-    taskComments: commentsToday,
+    taskComments: windowComments,
     currentSprint,
   });
   const priorityStack = workPriorityStackRead(snapshot, { limit: 3 });
@@ -2183,6 +2231,12 @@ export async function buildDailyBriefDigest({
       ours: commitmentsOurs,
     },
     open_review_items: openReviewItems,
+    new_comments: buildNewCommentsSection({
+      window: activityWindow,
+      comments: windowComments,
+      tasks: allTasks,
+      untilIso: dayWindows.utcRangeEndExclusive,
+    }),
     status_update_recommendations: statusUpdateRecommendations,
     guidance_title: guidanceTitle,
     guidance,

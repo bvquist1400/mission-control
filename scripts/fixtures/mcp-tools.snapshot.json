@@ -1260,7 +1260,7 @@
           "type": "string"
         },
         "since": {
-          "description": "Optional ISO timestamp to define the activity window for midday/eod updates.",
+          "description": "Optional ISO timestamp that overrides the activity window start (default: the previous brief's save; never more than 4 days before the day start).",
           "type": "string"
         }
       }

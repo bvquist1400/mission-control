@@ -331,11 +331,11 @@ function createMcpServer(): McpServer {
 
   mcp.tool(
     'get_brief_digest',
-    'Get a deterministic daily brief digest with sprint health, task buckets, stakeholder commitments, remaining meetings, guidance, and email-ready markdown. This is the preferred low-token brief for morning, midday, and eod.',
+    'Get a deterministic daily brief digest with sprint health, task buckets, stakeholder commitments, remaining meetings, guidance, and email-ready markdown. This is the preferred low-token brief for morning, midday, and eod. Activity (comments, task updates) is read since the previous brief was saved, at most 4 days back; `new_comments` lists every work task commented on in that window (hand-backs, REVIEW and HANDOFF first). Read a thread with list_task_comments.',
     {
       mode: z.enum(['morning', 'midday', 'eod', 'auto']).default('auto').describe('Briefing mode'),
       date: z.string().optional().describe('ISO date (YYYY-MM-DD). Defaults to today ET.'),
-      since: z.string().optional().describe('Optional ISO timestamp to define the activity window for midday/eod updates.'),
+      since: z.string().optional().describe('Optional ISO timestamp that overrides the activity window start (default: the previous brief\'s save; never more than 4 days before the day start).'),
     },
     async ({ mode, date, since }) => {
       const url = new URL('/api/briefing/digest', 'https://mission-control-orpin-chi.vercel.app');

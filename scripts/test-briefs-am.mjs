@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Pure tests for the morning (AM) brief on the brief-page system: the AM code
 // and item keys, the ready notice's headline stat, the tile href allowlist,
-// upcoming vs past blocks on the day timeline, prep from today's events, and
+// upcoming vs past blocks on the day timeline, prep from today's events, the
+// comment window (since the previous brief, capped at 4 days), and
 // the MCP save_brief / get_brief surface. No database; see test-briefs-am-db.mjs.
 //
 // Each test reports and the run continues, so a run against code without the
@@ -21,6 +22,7 @@ const { buildBriefNotice } = await import("../src/lib/briefs/notify.ts");
 const { identifyPrepTasks } = await import("../src/lib/briefing/prep-tasks.ts");
 const digestModule = await import("../src/lib/briefing/digest.ts").catch((error) => ({ missing: error.message }));
 const timeline = await import("../src/components/briefs/timeline.ts").catch((error) => ({ missing: error.message }));
+const commentWindow = await import("../src/lib/briefing/comment-window.ts").catch((error) => ({ missing: error.message }));
 
 let passed = 0;
 const failed = [];
@@ -593,6 +595,131 @@ await test("MCP: get_brief accepts code or latest (eod|am), and refuses neither 
     globalThis.fetch = originalFetch;
   }
   assert.equal(fetched, 0);
+});
+
+// ── The comment window: since the previous brief, not since midnight ──────
+
+function needCommentWindow() {
+  assert.ok(!commentWindow.missing, `src/lib/briefing/comment-window.ts: ${commentWindow.missing}`);
+  return commentWindow;
+}
+
+// ET day starts (EDT, UTC-4): Tue 10/20, Wed 10/21, Mon 10/19.
+const WED_START = "2026-10-21T04:00:00.000Z";
+const MON_START = "2026-10-19T04:00:00.000Z";
+const TUE_EOD = { code: "EOD-1020", edition: "eod", brief_date: "2026-10-20", created_at: "2026-10-20T20:18:00.000Z" };
+const FRI_EOD = { code: "EOD-1016", edition: "eod", brief_date: "2026-10-16", created_at: "2026-10-16T20:18:00.000Z" };
+const windowTask = (id, overrides = {}) => ({ id, title: `Task ${id}`, status: "In Progress", owner: "agent", owner_label: "PM", tags: [], project: null, ...overrides });
+const windowComment = (id, taskId, createdAt, content = "PM 10/20: a note.") => ({ id, task_id: taskId, content, created_at: createdAt, updated_at: createdAt });
+
+await test("comment window: an evening comment after the EOD shows in the next AM, and the old day window missed it", () => {
+  const { resolveCommentWindow, buildNewCommentsSection } = needCommentWindow();
+  const window = resolveCommentWindow({ explicitSince: null, previousBrief: TUE_EOD, dayStartIso: WED_START });
+  assert.equal(window.source, "previous_brief");
+  assert.equal(window.previous_brief_code, "EOD-1020");
+  assert.equal(window.capped, false);
+  // 30 minutes before the save, so a comment written while the EOD ran isn't lost.
+  assert.equal(window.since, "2026-10-20T19:48:00.000Z");
+  const comments = [
+    windowComment("c1", "t1", "2026-10-20T23:30:00.000Z", "Brent (handed back): ship it Thursday. Then tell Pat."), // 7:30 PM Tue
+    windowComment("c0", "t2", "2026-10-20T17:00:00.000Z"), // 1:00 PM Tue: the EOD already had it
+  ];
+  const section = buildNewCommentsSection({ window, comments, tasks: [windowTask("t1"), windowTask("t2")] });
+  assert.deepEqual(section.tasks.map((task) => task.id), ["t1"]);
+  assert.equal(section.tasks[0].latest_author, "Brent (handed back)");
+  assert.equal(section.tasks[0].latest_gist, "ship it Thursday.");
+  assert.deepEqual(section.tasks[0].flags, ["hand_back"]);
+  // Sensitivity: the day-start window (the old behaviour) drops it.
+  const dayOnly = resolveCommentWindow({ explicitSince: null, previousBrief: null, dayStartIso: WED_START });
+  assert.equal(dayOnly.source, "day_start");
+  assert.equal(buildNewCommentsSection({ window: dayOnly, comments, tasks: [windowTask("t1")] }).total_tasks, 0);
+});
+
+await test("comment window: a weekend comment shows in Monday's AM", () => {
+  const { resolveCommentWindow, buildNewCommentsSection } = needCommentWindow();
+  const window = resolveCommentWindow({ explicitSince: null, previousBrief: FRI_EOD, dayStartIso: MON_START });
+  assert.equal(window.capped, false);
+  const comments = [
+    windowComment("c-fri", "t1", "2026-10-16T23:00:00.000Z"), // Fri evening
+    windowComment("c-sat", "t2", "2026-10-17T15:00:00.000Z", "REVIEW (Codex): two findings. Details below."),
+    windowComment("c-sun", "t2", "2026-10-18T22:00:00.000Z", "HANDOFF: branch fix/x ready."),
+  ];
+  const section = buildNewCommentsSection({ window, comments, tasks: [windowTask("t1"), windowTask("t2", { owner: "brent", owner_label: null })] });
+  assert.equal(section.total_tasks, 2);
+  assert.equal(section.total_comments, 3);
+  // REVIEW / HANDOFF first, then newest.
+  assert.deepEqual(section.tasks.map((task) => task.id), ["t2", "t1"]);
+  assert.equal(section.tasks[0].count, 2);
+  assert.deepEqual(section.tasks[0].flags, ["review", "handoff"]);
+  assert.equal(section.tasks[0].latest_author, "Builder");
+  assert.equal(section.tasks[0].owner, "brent");
+});
+
+await test("comment window: nothing older than the 4-day cap, even with an old brief or an explicit since", () => {
+  const { resolveCommentWindow, buildNewCommentsSection, COMMENT_WINDOW_MAX_DAYS } = needCommentWindow();
+  assert.equal(COMMENT_WINDOW_MAX_DAYS, 4);
+  const stale = { code: "EOD-1009", edition: "eod", brief_date: "2026-10-09", created_at: "2026-10-09T20:18:00.000Z" };
+  const window = resolveCommentWindow({ explicitSince: null, previousBrief: stale, dayStartIso: WED_START });
+  assert.equal(window.capped, true);
+  assert.equal(window.since, "2026-10-17T04:00:00.000Z");
+  const comments = [
+    windowComment("c-old", "t1", "2026-10-16T12:00:00.000Z"), // 5 days back
+    windowComment("c-in", "t2", "2026-10-18T12:00:00.000Z"), // 3 days back
+  ];
+  assert.deepEqual(buildNewCommentsSection({ window, comments, tasks: [windowTask("t1"), windowTask("t2")] }).tasks.map((t) => t.id), ["t2"]);
+  const explicitOld = resolveCommentWindow({ explicitSince: "2026-09-01T00:00:00.000Z", previousBrief: null, dayStartIso: WED_START });
+  assert.equal(explicitOld.source, "explicit");
+  assert.equal(explicitOld.since, "2026-10-17T04:00:00.000Z");
+  assert.equal(explicitOld.capped, true);
+});
+
+await test("comment window: an explicit since overrides the previous brief", () => {
+  const { resolveCommentWindow } = needCommentWindow();
+  const window = resolveCommentWindow({ explicitSince: "2026-10-21T13:00:00.000Z", previousBrief: TUE_EOD, dayStartIso: WED_START });
+  assert.deepEqual(window, { since: "2026-10-21T13:00:00.000Z", source: "explicit", previous_brief_code: null, capped: false });
+});
+
+await test("comment window: the previous brief skips a same-day rerun of the edition being built, either edition counts", () => {
+  const { pickPreviousBrief, briefEditionForDigestMode } = needCommentWindow();
+  const am = { code: "AM-1021", edition: "am", brief_date: "2026-10-21", created_at: "2026-10-21T11:58:00.000Z" };
+  const eod = { code: "EOD-1021", edition: "eod", brief_date: "2026-10-21", created_at: "2026-10-21T20:18:00.000Z" };
+  assert.equal(briefEditionForDigestMode("eod"), "eod");
+  assert.equal(briefEditionForDigestMode("morning"), "am");
+  assert.equal(briefEditionForDigestMode("midday"), null);
+  // The 4:15 EOD reads from this morning's AM.
+  assert.equal(pickPreviousBrief([am, TUE_EOD], { edition: "eod", brief_date: "2026-10-21" })?.code, "AM-1021");
+  // A 9 PM EOD rerun skips its own 4:15 save and still reads from the AM.
+  assert.equal(pickPreviousBrief([eod, am, TUE_EOD], { edition: "eod", brief_date: "2026-10-21" })?.code, "AM-1021");
+  // Order of the input doesn't matter.
+  assert.equal(pickPreviousBrief([TUE_EOD, am], { edition: "am", brief_date: "2026-10-22" })?.code, "AM-1021");
+  assert.equal(pickPreviousBrief([], { edition: "am", brief_date: "2026-10-22" }), null);
+});
+
+await test("comment window: personal tasks and comments on unknown tasks stay out; the list is capped, totals stay real", () => {
+  const { resolveCommentWindow, buildNewCommentsSection } = needCommentWindow();
+  const window = resolveCommentWindow({ explicitSince: null, previousBrief: TUE_EOD, dayStartIso: WED_START });
+  const at = "2026-10-21T01:00:00.000Z";
+  const tasks = [
+    windowTask("w1"),
+    windowTask("p-tag", { tags: ["personal"] }),
+    windowTask("p-proj", { project: { tags: ["personal", "hobby"] } }),
+    ...Array.from({ length: 24 }, (_, i) => windowTask(`w-many-${String(i).padStart(2, "0")}`)),
+  ];
+  const comments = [
+    windowComment("a", "w1", at, "Just a plain note with no prefix at all"),
+    windowComment("b", "p-tag", at),
+    windowComment("c", "p-proj", at),
+    windowComment("d", "deleted-task", at),
+    ...Array.from({ length: 24 }, (_, i) => windowComment(`m${i}`, `w-many-${String(i).padStart(2, "0")}`, at)),
+  ];
+  const section = buildNewCommentsSection({ window, comments, tasks });
+  const ids = section.tasks.map((task) => task.id);
+  assert.ok(!ids.some((id) => id.startsWith("p-") || id === "deleted-task"));
+  assert.equal(section.total_tasks, 25);
+  assert.equal(section.tasks.length, 20);
+  const plain = buildNewCommentsSection({ window, comments: comments.slice(0, 1), tasks }).tasks[0];
+  assert.equal(plain.latest_author, null);
+  assert.deepEqual(plain.flags, []);
 });
 
 console.log(`\n${passed} passed${failed.length ? `, ${failed.length} failed` : ""}`);

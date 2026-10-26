@@ -529,6 +529,27 @@ export async function getLatestBrief(
 }
 
 /**
+ * The newest briefs of either edition first saved before `before`, newest
+ * first, for the digest's "since the last brief" window. Callers skip the
+ * brief they are building (a same-day rerun) with `pickPreviousBrief`.
+ */
+export async function listRecentBriefSaves(
+  supabase: AnySupabase,
+  userId: string,
+  options: { before: Date; limit?: number }
+): Promise<Array<{ code: string; edition: string; brief_date: string; created_at: string }>> {
+  const { data, error } = await supabase
+    .from("briefs")
+    .select("code, edition, brief_date, created_at")
+    .eq("user_id", userId)
+    .lt("created_at", options.before.toISOString())
+    .order("created_at", { ascending: false })
+    .limit(options.limit ?? 3);
+  if (error) throw error;
+  return (data ?? []) as Array<{ code: string; edition: string; brief_date: string; created_at: string }>;
+}
+
+/**
  * Today's brief for the app-shell button (ET date, never UTC) and how many of
  * its items are still open. With several editions today, the one saved last
  * wins: the morning brief until the EOD saves, then the EOD.
