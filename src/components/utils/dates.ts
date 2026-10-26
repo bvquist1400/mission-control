@@ -192,6 +192,36 @@ export function localDateInputToEndOfDayIso(dateString: string): string {
   return parsed.toISOString();
 }
 
+/** The start of a local day (00:00:00.000), for a multi-day task's start date (063). */
+export function localDateInputToStartOfDayIso(dateString: string): string {
+  if (!isValidDateInput(dateString)) {
+    return "";
+  }
+
+  const [year, month, day] = dateString.split("-").map((part) => Number.parseInt(part, 10));
+  const parsed = parseLocalDateParts(year, month, day);
+  if (!parsed) {
+    return "";
+  }
+
+  parsed.setHours(0, 0, 0, 0);
+  return parsed.toISOString();
+}
+
+/**
+ * A start date typed in the task window: the same inputs as the due date
+ * (YYYY-MM-DD, MM/DD/YYYY, t+N…), saved at the START of that day so a task can
+ * start and be due on the same day (the due date is saved at the end of its day).
+ */
+export function resolveStartDateInput(value: string, baseDate: Date = new Date()): DueDateInputResolution {
+  const resolution = resolveDueDateInput(value, baseDate);
+  if (resolution.error || !resolution.dateOnly) {
+    return resolution;
+  }
+
+  return { ...resolution, iso: localDateInputToStartOfDayIso(resolution.dateOnly) };
+}
+
 export function formatRelativeDate(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) {

@@ -7,6 +7,7 @@ import {
   formatDateOnly,
   localDateString,
   resolveDueDateInput,
+  resolveStartDateInput,
   timestampToLocalDateInputValue,
 } from "@/components/utils/dates";
 import { useSprints } from "@/hooks/useSprints";
@@ -14,6 +15,7 @@ import { RECURRENCE_FREQUENCIES } from "@/lib/recurrence";
 import { mergeTaskTags } from "@/lib/task-tags";
 import { hasPersonalTag, setPersonalTag } from "@/lib/personal-exclusion";
 import { followHint } from "@/lib/date-cascade-view";
+import { START_AFTER_DUE_ERROR } from "@/lib/task-range";
 import type { TaskBlocksLink } from "@/lib/task-detail";
 import type {
   TaskRecurrenceFrequency,
@@ -122,6 +124,7 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
   const [projectIdDraft, setProjectIdDraft] = useState(task.project_id ?? "");
   const [sectionIdDraft, setSectionIdDraft] = useState(task.section_id ?? "");
   const [sprintIdDraft, setSprintIdDraft] = useState(task.sprint_id ?? "");
+  const [startDateDraft, setStartDateDraft] = useState(timestampToLocalDateInputValue(task.start_at));
   const [dueDateDraft, setDueDateDraft] = useState(timestampToLocalDateInputValue(task.due_at));
   const [tagsDraft, setTagsDraft] = useState(currentTags);
   const [tagInput, setTagInput] = useState("");
@@ -165,6 +168,7 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
     setProjectIdDraft(task.project_id ?? "");
     setSectionIdDraft(task.section_id ?? "");
     setSprintIdDraft(task.sprint_id ?? "");
+    setStartDateDraft(timestampToLocalDateInputValue(task.start_at));
     setDueDateDraft(nextDueDateDraft);
     setTagsDraft(task.tags ?? []);
     setTagInput("");
@@ -299,6 +303,14 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
   const followLine = hasDueDateChange
     ? followHint({ currentDueAt: task.due_at, nextDateOnly: dueDateResolution.dateOnly, blocks })
     : null;
+  // Multi-day tasks (063): an optional start date; the due date is the end.
+  const currentStartDate = timestampToLocalDateInputValue(task.start_at);
+  const startDateResolution = resolveStartDateInput(startDateDraft);
+  const hasStartDateChange = startDateResolution.error === null && (startDateResolution.dateOnly ?? "") !== currentStartDate;
+  // The start and due dates as they would be saved (a draft that doesn't parse keeps the saved one).
+  const nextStartDate = startDateResolution.error === null ? startDateResolution.dateOnly : currentStartDate || null;
+  const nextDueDate = dueDateResolution.error === null ? dueDateResolution.dateOnly : currentDueDate || null;
+  const rangeError = nextStartDate && nextDueDate && nextStartDate > nextDueDate ? START_AFTER_DUE_ERROR : null;
   const nextTags = mergeTaskTags(tagsDraft, tagInput);
   const hasTagChanges = nextTags.length !== currentTags.length || nextTags.some((tag, index) => tag !== currentTags[index]);
   const isMutating = isSaving || isUpdatingRecurrence;
@@ -325,8 +337,14 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
     || nextSectionId !== task.section_id
     || nextSprintId !== task.sprint_id
     || hasTagChanges
+    || hasStartDateChange
     || hasDueDateChange;
-  const canSave = normalizedTitle.length > 0 && hasChanges && !isMutating && dueDateResolution.error === null;
+  const canSave = normalizedTitle.length > 0
+    && hasChanges
+    && !isMutating
+    && dueDateResolution.error === null
+    && startDateResolution.error === null
+    && rangeError === null;
 
   const recurrenceHasChanges = recurrenceEnabledDraft !== Boolean(editableRecurrence)
     || (recurrenceEnabledDraft && (
@@ -352,6 +370,17 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
     const normalizedValue = dueDateResolution.dateOnly ?? "";
     if (normalizedValue !== dueDateDraft) {
       setDueDateDraft(normalizedValue);
+    }
+  }
+
+  function normalizeStartDateDraft() {
+    if (startDateResolution.error) {
+      return;
+    }
+
+    const normalizedValue = startDateResolution.dateOnly ?? "";
+    if (normalizedValue !== startDateDraft) {
+      setStartDateDraft(normalizedValue);
     }
   }
 
@@ -386,6 +415,9 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
     if (nextSprintId !== task.sprint_id) {
       updates.sprint_id = nextSprintId;
     }
+    if (hasStartDateChange) {
+      updates.start_at = startDateResolution.iso;
+    }
     if (hasDueDateChange) {
       updates.due_at = dueDateResolution.iso;
     }
@@ -398,7 +430,10 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
     if (Object.keys(updates).length > 0) {
       void onUpdate(task.id, updates).then((outcome) => {
         // Cancelled in the "more than 25" box: nothing was saved; show the saved date again.
-        if (outcome === "cancelled") setDueDateDraft(currentDueDate);
+        if (outcome === "cancelled") {
+          setStartDateDraft(currentStartDate);
+          setDueDateDraft(currentDueDate);
+        }
       });
     }
   }
@@ -506,7 +541,43 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
         </label>
 
         <label className="space-y-1">
-          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Due Date</span>
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Start</span>
+          <input
+            value={startDateDraft}
+            onChange={(event) => setStartDateDraft(event.target.value)}
+            onBlur={normalizeStartDateDraft}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                normalizeStartDateDraft();
+                saveEdits();
+              }
+
+              if (event.key === "Escape") {
+                setStartDateDraft(currentStartDate);
+                event.currentTarget.blur();
+              }
+            }}
+            disabled={isMutating}
+            placeholder="Optional, e.g. t or 10/26"
+            aria-invalid={startDateResolution.error || rangeError ? "true" : "false"}
+            className={`w-full rounded border bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition disabled:cursor-not-allowed disabled:opacity-60 ${
+              startDateResolution.error || rangeError
+                ? "border-danger-border focus:border-red-400"
+                : "border-stroke focus:border-accent"
+            }`}
+          />
+          <p className={`text-xs ${startDateResolution.error || rangeError ? "text-danger" : "text-muted-foreground"}`}>
+            {startDateResolution.error
+              ?? rangeError
+              ?? (startDateResolution.dateOnly
+                ? `Starts ${formatDateOnly(startDateResolution.dateOnly)}. Not late until after the due date.`
+                : "For a task that takes more than a day. Leave blank for none.")}
+          </p>
+        </label>
+
+        <label className="space-y-1">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Due</span>
           <input
             value={dueDateDraft}
             onChange={(event) => setDueDateDraft(event.target.value)}
