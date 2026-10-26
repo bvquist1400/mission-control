@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { TaskTagChips } from "@/components/tasks/TaskTagChips";
 import {
   dateOnlyToInputValue,
@@ -125,6 +125,9 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
   const [sectionIdDraft, setSectionIdDraft] = useState(task.section_id ?? "");
   const [sprintIdDraft, setSprintIdDraft] = useState(task.sprint_id ?? "");
   const [startDateDraft, setStartDateDraft] = useState(timestampToLocalDateInputValue(task.start_at));
+  // Escape blurs the field, and the blur handler would normalize the stale draft
+  // back in (it runs before the reset applies): skip that one normalization.
+  const skipStartNormalizeRef = useRef(false);
   const [dueDateDraft, setDueDateDraft] = useState(timestampToLocalDateInputValue(task.due_at));
   const [tagsDraft, setTagsDraft] = useState(currentTags);
   const [tagInput, setTagInput] = useState("");
@@ -374,6 +377,10 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
   }
 
   function normalizeStartDateDraft() {
+    if (skipStartNormalizeRef.current) {
+      skipStartNormalizeRef.current = false;
+      return;
+    }
     if (startDateResolution.error) {
       return;
     }
@@ -555,7 +562,9 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
 
               if (event.key === "Escape") {
                 setStartDateDraft(currentStartDate);
+                skipStartNormalizeRef.current = true;
                 event.currentTarget.blur();
+                skipStartNormalizeRef.current = false;
               }
             }}
             disabled={isMutating}
