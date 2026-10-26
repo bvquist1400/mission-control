@@ -762,6 +762,8 @@ export interface CreateTaskFromNotePayload {
   estimated_minutes?: number;
   estimate_source?: EstimateSource;
   due_at?: string | null;
+  /** Multi-day tasks: optional start date (ISO); must not be after due_at. */
+  start_at?: string | null;
   priority_score?: number;
   blocker?: boolean;
   needs_review?: boolean;

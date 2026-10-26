@@ -2164,6 +2164,7 @@ function createMcpServer(): McpServer {
       estimated_minutes: z.number().int().min(1).max(480).optional(),
       estimate_source: z.enum(['default', 'llm', 'manual']).optional(),
       due_at: z.string().nullable().optional(),
+      start_at: z.string().nullable().optional().describe(TASK_START_AT_DESCRIPTION),
       priority_score: z.number().int().min(0).max(100).optional(),
       blocker: z.boolean().optional(),
       needs_review: z.boolean().optional(),

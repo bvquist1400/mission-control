@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { isStartAfterDueViolation, START_AFTER_DUE_ERROR, startIsAfterDue } from '@/lib/task-range';
 import {
   buildCalendarEntityId,
   parseCalendarEntityId,
@@ -525,6 +526,10 @@ export async function createTaskFromNote(
   }
 
   const dueAt = asIsoTimestampOrNull(input.due_at);
+  const startAt = asIsoTimestampOrNull(input.start_at);
+  if (startIsAfterDue(startAt, dueAt)) {
+    throw new NotesServiceError(START_AFTER_DUE_ERROR, 400, 'start_after_due');
+  }
   const implementationId = asTrimmedString(input.implementation_id);
   const projectId = asTrimmedString(input.project_id);
   const sprintId = asTrimmedString(input.sprint_id);
@@ -569,6 +574,7 @@ export async function createTaskFromNote(
           : 30,
       estimate_source: estimateSource,
       due_at: dueAt ?? null,
+      start_at: startAt ?? null,
       needs_review: input.needs_review === true,
       blocker: input.blocker === true,
       waiting_on: asTrimmedString(input.waiting_on) ?? null,
@@ -582,6 +588,9 @@ export async function createTaskFromNote(
     .single();
 
   if (insertResult.error) {
+    if (isStartAfterDueViolation(insertResult.error)) {
+      throw new NotesServiceError(START_AFTER_DUE_ERROR, 400, 'start_after_due');
+    }
     throw insertResult.error;
   }
 

@@ -38,6 +38,7 @@ export async function POST(
       estimate_source:
         typeof body.estimate_source === 'string' ? (body.estimate_source as EstimateSource) : undefined,
       due_at: typeof body.due_at === 'string' || body.due_at === null ? body.due_at : undefined,
+      start_at: typeof body.start_at === 'string' || body.start_at === null ? body.start_at : undefined,
       priority_score: typeof body.priority_score === 'number' ? body.priority_score : undefined,
       blocker: typeof body.blocker === 'boolean' ? body.blocker : undefined,
       needs_review: typeof body.needs_review === 'boolean' ? body.needs_review : undefined,

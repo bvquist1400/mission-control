@@ -1018,6 +1018,17 @@
             }
           ]
         },
+        "start_at": {
+          "description": "Start date of a multi-day task as ISO string (optional; the due date is the end). It can't be after the due date. A task is late only after its due date, never because of its start; a cascade moves only the due date.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "priority_score": {
           "type": "integer",
           "minimum": 0,
