@@ -27,7 +27,6 @@ import {
   dayStrip,
   laneContinuesText,
   laneCountsByColumn,
-  laneElapsedPercent,
   laneStartedText,
   mergeTasksById,
   placeWeekTasks,
@@ -1136,7 +1135,7 @@ export function WeekBoard({
             {/* Desktop: each multi-day task spans the day columns it covers. */}
             <section aria-label="Multi-day tasks this week" className="hidden xl:block">
               <h3 className="mb-2 px-1 text-xs font-bold uppercase tracking-[0.12em] text-range-text">Multi-day</h3>
-              <div className="grid grid-cols-5 gap-x-4 gap-y-2">
+              <div className="grid grid-flow-row-dense grid-cols-5 gap-x-4 gap-y-2">
                 {laneCards.map(({ placement: item, data }) => {
                   const continues = laneContinuesText(item, selectedWeekStart);
                   const started = laneStartedText(item);
@@ -1160,11 +1159,6 @@ export function WeekBoard({
                           setDraggingTaskId(null);
                           setDropTargetKey(null);
                         }}
-                        elapsedPercent={
-                          data.range?.elapsedPercent === null
-                            ? null
-                            : laneElapsedPercent(item, selectedWeekStart, todayDate)
-                        }
                         footer={
                           continues || started ? (
                             <p className="mt-1 text-xs font-bold text-range-text">

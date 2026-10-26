@@ -109,20 +109,6 @@ export function laneCountsByColumn<T>(lane: ReadonlyArray<LanePlacement<T>>): nu
   return counts;
 }
 
-/**
- * Where the dashed "time gone" mark sits on a lane card that spans only part
- * of its range: the left edge of today's column within the span, as 0–100.
- * Null when today isn't inside the span (another week, or the range is cut
- * at Friday and today is the weekend).
- */
-export function laneElapsedPercent(item: LanePlacement<unknown>, weekStart: string, today: string): number | null {
-  const todayIndex = dayIndex(weekStart, today);
-  if (todayIndex < item.startCol || todayIndex > item.endCol) return null;
-  const span = item.endCol - item.startCol + 1;
-  const share = (todayIndex - item.startCol) / span;
-  return share > 0 ? Math.round(share * 100) : null;
-}
-
 export interface DayStripCell {
   /** "M", "T", "W", "T", "F", "S", "S". */
   letter: string;

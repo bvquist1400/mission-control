@@ -60,8 +60,6 @@ export interface WeeklyTaskCardProps {
   canDrag?: boolean;
   /** Where the card sits ("lane", "phone", "col"): keeps steps ids unique when a task shows twice. */
   context?: string;
-  /** The dashed mark's position on a lane card cut to this week's columns (else the range's own share). */
-  elapsedPercent?: number | null;
   stepsOpen?: boolean;
   onToggleSteps?: () => void;
   steps?: ReactNode;
@@ -82,7 +80,6 @@ export function WeeklyTaskCard({
   onDragEnd,
   canDrag = true,
   context = "col",
-  elapsedPercent,
   stepsOpen = false,
   onToggleSteps,
   steps,
@@ -164,7 +161,7 @@ export function WeeklyTaskCard({
         draggable ? "cursor-grab active:cursor-grabbing" : ""
       } ${dragging ? "opacity-50" : ""} ${moving ? "opacity-60" : ""} ${rangeEdgeClass(range)}`}
     >
-      <RangeFillLayers view={range} elapsedPercent={elapsedPercent} />
+      <RangeFillLayers view={range} />
       <div className="relative">
         <button
           type="button"
@@ -189,8 +186,8 @@ export function WeeklyTaskCard({
         </div>
         {footer}
 
-        <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
-          <Button variant={range.allStepsDone ? "ready" : "success"} size="sm"
+        <div className="mt-2 flex flex-wrap gap-2">
+          <Button variant={range.allStepsDone ? "ready" : "success"} size="sm" className="min-w-28"
             onClick={onDone}
             disabled={completing}
             aria-label={range.allStepsDone ? "Mark task complete (all steps done)" : "Mark task complete"}>

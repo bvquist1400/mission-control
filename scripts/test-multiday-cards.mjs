@@ -239,12 +239,7 @@ await test("board: ranges go in the lane over their days, each once; one-day tas
   assert.deepEqual(board.laneCountsByColumn(placed.lane), [2, 3, 3, 4, 3]);
 });
 
-await test("board: the lane's dashed mark lines up with today's column; day strip marks the range", () => {
-  const item = { startCol: 0, endCol: 4 };
-  assert.equal(board.laneElapsedPercent(item, WEEK, "2026-10-29"), 60);
-  assert.equal(board.laneElapsedPercent(item, WEEK, "2026-10-26"), null);
-  assert.equal(board.laneElapsedPercent({ startCol: 1, endCol: 4 }, WEEK, "2026-10-31"), null);
-  assert.equal(board.laneElapsedPercent({ startCol: 1, endCol: 4 }, WEEK, "2026-10-28"), 25);
+await test("board: the phone day strip marks the range, the past and today", () => {
   const strip = board.dayStrip("2026-10-27", "2026-11-01", WEEK, "2026-10-29");
   assert.deepEqual(strip.map((cell) => cell.letter).join(""), "MTWTFSS");
   assert.deepEqual(strip.map((cell) => (cell.inRange ? 1 : 0)), [0, 1, 1, 1, 1, 1, 1]);
