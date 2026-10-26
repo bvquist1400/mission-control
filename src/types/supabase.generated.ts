@@ -2365,6 +2365,7 @@ export type Database = {
           source_url: string | null
           sprint_id: string | null
           stakeholder_mentions: string[]
+          start_at: string | null
           status: Database["public"]["Enums"]["task_status"]
           status_line: string | null
           tags: string[]
@@ -2411,6 +2412,7 @@ export type Database = {
           source_url?: string | null
           sprint_id?: string | null
           stakeholder_mentions?: string[]
+          start_at?: string | null
           status?: Database["public"]["Enums"]["task_status"]
           status_line?: string | null
           tags?: string[]
@@ -2457,6 +2459,7 @@ export type Database = {
           source_url?: string | null
           sprint_id?: string | null
           stakeholder_mentions?: string[]
+          start_at?: string | null
           status?: Database["public"]["Enums"]["task_status"]
           status_line?: string | null
           tags?: string[]

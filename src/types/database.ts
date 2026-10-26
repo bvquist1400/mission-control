@@ -90,6 +90,8 @@ export interface Task {
   latest_instance_id: string | null;
   last_generated_at: string | null;
   estimate_source: EstimateSource;
+  /** Optional start of a multi-day task (migration 063); due_at is the end. Never makes a task late. */
+  start_at: string | null;
   due_at: string | null;
   needs_review: boolean;
   blocker: boolean;
@@ -375,6 +377,7 @@ export interface TaskUpdatePayload {
   estimated_minutes?: number;
   actual_minutes?: number | null;
   estimate_source?: EstimateSource;
+  start_at?: string | null;
   due_at?: string | null;
   needs_review?: boolean;
   blocker?: boolean;
