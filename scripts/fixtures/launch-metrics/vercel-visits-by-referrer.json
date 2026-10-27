@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "query": { "since": "2026-10-21", "until": "2026-10-27", "groupBy": ["day", "referrerHostname"], "limit": 100 },
+  "data": [
+    { "timestamp": "2026-10-26T00:00:00.000Z", "referrerHostname": "www.reddit.com", "pageviews": 30, "visitors": 18 },
+    { "timestamp": "2026-10-26T00:00:00.000Z", "referrerHostname": "", "pageviews": 20, "visitors": 10 },
+    { "timestamp": "2026-10-26T00:00:00.000Z", "referrerHostname": "Others", "pageviews": 8, "visitors": 3 },
+    { "timestamp": "2026-10-27T00:00:00.000Z", "referrerHostname": "WWW.Google.com", "pageviews": 12, "visitors": 9 }
+  ]
+}

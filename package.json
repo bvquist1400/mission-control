@@ -24,6 +24,7 @@
     "test:today-sprint": "node --experimental-strip-types scripts/test-today-sprint-progress.mjs",
     "test:week-board": "node --experimental-strip-types scripts/test-week-board.mjs",
     "test:launch-metrics-apple-setup": "node --test scripts/test-launch-metrics-apple-setup.mjs",
+    "test:launch-metrics": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-launch-metrics.mjs",
     "test:launch-metrics-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-launch-metrics-db.mjs",
     "test:mcp-oauth": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-mcp-oauth.mjs",
     "test:mcp-intelligence-artifacts": "node scripts/test-mcp-intelligence-artifact-routing.mjs",
