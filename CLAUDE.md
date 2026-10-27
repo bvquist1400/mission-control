@@ -266,6 +266,7 @@ Controls with behaviour (Button, Input) are components; pure-styling primitives 
 | Pace section (project page) | `src/components/projects/pace/` |
 | Work sessions service / backfill | `src/lib/work-sessions/`, `supabase/migrations/059_add_work_sessions_and_units.sql` |
 | EOD routine prompt | `docs/routines/eod.md` |
+| Launch metrics: one-time Apple report-request setup (Brent runs it; dry run by default, never prints the key or token) | `scripts/launch-metrics/apple-create-requests.mjs`, `docs/runbooks/launch-metrics-apple-setup.md`, `npm run test:launch-metrics-apple-setup` |
 
 ## Briefing Model Note
 
