@@ -286,6 +286,13 @@ Controls with behaviour (Button, Input) are components; pure-styling primitives 
 - ICS feed does NOT include ATTENDEE/ORGANIZER properties (Microsoft strips them)
 - Attendee names only available if embedded in event title
 
+## Launch metrics (Menu & Market live dashboard; migration 065)
+
+- Baseline task d51b2848; plan `/Users/owner/dev/live-dashboard-plan.md` §3 with Brent's 10/27 decisions (counts only, unconfirmed sign-ups shown separately, deleted accounts keep counting on past days, Plus by household, Search Console in phase 1, Apple in phase 2).
+- **Counts only.** No account id, email or name from the Grocery app database is ever stored or shown; the app database sends daily totals. Website and Search Console rows are aggregates. Never add a column, MCP tool or search index over these tables without a separate review.
+- Migration 065 (`supabase/migrations/065_add_launch_metrics.sql`, rollback `supabase/rollbacks/065_add_launch_metrics.down.sql`): `launch_metric_daily` (one row per day × source × metric × dimension; PK (user_id, metric_date, source, metric, dimension); `dimension` '' = the day's total, else `<kind>:<value>`; each source keeps its own day: app_db ET, web UTC, search_console Pacific; trigger `launch_metric_daily_keep_latest_apple` keeps the newest Apple processing date on upsert), `launch_source_snapshots` (latest validated app-db summary / Search Console top lists per day), `launch_apple_instances` (phase 2), `launch_metric_runs` (run log, per-source codes only), `launch_reddit_posts`, `launch_milestones`, `launch_app_store_manual_reads`. 4-policy RLS + grants on every table. Domain types in `src/lib/launch-metrics/types.ts`, pinned in `type-assertions.ts`.
+- Tests: `npm run test:launch-metrics` (offline) and `test:launch-metrics-db` (local stack + `LAUNCH_TEST_SUPABASE_URL`, `LAUNCH_TEST_ANON_KEY`, `LAUNCH_TEST_SERVICE_ROLE_KEY`, `LAUNCH_TEST_DB_CONTAINER`; refuses non-local URLs).
+
 ## Environment Variables (key ones)
 
 - `DEPLOYMENT_ROLE` — `main` or `mcp`
@@ -297,3 +304,8 @@ Controls with behaviour (Button, Input) are components; pure-styling primitives 
 - `MISSION_CONTROL_USER_ID` — legacy MCP user binding
 - `MISSION_CONTROL_FAMCAL_API_KEY` — FamCal Sunday brief key, personal tasks only (main deployment; its own value, same as FamCal's `BASELINE_API_KEY`; a value equal to the legacy or actions key is refused for every caller)
 - `BASELINE_TELEGRAM_BOT_TOKEN`, `BASELINE_TELEGRAM_CHAT_ID` — the bot and chat for "brief ready" notices (main deployment; optional, a missing value is recorded on the brief)
+- `MM_METRICS_URL`, `MM_METRICS_TOKEN` — the Grocery app's `launch-metrics` edge function (`https://<ref>.supabase.co/functions/v1/launch-metrics`, nothing else accepted) and its bearer token (same value as the function's `METRICS_READ_TOKEN`); counts only
+- `VERCEL_ANALYTICS_TOKEN`, `VERCEL_ANALYTICS_PROJECT_ID`, `VERCEL_ANALYTICS_TEAM_ID` (optional), `VERCEL_ANALYTICS_TOKEN_EXPIRES` (YYYY-MM-DD) — website numbers for menuandmarket.com; the token is scoped to the menuandmarket-site project only and expires (the page warns 30 days ahead)
+- `GSC_CLIENT_EMAIL`, `GSC_PRIVATE_KEY`, `GSC_SITE_URL` — Google Search Console service account (Restricted user on the property; read-only scope) and the property (`sc-domain:menuandmarket.com` or `https://menuandmarket.com/`)
+- `LAUNCH_METRICS_ALERT_PROJECT_ID` (optional) — project for the "launch numbers stopped updating" task; without it the task is a standalone personal task
+- `CRON_SECRET` — also authorises the launch-metrics sync crons
