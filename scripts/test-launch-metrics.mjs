@@ -5,6 +5,7 @@
 //   npm run test:launch-metrics
 
 import assert from "node:assert/strict";
+import { generateKeyPairSync, createVerify } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/launch-metrics/${name}`, import.meta.url), "utf8"));
@@ -12,6 +13,7 @@ const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/launch-met
 const http = await import("../src/lib/launch-metrics/http.ts");
 const appDb = await import("../src/lib/launch-metrics/app-db.ts");
 const web = await import("../src/lib/launch-metrics/vercel-analytics.ts");
+const gsc = await import("../src/lib/launch-metrics/search-console.ts");
 
 let passed = 0;
 const failures = [];
@@ -318,6 +320,118 @@ await test("web: config reads env names and ignores a malformed expiry date", ()
   assert.equal(web.readVercelAnalyticsConfig({}), null);
   const config = web.readVercelAnalyticsConfig({ VERCEL_ANALYTICS_TOKEN: " tok ", VERCEL_ANALYTICS_PROJECT_ID: "prj_1", VERCEL_ANALYTICS_TOKEN_EXPIRES: "next year" });
   assert.deepEqual(config, { token: "tok", projectId: "prj_1", teamId: null, tokenExpires: null });
+});
+
+// ─── Search Console ───────────────────────────────────────────────────────
+
+const { privateKey: RSA_PRIVATE, publicKey: RSA_PUBLIC } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+const RSA_PEM = RSA_PRIVATE.export({ type: "pkcs8", format: "pem" });
+const GSC_CONFIG = {
+  clientEmail: "launch-metrics@menuandmarket-123456.iam.gserviceaccount.com",
+  privateKeyPem: RSA_PEM,
+  siteUrl: "sc-domain:menuandmarket.com",
+};
+
+function gscFetch(overrides = {}) {
+  return fakeFetch([
+    { match: (url) => url === "https://oauth2.googleapis.com/token", reply: overrides.token ?? (() => jsonResponse(fixture("gsc-token.json"))) },
+    {
+      match: (url) => url.startsWith("https://searchconsole.googleapis.com/"),
+      reply: (url, init) => {
+        const dims = JSON.parse(init.body).dimensions[0];
+        if (overrides[dims]) return overrides[dims](url, init);
+        return jsonResponse(fixture(`gsc-query-${dims}.json`));
+      },
+    },
+  ]);
+}
+
+function decodeJwt(jwt) {
+  const [h, c, s] = jwt.split(".");
+  return { header: JSON.parse(Buffer.from(h, "base64url")), claims: JSON.parse(Buffer.from(c, "base64url")), signingInput: `${h}.${c}`, signature: Buffer.from(s, "base64url") };
+}
+
+await test("gsc: the assertion is RS256, read-only scope, Google's audience, 10-minute life, and verifies", () => {
+  const jwt = gsc.signServiceAccountJwt(GSC_CONFIG, 1_800_000_000);
+  const { header, claims, signingInput, signature } = decodeJwt(jwt);
+  assert.deepEqual(header, { alg: "RS256", typ: "JWT" });
+  assert.deepEqual(claims, {
+    iss: GSC_CONFIG.clientEmail,
+    scope: "https://www.googleapis.com/auth/webmasters.readonly",
+    aud: "https://oauth2.googleapis.com/token",
+    iat: 1_800_000_000,
+    exp: 1_800_000_600,
+  });
+  const verifier = createVerify("RSA-SHA256");
+  verifier.update(signingInput);
+  assert.ok(verifier.verify(RSA_PUBLIC, signature));
+});
+
+await test("gsc: a key pasted with literal \\n works; a non-RSA or broken key is gsc_bad_key; a non-service-account email is refused", () => {
+  const escaped = RSA_PEM.replace(/\n/g, "\\n");
+  assert.ok(gsc.signServiceAccountJwt({ ...GSC_CONFIG, privateKeyPem: escaped }, 1).split(".").length === 3);
+  const ec = generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey.export({ type: "pkcs8", format: "pem" });
+  assert.throws(() => gsc.signServiceAccountJwt({ ...GSC_CONFIG, privateKeyPem: ec }, 1), (e) => e.code === "gsc_bad_key");
+  assert.throws(() => gsc.signServiceAccountJwt({ ...GSC_CONFIG, privateKeyPem: "-----BEGIN PRIVATE KEY-----\nnope\n-----END PRIVATE KEY-----" }, 1), (e) => e.code === "gsc_bad_key");
+  assert.throws(() => gsc.signServiceAccountJwt({ ...GSC_CONFIG, clientEmail: "brent@gmail.com" }, 1), (e) => e.code === "gsc_bad_email");
+});
+
+await test("gsc: token exchange then three queries, only to Google's two hosts, token never in a URL", async () => {
+  const fetchImpl = gscFetch();
+  const result = await gsc.fetchSearchConsoleMetrics(GSC_CONFIG, fetchImpl, NOW);
+  assert.equal(fetchImpl.calls.length, 4);
+  const [tokenCall, ...queryCalls] = fetchImpl.calls;
+  assert.equal(tokenCall.init.method, "POST");
+  const form = new URLSearchParams(tokenCall.init.body);
+  assert.equal(form.get("grant_type"), "urn:ietf:params:oauth:grant-type:jwt-bearer");
+  assert.equal(decodeJwt(form.get("assertion")).claims.iss, GSC_CONFIG.clientEmail);
+  for (const call of queryCalls) {
+    assert.equal(call.url, "https://searchconsole.googleapis.com/webmasters/v3/sites/sc-domain%3Amenuandmarket.com/searchAnalytics/query");
+    assert.equal(call.init.headers.Authorization, "Bearer ya29.fixture-access-token-not-real");
+    assert.equal(call.init.redirect, "error");
+  }
+  assert.deepEqual(queryCalls.map((c) => JSON.parse(c.init.body).dimensions), [["date"], ["query"], ["page"]]);
+  const body = JSON.parse(queryCalls[0].init.body);
+  assert.equal(body.startDate, "2026-10-21");
+  assert.equal(body.endDate, "2026-10-27");
+  assert.equal(body.type, "web");
+  assert.ok(!fetchImpl.calls.some((c) => c.url.includes("ya29")));
+  assert.ok(!JSON.stringify(result).includes("ya29"));
+  assert.ok(!JSON.stringify(result).includes("PRIVATE KEY"));
+});
+
+await test("gsc: daily clicks/impressions/position rows and aggregated top lists (own site paths only)", async () => {
+  const result = await gsc.fetchSearchConsoleMetrics(GSC_CONFIG, gscFetch(), NOW);
+  const get = (date, metric) => result.rows.find((r) => r.metric_date === date && r.metric === metric)?.value;
+  assert.equal(get("2026-10-26", "clicks"), 5);
+  assert.equal(get("2026-10-26", "impressions"), 61);
+  assert.equal(get("2026-10-25", "position"), 12.25);
+  assert.equal(result.topLists.top_queries[0].label, "menu and market app");
+  assert.deepEqual(result.topLists.top_pages.map((p) => p.label), ["/", "/privacy"]);
+  assert.ok(result.topLists.top_queries.length <= 10);
+});
+
+await test("gsc: the token step names itself on failure; odd replies are gsc_shape", async () => {
+  await rejectsWithCode(gsc.fetchSearchConsoleMetrics(GSC_CONFIG, gscFetch({ token: () => jsonResponse({ error: "invalid_grant" }, 400) }), NOW), "gsc_token_http_400");
+  await rejectsWithCode(gsc.fetchSearchConsoleMetrics(GSC_CONFIG, gscFetch({ token: () => jsonResponse({ access_token: "has spaces in it ok?" }) }), NOW), "gsc_token_shape");
+  await rejectsWithCode(gsc.fetchSearchConsoleMetrics(GSC_CONFIG, gscFetch({ date: () => jsonResponse({ rows: [{ keys: ["2026-10-26", "x"], clicks: 1 }] }) }), NOW), "gsc_shape");
+  await rejectsWithCode(gsc.fetchSearchConsoleMetrics(GSC_CONFIG, gscFetch({ date: () => jsonResponse({ rows: [{ keys: ["2025-01-01"], clicks: 1 }] }) }), NOW), "gsc_shape");
+  await rejectsWithCode(gsc.fetchSearchConsoleMetrics(GSC_CONFIG, gscFetch({ query: () => jsonResponse({ error: { code: 403 } }, 403) }), NOW), "http_403");
+  const quiet = await gsc.fetchSearchConsoleMetrics(GSC_CONFIG, gscFetch({ date: () => jsonResponse({ responseAggregationType: "byProperty" }) }), NOW);
+  assert.deepEqual(quiet.rows, []);
+});
+
+await test("gsc: site property must be sc-domain:<host> or https://<host>/", () => {
+  assert.equal(gsc.siteHost("sc-domain:menuandmarket.com"), "menuandmarket.com");
+  assert.equal(gsc.siteHost("https://menuandmarket.com/"), "menuandmarket.com");
+  for (const bad of ["menuandmarket.com", "http://menuandmarket.com/", "https://menuandmarket.com/path/", "sc-domain:", "sc-domain:../x"]) {
+    assert.throws(() => gsc.siteHost(bad), (e) => e.code === "gsc_bad_site");
+  }
+});
+
+await test("gsc: config needs all three env values", () => {
+  assert.equal(gsc.readSearchConsoleConfig({ GSC_CLIENT_EMAIL: "a", GSC_SITE_URL: "b" }), null);
+  assert.ok(gsc.readSearchConsoleConfig({ GSC_CLIENT_EMAIL: "a", GSC_PRIVATE_KEY: "k", GSC_SITE_URL: "b" }));
 });
 
 // @@MORE_TESTS@@

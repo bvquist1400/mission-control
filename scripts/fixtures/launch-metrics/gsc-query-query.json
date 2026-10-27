@@ -1,0 +1,7 @@
+{
+  "rows": [
+    { "keys": ["menu and market app"], "clicks": 4, "impressions": 9, "ctr": 0.44, "position": 1.2 },
+    { "keys": ["meal planner grocery list"], "clicks": 1, "impressions": 30, "ctr": 0.033, "position": 22.7 }
+  ],
+  "responseAggregationType": "byProperty"
+}
