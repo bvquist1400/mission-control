@@ -26,14 +26,15 @@ The script runs on your Mac, from your own Terminal. Nobody else sees the key: t
    chmod 600 ~/Downloads/AuthKey_XXXXXXXXXX.p8
    ```
 
-   The script refuses to run until you do this, because Downloads files are readable by other accounts on the Mac by default.
+   The script refuses to run until you do this: it checks that only you can read or change the key file, so no other account on the Mac can pick up an Admin key.
 
    If macOS asks whether Terminal may use the Downloads folder, that's your call; it's needed for these steps.
 
-3. **Dry run (sends nothing).** In Terminal, swap in your Key ID, Issuer ID and the app's Apple ID:
+3. **Dry run (sends nothing).** Wait until the PM tells you the script is merged; before that it isn't in this folder yet. Then, in Terminal, swap in your Key ID, Issuer ID and the app's Apple ID:
 
    ```
    cd "/Users/owner/dev/Cooper Mission Control/mission-control"
+   git pull
    node scripts/launch-metrics/apple-create-requests.mjs --key ~/Downloads/AuthKey_XXXXXXXXXX.p8 --key-id XXXXXXXXXX --issuer 00000000-0000-0000-0000-000000000000 --app-id 1234567890
    ```
 
@@ -63,7 +64,7 @@ Each line looks like `Request <id>: <type>, <created or already existed>, stoppe
 - **ONE_TIME_SNAPSHOT**: a one-off request that captures history from before today (launch week). Apple never adds to it after the day it was made.
 - **created**: the script just asked Apple for it.
 - **already existed**: it was there before; the script left it alone. Running the script twice is safe.
-- **stopped: yes**: Apple stopped that request because nobody downloaded its reports for a long time. The script then creates a new ONGOING request and says so.
+- **stopped: yes**: Apple stopped that request because nobody downloaded its reports for a long time. If that line is the ONGOING one, the script creates a new ONGOING request and says so. A stopped ONE_TIME_SNAPSHOT is left alone (it has already done its job).
 - The last line, `Done. Apple usually needs 1-2 days…`, means it worked.
 
 If something goes wrong it prints one line, for example `Apple returned HTTP 401 (code NOT_AUTHORIZED) while listing report requests. Stopped.` Common ones:
@@ -76,6 +77,8 @@ If something goes wrong it prints one line, for example `Apple returned HTTP 401
 | HTTP 409 | Apple says a request like this already exists. Run it again without changes; if it repeats, tell the PM. |
 | HTTP 429 | Too many requests; wait a few minutes and run it again. |
 | Could not reach Apple | Internet problem; run it again. |
+| … Apple may already have created it … | The script asked Apple for a request but couldn't confirm the answer. Run the same command again: it lists what exists first and won't make a duplicate. |
+| … not in the expected shape. Stopped before creating anything. | Apple answered in a way the script doesn't recognise, so it stopped rather than guess. Nothing was created. Tell the PM. |
 | Refused: … | A safety check stopped it before anything was sent. Do what it says. |
 
 Exit codes, for scripts: 0 = worked, 1 = Apple or network problem, 2 = refused before sending anything.
@@ -95,6 +98,7 @@ If the dashboard ever shows `apple_request_stopped`, Apple stopped the ONGOING r
    - `POST /v1/analyticsReportRequests` with `accessType: ONGOING` if no ONGOING request with `stoppedDueToInactivity` false exists;
    - `POST /v1/analyticsReportRequests` with `accessType: ONE_TIME_SNAPSHOT` if no snapshot request exists (stopped or not).
    - Every call: `redirect: 'error'`, 30-second timeout. Stops at the first error.
+   - A listed request without `attributes`, without `accessType`, with an `accessType` other than exactly `ONGOING` / `ONE_TIME_SNAPSHOT`, or with a non-boolean `stoppedDueToInactivity` stops the run (exit 1) before any POST. After a POST whose outcome is unknown (odd reply, network error, HTTP 5xx) the message says Apple may already have created it and a re-run is safe.
 4. Prints only ids, access types, created/already existed and the stopped flag. Errors: HTTP status and Apple's `errors[0].code` (only if it is plain letters, digits, `_ . -`). Response bodies, headers, the key and the token are never printed or written.
 
 Apple pages this follows (checked 2026-10-26):
@@ -109,5 +113,7 @@ Apple pages this follows (checked 2026-10-26):
 Not stated in Apple's docs, so the script plays safe:
 
 - Whether Apple allows a second ONGOING or snapshot request per app, and exactly when it answers 409. The script never asks for a duplicate; a 409 is reported and stops.
+- What the list reply looks like beyond the documented fields. If a listed request has no access type, or one the script doesn't know, it stops before creating anything rather than guess.
 - The paging link names. The list call asks for up to 200 requests (an app has a handful), and follows `links.next` only to Apple's own host.
 - The App Store Connect screen labels above may differ slightly from what you see; the Key ID, Issuer ID and Admin access are what matter.
+- Known limit: the git-repository check looks for a `.git` folder or file in the key's folder and its parents. A folder tracked by a bare repository kept elsewhere (the "dotfiles" setup, `git --git-dir … --work-tree …`) isn't detected. Keep the key in `~/Downloads` as the steps say, and tell the PM first if you keep your home folder's settings files in git that way.

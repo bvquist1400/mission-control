@@ -15,6 +15,8 @@
 //   the owner can read or write, and a non-numeric app id.
 // - The token is only ever sent to https://api.appstoreconnect.apple.com and
 //   redirects are refused, so it can't be forwarded elsewhere.
+// - Fails closed: a listed request it can't read for certain stops the run
+//   before any POST, so it never asks Apple for a duplicate.
 //
 // Plain Node >= 20, no dependencies.
 
@@ -60,6 +62,8 @@ class AppleCallError extends Error {
     this.network = network;
     this.networkCode = networkCode;
     this.shape = shape;
+    // Set when the failing call was a POST whose outcome at Apple is unknown.
+    this.mayHaveCreated = false;
   }
 }
 
@@ -208,7 +212,9 @@ async function appleRequest(fetchImpl, { step, method, url, token, body }) {
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch (error) {
-    const candidate = error?.cause?.code ?? error?.code ?? (error?.name === 'TimeoutError' ? 'TIMEOUT' : null);
+    // A fetch timeout rejects with a DOMException whose `code` is a number, so
+    // its name has to be checked before any code.
+    const candidate = error?.name === 'TimeoutError' ? 'TIMEOUT' : (error?.cause?.code ?? error?.code ?? null);
     const networkCode = typeof candidate === 'string' && NETWORK_CODE_PATTERN.test(candidate) ? candidate : null;
     throw new AppleCallError(step, { network: true, networkCode });
   }
@@ -227,17 +233,29 @@ async function appleRequest(fetchImpl, { step, method, url, token, body }) {
   return { status: response.status, json: parsed };
 }
 
-function readRequestItem(item, step) {
-  if (!item || typeof item !== 'object' || item.type !== 'analyticsReportRequests') {
-    throw new AppleCallError(step, { shape: true });
-  }
-  if (typeof item.id !== 'string' || !REQUEST_ID_PATTERN.test(item.id)) throw new AppleCallError(step, { shape: true });
-  const attributes = item.attributes && typeof item.attributes === 'object' ? item.attributes : {};
-  return {
-    id: item.id,
-    accessType: ACCESS_TYPES.includes(attributes.accessType) ? attributes.accessType : null,
-    stopped: attributes.stoppedDueToInactivity === true,
-  };
+// Reads one report request. Anything the script can't read for certain is a
+// shape error, never a guess: a listed request with no attributes, no
+// accessType or an accessType other than ONGOING / ONE_TIME_SNAPSHOT stops the
+// run before any POST (treating it as "nothing there" would ask Apple for
+// duplicates). `requested` is set only for the reply to our own POST, which may
+// leave the attributes out (the access type is then the one we asked for) but
+// must not name a different one.
+function readRequestItem(item, step, { requested = null } = {}) {
+  const shapeError = () => new AppleCallError(step, { shape: true });
+  if (!item || typeof item !== 'object' || Array.isArray(item) || item.type !== 'analyticsReportRequests') throw shapeError();
+  if (typeof item.id !== 'string' || !REQUEST_ID_PATTERN.test(item.id)) throw shapeError();
+  const { attributes } = item;
+  const hasAttributes = attributes !== null && typeof attributes === 'object' && !Array.isArray(attributes);
+  if (!hasAttributes && !(requested && attributes === undefined)) throw shapeError();
+  const rawAccessType = hasAttributes ? attributes.accessType : undefined;
+  let accessType;
+  if (ACCESS_TYPES.includes(rawAccessType)) accessType = rawAccessType;
+  else if (requested && rawAccessType === undefined) accessType = requested;
+  else throw shapeError();
+  if (requested && accessType !== requested) throw shapeError();
+  const rawStopped = hasAttributes ? attributes.stoppedDueToInactivity : undefined;
+  if (rawStopped !== undefined && rawStopped !== null && typeof rawStopped !== 'boolean') throw shapeError();
+  return { id: item.id, accessType, stopped: rawStopped === true };
 }
 
 async function listReportRequests(fetchImpl, { appId, token }) {
@@ -269,15 +287,23 @@ async function createReportRequest(fetchImpl, { appId, token, accessType }) {
       relationships: { app: { data: { type: 'apps', id: appId } } },
     },
   };
-  const { json } = await appleRequest(fetchImpl, {
-    step,
-    method: 'POST',
-    url: `${APPLE_API_ORIGIN}/v1/analyticsReportRequests`,
-    token,
-    body,
-  });
-  const created = readRequestItem(json.data, step);
-  return { ...created, accessType: created.accessType ?? accessType };
+  try {
+    const { json } = await appleRequest(fetchImpl, {
+      step,
+      method: 'POST',
+      url: `${APPLE_API_ORIGIN}/v1/analyticsReportRequests`,
+      token,
+      body,
+    });
+    return readRequestItem(json.data, step, { requested: accessType });
+  } catch (error) {
+    // The POST may have reached Apple when the reply is odd or lost, or Apple
+    // answered 5xx. A 4xx means Apple refused it.
+    if (error instanceof AppleCallError && (error.shape || error.network || (error.status ?? 0) >= 500)) {
+      error.mayHaveCreated = true;
+    }
+    throw error;
+  }
 }
 
 // ---------------------------------------------------------------- output
@@ -286,15 +312,20 @@ function describe(request, outcome) {
   return `Request ${request.id}: ${request.accessType}, ${outcome}, stopped: ${request.stopped ? 'yes' : 'no'}`;
 }
 
+const MAY_HAVE_CREATED = 'Apple may already have created it. Run the same command again to check: it lists what exists first and won\'t make a duplicate.';
+
 function describeError(error) {
   if (error instanceof AppleCallError) {
+    const after = error.mayHaveCreated ? ` ${MAY_HAVE_CREATED}` : '';
     if (error.network) {
-      return `Could not reach Apple while ${error.step} (network error${error.networkCode ? ` ${error.networkCode}` : ''}). Nothing else was sent. Re-run when the connection is back.`;
+      const what = `Could not reach Apple while ${error.step} (network error${error.networkCode ? ` ${error.networkCode}` : ''}).`;
+      return error.mayHaveCreated ? `${what} Stopped.${after}` : `${what} Nothing else was sent. Re-run when the connection is back.`;
     }
     if (error.shape) {
-      return `Apple's reply while ${error.step} was not in the expected shape. Stopped without making further changes.`;
+      const what = `Apple's reply while ${error.step} was not in the expected shape.`;
+      return error.mayHaveCreated ? `${what} Stopped there.${after}` : `${what} Stopped before creating anything.`;
     }
-    return `Apple returned HTTP ${error.status}${error.code ? ` (code ${error.code})` : ''} while ${error.step}. Stopped.`;
+    return `Apple returned HTTP ${error.status}${error.code ? ` (code ${error.code})` : ''} while ${error.step}. Stopped.${after}`;
   }
   return `Unexpected error (${error?.name ?? 'Error'}). Stopped.`;
 }
@@ -340,20 +371,21 @@ export async function run(argv, { fetch: fetchImpl = globalThis.fetch, stdout, s
 
   const token = createAppleJwt({ privateKey, keyId: options.keyId, issuerId: options.issuer, nowMs: now() });
   try {
+    // Every listed request has a known access type here: anything else already
+    // stopped the run inside listReportRequests, before any POST.
     const existing = await listReportRequests(fetchImpl, { appId, token });
-    const known = existing.filter((request) => request.accessType !== null);
-    for (const request of known) out(describe(request, 'already existed'));
+    for (const request of existing) out(describe(request, 'already existed'));
 
-    const activeOngoing = known.some((request) => request.accessType === 'ONGOING' && !request.stopped);
+    const activeOngoing = existing.some((request) => request.accessType === 'ONGOING' && !request.stopped);
     if (!activeOngoing) {
-      if (known.some((request) => request.accessType === 'ONGOING' && request.stopped)) {
+      if (existing.some((request) => request.accessType === 'ONGOING' && request.stopped)) {
         out('The ONGOING request above was stopped due to inactivity; creating a new one.');
       }
       const created = await createReportRequest(fetchImpl, { appId, token, accessType: 'ONGOING' });
       out(describe(created, 'created'));
     }
 
-    const hasSnapshot = known.some((request) => request.accessType === 'ONE_TIME_SNAPSHOT');
+    const hasSnapshot = existing.some((request) => request.accessType === 'ONE_TIME_SNAPSHOT');
     if (!hasSnapshot) {
       const created = await createReportRequest(fetchImpl, { appId, token, accessType: 'ONE_TIME_SNAPSHOT' });
       out(describe(created, 'created'));

@@ -338,6 +338,154 @@ test('a malformed list response fails closed without POSTing', async () => {
   assertNoLeaks(result, {});
 });
 
+// A listed request the script can't read (no attributes, no accessType, an
+// accessType it doesn't know) must stop the run before any POST: guessing
+// "nothing exists" would ask Apple for duplicates with an Admin key.
+for (const [label, attributes] of [
+  ['attributes missing', undefined],
+  ['attributes null', null],
+  ['attributes not an object', 'ONGOING'],
+  ['attributes an array', ['ONGOING']],
+  ['accessType missing', { stoppedDueToInactivity: false }],
+  ['accessType lower-case "ongoing"', { accessType: 'ongoing', stoppedDueToInactivity: false }],
+  ['accessType unknown value', { accessType: 'WEEKLY', stoppedDueToInactivity: false }],
+  ['accessType not a string', { accessType: 1, stoppedDueToInactivity: false }],
+  ['stoppedDueToInactivity not a boolean', { accessType: 'ONGOING', stoppedDueToInactivity: 'true' }],
+]) {
+  test(`a listed request with ${label} stops the run before any POST (exit 1)`, async () => {
+    const { file, text } = makeKeyFile();
+    const item = { type: 'analyticsReportRequests', id: 'r-odd', ...(attributes === undefined ? {} : { attributes }) };
+    const { fetchImpl, calls } = mockFetch({ existing: [item] });
+    const result = await runCli(goArgs(file), { fetchImpl });
+    assert.equal(result.code, 1, result.out);
+    assert.equal(calls.filter((c) => c.method === 'POST').length, 0, 'no POST after an unreadable list item');
+    assert.equal(result.out, '', 'nothing reported as existing or created');
+    assert.match(result.err, /while listing report requests was not in the expected shape/);
+    assert.match(result.err, /before creating anything/);
+    assert.ok(!/ongoing|WEEKLY|r-odd/.test(result.err), 'the odd value is not echoed');
+    assertNoLeaks(result, { keyText: text, tokens: tokensFrom(calls) });
+  });
+}
+
+test('one unreadable item among readable ones still stops the run before any POST', async () => {
+  const { file } = makeKeyFile();
+  const odd = { type: 'analyticsReportRequests', id: 'r-odd', attributes: { stoppedDueToInactivity: false } };
+  const { fetchImpl, calls } = mockFetch({ existing: [requestItem('r-on', 'ONGOING', true), odd] });
+  const result = await runCli(goArgs(file), { fetchImpl });
+  assert.equal(result.code, 1);
+  assert.equal(calls.filter((c) => c.method === 'POST').length, 0);
+});
+
+test('a listed request with stoppedDueToInactivity absent reads as not stopped (no new ONGOING)', async () => {
+  const { file } = makeKeyFile();
+  const onGoing = { type: 'analyticsReportRequests', id: 'r-on', attributes: { accessType: 'ONGOING' } };
+  const { fetchImpl, calls } = mockFetch({ existing: [onGoing, requestItem('r-snap', 'ONE_TIME_SNAPSHOT')] });
+  const result = await runCli(goArgs(file), { fetchImpl });
+  assert.equal(result.code, 0, result.err);
+  assert.equal(calls.filter((c) => c.method === 'POST').length, 0);
+  assert.match(result.out, /r-on: ONGOING, already existed, stopped: no/);
+});
+
+test('a paging link carrying a user name or password is never fetched', async () => {
+  for (const next of [
+    `https://user:pw@api.appstoreconnect.apple.com/v1/apps/${APP_ID}/analyticsReportRequests?cursor=x`,
+    `https://user@api.appstoreconnect.apple.com/v1/apps/${APP_ID}/analyticsReportRequests?cursor=x`,
+    `https://:pw@api.appstoreconnect.apple.com/v1/apps/${APP_ID}/analyticsReportRequests?cursor=x`,
+  ]) {
+    const { file } = makeKeyFile();
+    const { fetchImpl, calls } = mockFetch({ onGet: () => jsonResponse(200, listBody([requestItem('r-on', 'ONGOING')], next)) });
+    const result = await runCli(goArgs(file), { fetchImpl });
+    assert.equal(result.code, 1, next);
+    assert.equal(calls.length, 1, `only the first GET is sent, not ${next}`);
+    assert.ok(calls.every((c) => !new URL(c.url).username && !new URL(c.url).password));
+    assert.ok(!result.err.includes('user') && !result.err.includes('pw'));
+  }
+});
+
+// After a POST has gone out, Apple may have made the request even when the
+// reply is odd or lost. The message must say so, and a re-run must not duplicate.
+test('POST accepted but reply in an odd shape: says Apple may already have created it; re-run makes no duplicate', async () => {
+  const { file } = makeKeyFile();
+  const server = [];
+  const { fetchImpl, calls } = mockFetch({
+    onGet: () => jsonResponse(200, listBody(server.slice())),
+    onPost: (call) => {
+      const accessType = JSON.parse(call.body).data.attributes.accessType;
+      server.push(requestItem(`srv-${server.length + 1}`, accessType));
+      return jsonResponse(201, { data: { type: 'analyticsReportRequests', id: 'has spaces!' } });
+    },
+  });
+  const first = await runCli(goArgs(file), { fetchImpl });
+  assert.equal(first.code, 1);
+  assert.match(first.err, /while creating the ONGOING request was not in the expected shape/);
+  assert.match(first.err, /Apple may already have created it/);
+  assert.match(first.err, /run the same command again/i);
+  assert.ok(!/without making further changes/.test(first.err));
+  assert.ok(!first.err.includes('has spaces'));
+
+  const second = await runCli(goArgs(file), { fetchImpl });
+  assert.equal(second.code, 1, 'the snapshot reply is odd too, so the second run also stops');
+  assert.match(second.out, /srv-1: ONGOING, already existed/);
+  assert.equal(server.filter((r) => r.attributes.accessType === 'ONGOING').length, 1, 'no duplicate ONGOING');
+  assert.equal(calls.filter((c) => c.method === 'POST').length, 2, 'ONGOING once, then the snapshot');
+});
+
+test('POST reply naming a different access type than requested is a shape error', async () => {
+  const { file } = makeKeyFile();
+  const { fetchImpl } = mockFetch({
+    existing: [requestItem('r-snap', 'ONE_TIME_SNAPSHOT')],
+    onPost: () => jsonResponse(201, { data: requestItem('new-1', 'ONE_TIME_SNAPSHOT') }),
+  });
+  const result = await runCli(goArgs(file), { fetchImpl });
+  assert.equal(result.code, 1);
+  assert.match(result.err, /creating the ONGOING request was not in the expected shape/);
+  assert.match(result.err, /Apple may already have created it/);
+});
+
+test('POST reply without attributes still reports the requested access type', async () => {
+  const { file } = makeKeyFile();
+  const { fetchImpl } = mockFetch({
+    existing: [requestItem('r-snap', 'ONE_TIME_SNAPSHOT')],
+    onPost: () => jsonResponse(201, { data: { type: 'analyticsReportRequests', id: 'new-1' } }),
+  });
+  const result = await runCli(goArgs(file), { fetchImpl });
+  assert.equal(result.code, 0, result.err);
+  assert.match(result.out, /new-1: ONGOING, created, stopped: no/);
+});
+
+test('network failure or server error on a POST says Apple may already have created it', async () => {
+  for (const onPost of [
+    () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } }); },
+    () => appleError(503, 'SERVICE_UNAVAILABLE'),
+  ]) {
+    const { file } = makeKeyFile();
+    const { fetchImpl } = mockFetch({ existing: [], onPost });
+    const result = await runCli(goArgs(file), { fetchImpl });
+    assert.equal(result.code, 1);
+    assert.match(result.err, /creating the ONGOING request/);
+    assert.match(result.err, /Apple may already have created it/);
+    assert.match(result.err, /run the same command again/i);
+  }
+});
+
+test('a 4xx on a POST does not claim Apple may have created it', async () => {
+  const { file } = makeKeyFile();
+  const { fetchImpl } = mockFetch({ existing: [], onPost: () => appleError(403, 'FORBIDDEN_ERROR') });
+  const result = await runCli(goArgs(file), { fetchImpl });
+  assert.equal(result.code, 1);
+  assert.ok(!/may already have created/.test(result.err));
+});
+
+test('a network failure while listing says nothing was created', async () => {
+  const { file } = makeKeyFile();
+  const fetchImpl = async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } }); };
+  const result = await runCli(goArgs(file), { fetchImpl });
+  assert.equal(result.code, 1);
+  assert.match(result.err, /network error ENOTFOUND/);
+  assert.match(result.err, /Nothing else was sent/);
+  assert.ok(!/may already have created/.test(result.err));
+});
+
 // ---------------------------------------------------------------- error paths
 
 test('GET error prints HTTP status and Apple error code only', async () => {
@@ -395,6 +543,16 @@ test('a network failure prints no message text', async () => {
   assert.equal(result.code, 1);
   assert.match(result.err, /network/i);
   assertNoLeaks(result, {});
+});
+
+test('a timeout is labelled TIMEOUT (the DOMException\'s numeric code is not used)', async () => {
+  const { file } = makeKeyFile();
+  const timeout = new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+  assert.equal(typeof timeout.code, 'number', 'precondition: DOMException carries a numeric code');
+  const result = await runCli(goArgs(file), { fetchImpl: async () => { throw timeout; } });
+  assert.equal(result.code, 1);
+  assert.match(result.err, /network error TIMEOUT/);
+  assert.ok(!result.err.includes('aborted due to timeout'));
 });
 
 // ---------------------------------------------------------------- refusals
@@ -493,6 +651,22 @@ test('refuses a missing key file, a directory, and missing arguments', async () 
   assert.equal(noIssuer.code, 2);
   const unknown = await runCli(goArgs(file, ['--verbose']));
   assert.equal(unknown.code, 2);
+});
+
+test('an unknown argument is refused without echoing it (it could be a pasted key or token)', async () => {
+  const { file, text } = makeKeyFile();
+  const secretish = 'eyJhbGciOiJFUzI1NiJ9.SECRET_ARG_MARKER.sig';
+  const pemLine = keyBodyLines(text)[0];
+  for (const extra of [[secretish], [`--token=${secretish}`], [`--${secretish}`], [pemLine], ['--go=SECRET_ARG_MARKER']]) {
+    const { fetchImpl, calls } = mockFetch();
+    const result = await runCli(goArgs(file, extra), { fetchImpl });
+    assert.equal(result.code, 2);
+    assert.equal(calls.length, 0);
+    const all = `${result.out}\n${result.err}`;
+    assert.match(result.err, /Unknown argument/);
+    assert.ok(!all.includes('SECRET_ARG_MARKER'), `echoed ${extra}`);
+    assert.ok(!all.includes(pemLine.slice(0, 20)), 'echoed a key line');
+  }
 });
 
 test('refuses a malformed key id or issuer id', async () => {
