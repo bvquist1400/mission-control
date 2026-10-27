@@ -434,6 +434,335 @@ await test("gsc: config needs all three env values", () => {
   assert.ok(gsc.readSearchConsoleConfig({ GSC_CLIENT_EMAIL: "a", GSC_PRIVATE_KEY: "k", GSC_SITE_URL: "b" }));
 });
 
+// ─── sync run, run log, alerts (decision 6), stale rules, route guards ────
+
+const sync = await import("../src/lib/launch-metrics/sync.ts");
+const alerts = await import("../src/lib/launch-metrics/alerts.ts");
+const stale = await import("../src/lib/launch-metrics/stale.ts");
+const guards = await import("../src/lib/launch-metrics/route-guards.ts");
+const storeLib = await import("../src/lib/launch-metrics/store.ts");
+
+function memoryStore() {
+  const state = { runs: [], daily: new Map(), snapshots: new Map(), tasks: [], comments: [], seq: 0, failUpsert: false };
+  const store = {
+    state,
+    async recentRuns(limit) {
+      return [...state.runs].sort((a, b) => b.started_at.localeCompare(a.started_at)).slice(0, limit).map((r) => ({ ...r, sources: { ...r.sources } }));
+    },
+    async insertRun(run) {
+      const id = `run-${++state.seq}`;
+      state.runs.push({ id, ...run, finished_at: null, status: "running", sources: {} });
+      return id;
+    },
+    async finishRun(id, result) {
+      Object.assign(state.runs.find((r) => r.id === id), result);
+    },
+    async upsertDaily(rows) {
+      if (state.failUpsert) throw new http.LaunchSourceError("db_write");
+      for (const row of rows) state.daily.set(`${row.metric_date}|${row.source}|${row.metric}|${row.dimension}`, row.value);
+    },
+    async upsertSnapshot(source, asOf, capturedAt, payload) {
+      state.snapshots.set(`${source}|${asOf}`, payload);
+    },
+    async findAlertTask(ext) {
+      const t = state.tasks.find((task) => task.external_source_id === ext);
+      return t ? { id: t.id, status: t.status } : null;
+    },
+    async createAlertTask(task) {
+      if (state.tasks.some((t) => t.external_source_id === task.external_source_id)) return null;
+      const row = { id: `task-${++state.seq}`, status: "Planned", owner: "brent", ...task };
+      state.tasks.push(row);
+      return { id: row.id, status: row.status };
+    },
+    async updateAlertTask(id, patch) {
+      Object.assign(state.tasks.find((t) => t.id === id), patch);
+    },
+    async addTaskComment(taskId, content) {
+      state.comments.push({ taskId, content });
+    },
+  };
+  return store;
+}
+
+const FULL_ENV = {
+  appDb: { url: APP_DB_URL, token: APP_DB_TOKEN },
+  web: WEB_CONFIG,
+  searchConsole: GSC_CONFIG,
+  alertProjectId: null,
+};
+
+function allSourcesFetch(overrides = {}) {
+  const gscRoutes = gscFetch();
+  const vercelRoutes = vercelFetch();
+  return fakeFetch([
+    { match: (url) => url === APP_DB_URL, reply: overrides.appDb ?? (() => jsonResponse(fixture("app-db-summary.json"))) },
+    { match: (url) => url.startsWith("https://api.vercel.com/"), reply: overrides.web ?? ((url, init) => vercelRoutes(url, init)) },
+    { match: (url) => url.includes("googleapis.com"), reply: overrides.gsc ?? ((url, init) => gscRoutes(url, init)) },
+  ]);
+}
+
+let clock = Date.parse("2026-10-27T19:30:00Z");
+const tick = (minutes = 60) => { clock += minutes * 60_000; };
+const deps = (store, fetchImpl, env = FULL_ENV) => ({ store, env, fetchImpl, now: () => new Date(clock) });
+
+await test("sync: a full run writes all three sources, logs codes only, Apple is not connected", async () => {
+  const store = memoryStore();
+  const fetchImpl = allSourcesFetch();
+  const result = await sync.runLaunchSync(deps(store, fetchImpl), { trigger: "cron", kind: "full" });
+  assert.equal(result.status, "ok");
+  assert.deepEqual(result.sources, { app_db: "ok", web: "ok", search_console: "ok", apple: "not_connected" });
+  const run = store.state.runs[0];
+  assert.equal(run.status, "ok");
+  assert.ok(run.finished_at);
+  assert.equal(store.state.daily.get("2026-10-26|app_db|signups_real|"), 2);
+  assert.equal(store.state.daily.get("2026-10-27|app_db|total_real_users|"), 2);
+  assert.equal(store.state.daily.get("2026-10-26|web|pageviews|"), 58);
+  assert.equal(store.state.daily.get("2026-10-26|search_console|clicks|"), 5);
+  assert.ok(store.state.snapshots.has("app_db|2026-10-27"));
+  assert.ok(store.state.snapshots.has("search_console|2026-10-27"));
+  assert.ok(!fetchImpl.calls.some((c) => c.url.includes("appstoreconnect")));
+});
+
+await test("sync: a light run skips Search Console", async () => {
+  const store = memoryStore();
+  const fetchImpl = allSourcesFetch();
+  const result = await sync.runLaunchSync(deps(store, fetchImpl), { trigger: "cron", kind: "light" });
+  assert.deepEqual(result.sources, { app_db: "ok", web: "ok", search_console: "skipped", apple: "not_connected" });
+  assert.ok(!fetchImpl.calls.some((c) => c.url.includes("googleapis.com")));
+});
+
+await test("sync: one source failing never stops the others; the run is partial with the code", async () => {
+  const store = memoryStore();
+  const fetchImpl = allSourcesFetch({ appDb: () => jsonResponse({ error: "secret detail" }, 401) });
+  const result = await sync.runLaunchSync(deps(store, fetchImpl), { trigger: "cron", kind: "full" });
+  assert.equal(result.status, "partial");
+  assert.equal(result.sources.app_db, "http_401");
+  assert.equal(result.sources.web, "ok");
+  assert.equal(result.sources.search_console, "ok");
+  assert.ok(!JSON.stringify(store.state.runs).includes("secret detail"));
+});
+
+await test("sync: a reply with account ids is refused and nothing from it is stored", async () => {
+  const store = memoryStore();
+  const leaky = { ...fixture("app-db-summary.json"), accounts: [{ short_id: "5ee0000e" }] };
+  const result = await sync.runLaunchSync(deps(store, allSourcesFetch({ appDb: () => jsonResponse(leaky) })), { trigger: "cron", kind: "light" });
+  assert.equal(result.sources.app_db, "app_db_not_counts");
+  assert.ok(![...store.state.daily.keys()].some((k) => k.includes("|app_db|")));
+  assert.equal(store.state.snapshots.size, 0);
+  assert.ok(!JSON.stringify([...store.state.daily.entries()]).includes("5ee0000e"));
+});
+
+await test("sync: missing keys are not_configured (status failed, no network call, no alert)", async () => {
+  const store = memoryStore();
+  const fetchImpl = fakeFetch([]);
+  const env = { appDb: null, web: null, searchConsole: null, alertProjectId: null };
+  for (let i = 0; i < 3; i += 1) {
+    tick();
+    const result = await sync.runLaunchSync(deps(store, fetchImpl, env), { trigger: "cron", kind: "full" });
+    assert.equal(result.status, "failed");
+    assert.deepEqual(result.sources, { app_db: "not_configured", web: "not_configured", search_console: "not_configured", apple: "not_connected" });
+  }
+  assert.equal(fetchImpl.calls.length, 0);
+  assert.equal(store.state.tasks.length, 0);
+});
+
+await test("sync: a database write failure is db_write for that source only", async () => {
+  const store = memoryStore();
+  store.state.failUpsert = true;
+  const result = await sync.runLaunchSync(deps(store, allSourcesFetch()), { trigger: "cron", kind: "light" });
+  assert.deepEqual([result.sources.app_db, result.sources.web], ["db_write", "db_write"]);
+  assert.equal(result.status, "failed");
+});
+
+await test("sync: a run already in progress (under 5 minutes) makes the next one 'busy' with no new row", async () => {
+  const store = memoryStore();
+  store.state.runs.push({ id: "r0", trigger: "cron", kind: "full", started_at: new Date(clock - 60_000).toISOString(), finished_at: null, status: "running", sources: {} });
+  const result = await sync.runLaunchSync(deps(store, allSourcesFetch()), { trigger: "manual", kind: "full" });
+  assert.equal(result.status, "busy");
+  assert.equal(store.state.runs.length, 1);
+  store.state.runs[0].started_at = new Date(clock - 20 * 60_000).toISOString(); // stuck: ignored
+  const later = await sync.runLaunchSync(deps(store, allSourcesFetch()), { trigger: "manual", kind: "full" });
+  assert.equal(later.status, "ok");
+});
+
+await test("alerts: two failed runs in a row create ONE task for Brent; more failures don't add another", async () => {
+  const store = memoryStore();
+  const failing = allSourcesFetch({ web: () => jsonResponse({}, 403) });
+  tick(); await sync.runLaunchSync(deps(store, failing), { trigger: "cron", kind: "light" });
+  assert.equal(store.state.tasks.length, 0, "one failure is not enough");
+  tick(); const second = await sync.runLaunchSync(deps(store, failing), { trigger: "cron", kind: "light" });
+  assert.deepEqual(second.alerts.find((a) => a.source === "web"), { source: "web", action: "created" });
+  assert.equal(store.state.tasks.length, 1);
+  const task = store.state.tasks[0];
+  assert.equal(task.external_source_id, "source:web");
+  assert.equal(task.owner, "brent");
+  assert.equal(task.title, "Launch numbers: website visits stopped updating");
+  assert.ok(task.status_line.length <= 280);
+  assert.match(task.status_line, /key was refused or has expired/);
+  assert.ok(!/claude|anthropic/i.test(JSON.stringify(store.state.tasks) + JSON.stringify(store.state.comments)));
+  for (let i = 0; i < 3; i += 1) {
+    tick(); const again = await sync.runLaunchSync(deps(store, failing), { trigger: "cron", kind: "light" });
+    assert.equal(again.alerts.find((a) => a.source === "web").action, "already_open");
+  }
+  assert.equal(store.state.tasks.length, 1);
+  assert.equal(store.state.comments.length, 1);
+});
+
+await test("alerts: recovery closes the task with a note; a new outage reopens the same task", async () => {
+  const store = memoryStore();
+  const failing = allSourcesFetch({ appDb: () => { throw new TypeError("down"); } });
+  tick(); await sync.runLaunchSync(deps(store, failing), { trigger: "cron", kind: "light" });
+  tick(); await sync.runLaunchSync(deps(store, failing), { trigger: "cron", kind: "light" });
+  assert.equal(store.state.tasks.length, 1);
+  tick(); const ok = await sync.runLaunchSync(deps(store, allSourcesFetch()), { trigger: "cron", kind: "light" });
+  assert.equal(ok.alerts.find((a) => a.source === "app_db").action, "resolved");
+  assert.equal(store.state.tasks[0].status, "Done");
+  assert.equal(store.state.tasks[0].owner, "agent");
+  assert.match(store.state.comments.at(-1).content, /^Recovered: the app sign-ups numbers updated again/);
+  tick(); await sync.runLaunchSync(deps(store, failing), { trigger: "cron", kind: "light" });
+  assert.equal(store.state.tasks[0].status, "Done", "one failure after recovery: still closed");
+  tick(); const reopened = await sync.runLaunchSync(deps(store, failing), { trigger: "cron", kind: "light" });
+  assert.equal(reopened.alerts.find((a) => a.source === "app_db").action, "reopened");
+  assert.equal(store.state.tasks.length, 1);
+  assert.equal(store.state.tasks[0].status, "Planned");
+  assert.equal(store.state.tasks[0].owner, "brent");
+});
+
+await test("alerts: a task Brent closes during a long outage stays closed until the next outage", async () => {
+  const store = memoryStore();
+  const failing = allSourcesFetch({ web: () => jsonResponse({}, 500) });
+  tick(); await sync.runLaunchSync(deps(store, failing), { trigger: "cron", kind: "light" });
+  tick(); await sync.runLaunchSync(deps(store, failing), { trigger: "cron", kind: "light" });
+  store.state.tasks[0].status = "Done";
+  tick(); const third = await sync.runLaunchSync(deps(store, failing), { trigger: "cron", kind: "light" });
+  assert.equal(third.alerts.find((a) => a.source === "web").action, "left_closed");
+  assert.equal(store.state.tasks[0].status, "Done");
+});
+
+await test("alerts: light runs don't count for Search Console; a skipped run between two failures still alerts", async () => {
+  const store = memoryStore();
+  const failing = allSourcesFetch({ gsc: () => jsonResponse({}, 400) });
+  tick(); await sync.runLaunchSync(deps(store, failing), { trigger: "cron", kind: "full" });
+  for (let i = 0; i < 5; i += 1) {
+    tick(); await sync.runLaunchSync(deps(store, failing), { trigger: "cron", kind: "light" });
+  }
+  assert.equal(store.state.tasks.length, 0);
+  tick(); await sync.runLaunchSync(deps(store, failing), { trigger: "cron", kind: "full" });
+  assert.equal(store.state.tasks.length, 1);
+  assert.equal(store.state.tasks[0].external_source_id, "source:search_console");
+  assert.match(store.state.tasks[0].status_line, /Google refused the service account key/);
+});
+
+await test("alerts: two runs racing to create the task leave one (unique external id)", async () => {
+  const store = memoryStore();
+  const runs = [
+    { id: "a", started_at: "2026-10-27T10:00:00Z", finished_at: "2026-10-27T10:01:00Z", status: "failed", sources: { web: "http_500" } },
+    { id: "b", started_at: "2026-10-27T11:00:00Z", finished_at: "2026-10-27T11:01:00Z", status: "failed", sources: { web: "http_500" } },
+  ];
+  const [first, second] = await Promise.all([
+    alerts.evaluateAlerts(store, runs, new Date(clock), null),
+    alerts.evaluateAlerts(store, runs, new Date(clock), null),
+  ]);
+  const actions = [first, second].map((o) => o.find((a) => a.source === "web").action).sort();
+  assert.deepEqual(actions, ["already_open", "created"]);
+  assert.equal(store.state.tasks.length, 1);
+});
+
+await test("alerts: decideAlert and plainReason", () => {
+  assert.deepEqual(alerts.decideAlert([]), { action: "none" });
+  assert.deepEqual(alerts.decideAlert(["http_500"]), { action: "none" });
+  assert.deepEqual(alerts.decideAlert(["http_500", "timeout", "ok"]), { action: "raise", code: "http_500", streak: 2 });
+  assert.deepEqual(alerts.decideAlert(["ok", "http_500"]), { action: "recover" });
+  assert.equal(alerts.plainReason("timeout"), "the service did not answer");
+  assert.equal(alerts.plainReason("app_db_not_counts"), "the reply was not in the expected shape, so nothing was saved");
+  assert.equal(alerts.plainReason("weird_code"), "error code weird_code");
+});
+
+await test("alerts: a failing alert write never fails the run", async () => {
+  const store = memoryStore();
+  store.createAlertTask = async () => { throw new http.LaunchSourceError("db_write"); };
+  const failing = allSourcesFetch({ web: () => jsonResponse({}, 500) });
+  tick(); await sync.runLaunchSync(deps(store, failing), { trigger: "cron", kind: "light" });
+  tick(); const result = await sync.runLaunchSync(deps(store, failing), { trigger: "cron", kind: "light" });
+  assert.equal(result.alerts.find((a) => a.source === "web").action, "error");
+  assert.equal(result.status, "partial");
+});
+
+await test("run log: sources read back are codes only; anything else becomes 'error'", () => {
+  assert.deepEqual(storeLib.readRunSources({ web: "ok", app_db: "Bearer abc", "bad key": "ok", search_console: 5 }), { web: "ok", app_db: "error", search_console: "error" });
+  assert.deepEqual(storeLib.readRunSources(["x"]), {});
+  assert.equal(sync.runStatus({ app_db: "ok", web: "ok", search_console: "skipped", apple: "not_connected" }), "ok");
+  assert.equal(sync.runStatus({ app_db: "ok", web: "http_500", apple: "not_connected" }), "partial");
+  assert.equal(sync.runStatus({ app_db: "timeout", web: "http_500", apple: "not_connected" }), "failed");
+});
+
+await test("stale: 2 hours for app db and website, 36 for Search Console, Apple not connected", () => {
+  const now = new Date("2026-10-27T20:00:00Z");
+  const run = (startedAt, sources) => ({ id: startedAt, trigger: "cron", kind: "full", started_at: startedAt, finished_at: startedAt, status: "ok", sources });
+  const runs = [
+    run("2026-10-27T19:15:00Z", { app_db: "ok", web: "http_403", search_console: "skipped", apple: "not_connected" }),
+    run("2026-10-27T17:15:00Z", { app_db: "ok", web: "ok", search_console: "skipped", apple: "not_connected" }),
+    run("2026-10-26T11:30:00Z", { app_db: "ok", web: "ok", search_console: "ok", apple: "not_connected" }),
+  ];
+  const health = Object.fromEntries(stale.sourceHealth(runs, now).map((h) => [h.source, h]));
+  assert.equal(health.app_db.state, "fresh");
+  assert.equal(health.web.state, "failing");
+  assert.equal(health.web.lastOkAt, "2026-10-27T17:15:00Z");
+  assert.equal(health.search_console.state, "fresh");
+  assert.equal(health.apple.state, "not_connected");
+  const at = (iso) => Object.fromEntries(stale.sourceHealth(runs, new Date(iso)).map((h) => [h.source, h.state]));
+  assert.equal(at("2026-10-27T21:14:00Z").app_db, "fresh");
+  assert.equal(at("2026-10-27T21:16:00Z").app_db, "stale"); // > 2 h since 19:15
+  assert.equal(at("2026-10-27T23:29:00Z").search_console, "fresh");
+  assert.equal(at("2026-10-27T23:31:00Z").search_console, "stale"); // > 36 h since 10-26 11:30
+  assert.equal(stale.sourceHealth([], now).find((h) => h.source === "web").state, "never");
+  const unconfigured = [run("2026-10-27T19:15:00Z", { web: "not_configured" })];
+  assert.equal(stale.sourceHealth(unconfigured, now).find((h) => h.source === "web").state, "not_configured");
+});
+
+await test("stale: token warning from 30 days out; unfinished runs after 10 minutes", () => {
+  assert.equal(stale.tokenDaysLeft("2027-10-27", "2026-10-27"), null);
+  assert.equal(stale.tokenDaysLeft("2027-10-27", "2027-09-27"), 30);
+  assert.equal(stale.tokenDaysLeft("2027-10-27", "2027-10-30"), -3);
+  assert.equal(stale.tokenDaysLeft(null, "2027-10-30"), null);
+  const now = new Date("2026-10-27T20:00:00Z");
+  assert.equal(stale.isRunUnfinished({ started_at: "2026-10-27T19:49:00Z", finished_at: null }, now), true);
+  assert.equal(stale.isRunUnfinished({ started_at: "2026-10-27T19:55:00Z", finished_at: null }, now), false);
+});
+
+await test("guards: cron secret (bearer, constant-time), same-origin writes, owner only", () => {
+  assert.equal(guards.hasCronAccess("Bearer s3cret-value", "s3cret-value"), true);
+  assert.equal(guards.hasCronAccess("bearer s3cret-value", "s3cret-value"), true);
+  assert.equal(guards.hasCronAccess("Bearer wrong", "s3cret-value"), false);
+  assert.equal(guards.hasCronAccess("s3cret-value", "s3cret-value"), false);
+  assert.equal(guards.hasCronAccess(null, "s3cret-value"), false);
+  assert.equal(guards.hasCronAccess("Bearer ", ""), false);
+  assert.equal(guards.hasCronAccess("Bearer x", undefined), false);
+  assert.equal(guards.isSameOriginWrite("https://baseline.example", "baseline.example"), true);
+  assert.equal(guards.isSameOriginWrite("https://evil.example", "baseline.example"), false);
+  assert.equal(guards.isSameOriginWrite(null, "baseline.example"), false);
+  assert.equal(guards.isSameOriginWrite("null", "baseline.example"), false);
+  assert.equal(guards.isLaunchOwner("u1", "u1"), true);
+  assert.equal(guards.isLaunchOwner("u1", "u2"), false);
+  assert.equal(guards.isLaunchOwner("u1", undefined), false);
+  assert.equal(guards.isLaunchOwner("u1", "  "), false);
+});
+
+await test("env: LAUNCH_METRICS_ALERT_PROJECT_ID must be a uuid", () => {
+  assert.equal(sync.readLaunchEnv({ LAUNCH_METRICS_ALERT_PROJECT_ID: "drop table" }).alertProjectId, null);
+  assert.equal(sync.readLaunchEnv({ LAUNCH_METRICS_ALERT_PROJECT_ID: "4c2fa95a-a60e-4cec-b0d8-8c6fb62e0a8e" }).alertProjectId, "4c2fa95a-a60e-4cec-b0d8-8c6fb62e0a8e");
+});
+
+await test("crons: vercel.json runs the full sync daily and the light sync hourly, with time to finish", () => {
+  const vercel = JSON.parse(readFileSync(new URL("../vercel.json", import.meta.url), "utf8"));
+  const crons = vercel.crons.filter((c) => c.path.startsWith("/api/launch-metrics/sync"));
+  assert.deepEqual(crons, [
+    { path: "/api/launch-metrics/sync?kind=full", schedule: "30 11 * * *" },
+    { path: "/api/launch-metrics/sync?kind=light", schedule: "15 * * * *" },
+  ]);
+  assert.equal(vercel.functions["src/app/api/launch-metrics/sync/route.ts"].maxDuration, 120);
+});
+
 // @@MORE_TESTS@@
 
 console.log(`\n${passed} passed, ${failures.length} failed`);
