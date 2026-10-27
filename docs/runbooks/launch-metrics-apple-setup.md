@@ -10,6 +10,7 @@ The script runs on your Mac, from your own Terminal. Nobody else sees the key: t
 
 - The app's **Apple ID** (a number). App Store Connect → Apps → Menu & Market → App Information → General Information → Apple ID.
 - About 10 minutes at your Mac.
+- Run it **once**, from **one** Terminal window, and only you. Don't start it in a second window or on another Mac while it runs, and don't let anyone else run it at the same time: two runs at once can each ask Apple for the same request.
 
 ## Steps
 
@@ -38,15 +39,19 @@ The script runs on your Mac, from your own Terminal. Nobody else sees the key: t
    node scripts/launch-metrics/apple-create-requests.mjs --key ~/Downloads/AuthKey_XXXXXXXXXX.p8 --key-id XXXXXXXXXX --issuer 00000000-0000-0000-0000-000000000000 --app-id 1234567890
    ```
 
+   If `git pull` prints an error or a warning instead of finishing (for example about local changes or a merge), stop there and tell the PM. Don't run the script from that folder until the PM says it's sorted.
+
    It should say `Dry run: no requests were sent to Apple` and list the three things it would do. If it says `Refused:`, follow what it says and run it again.
 
-4. **Do it for real.** Run the same command with `--go` at the end:
+4. **Do it for real, once.** Run the same command with `--go` at the end:
 
    ```
    node scripts/launch-metrics/apple-create-requests.mjs --key ~/Downloads/AuthKey_XXXXXXXXXX.p8 --key-id XXXXXXXXXX --issuer 00000000-0000-0000-0000-000000000000 --app-id 1234567890 --go
    ```
 
-5. **Delete the Admin key at Apple.** Same Team Keys screen → click `launch metrics setup` → **Revoke API Key**. Do this even if step 4 failed; you can make a fresh key to try again.
+   Run this only once. If it stops with a line saying Apple **may or may not have created it**, do NOT run it with `--go` again, not even later: tell the PM (step 7). The PM checks what exists first.
+
+5. **Delete the Admin key at Apple.** Same Team Keys screen → click `launch metrics setup` → **Revoke API Key**. Do this even if step 4 failed; if the PM later says to try again, you make a fresh key then.
 
 6. **Delete the file on your Mac.**
 
@@ -63,7 +68,7 @@ Each line looks like `Request <id>: <type>, <created or already existed>, stoppe
 - **ONGOING**: the request that makes new reports every day. This is the one the dashboard needs.
 - **ONE_TIME_SNAPSHOT**: a one-off request that captures history from before today (launch week). Apple never adds to it after the day it was made.
 - **created**: the script just asked Apple for it.
-- **already existed**: it was there before; the script left it alone. Running the script twice is safe.
+- **already existed**: it was there before; the script left it alone.
 - **stopped: yes**: Apple stopped that request because nobody downloaded its reports for a long time. If that line is the ONGOING one, the script creates a new ONGOING request and says so. A stopped ONE_TIME_SNAPSHOT is left alone (it has already done its job).
 - The last line, `Done. Apple usually needs 1-2 days…`, means it worked.
 
@@ -74,14 +79,19 @@ If something goes wrong it prints one line, for example `Apple returned HTTP 401
 | HTTP 401 | The Key ID or Issuer ID doesn't match the file, the key was already revoked, or the Mac's clock is wrong. |
 | HTTP 403 | The key isn't Admin. Make a new key with Admin access. |
 | HTTP 404 | The app's Apple ID is wrong. |
-| HTTP 409 | Apple says a request like this already exists. Run it again without changes; if it repeats, tell the PM. |
+| HTTP 409 | Apple says a request like this already exists. Don't run it again; tell the PM. |
 | HTTP 429 | Too many requests; wait a few minutes and run it again. |
-| Could not reach Apple | Internet problem; run it again. |
-| … Apple may already have created it … | The script asked Apple for a request but couldn't confirm the answer. Run the same command again: it lists what exists first and won't make a duplicate. |
+| Could not reach Apple … Nothing else was sent. | Internet problem while reading the list; nothing was created. Run it again when the internet is back. |
+| … Apple may or may not have created it … Do NOT run it with --go again … | The script asked Apple for a request but couldn't confirm the answer (no reply, a timeout, an Apple server error or an odd reply). Apple may still be making it, so running `--go` again could ask for a second one. Don't run it again. Tell the PM the line; the PM checks what exists before anything else is sent. |
+| … list of report requests was incomplete … | Apple said it has more requests than it sent back. Nothing was created. Tell the PM. |
 | … not in the expected shape. Stopped before creating anything. | Apple answered in a way the script doesn't recognise, so it stopped rather than guess. Nothing was created. Tell the PM. |
 | Refused: … | A safety check stopped it before anything was sent. Do what it says. |
 
 Exit codes, for scripts: 0 = worked, 1 = Apple or network problem, 2 = refused before sending anything.
+
+## Read-only check (only when the PM asks)
+
+`--check` instead of `--go` lists the app's report requests and sends nothing else: it never creates anything. Each line looks like `Request <id>: <type>, exists, stopped: <yes or no>`, then `Check only: … Nothing was created or changed.` The PM uses it to see what Apple has after a run that ended with "may or may not have created it". It needs an Admin key like `--go` (make a fresh one if you already revoked it, and revoke it again afterwards).
 
 ## If Apple stops the request later
 
@@ -98,8 +108,11 @@ If the dashboard ever shows `apple_request_stopped`, Apple stopped the ONGOING r
    - `POST /v1/analyticsReportRequests` with `accessType: ONGOING` if no ONGOING request with `stoppedDueToInactivity` false exists;
    - `POST /v1/analyticsReportRequests` with `accessType: ONE_TIME_SNAPSHOT` if no snapshot request exists (stopped or not).
    - Every call: `redirect: 'error'`, 30-second timeout. Stops at the first error.
-   - A listed request without `attributes`, without `accessType`, with an `accessType` other than exactly `ONGOING` / `ONE_TIME_SNAPSHOT`, or with a non-boolean `stoppedDueToInactivity` stops the run (exit 1) before any POST. After a POST whose outcome is unknown (odd reply, network error, HTTP 5xx) the message says Apple may already have created it and a re-run is safe.
-4. Prints only ids, access types, created/already existed and the stopped flag. Errors: HTTP status and Apple's `errors[0].code` (only if it is plain letters, digits, `_ . -`). Response bodies, headers, the key and the token are never printed or written.
+   - A listed request without `attributes`, without `accessType`, with an `accessType` other than exactly `ONGOING` / `ONE_TIME_SNAPSHOT`, or with a non-boolean `stoppedDueToInactivity` stops the run (exit 1) before any POST.
+   - The list must be provably complete before any POST: `links`, when present, must be an object; `links.next`, when present and not null, must be a string on Apple's host; no id may appear twice; `meta`/`meta.paging`, when present, must be objects, and `meta.paging.total`, when present, must be a whole number, the same on every page that gives it, and equal to the number of ids read. Otherwise exit 1, zero POSTs.
+   - After a POST whose outcome is unknown (odd reply, network error or timeout, HTTP 5xx) it sends nothing else and exits 1 with a message that Apple may or may not have created it and NOT to run `--go` again (tell the PM). A re-run is not safe there: a fresh list can't prove the earlier create has finished.
+4. With `--check`: the same GET (with every completeness check), prints each request as `exists`, never POSTs.
+5. Prints only ids, access types, created/already existed/exists and the stopped flag. Errors: HTTP status and Apple's `errors[0].code` (only if it is plain letters, digits, `_ . -`). Response bodies, headers, the key and the token are never printed or written.
 
 Apple pages this follows (checked 2026-10-26):
 
@@ -112,8 +125,8 @@ Apple pages this follows (checked 2026-10-26):
 
 Not stated in Apple's docs, so the script plays safe:
 
-- Whether Apple allows a second ONGOING or snapshot request per app, and exactly when it answers 409. The script never asks for a duplicate; a 409 is reported and stops.
+- Whether Apple allows a second ONGOING or snapshot request per app, and exactly when it answers 409. The script only asks for a type the complete list doesn't show; a 409 is reported and stops. It can't see a create Apple is still processing, which is why an unknown POST outcome means "don't re-run, tell the PM", and why it must not run twice at once.
 - What the list reply looks like beyond the documented fields. If a listed request has no access type, or one the script doesn't know, it stops before creating anything rather than guess.
-- The paging link names. The list call asks for up to 200 requests (an app has a handful), and follows `links.next` only to Apple's own host.
+- The paging link names and `meta.paging.total`. The list call asks for up to 200 requests (an app has a handful), follows `links.next` only to Apple's own host, and treats a missing or null `links.next` as the last page only when the count matches any total Apple states.
 - The App Store Connect screen labels above may differ slightly from what you see; the Key ID, Issuer ID and Admin access are what matter.
 - Known limit: the git-repository check looks for a `.git` folder or file in the key's folder and its parents. A folder tracked by a bare repository kept elsewhere (the "dotfiles" setup, `git --git-dir … --work-tree …`) isn't detected. Keep the key in `~/Downloads` as the steps say, and tell the PM first if you keep your home folder's settings files in git that way.

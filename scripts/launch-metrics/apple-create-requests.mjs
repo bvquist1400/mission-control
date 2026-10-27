@@ -15,8 +15,14 @@
 //   the owner can read or write, and a non-numeric app id.
 // - The token is only ever sent to https://api.appstoreconnect.apple.com and
 //   redirects are refused, so it can't be forwarded elsewhere.
-// - Fails closed: a listed request it can't read for certain stops the run
-//   before any POST, so it never asks Apple for a duplicate.
+// - Fails closed: a listed request it can't read for certain, or a list that
+//   isn't provably complete (odd paging links, a count that doesn't match
+//   Apple's total, the same id twice), stops the run before any POST.
+// - After a POST whose outcome is unknown (timeout, network error, HTTP 5xx,
+//   unreadable reply) it stops, says Apple may or may not have created it, and
+//   says NOT to run --go again: a fresh list can't prove an earlier create has
+//   finished, so a re-run could ask for a second one. Nothing else is sent in
+//   that run. --check lists what exists without ever sending a POST.
 //
 // Plain Node >= 20, no dependencies.
 
@@ -46,15 +52,16 @@ const EXIT_REFUSED = 2;
 const USAGE = [
   'Usage:',
   '  node scripts/launch-metrics/apple-create-requests.mjs \\',
-  '    --key <path to AuthKey_XXXX.p8> --key-id <Key ID> --issuer <Issuer ID> --app-id <numeric Apple ID> [--go]',
+  '    --key <path to AuthKey_XXXX.p8> --key-id <Key ID> --issuer <Issuer ID> --app-id <numeric Apple ID> [--go | --check]',
   '',
   'Without --go (or with --dry-run) it only checks the key file and says what it would do; nothing is sent.',
+  'With --check it only lists the app\'s report requests (read-only); it never creates anything.',
 ];
 
 class Refusal extends Error {}
 
 class AppleCallError extends Error {
-  constructor(step, { status = null, code = null, network = false, networkCode = null, shape = false } = {}) {
+  constructor(step, { status = null, code = null, network = false, networkCode = null, shape = false, incomplete = false } = {}) {
     super('apple call failed');
     this.step = step;
     this.status = status;
@@ -62,6 +69,8 @@ class AppleCallError extends Error {
     this.network = network;
     this.networkCode = networkCode;
     this.shape = shape;
+    // The list was readable but provably not the whole list.
+    this.incomplete = incomplete;
     // Set when the failing call was a POST whose outcome at Apple is unknown.
     this.mayHaveCreated = false;
   }
@@ -78,12 +87,13 @@ const VALUE_FLAGS = new Map([
 const BOOLEAN_FLAGS = new Map([
   ['--go', 'go'],
   ['--dry-run', 'dryRun'],
+  ['--check', 'check'],
   ['--help', 'help'],
   ['-h', 'help'],
 ]);
 
 function parseArgs(argv) {
-  const options = { go: false, dryRun: false, help: false };
+  const options = { go: false, dryRun: false, check: false, help: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     const eq = arg.startsWith('--') ? arg.indexOf('=') : -1;
@@ -111,7 +121,9 @@ function parseArgs(argv) {
 }
 
 function validateOptions(options) {
-  if (options.go && options.dryRun) throw new Refusal('Use either --go or --dry-run, not both.');
+  if ([options.go, options.dryRun, options.check].filter(Boolean).length > 1) {
+    throw new Refusal('Use only one of --go, --check and --dry-run.');
+  }
   for (const [flag, key] of VALUE_FLAGS) {
     if (options[key] === undefined || options[key] === '') {
       // An empty --app-id is still reported as a non-numeric app id below.
@@ -258,24 +270,68 @@ function readRequestItem(item, step, { requested = null } = {}) {
   return { id: item.id, accessType, stopped: rawStopped === true };
 }
 
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+// Apple's advertised total for the whole list (`meta.paging.total`), or
+// undefined when the page doesn't give one. A `meta` or `paging` that isn't an
+// object, or a total that isn't a whole number >= 0, is a shape error.
+function readPagingTotal(json, step) {
+  const shapeError = () => new AppleCallError(step, { shape: true });
+  if (json.meta === undefined) return undefined;
+  if (!isPlainObject(json.meta)) throw shapeError();
+  if (json.meta.paging === undefined) return undefined;
+  if (!isPlainObject(json.meta.paging)) throw shapeError();
+  const { total } = json.meta.paging;
+  if (total === undefined) return undefined;
+  if (!Number.isSafeInteger(total) || total < 0) throw shapeError();
+  return total;
+}
+
+// Lists every report request of the app. The result is only returned when it
+// is provably the whole list, because "not in the list" is what authorizes a
+// POST: `links`, when present, must be an object; `links.next`, when present
+// and not null, must be a string on Apple's host; every id appears once; and
+// when Apple states a total, the number of ids read must equal it (every page
+// that states one must state the same). Anything else stops before any POST.
 async function listReportRequests(fetchImpl, { appId, token }) {
   const step = 'listing report requests';
+  const shapeError = () => new AppleCallError(step, { shape: true });
   const params = new URLSearchParams({
     'fields[analyticsReportRequests]': 'accessType,stoppedDueToInactivity',
     limit: '200',
   });
   let url = `${APPLE_API_ORIGIN}/v1/apps/${appId}/analyticsReportRequests?${params}`;
   const items = [];
+  const seenIds = new Set();
+  let advertisedTotal;
   for (let page = 0; page < MAX_LIST_PAGES; page += 1) {
     const { json } = await appleRequest(fetchImpl, { step, method: 'GET', url, token });
-    if (!Array.isArray(json.data)) throw new AppleCallError(step, { shape: true });
-    for (const item of json.data) items.push(readRequestItem(item, step));
+    if (!Array.isArray(json.data)) throw shapeError();
+    for (const raw of json.data) {
+      const item = readRequestItem(raw, step);
+      if (seenIds.has(item.id)) throw shapeError();
+      seenIds.add(item.id);
+      items.push(item);
+    }
+    const total = readPagingTotal(json, step);
+    if (total !== undefined) {
+      if (advertisedTotal !== undefined && advertisedTotal !== total) throw shapeError();
+      advertisedTotal = total;
+    }
+    if (json.links !== undefined && !isPlainObject(json.links)) throw shapeError();
     const next = json.links?.next;
-    if (next === undefined || next === null) return items;
-    if (typeof next !== 'string' || !assertAppleUrl(next)) throw new AppleCallError(step, { shape: true });
+    if (next === undefined || next === null) {
+      if (advertisedTotal !== undefined && advertisedTotal !== items.length) {
+        throw new AppleCallError(step, { incomplete: true });
+      }
+      return items;
+    }
+    if (typeof next !== 'string' || !assertAppleUrl(next)) throw shapeError();
     url = next;
   }
-  throw new AppleCallError(step, { shape: true });
+  throw shapeError();
 }
 
 async function createReportRequest(fetchImpl, { appId, token, accessType }) {
@@ -312,7 +368,9 @@ function describe(request, outcome) {
   return `Request ${request.id}: ${request.accessType}, ${outcome}, stopped: ${request.stopped ? 'yes' : 'no'}`;
 }
 
-const MAY_HAVE_CREATED = 'Apple may already have created it. Run the same command again to check: it lists what exists first and won\'t make a duplicate.';
+// Never advise a re-run here: a fresh list can't prove the earlier create has
+// finished, so running --go again could ask Apple for a second one.
+const MAY_HAVE_CREATED = 'Apple may or may not have created it; the script can\'t tell. Do NOT run it with --go again. Tell the PM what it printed; the PM will check what exists before anything else is sent.';
 
 function describeError(error) {
   if (error instanceof AppleCallError) {
@@ -320,6 +378,9 @@ function describeError(error) {
     if (error.network) {
       const what = `Could not reach Apple while ${error.step} (network error${error.networkCode ? ` ${error.networkCode}` : ''}).`;
       return error.mayHaveCreated ? `${what} Stopped.${after}` : `${what} Nothing else was sent. Re-run when the connection is back.`;
+    }
+    if (error.incomplete) {
+      return `Apple's list of report requests was incomplete while ${error.step} (it said there are more than it returned). Stopped before creating anything. Tell the PM.`;
     }
     if (error.shape) {
       const what = `Apple's reply while ${error.step} was not in the expected shape.`;
@@ -357,7 +418,7 @@ export async function run(argv, { fetch: fetchImpl = globalThis.fetch, stdout, s
 
   const appId = options.appId;
 
-  if (!options.go) {
+  if (!options.go && !options.check) {
     // Prove the key can sign, locally. The token is discarded, never shown.
     createAppleJwt({ privateKey, keyId: options.keyId, issuerId: options.issuer, nowMs: now() });
     out('Dry run: no requests were sent to Apple. Add --go to do it for real.');
@@ -370,6 +431,20 @@ export async function run(argv, { fetch: fetchImpl = globalThis.fetch, stdout, s
   }
 
   const token = createAppleJwt({ privateKey, keyId: options.keyId, issuerId: options.issuer, nowMs: now() });
+
+  if (options.check) {
+    // Read-only: one list (with every completeness check), never a POST.
+    try {
+      const existing = await listReportRequests(fetchImpl, { appId, token });
+      for (const request of existing) out(describe(request, 'exists'));
+      out(`Check only: ${existing.length} report request${existing.length === 1 ? '' : 's'} listed. Nothing was created or changed.`);
+      return EXIT_OK;
+    } catch (error) {
+      err(describeError(error));
+      return EXIT_APPLE;
+    }
+  }
+
   try {
     // Every listed request has a known access type here: anything else already
     // stopped the run inside listReportRequests, before any POST.

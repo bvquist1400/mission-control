@@ -68,11 +68,12 @@ function jsonResponse(status, body) {
   });
 }
 
-function listBody(items, next) {
+// `total` is Apple's count for the WHOLE list (all pages), not this page.
+function listBody(items, next, total = items.length) {
   return {
     data: items,
     links: { self: `${APPLE_API_ORIGIN}/v1/apps/${APP_ID}/analyticsReportRequests`, ...(next ? { next } : {}) },
-    meta: { paging: { total: items.length, limit: 200 } },
+    meta: { paging: { total, limit: 200 } },
   };
 }
 
@@ -123,6 +124,21 @@ async function runCli(args, { fetchImpl, now } = {}) {
 
 function goArgs(keyFile, extra = []) {
   return ['--key', keyFile, '--key-id', KEY_ID, '--issuer', ISSUER, '--app-id', APP_ID, '--go', ...extra];
+}
+
+function checkArgs(keyFile, extra = []) {
+  return ['--key', keyFile, '--key-id', KEY_ID, '--issuer', ISSUER, '--app-id', APP_ID, '--check', ...extra];
+}
+
+// After a POST with an unknown outcome the message must say Apple may or may
+// not have created it, say NOT to run --go again, point at the PM, and never
+// promise that a re-run is safe or won't duplicate.
+const RERUN_ADVICE = /run (it |the same command |the script )?again(?! with --go)|re-?run (it|is|when)|won'?t (make a )?duplicate|is safe|no duplicate/i;
+function assertUncertainCreateMessage(text) {
+  assert.match(text, /Apple may or may not have created it/);
+  assert.match(text, /Do NOT run it with --go again/);
+  assert.match(text, /Tell the PM/);
+  assert.ok(!RERUN_ADVICE.test(text), `re-run advice after an uncertain create: ${text}`);
 }
 
 function decodeSegment(segment) {
@@ -308,8 +324,8 @@ test('GET follows Apple paging links on Apple\'s host only', async () => {
   const next = `${APPLE_API_ORIGIN}/v1/apps/${APP_ID}/analyticsReportRequests?cursor=abc&limit=200`;
   const { fetchImpl, calls } = mockFetch({
     onGet: (call) => (call.url.includes('cursor=abc')
-      ? jsonResponse(200, listBody([requestItem('r-snap', 'ONE_TIME_SNAPSHOT')]))
-      : jsonResponse(200, listBody([requestItem('r-on', 'ONGOING')], next))),
+      ? jsonResponse(200, listBody([requestItem('r-snap', 'ONE_TIME_SNAPSHOT')], undefined, 2))
+      : jsonResponse(200, listBody([requestItem('r-on', 'ONGOING')], next, 2))),
   });
   const result = await runCli(goArgs(file), { fetchImpl });
   assert.equal(result.code, 0, result.err);
@@ -403,8 +419,9 @@ test('a paging link carrying a user name or password is never fetched', async ()
 });
 
 // After a POST has gone out, Apple may have made the request even when the
-// reply is odd or lost. The message must say so, and a re-run must not duplicate.
-test('POST accepted but reply in an odd shape: says Apple may already have created it; re-run makes no duplicate', async () => {
+// reply is odd or lost. The message must say so and must NOT advise a re-run
+// (a fresh list can't prove the create has finished); --check reads only.
+test('POST accepted but reply in an odd shape: says Apple may or may not have created it, no re-run advice; --check sees it without POSTing', async () => {
   const { file } = makeKeyFile();
   const server = [];
   const { fetchImpl, calls } = mockFetch({
@@ -418,16 +435,15 @@ test('POST accepted but reply in an odd shape: says Apple may already have creat
   const first = await runCli(goArgs(file), { fetchImpl });
   assert.equal(first.code, 1);
   assert.match(first.err, /while creating the ONGOING request was not in the expected shape/);
-  assert.match(first.err, /Apple may already have created it/);
-  assert.match(first.err, /run the same command again/i);
+  assertUncertainCreateMessage(first.err);
   assert.ok(!/without making further changes/.test(first.err));
   assert.ok(!first.err.includes('has spaces'));
+  assert.equal(calls.filter((c) => c.method === 'POST').length, 1, 'no snapshot POST after the uncertain ONGOING');
 
-  const second = await runCli(goArgs(file), { fetchImpl });
-  assert.equal(second.code, 1, 'the snapshot reply is odd too, so the second run also stops');
-  assert.match(second.out, /srv-1: ONGOING, already existed/);
-  assert.equal(server.filter((r) => r.attributes.accessType === 'ONGOING').length, 1, 'no duplicate ONGOING');
-  assert.equal(calls.filter((c) => c.method === 'POST').length, 2, 'ONGOING once, then the snapshot');
+  const check = await runCli(checkArgs(file), { fetchImpl });
+  assert.equal(check.code, 0, check.err);
+  assert.match(check.out, /srv-1: ONGOING, exists, stopped: no/);
+  assert.equal(calls.filter((c) => c.method === 'POST').length, 1, '--check sent no POST');
 });
 
 test('POST reply naming a different access type than requested is a shape error', async () => {
@@ -439,7 +455,7 @@ test('POST reply naming a different access type than requested is a shape error'
   const result = await runCli(goArgs(file), { fetchImpl });
   assert.equal(result.code, 1);
   assert.match(result.err, /creating the ONGOING request was not in the expected shape/);
-  assert.match(result.err, /Apple may already have created it/);
+  assertUncertainCreateMessage(result.err);
 });
 
 test('POST reply without attributes still reports the requested access type', async () => {
@@ -453,7 +469,7 @@ test('POST reply without attributes still reports the requested access type', as
   assert.match(result.out, /new-1: ONGOING, created, stopped: no/);
 });
 
-test('network failure or server error on a POST says Apple may already have created it', async () => {
+test('network failure or server error on a POST says Apple may or may not have created it', async () => {
   for (const onPost of [
     () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } }); },
     () => appleError(503, 'SERVICE_UNAVAILABLE'),
@@ -463,8 +479,7 @@ test('network failure or server error on a POST says Apple may already have crea
     const result = await runCli(goArgs(file), { fetchImpl });
     assert.equal(result.code, 1);
     assert.match(result.err, /creating the ONGOING request/);
-    assert.match(result.err, /Apple may already have created it/);
-    assert.match(result.err, /run the same command again/i);
+    assertUncertainCreateMessage(result.err);
   }
 });
 
@@ -473,7 +488,7 @@ test('a 4xx on a POST does not claim Apple may have created it', async () => {
   const { fetchImpl } = mockFetch({ existing: [], onPost: () => appleError(403, 'FORBIDDEN_ERROR') });
   const result = await runCli(goArgs(file), { fetchImpl });
   assert.equal(result.code, 1);
-  assert.ok(!/may already have created/.test(result.err));
+  assert.ok(!/may (already|or may not) have created/.test(result.err));
 });
 
 test('a network failure while listing says nothing was created', async () => {
@@ -483,7 +498,289 @@ test('a network failure while listing says nothing was created', async () => {
   assert.equal(result.code, 1);
   assert.match(result.err, /network error ENOTFOUND/);
   assert.match(result.err, /Nothing else was sent/);
-  assert.ok(!/may already have created/.test(result.err));
+  assert.ok(!/may (already|or may not) have created/.test(result.err));
+});
+
+// ---------------------------------------------------------------- fix round 2: uncertain creates (F1)
+
+// Codex's delayed-completion sequence: the ONGOING POST reaches Apple, the reply
+// times out, and Apple finishes creating it only later. A re-run at that point
+// would list the old snapshot only and POST a second ONGOING, so the first run
+// must stop and must not advise running --go again.
+test('F1: timed-out ONGOING create still pending at Apple: exit 1, one POST, no re-run advice', async () => {
+  const { file, text } = makeKeyFile();
+  const server = [requestItem('existing-snap', 'ONE_TIME_SNAPSHOT')];
+  const { fetchImpl, calls } = mockFetch({
+    onGet: () => jsonResponse(200, listBody(server.slice())),
+    onPost: () => { throw new DOMException('Synthetic response timeout; Apple still processing', 'TimeoutError'); },
+  });
+  const first = await runCli(goArgs(file), { fetchImpl });
+  assert.equal(first.code, 1);
+  assert.equal(calls.filter((c) => c.method === 'POST').length, 1, 'exactly one POST, nothing after the uncertain one');
+  assert.match(first.err, /network error TIMEOUT/);
+  assert.match(first.err, /creating the ONGOING request/);
+  assertUncertainCreateMessage(first.err);
+  assert.ok(!/created/.test(first.out.replace(/may or may not have created/g, '')), 'nothing reported as created');
+  assert.ok(!/^Done/m.test(first.out), 'no Done line');
+  assertNoLeaks(first, { keyText: text, tokens: tokensFrom(calls) });
+
+  // Apple's pending create completes later; the PM's read-only check shows it
+  // and still sends no POST.
+  server.push(requestItem('first-on', 'ONGOING'));
+  const check = await runCli(checkArgs(file), { fetchImpl });
+  assert.equal(check.code, 0, check.err);
+  assert.match(check.out, /first-on: ONGOING, exists, stopped: no/);
+  assert.match(check.out, /existing-snap: ONE_TIME_SNAPSHOT, exists/);
+  assert.match(check.out, /Nothing was created or changed/);
+  assert.equal(calls.filter((c) => c.method === 'POST').length, 1, '--check added no POST');
+});
+
+// Every way a POST outcome can be unknown gets the same stop message, and no
+// second POST is sent in that run.
+for (const [label, onPost] of [
+  ['network reset', () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } }); }],
+  ['timeout', () => { throw new DOMException('timeout', 'TimeoutError'); }],
+  ['HTTP 500', () => appleError(500, 'INTERNAL_ERROR')],
+  ['HTTP 502 with a non-JSON body', () => new Response(`<html>${BODY_MARKER}</html>`, { status: 502 })],
+  ['HTTP 503', () => appleError(503, 'SERVICE_UNAVAILABLE')],
+  ['201 with a non-JSON body', () => new Response(`not json ${BODY_MARKER}`, { status: 201 })],
+  ['201 without data', () => jsonResponse(201, { links: {} })],
+  ['201 with attributes: null', () => jsonResponse(201, { data: { type: 'analyticsReportRequests', id: 'new-1', attributes: null } })],
+]) {
+  test(`F1: uncertain create (${label}): exit 1, one POST, "may or may not", do not re-run --go`, async () => {
+    const { file, text } = makeKeyFile();
+    const { fetchImpl, calls } = mockFetch({ existing: [], onPost });
+    const result = await runCli(goArgs(file), { fetchImpl });
+    assert.equal(result.code, 1);
+    assert.equal(calls.filter((c) => c.method === 'POST').length, 1, 'no snapshot POST after the uncertain ONGOING');
+    assert.match(result.err, /creating the ONGOING request/);
+    assertUncertainCreateMessage(result.err);
+    assertNoLeaks(result, { keyText: text, tokens: tokensFrom(calls) });
+  });
+}
+
+test('F1: an uncertain snapshot create (after a confirmed ONGOING) gets the same stop message', async () => {
+  const { file } = makeKeyFile();
+  const { fetchImpl, calls } = mockFetch({
+    existing: [requestItem('r-on', 'ONGOING')],
+    onPost: () => appleError(503, 'SERVICE_UNAVAILABLE'),
+  });
+  const result = await runCli(goArgs(file), { fetchImpl });
+  assert.equal(result.code, 1);
+  assert.equal(calls.filter((c) => c.method === 'POST').length, 1);
+  assert.match(result.err, /creating the ONE_TIME_SNAPSHOT request/);
+  assertUncertainCreateMessage(result.err);
+});
+
+// Opus fr1 follow-up: the reply to our own POST may leave attributes out, but
+// attributes: null is not "left out" and must not be read as the requested type.
+test('POST reply with attributes: null is a shape error (not read as the requested type)', async () => {
+  const { file } = makeKeyFile();
+  const { fetchImpl } = mockFetch({
+    existing: [requestItem('r-snap', 'ONE_TIME_SNAPSHOT')],
+    onPost: () => jsonResponse(201, { data: { type: 'analyticsReportRequests', id: 'new-1', attributes: null } }),
+  });
+  const result = await runCli(goArgs(file), { fetchImpl });
+  assert.equal(result.code, 1);
+  assert.match(result.err, /creating the ONGOING request was not in the expected shape/);
+  assert.ok(!/new-1: ONGOING, created/.test(result.out));
+  assertUncertainCreateMessage(result.err);
+});
+
+// ---------------------------------------------------------------- --check (read-only)
+
+for (const [label, existing] of [
+  ['no requests at all', []],
+  ['only a stopped ONGOING', [requestItem('r-old', 'ONGOING', true)]],
+  ['only a snapshot', [requestItem('r-snap', 'ONE_TIME_SNAPSHOT')]],
+]) {
+  test(`--check with ${label}: lists, exit 0, zero POSTs (where --go would create)`, async () => {
+    const { file, text } = makeKeyFile();
+    const { fetchImpl, calls } = mockFetch({ existing });
+    const result = await runCli(checkArgs(file), { fetchImpl });
+    assert.equal(result.code, 0, result.err);
+    assert.equal(calls.filter((c) => c.method !== 'GET').length, 0, 'no POST or other write');
+    assert.equal(calls.length, 1);
+    assert.match(result.out, new RegExp(`Check only: ${existing.length} report request`));
+    for (const item of existing) assert.match(result.out, new RegExp(`${item.id}: ${item.attributes.accessType}, exists`));
+    assert.ok(!/created/.test(result.out.replace('Nothing was created', '')));
+    assertNoLeaks(result, { keyText: text, tokens: tokensFrom(calls) });
+  });
+}
+
+test('--check follows paging and applies the same completeness checks (incomplete list: exit 1)', async () => {
+  const { file } = makeKeyFile();
+  const next = `${APPLE_API_ORIGIN}/v1/apps/${APP_ID}/analyticsReportRequests?cursor=2`;
+  const paged = mockFetch({
+    onGet: (call) => (call.url.includes('cursor=2')
+      ? jsonResponse(200, listBody([requestItem('r-snap', 'ONE_TIME_SNAPSHOT')], undefined, 2))
+      : jsonResponse(200, listBody([requestItem('r-on', 'ONGOING')], next, 2))),
+  });
+  const ok = await runCli(checkArgs(file), { fetchImpl: paged.fetchImpl });
+  assert.equal(ok.code, 0, ok.err);
+  assert.match(ok.out, /Check only: 2 report requests/);
+  assert.equal(paged.calls.length, 2);
+
+  const short = mockFetch({ onGet: () => jsonResponse(200, listBody([requestItem('r-on', 'ONGOING')], undefined, 2)) });
+  const bad = await runCli(checkArgs(file), { fetchImpl: short.fetchImpl });
+  assert.equal(bad.code, 1);
+  assert.match(bad.err, /incomplete/);
+  assert.equal(short.calls.filter((c) => c.method !== 'GET').length, 0);
+});
+
+test('--check with an Apple error exits 1 and sends nothing else', async () => {
+  const { file } = makeKeyFile();
+  const { fetchImpl, calls } = mockFetch({ onGet: () => appleError(401, 'NOT_AUTHORIZED') });
+  const result = await runCli(checkArgs(file), { fetchImpl });
+  assert.equal(result.code, 1);
+  assert.match(result.err, /HTTP 401/);
+  assert.equal(calls.length, 1);
+});
+
+test('--check together with --go or --dry-run is refused before any fetch; key refusals apply to --check', async () => {
+  const { file } = makeKeyFile();
+  for (const extra of [['--go'], ['--dry-run']]) {
+    const { fetchImpl, calls } = mockFetch();
+    const result = await runCli(checkArgs(file, extra), { fetchImpl });
+    assert.equal(result.code, 2, extra.join(' '));
+    assert.equal(calls.length, 0);
+  }
+  const loose = makeKeyFile({ mode: 0o644 });
+  const { fetchImpl, calls } = mockFetch();
+  const refused = await runCli(checkArgs(loose.file), { fetchImpl });
+  assert.equal(refused.code, 2);
+  assert.equal(calls.length, 0);
+});
+
+// ---------------------------------------------------------------- fix round 2: provably complete list (F2)
+
+function rawListOnce(body) {
+  return mockFetch({ onGet: () => jsonResponse(200, body) });
+}
+const SNAP = requestItem('existing-snap', 'ONE_TIME_SNAPSHOT');
+
+// Codex's three bodies: one item returned, Apple says there are two.
+for (const links of [[], 'invalid', { next: null }]) {
+  test(`F2: total 2 with one item and links ${JSON.stringify(links)}: exit 1, zero POSTs`, async () => {
+    const { file } = makeKeyFile();
+    const { fetchImpl, calls } = rawListOnce({ data: [SNAP], links, meta: { paging: { total: 2, limit: 1 } } });
+    const result = await runCli(goArgs(file), { fetchImpl });
+    assert.equal(result.code, 1, result.out);
+    assert.equal(calls.filter((c) => c.method === 'POST').length, 0);
+    assert.match(result.err, /before creating anything/);
+    assert.equal(result.out, '', 'nothing reported as existing before the list is proven complete');
+  });
+}
+
+test('F2 control: complete list (one item, total 1, next null) still creates exactly one ONGOING', async () => {
+  const { file } = makeKeyFile();
+  const { fetchImpl, calls } = rawListOnce({ data: [SNAP], links: { next: null }, meta: { paging: { total: 1, limit: 200 } } });
+  const result = await runCli(goArgs(file), { fetchImpl });
+  assert.equal(result.code, 0, result.err);
+  const posts = calls.filter((c) => c.method === 'POST');
+  assert.equal(posts.length, 1);
+  assert.equal(JSON.parse(posts[0].body).data.attributes.accessType, 'ONGOING');
+});
+
+test('F2 control: no links and no meta at all reads as one complete page', async () => {
+  const { file } = makeKeyFile();
+  const { fetchImpl, calls } = rawListOnce({ data: [requestItem('r-on', 'ONGOING'), SNAP] });
+  const result = await runCli(goArgs(file), { fetchImpl });
+  assert.equal(result.code, 0, result.err);
+  assert.equal(calls.filter((c) => c.method === 'POST').length, 0);
+});
+
+test('F2 control: valid multi-page list with no total, then with the whole-list total on each page', async () => {
+  const { file } = makeKeyFile();
+  const next = `${APPLE_API_ORIGIN}/v1/apps/${APP_ID}/analyticsReportRequests?cursor=2`;
+  for (const meta of [undefined, { paging: { total: 2, limit: 1 } }]) {
+    const { fetchImpl, calls } = mockFetch({
+      onGet: (call) => jsonResponse(200, call.url.includes('cursor=2')
+        ? { data: [SNAP], links: { next: null }, ...(meta ? { meta } : {}) }
+        : { data: [requestItem('r-on', 'ONGOING')], links: { next }, ...(meta ? { meta } : {}) }),
+    });
+    const result = await runCli(goArgs(file), { fetchImpl });
+    assert.equal(result.code, 0, result.err);
+    assert.equal(calls.filter((c) => c.method === 'GET').length, 2);
+    assert.equal(calls.filter((c) => c.method === 'POST').length, 0);
+  }
+});
+
+for (const [label, body] of [
+  ['links null', { data: [SNAP], links: null }],
+  ['links an array', { data: [SNAP], links: [] }],
+  ['links a string', { data: [SNAP], links: 'invalid' }],
+  ['links a number', { data: [SNAP], links: 5 }],
+  ['links.next a number', { data: [SNAP], links: { next: 5 } }],
+  ['links.next an object', { data: [SNAP], links: { next: {} } }],
+  ['links.next an array', { data: [SNAP], links: { next: [] } }],
+  ['links.next true', { data: [SNAP], links: { next: true } }],
+  ['links.next an empty string', { data: [SNAP], links: { next: '' } }],
+  ['meta a string', { data: [SNAP], meta: 'x' }],
+  ['meta.paging an array', { data: [SNAP], meta: { paging: [] } }],
+  ['total a string', { data: [SNAP], meta: { paging: { total: '1' } } }],
+  ['total negative', { data: [SNAP], meta: { paging: { total: -1 } } }],
+  ['total a fraction', { data: [SNAP], meta: { paging: { total: 1.5 } } }],
+  ['total null', { data: [SNAP], meta: { paging: { total: null } } }],
+  ['the same id twice on one page', { data: [SNAP, SNAP], meta: { paging: { total: 2 } } }],
+]) {
+  test(`F2: list with ${label} is a shape error: exit 1, zero POSTs`, async () => {
+    const { file } = makeKeyFile();
+    const { fetchImpl, calls } = rawListOnce(body);
+    const result = await runCli(goArgs(file), { fetchImpl });
+    assert.equal(result.code, 1, result.out);
+    assert.equal(calls.filter((c) => c.method === 'POST').length, 0);
+    assert.match(result.err, /while listing report requests was not in the expected shape\. Stopped before creating anything/);
+  });
+}
+
+for (const [label, body] of [
+  ['no links, total 2, one item', { data: [SNAP], meta: { paging: { total: 2 } } }],
+  ['links with self only, total 3, one item', { data: [SNAP], links: { self: `${APPLE_API_ORIGIN}/x` }, meta: { paging: { total: 3 } } }],
+  ['total 0 but one item', { data: [SNAP], meta: { paging: { total: 0 } } }],
+  ['empty list, total 1', { data: [], links: { next: null }, meta: { paging: { total: 1 } } }],
+]) {
+  test(`F2: ${label}: incomplete, exit 1, zero POSTs`, async () => {
+    const { file } = makeKeyFile();
+    const { fetchImpl, calls } = rawListOnce(body);
+    const result = await runCli(goArgs(file), { fetchImpl });
+    assert.equal(result.code, 1, result.out);
+    assert.equal(calls.filter((c) => c.method === 'POST').length, 0);
+    assert.match(result.err, /list of report requests was incomplete/);
+    assert.match(result.err, /Stopped before creating anything\. Tell the PM\./);
+  });
+}
+
+test('F2: the same id on two pages, or totals that disagree between pages: exit 1, zero POSTs', async () => {
+  const next = `${APPLE_API_ORIGIN}/v1/apps/${APP_ID}/analyticsReportRequests?cursor=2`;
+  for (const [first, second] of [
+    [{ data: [SNAP], links: { next }, meta: { paging: { total: 2 } } }, { data: [SNAP], meta: { paging: { total: 2 } } }],
+    [{ data: [SNAP], links: { next }, meta: { paging: { total: 2 } } }, { data: [requestItem('r-on', 'ONGOING')], meta: { paging: { total: 3 } } }],
+  ]) {
+    const { file } = makeKeyFile();
+    const { fetchImpl, calls } = mockFetch({ onGet: (call) => jsonResponse(200, call.url.includes('cursor=2') ? second : first) });
+    const result = await runCli(goArgs(file), { fetchImpl });
+    assert.equal(result.code, 1, result.out);
+    assert.equal(calls.filter((c) => c.method === 'GET').length, 2);
+    assert.equal(calls.filter((c) => c.method === 'POST').length, 0);
+    assert.match(result.err, /before creating anything/);
+  }
+});
+
+test('F2: a paging chain with fresh ids on every page stops at the 10-page cap with zero POSTs', async () => {
+  const { file } = makeKeyFile();
+  let page = 0;
+  const { fetchImpl, calls } = mockFetch({
+    onGet: () => {
+      page += 1;
+      const next = `${APPLE_API_ORIGIN}/v1/apps/${APP_ID}/analyticsReportRequests?cursor=${page}`;
+      return jsonResponse(200, { data: [requestItem(`r-snap-${page}`, 'ONE_TIME_SNAPSHOT')], links: { next } });
+    },
+  });
+  const result = await runCli(goArgs(file), { fetchImpl });
+  assert.equal(result.code, 1);
+  assert.equal(calls.filter((c) => c.method === 'GET').length, 10);
+  assert.equal(calls.filter((c) => c.method === 'POST').length, 0);
 });
 
 // ---------------------------------------------------------------- error paths
