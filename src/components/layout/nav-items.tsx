@@ -69,6 +69,12 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: <Icon><path d="M4 6h9M4 12h13M4 18h6" /><path d="M20 4v16" /></Icon>,
       },
       {
+        href: "/launch",
+        label: "Launch",
+        hint: "Menu & Market launch numbers: sign-ups, website, Google search",
+        icon: <Icon><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></Icon>,
+      },
+      {
         href: "/applications",
         label: "Applications",
         hint: "Portfolio health and updates",

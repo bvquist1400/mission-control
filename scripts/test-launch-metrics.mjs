@@ -763,6 +763,179 @@ await test("crons: vercel.json runs the full sync daily and the light sync hourl
   assert.equal(vercel.functions["src/app/api/launch-metrics/sync/route.ts"].maxDuration, 120);
 });
 
+// ─── page model, manual entries, dates, words ─────────────────────────────
+
+const pageData = await import("../src/lib/launch-metrics/page-data.ts");
+const manual = await import("../src/lib/launch-metrics/manual.ts");
+const dates = await import("../src/lib/launch-metrics/dates.ts");
+const format = await import("../src/lib/launch-metrics/format.ts");
+
+function pageInput(overrides = {}) {
+  const summary = appDb.validateAppDbSummary(fixture("app-db-summary.json"), NOW);
+  const daily = [
+    ...appDb.appDbDailyRows(summary, "2026-10-26").map((r) => (r.metric.startsWith("total_") ? { ...r, value: r.metric === "total_real_users" ? 1 : r.value } : r)),
+    ...appDb.appDbDailyRows(summary, "2026-10-27"),
+    ...web.parseVisitsByDay(fixture("vercel-visits-by-day.json")),
+    ...web.parseVisitsByReferrer(fixture("vercel-visits-by-referrer.json")),
+    ...web.parseAppStoreTaps(fixture("vercel-events-placement.json")),
+    ...gsc.dailyRowsFromQuery(gsc.parseQueryRows(fixture("gsc-query-date.json")), "2026-10-21", "2026-10-27"),
+  ];
+  return {
+    daily,
+    searchTop: { since: "2026-10-21", until: "2026-10-27", top_queries: [{ label: "menu and market app", clicks: 4, impressions: 9, position: 1.2 }], top_pages: [] },
+    runs: [{ id: "r1", trigger: "cron", kind: "full", started_at: "2026-10-27T19:15:00Z", finished_at: "2026-10-27T19:15:20Z", status: "ok", sources: { app_db: "ok", web: "ok", search_console: "ok", apple: "not_connected" } }],
+    reddit: [],
+    milestones: [{ id: "m1", user_id: "u", happened_at: "2026-10-26T14:30:00Z", label: "First real user", kind: "Users", created_at: "", updated_at: "" }],
+    manualReads: [],
+    tokenExpires: "2027-10-27",
+    ...overrides,
+  };
+}
+
+await test("page: headline totals come from the newest as-of day; Plus by household; family not counted", () => {
+  const view = pageData.buildLaunchView(pageInput(), NOW);
+  assert.equal(view.today, "2026-10-27");
+  assert.deepEqual(
+    { asOf: view.totals.asOfDate, real: view.totals.realUsers, unconfirmed: view.totals.unconfirmed, family: view.totals.familyAccounts, paid: view.totals.plusPaid, trial: view.totals.plusTrial, comp: view.totals.plusComp },
+    { asOf: "2026-10-27", real: 2, unconfirmed: 1, family: 2, paid: 0, trial: 1, comp: 3 }
+  );
+});
+
+await test("page: sign-up days run release → today (ET), with unconfirmed separate and the total line from as-of rows", () => {
+  const view = pageData.buildLaunchView(pageInput(), NOW);
+  const days = view.signups.days;
+  assert.equal(days[0].date, "2026-10-21");
+  assert.equal(days.at(-1).date, "2026-10-27");
+  const oct26 = days.find((d) => d.date === "2026-10-26");
+  assert.deepEqual([oct26.real, oct26.apple, oct26.unconfirmed, oct26.totalReal], [2, 2, 1, 1]);
+  assert.equal(days.find((d) => d.date === "2026-10-23").family, 2);
+  assert.equal(days.find((d) => d.date === "2026-10-24").totalReal, null);
+  assert.deepEqual(view.markers, [{ date: "2026-10-26", label: "First real user", kind: "Users" }]);
+});
+
+await test("page: website sums, top referrers (last 7 UTC days) and App Store taps by button", () => {
+  const view = pageData.buildLaunchView(pageInput(), NOW);
+  assert.equal(view.website.visitorsSum, 40);
+  assert.equal(view.website.pageviewsSum, 70);
+  assert.equal(view.website.tapsSum, 7);
+  assert.deepEqual(view.website.referrers.map((r) => [r.label, r.value, r.secondary]), [
+    ["www.reddit.com", 30, 18],
+    ["(direct)", 20, 10],
+    ["www.google.com", 12, 9],
+    ["others", 8, 3],
+  ]);
+  assert.deepEqual(view.website.placements.map((p) => [p.label, p.value]), [["site-hero", 6], ["site-footer", 1]]);
+});
+
+await test("page: Search Console totals, impression-weighted position, click rate and data-through date", () => {
+  const view = pageData.buildLaunchView(pageInput(), NOW);
+  assert.equal(view.search.clicks, 7);
+  assert.equal(view.search.impressions, 104);
+  assert.equal(view.search.dataThrough, "2026-10-26");
+  assert.ok(Math.abs(view.search.ctr - 7 / 104) < 1e-9);
+  const expected = (41.3 * 3 + 12.25 * 40 + 8.4 * 61) / 104;
+  assert.ok(Math.abs(view.search.position - expected) < 1e-6);
+  assert.equal(view.search.days.find((d) => d.date === "2026-10-23").position, null);
+  assert.equal(view.search.topQueries[0].label, "menu and market app");
+});
+
+await test("page: an empty database shows waiting states, not zeros as facts", () => {
+  const view = pageData.buildLaunchView(pageInput({ daily: [], runs: [], searchTop: null, milestones: [] }), NOW);
+  assert.equal(view.totals, null);
+  assert.equal(view.signups.hasData, false);
+  assert.equal(view.website.hasData, false);
+  assert.equal(view.search.hasData, false);
+  assert.equal(view.lastRun, null);
+  assert.deepEqual(view.health.map((h) => h.state), ["never", "never", "never", "not_connected"]);
+});
+
+await test("page: the website token warning shows from 30 days out", () => {
+  assert.equal(pageData.buildLaunchView(pageInput(), NOW).tokenDaysLeft, null);
+  assert.equal(pageData.buildLaunchView(pageInput({ tokenExpires: "2026-11-10" }), NOW).tokenDaysLeft, 14);
+});
+
+await test("page: the page model carries no account id, email or name from any source", () => {
+  const text = JSON.stringify(pageData.buildLaunchView(pageInput(), NOW));
+  assert.ok(!/@|5ee0000e|5ee00008|5ee00001|5ee0000b|should-never-be-read/.test(text));
+});
+
+await test("manual: Reddit posts take only the allowlisted fields; New York times; stats stamp stats_as_of", () => {
+  const ok = manual.parseRedditInput({ label: " r/apps  launch ", subreddit: "apps", posted_at: "2026-10-26T14:40", views: "1600", upvotes: -2, comments: 0 }, NOW, false);
+  assert.ok(ok.ok);
+  assert.deepEqual(ok.value, {
+    label: "r/apps launch",
+    subreddit: "r/apps",
+    posted_at: "2026-10-26T18:40:00.000Z",
+    views: 1600,
+    upvotes: -2,
+    comments: 0,
+    stats_as_of: NOW.toISOString(),
+  });
+  const noStats = manual.parseRedditInput({ label: "x", subreddit: "r/apps", posted_at: "2026-10-26T14:40:00Z" }, NOW, false);
+  assert.equal(noStats.value.stats_as_of, undefined);
+  for (const bad of [
+    { label: "x", subreddit: "r/apps", posted_at: "2026-10-26T14:40", user_id: "someone-else" },
+    { label: "x", subreddit: "r/apps", posted_at: "2026-10-26T14:40", id: "x" },
+    { label: "", subreddit: "r/apps", posted_at: "2026-10-26T14:40" },
+    { label: "x", subreddit: "r/a b", posted_at: "2026-10-26T14:40" },
+    { label: "x", subreddit: "r/apps", posted_at: "yesterday" },
+    { label: "x", subreddit: "r/apps", posted_at: "2031-01-01T00:00" },
+    { label: "x", subreddit: "r/apps", posted_at: "2026-10-26T14:40", views: -1 },
+    { label: "x", subreddit: "r/apps", posted_at: "2026-10-26T14:40", views: 1.5 },
+    { label: "x".repeat(201), subreddit: "r/apps", posted_at: "2026-10-26T14:40" },
+    [],
+    null,
+  ]) {
+    assert.equal(manual.parseRedditInput(bad, NOW, false).ok, false, JSON.stringify(bad));
+  }
+  assert.equal(manual.parseRedditInput({}, NOW, true).ok, false);
+  assert.deepEqual(manual.parseRedditInput({ views: "" }, NOW, true).value, { views: null, stats_as_of: NOW.toISOString() });
+});
+
+await test("manual: milestones take happened_at, label and kind only", () => {
+  const ok = manual.parseMilestoneInput({ happened_at: "2026-10-26 13:56", label: "First feature request", kind: "Feedback" }, NOW, false);
+  assert.deepEqual(ok.value, { happened_at: "2026-10-26T17:56:00.000Z", label: "First feature request", kind: "Feedback" });
+  assert.equal(manual.parseMilestoneInput({ happened_at: "2026-10-26T13:56", label: "x", kind: "Party" }, NOW, false).ok, false);
+  assert.equal(manual.parseMilestoneInput({ happened_at: "2026-10-26T13:56", label: "x", kind: "Users", user_id: "u" }, NOW, false).ok, false);
+  assert.deepEqual(manual.parseMilestoneInput({ kind: "Other" }, NOW, true).value, { kind: "Other" });
+});
+
+await test("dates: New York wall-clock ↔ UTC across both DST changes", () => {
+  assert.equal(dates.etLocalToIso("2026-10-21T13:42"), "2026-10-21T17:42:00.000Z");
+  assert.equal(dates.etLocalToIso("2026-12-01T09:00"), "2026-12-01T14:00:00.000Z");
+  assert.equal(dates.etLocalToIso("2027-03-14T02:30"), null); // skipped hour
+  assert.equal(dates.etLocalToIso("2026-11-01T01:30"), "2026-11-01T05:30:00.000Z"); // repeated hour: daylight
+  assert.equal(dates.etLocalToIso("2026-02-30T10:00"), null);
+  assert.equal(dates.etLocalToIso("2026-10-21T24:00"), null);
+  assert.equal(dates.isoToEtLocal("2026-10-21T17:42:00Z"), "2026-10-21T13:42");
+  assert.equal(dates.etDate(new Date("2026-10-27T03:59:00Z")), "2026-10-26");
+  assert.equal(dates.etDate(new Date("2026-10-27T04:00:00Z")), "2026-10-27");
+  assert.deepEqual(dates.dateRange("2026-10-30", "2026-11-02"), ["2026-10-30", "2026-10-31", "2026-11-01", "2026-11-02"]);
+});
+
+await test("words: footer lines per source state; no product copy names an assistant", () => {
+  assert.equal(format.healthLine({ source: "apple", state: "not_connected" }).text, "App Store: not connected yet (comes in phase 2)");
+  assert.equal(format.healthLine({ source: "web", state: "failing", lastCode: "http_403", lastOkAt: null }).tone, "danger");
+  assert.match(format.healthLine({ source: "app_db", state: "fresh", lastOkAt: "2026-10-27T19:15:20Z" }).text, /^App sign-ups: updated Oct 27, 3:15 PM$/);
+  assert.equal(format.formatPercent(7 / 104), "6.7%");
+  assert.equal(format.plural(1, "day", "days"), "1 day");
+  for (const file of [
+    "../src/components/launch/LaunchPage.tsx",
+    "../src/components/launch/LaunchManualPanels.tsx",
+    "../src/components/launch/DailyChart.tsx",
+    "../src/app/launch/page.tsx",
+    "../src/lib/launch-metrics/alerts.ts",
+    "../src/lib/launch-metrics/format.ts",
+  ]) {
+    assert.ok(!/claude|anthropic/i.test(readFileSync(new URL(file, import.meta.url), "utf8")), file);
+  }
+});
+
+await test("nav: the Launch page is in NAV_GROUPS", () => {
+  const nav = readFileSync(new URL("../src/components/layout/nav-items.tsx", import.meta.url), "utf8");
+  assert.match(nav, /href: "\/launch",\s+label: "Launch"/);
+});
+
 // @@MORE_TESTS@@
 
 console.log(`\n${passed} passed, ${failures.length} failed`);

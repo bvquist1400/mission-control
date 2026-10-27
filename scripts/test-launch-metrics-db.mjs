@@ -340,6 +340,44 @@ await test("alerts on the database: the unique external id stops a second task e
   assert.equal(count, 1);
 });
 
+// ─── Part 3: the Launch page's routes and loader on a real database ───────
+
+const redditRoute = await import("../src/app/api/launch-metrics/reddit/route.ts");
+const redditIdRoute = await import("../src/app/api/launch-metrics/reddit/[id]/route.ts");
+const milestonesRoute = await import("../src/app/api/launch-metrics/milestones/route.ts");
+const { loadLaunchPageInput, buildLaunchView } = await import("../src/lib/launch-metrics/page-data.ts");
+
+await test("routes: Reddit/milestone writes refuse a missing or foreign Origin and every machine key", async () => {
+  const body = JSON.stringify({ label: "x", subreddit: "r/apps", posted_at: "2026-10-26T14:40" });
+  const make = (headers) => new NextRequest("http://localhost/api/launch-metrics/reddit", { method: "POST", headers: { "content-type": "application/json", ...headers }, body });
+  assert.equal((await redditRoute.POST(make({ host: "localhost" }))).status, 403);
+  assert.equal((await redditRoute.POST(make({ host: "localhost", origin: "https://evil.example" }))).status, 403);
+  assert.equal((await redditRoute.POST(make({ host: "localhost", origin: "http://localhost", "x-mission-control-key": MACHINE_KEY }))).status, 403);
+  const milestone = new NextRequest("http://localhost/api/launch-metrics/milestones", {
+    method: "POST",
+    headers: { host: "localhost", origin: "http://localhost", "x-mission-control-key": MACHINE_KEY, "content-type": "application/json" },
+    body: JSON.stringify({ happened_at: "2026-10-26T14:40", label: "x", kind: "Other" }),
+  });
+  assert.equal((await milestonesRoute.POST(milestone)).status, 403);
+  const del = new NextRequest(`http://localhost/api/launch-metrics/reddit/${randomUUID()}`, { method: "DELETE", headers: { host: "localhost", origin: "http://localhost", "x-mission-control-key": MACHINE_KEY } });
+  assert.equal((await redditIdRoute.DELETE(del, { params: Promise.resolve({ id: randomUUID() }) })).status, 403);
+  const { count } = await admin.from("launch_reddit_posts").select("id", { count: "exact", head: true }).eq("user_id", brent.id);
+  assert.equal(count, 0);
+});
+
+await test("loader: the page reads only this user's rows and builds the counts-only view", async () => {
+  await admin.from("launch_reddit_posts").insert({ user_id: other.id, label: "Not Brent's", subreddit: "r/other", posted_at: "2026-10-26T18:40:00Z" });
+  const input = await loadLaunchPageInput(brent.client, brent.id, null);
+  assert.ok(input.daily.length > 0);
+  assert.ok(input.runs.length > 0);
+  assert.deepEqual(input.reddit, []);
+  const view = buildLaunchView(input, new Date("2026-10-27T19:30:00Z"));
+  assert.equal(view.totals.realUsers, 2);
+  assert.equal(view.website.tapsSum, 7);
+  const asOther = await loadLaunchPageInput(other.client, brent.id, null);
+  assert.deepEqual([asOther.daily.length, asOther.runs.length], [0, 0], "RLS: another user reading Brent's id sees nothing");
+});
+
 globalThis.fetch = realFetch;
 await admin.from("tasks").delete().eq("user_id", brent.id).eq("external_source_system", "launch_metrics");
 

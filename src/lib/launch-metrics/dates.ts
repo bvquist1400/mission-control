@@ -58,3 +58,56 @@ export function dateRange(from: string, to: string): string[] {
 export function daysBetween(a: string, b: string): number {
   return Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000);
 }
+
+const LOCAL_DATE_TIME = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})$/;
+
+/**
+ * "YYYY-MM-DDTHH:MM" (or with a space) as New York wall-clock time → ISO UTC.
+ * Returns null for anything else, including a time skipped by the spring DST
+ * change. In the repeated autumn hour the earlier (daylight) instant wins.
+ */
+export function etLocalToIso(local: string): string | null {
+  const match = LOCAL_DATE_TIME.exec(local.trim());
+  if (!match || !isIsoDate(match[1])) {
+    return null;
+  }
+  const [, date, hh, mm] = match;
+  const hour = Number(hh);
+  const minute = Number(mm);
+  if (hour > 23 || minute > 59) {
+    return null;
+  }
+  for (const offsetHours of [4, 5]) {
+    const candidate = new Date(`${date}T${hh}:${mm}:00Z`);
+    candidate.setUTCHours(candidate.getUTCHours() + offsetHours);
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: LAUNCH_TIMEZONE,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(candidate);
+    const get = (type: string) => parts.find((part) => part.type === type)?.value ?? '';
+    if (`${get('year')}-${get('month')}-${get('day')}` === date && Number(get('hour')) === hour && Number(get('minute')) === minute) {
+      return candidate.toISOString();
+    }
+  }
+  return null;
+}
+
+/** ISO instant → "YYYY-MM-DDTHH:MM" New York wall-clock (for a datetime-local input). */
+export function isoToEtLocal(iso: string): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: LAUNCH_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(iso));
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? '';
+  return `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}`;
+}
