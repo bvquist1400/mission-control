@@ -71,11 +71,11 @@
                 "type": "string"
               },
               "due": {
-                "description": "Accept only: today | tomorrow | this_week | none | YYYY-MM-DD (any real date on or after the brief date). Omit for tomorrow.",
+                "description": "Accept only: today | tomorrow | this_week | none | YYYY-MM-DD (any real date from today in ET to 2 years ahead). Omit for tomorrow.",
                 "type": "string"
               },
               "date": {
-                "description": "Move only (carry_over / carry_group): the day to move the task(s) to, YYYY-MM-DD, on or after the brief date",
+                "description": "Move only (carry_over / carry_group): the day to move the task(s) to, YYYY-MM-DD, from today (ET) to 2 years ahead",
                 "type": "string"
               }
             },

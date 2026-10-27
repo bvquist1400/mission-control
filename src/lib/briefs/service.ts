@@ -11,6 +11,7 @@ import {
   buildBriefCode,
   computeBriefItemKey,
   normalizeBriefCode,
+  resolveTomorrowDate,
   resolveTomorrowDueAt,
   todayInBriefTimeZone,
 } from "@/lib/briefs/keys";
@@ -111,15 +112,25 @@ function deferredToDate(item: BriefItemRow): string | null {
 }
 
 /**
- * A repeat is a no-op success. Move repeats only for the same day it already
- * moved to; a different day is refused (Undo first), never silently ignored.
+ * A repeat is a no-op success only when it would leave the same date: Move for
+ * the day it already moved to, Tomorrow for the day Tomorrow means (or when the
+ * move predates the saved snapshot, so nothing says where it went). A different
+ * day is refused (Undo first), never silently ignored: it answers "already"
+ * while the task sits somewhere else. Re-deferring in place was not chosen: the
+ * state machine has one way out of "deferred" (Undo), which restores the
+ * pre-brief date from the snapshot; a second deferral on top would have to carry
+ * that snapshot forward through the database function.
  */
-function isRepeat(item: BriefItemRow, input: BriefActionInput): boolean {
+function isRepeat(item: BriefItemRow, input: BriefActionInput, brief: Pick<BriefRow, "brief_date">, now: Date): boolean {
   const rule = ACTION_RULES[item.kind][input.action];
   if (!rule || item.state !== rule.to) return false;
   if (input.action === "move") {
     const movedTo = deferredToDate(item);
     return movedTo !== null && movedTo === input.date;
+  }
+  if (input.action === "tomorrow") {
+    const movedTo = deferredToDate(item);
+    return movedTo === null || movedTo === resolveTomorrowDate(brief.brief_date, now);
   }
   return IDEMPOTENT_ACTIONS.has(input.action);
 }
@@ -647,6 +658,8 @@ export interface BriefActionResult {
   /** The item changed between validation and the write; nothing was applied. Re-read and decide again. */
   conflict?: boolean;
   current_state?: BriefItemState;
+  /** Undo was refused for a reason that will not go away on its own (a task's date was changed since, or no snapshot): the page stops offering Undo. */
+  undo_blocked?: boolean;
 }
 
 function describeSources(item: BriefItemRow): string {
@@ -782,7 +795,7 @@ async function buildCarryUpdates(
     action.action === "tomorrow"
       ? resolveTomorrowDueAt(brief.brief_date, now)
       : action.action === "move"
-        ? resolvePickedDueAt(action.date ?? "", brief.brief_date)
+        ? resolvePickedDueAt(action.date ?? "", now)
         : undefined;
 
   const updates = item.task_ids.map((taskId) => {
@@ -858,8 +871,8 @@ export async function actOnBriefItems(
       problems.push(`#${action.n} is a ${item.kind}; "${action.action}" doesn't apply (use ${allowedActionsForKind(item.kind).join(", ")})`);
       continue;
     }
-    if (!rule.from.includes(item.state) && !isRepeat(item, action)) {
-      const movedTo = action.action === "move" && item.state === "deferred" ? deferredToDate(item) : null;
+    if (!rule.from.includes(item.state) && !isRepeat(item, action, brief, now)) {
+      const movedTo = (action.action === "move" || action.action === "tomorrow") && item.state === "deferred" ? deferredToDate(item) : null;
       problems.push(
         item.state === "accepted"
           ? `#${action.n} was already accepted (task ${item.created_task_id ?? "deleted"}); change it in Baseline`
@@ -870,7 +883,7 @@ export async function actOnBriefItems(
       continue;
     }
     if (action.action === "move") {
-      const problem = pickedDateProblem(action.date, brief.brief_date);
+      const problem = pickedDateProblem(action.date, now);
       if (problem) problems.push(`#${action.n}: ${problem}`);
     }
     if (action.action === "undo" && item.state === "deferred" && !item.prior_due?.length) {
@@ -892,7 +905,7 @@ export async function actOnBriefItems(
       problems.push(`#${action.n}: due only applies to accept`);
     }
     if (action.action === "accept" && action.due && !isAcceptDuePreset(action.due)) {
-      const problem = pickedDateProblem(action.due, brief.brief_date);
+      const problem = pickedDateProblem(action.due, now);
       if (problem) problems.push(`#${action.n}: ${problem}; otherwise use today, tomorrow, this_week or none`);
     }
   }
@@ -906,7 +919,7 @@ export async function actOnBriefItems(
     const rule = ACTION_RULES[item.kind][action.action]!;
     const actedAt = now.toISOString();
     try {
-      if (isRepeat(item, action)) {
+      if (isRepeat(item, action, brief, now)) {
         results.push({
           n: item.n,
           action: action.action,
@@ -1034,7 +1047,16 @@ export async function actOnBriefItems(
 
       results.push(result);
     } catch (caught) {
-      results.push({ n: item.n, action: action.action, ok: false, error: actionErrorMessage(item, caught) });
+      const undoBlocked =
+        action.action === "undo" &&
+        (caught instanceof BriefServiceError || (caught as { code?: unknown } | null)?.code === TASK_CHANGED_SQLSTATE);
+      results.push({
+        n: item.n,
+        action: action.action,
+        ok: false,
+        error: actionErrorMessage(item, caught),
+        ...(undoBlocked ? { undo_blocked: true } : {}),
+      });
     }
   }
 

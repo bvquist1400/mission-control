@@ -192,8 +192,8 @@ try {
     assert.equal(none.priority_score, 50);
   });
 
-  await test("a date before the brief's date is a 400, and nothing changes (any later date is allowed since 064's pick-a-date)", async () => {
-    await rejects(actOnBriefItems(admin, alice.id, code, actions([{ n: 6, action: "accept", due: "2026-09-28" }]), { now: NOW }), 400, /is before the brief's date \(2026-09-29\)/);
+  await test("a date before today (ET) is a 400, and nothing changes (any later date up to 2 years ahead is allowed since 064's pick-a-date)", async () => {
+    await rejects(actOnBriefItems(admin, alice.id, code, actions([{ n: 6, action: "accept", due: "2026-09-28" }]), { now: NOW }), 400, /is before today \(2026-09-29\)/);
     // One bad entry blocks the whole batch.
     await rejects(
       actOnBriefItems(admin, alice.id, code, actions([{ n: 7, action: "accept" }, { n: 6, action: "accept", due: "2026-09-01" }]), { now: NOW }),

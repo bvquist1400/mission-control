@@ -17,6 +17,7 @@ import {
 } from "@/components/briefs/cards";
 import { DayTile, HeroTile, NextTile, RecapBento, Sheet, TILE_REGISTRY } from "@/components/briefs/tiles";
 import { dateHeading } from "@/components/briefs/format";
+import { patchForRefusedAction } from "@/lib/briefs/act-patch";
 import { buildDayTimeline } from "@/components/briefs/timeline";
 import type { BriefCounts, BriefItemRow, BriefMeetingRef, BriefTaskSummary, BriefTile, BriefView } from "@/lib/briefs/types";
 
@@ -33,6 +34,7 @@ interface ActResult {
   already?: boolean;
   error?: string;
   conflict?: boolean;
+  undo_blocked?: boolean;
 }
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -151,6 +153,9 @@ export function BriefPage({ view }: { view: BriefView }) {
         const result = body?.results?.[0];
         if (!response.ok || !result || !result.ok) {
           toast({ message: result?.error ?? body?.error ?? "That didn't save. Try again.", tone: "danger" });
+          // A refused Undo that will keep failing: show the message once and drop the dead link.
+          const refused = patchForRefusedAction(request.action, result);
+          if (refused) setOverrides((current) => ({ ...current, [request.n]: { baseUpdatedAt: item.updated_at, patch: refused } }));
           // Lost a race (e.g. accepted in Claude meanwhile): show what actually happened.
           if (result?.conflict) router.refresh();
           return;
@@ -228,7 +233,7 @@ export function BriefPage({ view }: { view: BriefView }) {
       if (!item || item.state !== "open" || CARD_REGISTRY[item.kind].keyboard !== "decide" || pending[item.n]) return;
       if (key === "a") {
         event.preventDefault();
-        const due = effectiveAcceptDue(dueChoices[item.n] ?? defaultAcceptDue(item), pickedDates[item.n] ?? "", brief.brief_date);
+        const due = effectiveAcceptDue(dueChoices[item.n] ?? defaultAcceptDue(item), pickedDates[item.n] ?? "");
         if (due) void act({ n: item.n, action: "accept", due });
       } else if (key === "d") {
         event.preventDefault();
@@ -252,7 +257,7 @@ export function BriefPage({ view }: { view: BriefView }) {
     setDueChoice: (choice) => setDueChoices((current) => ({ ...current, [item.n]: choice })),
     pickedDate: pickedDates[item.n] ?? "",
     setPickedDate: (date) => setPickedDates((current) => ({ ...current, [item.n]: date })),
-    acceptDue: effectiveAcceptDue(dueChoices[item.n] ?? defaultAcceptDue(item), pickedDates[item.n] ?? "", brief.brief_date),
+    acceptDue: effectiveAcceptDue(dueChoices[item.n] ?? defaultAcceptDue(item), pickedDates[item.n] ?? ""),
     meetingColor,
     meetingLabel,
     pending: Boolean(pending[item.n]),

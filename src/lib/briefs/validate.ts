@@ -479,8 +479,8 @@ export function parseBriefActions(raw: unknown): ParseResult<BriefActionInput[]>
       }
     }
 
-    // Move's day. Required, only on move, a real YYYY-MM-DD (whether it is on/after the brief's date is
-    // checked against the brief when the action runs).
+    // Move's day. Required, only on move, a real YYYY-MM-DD (whether it falls from today (ET) to 2 years ahead is
+    // checked when the action runs).
     let date: string | undefined;
     if (entry.date !== undefined) {
       if (action !== "move") errors.push(`${path}.date only applies to move`);

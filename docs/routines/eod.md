@@ -248,8 +248,9 @@ task yourself. Brent decides on the page.
   the same state.
 - **"move 3 to 11/4"** (a carry-over or a group): `{ n: 3, action: "move",
   date: "2026-11-04" }`. Every task of the item is due the end of that ET day,
-  exactly as Tomorrow does it, and the item is "deferred". Any real date on or
-  after the brief's date works; a past date is refused with the reason. Turn
+  exactly as Tomorrow does it, and the item is "deferred". Any real date from
+  today (ET) to 2 years ahead works; a past or too-far date is refused with the
+  reason. Turn
   "11/4" into `YYYY-MM-DD` using the brief's year (next year if the date has
   already passed). **"accept 2 due 11/6"**: `{ n: 2, action: "accept", due:
   "2026-11-06" }`. **"undo 3"** on a moved or "tomorrow" item puts each task
@@ -294,7 +295,7 @@ item's key, so it can't create a second task.
 today", "accept 4 this week", "accept 3 no date", "accept 5 notes date" →
 `act_on_brief_items(code, [{ n, action: "accept", due }])` with `due` =
 `today`, `tomorrow`, `this_week`, `none`, the item's `suggested_due`, or any
-other real date on or after the brief's date (the page's "Pick a date…").
+other real date from today (ET) to 2 years ahead (the page's "Pick a date…").
 Without `due` the task is due tomorrow. Accepting again never changes the
 task; change its date in Baseline instead.
 

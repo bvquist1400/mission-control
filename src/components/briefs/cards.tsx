@@ -16,7 +16,9 @@ import {
   defaultAcceptDueChoice,
   isAcceptDuePreset,
   isDatePassed,
+  earliestPickedDate,
   isDateOnlyString,
+  latestPickedDate,
   pickedDateProblem,
   resolveAcceptDueDate,
   type AcceptDueChoice,
@@ -40,9 +42,9 @@ export interface ActRequest {
 export type DueSelection = AcceptDueChoice | "pick";
 
 /** The choice Accept sends, or null while "Pick a date…" has no valid day yet. */
-export function effectiveAcceptDue(selection: DueSelection, pickedDate: string, briefDate: string): AcceptDueChoice | null {
+export function effectiveAcceptDue(selection: DueSelection, pickedDate: string, now: Date = new Date()): AcceptDueChoice | null {
   if (selection !== "pick") return selection;
-  return pickedDateProblem(pickedDate, briefDate) === null ? (pickedDate as AcceptDueChoice) : null;
+  return pickedDateProblem(pickedDate, now) === null ? (pickedDate as AcceptDueChoice) : null;
 }
 
 export interface DismissDraft {
@@ -147,20 +149,18 @@ function dueLabel(dueAt: string | null | undefined): string {
 }
 
 /**
- * The inline date field of "Pick a date…": native date input (earliest = the
- * brief's date, ET), the weekday it lands on, an inline message for a day that
+ * The inline date field of "Pick a date…": native date input (earliest = today, ET;
+ * latest = 2 years ahead), the weekday it lands on, an inline message for a day that
  * is too early, and the card's confirm button (Move) when it has one.
  */
 function PickRow({
   label,
-  briefDate,
   value,
   onChange,
   onEnter,
   children,
 }: {
   label: string;
-  briefDate: string;
   value: string;
   onChange: (date: string) => void;
   onEnter?: () => void;
@@ -172,14 +172,15 @@ function PickRow({
     // Only when the row opens.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const problem = value ? pickedDateProblem(value, briefDate) : null;
+  const problem = value ? pickedDateProblem(value) : null;
   return (
     <div className="pickrow">
       <input
         ref={ref}
         type="date"
         className="note-in"
-        min={briefDate}
+        min={earliestPickedDate()}
+        max={latestPickedDate()}
         value={value}
         aria-label={label}
         aria-invalid={problem ? true : undefined}
@@ -197,7 +198,7 @@ function PickRow({
       {children}
       {problem ? (
         <span className="perr" role="alert">
-          Past dates aren&rsquo;t allowed.
+          {value < earliestPickedDate() ? "Past dates aren\u2019t allowed." : "That\u2019s too far ahead."}
         </span>
       ) : null}
     </div>
@@ -253,7 +254,8 @@ function DuePicker({ item, ctx }: CardProps) {
           type="button"
           aria-pressed={selected === suggested}
           suppressHydrationWarning
-          disabled={ctx.pending}
+          // A notes date that has already passed can't be picked: the earliest due date is today (ET).
+          disabled={ctx.pending || isDatePassed(suggested)}
           onClick={() => ctx.setDueChoice(suggested as AcceptDueChoice)}
         >
           {notesParts?.day} <span className="from" suppressHydrationWarning>
@@ -442,7 +444,7 @@ function ProposedTaskCard({ item, ctx }: CardProps) {
       {body}
       <DuePicker item={item} ctx={ctx} />
       {ctx.dueChoice === "pick" ? (
-        <PickRow label="Pick a due date" briefDate={ctx.briefDate} value={ctx.pickedDate} onChange={ctx.setPickedDate} />
+        <PickRow label="Pick a due date" value={ctx.pickedDate} onChange={ctx.setPickedDate} />
       ) : null}
       <div className="side">
         <button
@@ -540,15 +542,14 @@ function CarryOverCard({ item, ctx }: CardProps) {
       {pick.open ? (
         <PickRow
           label="Move to which day?"
-          briefDate={ctx.briefDate}
           value={pick.date}
           onChange={pick.setDate}
-          onEnter={() => pickedDateProblem(pick.date, ctx.briefDate) === null && ctx.act({ n: item.n, action: "move", date: pick.date })}
+          onEnter={() => pickedDateProblem(pick.date) === null && ctx.act({ n: item.n, action: "move", date: pick.date })}
         >
           <button
             type="button"
             className="btn sm solid"
-            disabled={ctx.pending || pickedDateProblem(pick.date, ctx.briefDate) !== null}
+            disabled={ctx.pending || pickedDateProblem(pick.date) !== null}
             onClick={() => ctx.act({ n: item.n, action: "move", date: pick.date })}
           >
             Move
@@ -604,15 +605,14 @@ function CarryGroupCard({ item, ctx }: CardProps) {
       {pick.open ? (
         <PickRow
           label={`Move all ${count} to which day?`}
-          briefDate={ctx.briefDate}
           value={pick.date}
           onChange={pick.setDate}
-          onEnter={() => pickedDateProblem(pick.date, ctx.briefDate) === null && ctx.act({ n: item.n, action: "move", date: pick.date })}
+          onEnter={() => pickedDateProblem(pick.date) === null && ctx.act({ n: item.n, action: "move", date: pick.date })}
         >
           <button
             type="button"
             className="btn sm solid"
-            disabled={ctx.pending || pickedDateProblem(pick.date, ctx.briefDate) !== null}
+            disabled={ctx.pending || pickedDateProblem(pick.date) !== null}
             onClick={() => ctx.act({ n: item.n, action: "move", date: pick.date })}
           >
             Move all {count}

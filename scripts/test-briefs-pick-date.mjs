@@ -26,6 +26,7 @@ async function load(path) {
 const due = await load("../src/lib/briefs/due.ts");
 const validate = await load("../src/lib/briefs/validate.ts");
 const service = await load("../src/lib/briefs/service.ts");
+const actPatch = await load("../src/lib/briefs/act-patch.ts");
 
 function need(mod, ...names) {
   if (mod.__missing) assert.fail(`module missing: ${mod.__missing}`);
@@ -238,30 +239,42 @@ async function rejects(promise, status, pattern) {
 // Pure date rules
 // ---------------------------------------------------------------------------
 
-await test("pickedDateProblem: real dates on/after the brief date pass; past, impossible and loose dates are refused", () => {
+const NOW_1027 = new Date("2026-10-27T20:30:00Z"); // Tue 10/27 4:30 PM EDT
+
+await test("pickedDateProblem: real dates from today (ET) up to 2 years ahead pass; past, impossible, loose and far-future dates are refused", () => {
   need(due, "pickedDateProblem");
-  assert.equal(due.pickedDateProblem("2026-10-27", "2026-10-27"), null);
-  assert.equal(due.pickedDateProblem("2026-11-04", "2026-10-27"), null);
-  assert.equal(due.pickedDateProblem("2031-01-01", "2026-10-27"), null);
-  assert.match(due.pickedDateProblem("2026-10-26", "2026-10-27"), /before the brief's date \(2026-10-27\)/);
+  assert.equal(due.pickedDateProblem("2026-10-27", NOW_1027), null, "today is allowed");
+  assert.equal(due.pickedDateProblem("2026-11-04", NOW_1027), null);
+  assert.equal(due.pickedDateProblem("2028-10-26", NOW_1027), null, "just inside 2 years");
+  assert.match(due.pickedDateProblem("2026-10-26", NOW_1027), /before today \(2026-10-27\)/);
+  assert.match(due.pickedDateProblem("9999-12-31", NOW_1027), /too far ahead.*2028-10-26/);
+  assert.match(due.pickedDateProblem("2028-10-27", NOW_1027), /too far ahead/);
   for (const bad of ["2026-02-30", "2026-13-01", "2026-9-30", " 2026-11-04", "2026-11-04T10:00:00Z", "11/4", "", null, undefined, 20261104]) {
-    assert.ok(due.pickedDateProblem(bad, "2026-10-27"), `${JSON.stringify(bad)} should be refused`);
+    assert.ok(due.pickedDateProblem(bad, NOW_1027), `${JSON.stringify(bad)} should be refused`);
   }
+});
+
+await test("pickedDateProblem: 'today' is the ET day, never UTC (9 PM ET on 10/27 is already 10/28 in UTC)", () => {
+  need(due, "pickedDateProblem");
+  const lateEvening = new Date("2026-10-28T01:30:00Z"); // Tue 10/27 9:30 PM EDT
+  assert.equal(due.pickedDateProblem("2026-10-27", lateEvening), null);
+  assert.match(due.pickedDateProblem("2026-10-26", lateEvening), /before today \(2026-10-27\)/);
 });
 
 await test("resolvePickedDueAt: the end of the picked ET day, either side of the Nov 1 2026 DST change", () => {
   need(due, "resolvePickedDueAt");
-  assert.equal(due.resolvePickedDueAt("2026-10-30", "2026-10-27"), "2026-10-31T03:59:59.999Z"); // EDT -4
-  assert.equal(due.resolvePickedDueAt("2026-10-31", "2026-10-27"), "2026-11-01T03:59:59.999Z"); // EDT, the night before the change
-  assert.equal(due.resolvePickedDueAt("2026-11-01", "2026-10-27"), "2026-11-02T04:59:59.999Z"); // the changeover Sunday ends in EST -5
-  assert.equal(due.resolvePickedDueAt("2026-11-04", "2026-10-27"), "2026-11-05T04:59:59.999Z"); // EST
-  assert.throws(() => due.resolvePickedDueAt("2026-10-26", "2026-10-27"), /before the brief's date/);
+  assert.equal(due.resolvePickedDueAt("2026-10-30", NOW_1027), "2026-10-31T03:59:59.999Z"); // EDT -4
+  assert.equal(due.resolvePickedDueAt("2026-10-31", NOW_1027), "2026-11-01T03:59:59.999Z"); // EDT, the night before the change
+  assert.equal(due.resolvePickedDueAt("2026-11-01", NOW_1027), "2026-11-02T04:59:59.999Z"); // the changeover Sunday ends in EST -5
+  assert.equal(due.resolvePickedDueAt("2026-11-04", NOW_1027), "2026-11-05T04:59:59.999Z"); // EST
+  assert.throws(() => due.resolvePickedDueAt("2026-10-26", NOW_1027), /before today/);
+  assert.throws(() => due.resolvePickedDueAt("9999-12-31", NOW_1027), /too far ahead/);
 });
 
 await test("a picked date resolves exactly like the same day written as an Accept choice", () => {
   need(due, "resolvePickedDueAt", "resolveAcceptDueAt");
   for (const date of ["2026-10-27", "2026-10-31", "2026-11-01", "2026-11-09"]) {
-    assert.equal(due.resolvePickedDueAt(date, "2026-10-27"), due.resolveAcceptDueAt(date, "2026-10-27", new Date("2026-10-27T20:00:00Z")));
+    assert.equal(due.resolvePickedDueAt(date, NOW_1027), due.resolveAcceptDueAt(date, "2026-10-27", NOW_1027));
   }
 });
 
@@ -323,12 +336,12 @@ await test("accept on a date across the DST change: Fri 10/30 ends in EDT, Mon 1
   assert.deepEqual(world.inserted.map((task) => task.due_at), ["2026-10-31T03:59:59.999Z", "2026-11-03T04:59:59.999Z"]);
 });
 
-await test("accept: the brief's own date is allowed; a past date is refused with a clear message and nothing is created", async () => {
+await test("accept: today is allowed; a past date is refused with a clear message and nothing is created", async () => {
   const world = proposalWorld();
   const { results } = await act(world, [{ n: 1, action: "accept", due: "2026-10-27" }]);
   assert.equal(results[0].ok, true);
   const refused = proposalWorld();
-  const error = await rejects(act(refused, [{ n: 1, action: "accept", due: "2026-10-26" }]), 400, /#1: 2026-10-26 is before the brief's date \(2026-10-27\)/);
+  const error = await rejects(act(refused, [{ n: 1, action: "accept", due: "2026-10-26" }]), 400, /#1: 2026-10-26 is before today \(2026-10-27\)/);
   assert.ok(error);
   assert.equal(refused.inserted.length, 0);
   assert.equal(refused.rpcCalls.length, 0);
@@ -408,7 +421,7 @@ await test("move writes due_at and priority only, the same shape Tomorrow writes
 
 await test("move: a past date is refused with a clear message, nothing changes, the whole call stops", async () => {
   const world = carryWorld();
-  await rejects(act(world, [{ n: 1, action: "move", date: "2026-10-26" }]), 400, /#1: 2026-10-26 is before the brief's date/);
+  await rejects(act(world, [{ n: 1, action: "move", date: "2026-10-26" }]), 400, /#1: 2026-10-26 is before today/);
   await rejects(act(world, [{ n: 2, action: "tomorrow" }, { n: 1, action: "move", date: "2026-01-01" }]), 400);
   assert.equal(world.rpcCalls.length, 0);
   assert.equal(itemOf(world, 1).state, "open");
@@ -420,7 +433,7 @@ await test("move applies to carry items only (a proposal or a choice refuses it)
   await rejects(act(world, [{ n: 1, action: "move", date: "2026-11-04" }]), 400, /proposed_task; "move" doesn't apply/);
 });
 
-await test("move to the brief's own date is allowed", async () => {
+await test("move to today (the brief's own date here) is allowed", async () => {
   const world = carryWorld();
   const { results } = await act(world, [{ n: 1, action: "move", date: "2026-10-27" }]);
   assert.equal(results[0].ok, true);
@@ -437,6 +450,84 @@ await test("repeating the same move is a safe no-op; a different day is refused 
   assert.equal(dueOf(world, 1), "2026-11-05T04:59:59.999Z");
   await rejects(act(world, [{ n: 1, action: "move", date: "2026-11-05" }]), 400, /already moved to 2026-11-04; undo it first/);
   assert.equal(dueOf(world, 1), "2026-11-05T04:59:59.999Z");
+});
+
+await test("P2-1: Tomorrow on an item already moved to another day is refused (never 'already' while the old date stays); Undo then Tomorrow works", async () => {
+  const world = carryWorld();
+  addTask(world, 6, { due_at: "2026-10-25T03:59:59.999Z" }); // due Sat 10/24, the reviewer's repro
+  addItem(world, 6, "carry_over", [T(6)], { item_key: "repro" });
+  const original = dueOf(world, 6);
+  await act(world, [{ n: 6, action: "move", date: "2026-11-09" }]);
+  assert.equal(dueOf(world, 6), "2026-11-10T04:59:59.999Z");
+  const calls = world.rpcCalls.length;
+  await rejects(act(world, [{ n: 6, action: "tomorrow" }]), 400, /#6 is already moved to 2026-11-09; undo it first/);
+  assert.equal(world.rpcCalls.length, calls, "nothing written");
+  assert.equal(dueOf(world, 6), "2026-11-10T04:59:59.999Z", "the task stays where it was moved");
+  assert.equal(itemOf(world, 6).prior_due[0].due_at, original, "the snapshot still holds the pre-brief date");
+  await act(world, [{ n: 6, action: "undo" }]);
+  assert.equal(dueOf(world, 6), original);
+  const { results } = await act(world, [{ n: 6, action: "tomorrow" }]);
+  assert.deepEqual({ ok: results[0].ok, already: results[0].already }, { ok: true, already: undefined });
+  assert.equal(dueOf(world, 6), "2026-10-29T03:59:59.999Z"); // Wed 10/28 ET
+});
+
+await test("P2-1: Tomorrow is a safe repeat after Tomorrow, and after a Move to the very day Tomorrow means", async () => {
+  const world = carryWorld();
+  await act(world, [{ n: 1, action: "tomorrow" }, { n: 2, action: "move", date: "2026-10-28" }]);
+  const calls = world.rpcCalls.length;
+  const again = await act(world, [{ n: 1, action: "tomorrow" }, { n: 2, action: "tomorrow" }]);
+  for (const result of again.results) assert.deepEqual({ ok: result.ok, already: result.already }, { ok: true, already: true });
+  assert.equal(world.rpcCalls.length, calls, "no second write");
+});
+
+await test("P2-1: Tomorrow on an item deferred before snapshots existed stays an 'already' (nothing says where it went)", async () => {
+  const world = carryWorld();
+  itemOf(world, 1).state = "deferred";
+  const { results } = await act(world, [{ n: 1, action: "tomorrow" }]);
+  assert.deepEqual({ ok: results[0].ok, already: results[0].already }, { ok: true, already: true });
+});
+
+await test("P2-1: a group moved to a day is also not 'already' for All tomorrow", async () => {
+  const world = carryWorld();
+  await act(world, [{ n: 3, action: "move", date: "2026-11-09" }]);
+  await rejects(act(world, [{ n: 3, action: "tomorrow" }]), 400, /#3 is already moved to 2026-11-09; undo it first/);
+  assert.equal(dueOf(world, 3), "2026-11-10T04:59:59.999Z");
+  assert.equal(dueOf(world, 4), "2026-11-10T04:59:59.999Z");
+});
+
+await test("LOW-1: a date more than 2 years ahead is a plain 400 before the database (Accept and Move), nothing changes", async () => {
+  const world = carryWorld();
+  const calls = world.rpcCalls.length;
+  await rejects(act(world, [{ n: 1, action: "move", date: "9999-12-31" }]), 400, /#1: 9999-12-31 is too far ahead; pick a day on or before 2028-10-26/);
+  assert.equal(world.rpcCalls.length, calls);
+  assert.equal(itemOf(world, 1).state, "open");
+  const proposal = proposalWorld();
+  await rejects(act(proposal, [{ n: 1, action: "accept", due: "9999-12-31" }]), 400, /#1: 9999-12-31 is too far ahead/);
+  assert.equal(proposal.inserted.length, 0);
+  assert.equal(proposal.rpcCalls.length, 0);
+  const edge = await act(world, [{ n: 1, action: "move", date: "2028-10-26" }]);
+  assert.equal(edge.results[0].ok, true, "the last allowed day still works");
+});
+
+await test("LOW-2: the earliest allowed day is today (ET), not the brief's date: an old brief's own date is refused for Move and Accept", async () => {
+  const old = makeWorld({ briefDate: "2026-10-20" });
+  old.brief.code = "EOD-1020";
+  addTask(old, 1, { due_at: "2026-10-20T03:59:59.999Z" });
+  addItem(old, 1, "carry_over", [T(1)]);
+  addItem(old, 2, "proposed_task", [], { payload: { title: "Old proposal" }, source: { meetings: [{ id: "m1", title: "x", start: null, url: null, lines: ["Old proposal"] }] } });
+  const run = (list) => service.actOnBriefItems(fakeSupabase(old), USER, "EOD-1020", actions(list), { now: NOW_1027 });
+  await rejects(run([{ n: 1, action: "move", date: "2026-10-20" }]), 400, /#1: 2026-10-20 is before today \(2026-10-27\)/);
+  await rejects(run([{ n: 1, action: "move", date: "2026-10-26" }]), 400, /before today/);
+  await rejects(run([{ n: 2, action: "accept", due: "2026-10-21" }]), 400, /#2: 2026-10-21 is before today \(2026-10-27\)/);
+  assert.equal(old.rpcCalls.length, 0);
+  assert.equal((await run([{ n: 1, action: "move", date: "2026-10-27" }])).results[0].ok, true, "today works");
+  assert.equal(dueOf(old, 1), "2026-10-28T03:59:59.999Z");
+});
+
+await test("LOW-2: Tomorrow keeps its meaning (the next weekday after the brief's date, or today when that has passed)", async () => {
+  const world = carryWorld();
+  await act(world, [{ n: 1, action: "tomorrow" }]);
+  assert.equal(dueOf(world, 1), "2026-10-29T03:59:59.999Z");
 });
 
 // ---------------------------------------------------------------------------
@@ -511,6 +602,7 @@ await test("Undo is refused, and changes nothing, when a task's date was edited 
   const { results } = await act(world, [{ n: 3, action: "undo" }]);
   assert.equal(results[0].ok, false);
   assert.match(results[0].error, /#3 can't be undone: a task's due date was changed after the move/);
+  assert.equal(results[0].undo_blocked, true, "tells the page to stop offering Undo");
   assert.equal(itemOf(world, 3).state, "deferred");
   assert.equal(dueOf(world, 3), "2026-11-10T04:59:59.999Z", "the unedited task is not half-restored");
   assert.equal(dueOf(world, 4), "2026-11-20T04:59:59.999Z");
@@ -545,6 +637,20 @@ await test("Undo recomputes priority for the restored date (the due-date boost g
   const restored = world.tasks.get(T(1)).priority_score;
   assert.ok(moved <= restored, `moving it far out should not raise priority (${moved} vs ${restored})`);
   assert.equal(typeof before, "number");
+});
+
+await test("LOW-3: a refused Undo that will keep failing hides the Undo link; a conflict or a failed request does not", async () => {
+  need(actPatch, "patchForRefusedAction");
+  const world = carryWorld();
+  await act(world, [{ n: 3, action: "move", date: "2026-11-09" }]);
+  world.tasks.get(T(4)).due_at = "2026-11-20T04:59:59.999Z"; // edited by hand afterwards
+  const { results } = await act(world, [{ n: 3, action: "undo" }]);
+  assert.deepEqual(actPatch.patchForRefusedAction("undo", results[0]), { can_undo: false });
+  assert.equal(actPatch.patchForRefusedAction("undo", { ok: false, conflict: true }), null);
+  assert.equal(actPatch.patchForRefusedAction("undo", { ok: false }), null, "a bare failure (network, 500) keeps the link");
+  assert.equal(actPatch.patchForRefusedAction("undo", undefined), null);
+  assert.equal(actPatch.patchForRefusedAction("move", { ok: false, undo_blocked: true }), null, "only Undo");
+  assert.equal(actPatch.patchForRefusedAction("undo", { ok: true }), null);
 });
 
 // ---------------------------------------------------------------------------

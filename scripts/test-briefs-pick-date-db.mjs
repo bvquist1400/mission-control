@@ -215,6 +215,7 @@ try {
     const result = await actOnBriefItems(admin, alice.id, code, actions([{ n: 3, action: "undo" }]), { now: NOW });
     assert.equal(result.results[0].ok, false);
     assert.match(result.results[0].error, /can't be undone: a task's due date was changed after the move/);
+    assert.equal(result.results[0].undo_blocked, true);
     assert.equal((await rawItem(alice.id, code, 3)).state, "deferred");
     assert.equal(await dueOf(g1), "2026-11-10T04:59:59.999Z", "g1 is not restored on its own");
     assert.equal(await dueOf(g2), "2026-11-20T04:59:59.999Z");
@@ -228,10 +229,42 @@ try {
     await rejects(actOnBriefItems(admin, alice.id, legacy.code, actions([{ n: 1, action: "undo" }])), 400, /moved before earlier due dates were saved/);
   });
 
-  await test("a past date is refused for Move and Accept (400, nothing changes)", async () => {
-    const fresh = await save(alice.id, "2026-10-29", [{ kind: "carry_over", title: "Past test", task_ids: [await makeTask(alice.id, "Past task", "2026-10-29T03:59:59.999Z")] }]);
-    await rejects(actOnBriefItems(admin, alice.id, fresh.code, move(1, "2026-10-28")), 400, /before the brief's date \(2026-10-29\)/);
+  await test("a day before today (ET) is refused for Move, even when it is the old brief's own date (400, nothing changes)", async () => {
+    const fresh = await save(alice.id, "2026-10-20", [{ kind: "carry_over", title: "Past test", task_ids: [await makeTask(alice.id, "Past task", "2026-10-20T03:59:59.999Z")] }]);
+    await rejects(actOnBriefItems(admin, alice.id, fresh.code, move(1, "2026-10-20"), { now: NOW }), 400, /before today \(2026-10-27\)/);
+    await rejects(actOnBriefItems(admin, alice.id, fresh.code, move(1, "2026-10-26"), { now: NOW }), 400, /before today \(2026-10-27\)/);
     assert.equal((await rawItem(alice.id, fresh.code, 1)).state, "open");
+    const today = await actOnBriefItems(admin, alice.id, fresh.code, move(1, "2026-10-27"), { now: NOW });
+    assert.equal(today.results[0].ok, true);
+  });
+
+  await test("a date more than 2 years ahead is a plain 400 (not the database's timestamp message) for Move and Accept", async () => {
+    const fresh = await save(alice.id, "2026-10-23", [
+      { kind: "carry_over", title: "Far test", task_ids: [await makeTask(alice.id, "Far task", "2026-10-26T03:59:59.999Z")] },
+      { kind: "proposed_task", title: "Far proposal", source: { meetings: [{ id: "m-far", title: "Sync", start: "2026-10-27T14:00:00Z", url: null, lines: ["Far proposal (Brent)"] }] } },
+    ]);
+    await rejects(actOnBriefItems(admin, alice.id, fresh.code, move(1, "9999-12-31"), { now: NOW }), 400, /too far ahead/);
+    await rejects(actOnBriefItems(admin, alice.id, fresh.code, actions([{ n: 2, action: "accept", due: "9999-12-31" }]), { now: NOW }), 400, /too far ahead/);
+    assert.equal((await rawItem(alice.id, fresh.code, 1)).state, "open");
+    assert.equal((await rawItem(alice.id, fresh.code, 2)).state, "open");
+  });
+
+  await test("P2-1: Tomorrow on an item already moved to another day is refused; the task stays and Undo still restores the pre-brief date", async () => {
+    const original = "2026-10-25T13:37:12.000Z";
+    const task = await makeTask(alice.id, "Repro task", original);
+    const fresh = await save(alice.id, "2026-10-26", [{ kind: "carry_over", title: "Repro", task_ids: [task] }]);
+    await actOnBriefItems(admin, alice.id, fresh.code, move(1, "2026-11-09"), { now: NOW });
+    await rejects(actOnBriefItems(admin, alice.id, fresh.code, actions([{ n: 1, action: "tomorrow" }]), { now: NOW }), 400, /already moved to 2026-11-09; undo it first/);
+    assert.equal(await dueOf(task), "2026-11-10T04:59:59.999Z");
+    const same = await actOnBriefItems(admin, alice.id, fresh.code, move(1, "2026-11-09"), { now: NOW });
+    assert.equal(same.results[0].already, true);
+    await actOnBriefItems(admin, alice.id, fresh.code, actions([{ n: 1, action: "undo" }]), { now: NOW });
+    assert.equal(await dueOf(task), original);
+    const tomorrow = await actOnBriefItems(admin, alice.id, fresh.code, actions([{ n: 1, action: "tomorrow" }]), { now: NOW });
+    assert.equal(tomorrow.results[0].ok, true);
+    assert.equal(tomorrow.results[0].already, undefined);
+    const again = await actOnBriefItems(admin, alice.id, fresh.code, actions([{ n: 1, action: "tomorrow" }]), { now: NOW });
+    assert.equal(again.results[0].already, true);
   });
 
   await test("064: applies twice, rolls back to 058's exact function and drops the column, re-applies", async () => {

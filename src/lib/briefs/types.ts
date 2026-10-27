@@ -175,9 +175,9 @@ export interface BriefActionInput {
   reason: DismissReason | null;
   note: string | null;
   choice: string | null;
-  /** accept only. Absent = "tomorrow". A date is any real YYYY-MM-DD on or after the brief's date. */
+  /** accept only. Absent = "tomorrow". A date is any real YYYY-MM-DD from today (ET) to 2 years ahead. */
   due?: AcceptDueChoice | null;
-  /** move only (carry_over / carry_group): the ET day the task(s) move to, YYYY-MM-DD, on or after the brief's date. */
+  /** move only (carry_over / carry_group): the ET day the task(s) move to, YYYY-MM-DD, from today (ET) to 2 years ahead. */
   date?: string | null;
 }
 
