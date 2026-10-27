@@ -380,7 +380,7 @@ function describeError(error) {
       return error.mayHaveCreated ? `${what} Stopped.${after}` : `${what} Nothing else was sent. Re-run when the connection is back.`;
     }
     if (error.incomplete) {
-      return `Apple's list of report requests was incomplete while ${error.step} (it said there are more than it returned). Stopped before creating anything. Tell the PM.`;
+      return `Apple's list of report requests didn't add up while ${error.step} (the count it gave doesn't match the requests it returned). Stopped before creating anything. Tell the PM.`;
     }
     if (error.shape) {
       const what = `Apple's reply while ${error.step} was not in the expected shape.`;

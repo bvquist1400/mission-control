@@ -381,6 +381,48 @@ await test("loader: the page reads only this user's rows and builds the counts-o
 globalThis.fetch = realFetch;
 await admin.from("tasks").delete().eq("user_id", brent.id).eq("external_source_system", "launch_metrics");
 
+// ─── Part 4: seed import against the local database ───────────────────────
+
+const { spawnSync } = await import("node:child_process");
+const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+const { tmpdir } = await import("node:os");
+const pathMod = await import("node:path");
+const { fileURLToPath } = await import("node:url");
+
+await test("seed: --apply writes counts only, and a second run changes nothing (upserts)", async () => {
+  const seeded = await makeUser("launch-db-seed");
+  const dir = mkdtempSync(pathMod.join(tmpdir(), "launch-seed-db-"));
+  try {
+    writeFileSync(pathMod.join(dir, "signups.csv"), "account,signed_up_et,sign_in,who,household\nzz11aa22,2026-10-23 07:08,Apple,Family,Own\nyy33bb44,2026-10-26 07:10,Apple,Real user,Own\n");
+    writeFileSync(pathMod.join(dir, "milestones.csv"), "when_et,event,kind\n2026-10-21 13:42,Menu & Market 1.0 released,Release\n");
+    writeFileSync(pathMod.join(dir, "reddit.csv"), "post,subreddit,posted_et,views,upvotes,comments,stats_as_of\nr/apps post,r/apps,2026-10-26 14:40,,1,0,2026-10-26 15:18\n");
+    writeFileSync(pathMod.join(dir, "app_store.csv"), "read_on,data_through,window,impressions,product_page_views,first_downloads,conversion\n2026-10-26,2026-10-24,Last 30 days,41,16,4,0.286\n");
+    const run = () => spawnSync("npm", ["run", "-s", "launch-metrics:seed", "--", "--dir", dir, "--apply"], {
+      cwd: fileURLToPath(new URL("..", import.meta.url)),
+      encoding: "utf8",
+      env: { ...process.env, LAUNCH_SEED_SUPABASE_URL: url, LAUNCH_SEED_SERVICE_ROLE_KEY: serviceKey, LAUNCH_SEED_USER_ID: seeded.id },
+    });
+    const counts = async () => Promise.all(
+      ["launch_metric_daily", "launch_milestones", "launch_reddit_posts", "launch_app_store_manual_reads"].map(
+        async (table) => (await admin.from(table).select("*", { count: "exact", head: true }).eq("user_id", seeded.id)).count
+      )
+    );
+    const first = run();
+    assert.equal(first.status, 0, first.stderr);
+    assert.ok(!first.stdout.includes(serviceKey));
+    const afterFirst = await counts();
+    assert.deepEqual(afterFirst.slice(1), [1, 1, 1]);
+    assert.equal(run().status, 0);
+    assert.deepEqual(await counts(), afterFirst);
+    const { data: rows } = await admin.from("launch_metric_daily").select("*").eq("user_id", seeded.id);
+    assert.ok(!JSON.stringify(rows).includes("zz11aa22") && !JSON.stringify(rows).includes("yy33bb44"));
+    assert.equal(Number(rows.find((r) => r.metric_date === "2026-10-26" && r.metric === "total_real_users").value), 1);
+    assert.ok(rows.every((r) => r.variant === "seed"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // @@MORE_DB_TESTS@@
 
 for (const id of users) {

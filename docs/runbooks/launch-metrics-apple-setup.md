@@ -83,7 +83,7 @@ If something goes wrong it prints one line, for example `Apple returned HTTP 401
 | HTTP 429 | Too many requests; wait a few minutes and run it again. |
 | Could not reach Apple … Nothing else was sent. | Internet problem while reading the list; nothing was created. Run it again when the internet is back. |
 | … Apple may or may not have created it … Do NOT run it with --go again … | The script asked Apple for a request but couldn't confirm the answer (no reply, a timeout, an Apple server error or an odd reply). Apple may still be making it, so running `--go` again could ask for a second one. Don't run it again. Tell the PM the line; the PM checks what exists before anything else is sent. |
-| … list of report requests was incomplete … | Apple said it has more requests than it sent back. Nothing was created. Tell the PM. |
+| … list of report requests didn't add up … | The number of requests Apple said it has doesn't match the requests it sent back (more or fewer). Nothing was created. Tell the PM. |
 | … not in the expected shape. Stopped before creating anything. | Apple answered in a way the script doesn't recognise, so it stopped rather than guess. Nothing was created. Tell the PM. |
 | Refused: … | A safety check stopped it before anything was sent. Do what it says. |
 
@@ -91,7 +91,7 @@ Exit codes, for scripts: 0 = worked, 1 = Apple or network problem, 2 = refused b
 
 ## Read-only check (only when the PM asks)
 
-`--check` instead of `--go` lists the app's report requests and sends nothing else: it never creates anything. Each line looks like `Request <id>: <type>, exists, stopped: <yes or no>`, then `Check only: … Nothing was created or changed.` The PM uses it to see what Apple has after a run that ended with "may or may not have created it". It needs an Admin key like `--go` (make a fresh one if you already revoked it, and revoke it again afterwards).
+`--check` instead of `--go` lists the app's report requests and sends nothing else: it never creates anything. Each line looks like `Request <id>: <type>, exists, stopped: <yes or no>`, then `Check only: … Nothing was created or changed.` The PM uses it to see what Apple has after a run that ended with "may or may not have created it". Wait a few hours after such a run before trusting it: a create Apple is still working on may not show in the list yet, so an early "missing" doesn't prove nothing was made. It needs an Admin key like `--go` (make a fresh one if you already revoked it, and revoke it again afterwards).
 
 ## If Apple stops the request later
 

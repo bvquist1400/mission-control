@@ -26,6 +26,7 @@
     "test:launch-metrics-apple-setup": "node --test scripts/test-launch-metrics-apple-setup.mjs",
     "test:launch-metrics": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-launch-metrics.mjs",
     "test:launch-metrics-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-launch-metrics-db.mjs",
+    "launch-metrics:seed": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/launch-metrics/seed-import.mjs",
     "test:mcp-oauth": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-mcp-oauth.mjs",
     "test:mcp-intelligence-artifacts": "node scripts/test-mcp-intelligence-artifact-routing.mjs",
     "test:mcp-contract": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-mcp-contract.mjs",

@@ -624,7 +624,7 @@ test('--check follows paging and applies the same completeness checks (incomplet
   const short = mockFetch({ onGet: () => jsonResponse(200, listBody([requestItem('r-on', 'ONGOING')], undefined, 2)) });
   const bad = await runCli(checkArgs(file), { fetchImpl: short.fetchImpl });
   assert.equal(bad.code, 1);
-  assert.match(bad.err, /incomplete/);
+  assert.match(bad.err, /didn't add up/);
   assert.equal(short.calls.filter((c) => c.method !== 'GET').length, 0);
 });
 
@@ -740,13 +740,14 @@ for (const [label, body] of [
   ['total 0 but one item', { data: [SNAP], meta: { paging: { total: 0 } } }],
   ['empty list, total 1', { data: [], links: { next: null }, meta: { paging: { total: 1 } } }],
 ]) {
-  test(`F2: ${label}: incomplete, exit 1, zero POSTs`, async () => {
+  test(`F2: ${label}: count doesn't add up, exit 1, zero POSTs`, async () => {
     const { file } = makeKeyFile();
     const { fetchImpl, calls } = rawListOnce(body);
     const result = await runCli(goArgs(file), { fetchImpl });
     assert.equal(result.code, 1, result.out);
     assert.equal(calls.filter((c) => c.method === 'POST').length, 0);
-    assert.match(result.err, /list of report requests was incomplete/);
+    assert.match(result.err, /list of report requests didn't add up/);
+    assert.match(result.err, /the count it gave doesn't match the requests it returned/);
     assert.match(result.err, /Stopped before creating anything\. Tell the PM\./);
   });
 }
@@ -756,6 +757,9 @@ test('F2: the same id on two pages, or totals that disagree between pages: exit 
   for (const [first, second] of [
     [{ data: [SNAP], links: { next }, meta: { paging: { total: 2 } } }, { data: [SNAP], meta: { paging: { total: 2 } } }],
     [{ data: [SNAP], links: { next }, meta: { paging: { total: 2 } } }, { data: [requestItem('r-on', 'ONGOING')], meta: { paging: { total: 3 } } }],
+    // Phase 1 follow-up (Opus fr2 LOW 1): the later page's total matches the
+    // items read, but the first page said 3. Only the cross-page check stops it.
+    [{ data: [SNAP], links: { next }, meta: { paging: { total: 3 } } }, { data: [requestItem('r-on', 'ONGOING')], meta: { paging: { total: 2 } } }],
   ]) {
     const { file } = makeKeyFile();
     const { fetchImpl, calls } = mockFetch({ onGet: (call) => jsonResponse(200, call.url.includes('cursor=2') ? second : first) });

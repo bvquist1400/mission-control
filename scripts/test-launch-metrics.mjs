@@ -936,6 +936,102 @@ await test("nav: the Launch page is in NAV_GROUPS", () => {
   assert.match(nav, /href: "\/launch",\s+label: "Launch"/);
 });
 
+// ─── seed import (piece 9) ────────────────────────────────────────────────
+
+const seed = await import("../src/lib/launch-metrics/seed.ts");
+const { spawnSync } = await import("node:child_process");
+const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+const { tmpdir } = await import("node:os");
+const pathMod = await import("node:path");
+
+const SEED_FILES = {
+  "signups.csv": "account,signed_up_et,sign_in,who,household\naaaa1111,2026-10-23 07:08,Apple,Family,Own\nbbbb2222,2026-10-23 07:09,Apple,Family,Own\ncccc3333,2026-10-26 07:10,Apple,Real user,Own\ndddd4444,2026-10-26 07:11,Email,Real user,Own\neeee5555,2026-10-26 14:23,Apple,Internal,Own\n",
+  "plus.csv": "as_of,trial,paid,comp\n2026-10-26,0,0,3\n2026-10-27,1,0,3\n",
+  "reddit.csv": "post,subreddit,posted_et,views,upvotes,comments,stats_as_of\nr/iPhoneduoapp Oct 26 09:23,r/iPhoneduoapp,2026-10-26 09:23,1600,1,2,2026-10-26 20:03\nr/apps Oct 26 14:40,r/apps,2026-10-26 14:40,,1,0,2026-10-26 15:18\n",
+  "milestones.csv": 'when_et,event,kind\n2026-10-21 13:42,Menu & Market 1.0 released,Release\n2026-10-26 11:37,"First Plus free trial (auto-renew off, ends 11/26)",Users\n2026-10-26 13:56,First feature request: dinner suggestions,Feedback\n2026-10-27 08:00,Something new,Party\n',
+  "app_store.csv": "read_on,data_through,window,impressions,product_page_views,first_downloads,conversion\n2026-10-26,2026-10-24,Last 30 days,41,16,4,0.286\n",
+};
+
+await test("seed: CSV parsing handles quotes, escaped quotes, commas and CRLF", () => {
+  assert.deepEqual(seed.parseCsv('a,b\r\n"x, y","he said ""hi"""\r\n'), [["a", "b"], ["x, y", 'he said "hi"']]);
+  assert.throws(() => seed.parseCsv('a\n"open'), /unclosed quote/);
+});
+
+await test("seed: signups.csv becomes counts per New York day; no account id survives anywhere", () => {
+  const plan = seed.buildSeedPlan(SEED_FILES);
+  assert.deepEqual(plan.signupDays, [
+    { date: "2026-10-23", real: 0, apple: 0, email: 0, family: 2 },
+    { date: "2026-10-26", real: 2, apple: 1, email: 1, family: 0 },
+  ]);
+  assert.equal(plan.skippedInternal, 1);
+  const get = (date, metric) => plan.daily.find((r) => r.metric_date === date && r.metric === metric)?.value;
+  assert.equal(get("2026-10-21", "total_real_users"), 0);
+  assert.equal(get("2026-10-26", "total_real_users"), 2);
+  assert.equal(get("2026-10-26", "total_family_accounts"), 2);
+  assert.equal(get("2026-10-27", "total_plus_trial"), 1);
+  assert.ok(plan.daily.every((r) => r.source === "app_db" && r.variant === "seed"));
+  const text = JSON.stringify(plan);
+  for (const id of ["aaaa1111", "bbbb2222", "cccc3333", "dddd4444", "eeee5555"]) assert.ok(!text.includes(id), id);
+});
+
+await test("seed: Reddit, timeline and App Store hand reads", () => {
+  const plan = seed.buildSeedPlan(SEED_FILES);
+  assert.deepEqual(plan.reddit[1], { label: "r/apps Oct 26 14:40", subreddit: "r/apps", posted_at: "2026-10-26T18:40:00.000Z", views: null, upvotes: 1, comments: 0, stats_as_of: "2026-10-26T19:18:00.000Z" });
+  assert.deepEqual(plan.milestones.map((m) => m.kind), ["Release", "Users", "Feedback", "Other"]);
+  assert.equal(plan.milestones[1].label, "First Plus free trial (auto-renew off, ends 11/26)");
+  assert.equal(plan.milestones[0].happened_at, "2026-10-21T17:42:00.000Z");
+  assert.deepEqual(plan.manualReads, [{ read_on: "2026-10-26", data_through: "2026-10-24", window_label: "Last 30 days", impressions: 41, product_page_views: 16, first_downloads: 4 }]);
+});
+
+await test("seed: bad files are refused with the file and row named", () => {
+  assert.throws(() => seed.buildSeedPlan({ "signups.csv": "account,signed_up_et,sign_in\nx,2026-10-26 07:10,Apple\n" }), /signups\.csv: missing column who/);
+  assert.throws(() => seed.buildSeedPlan({ "signups.csv": "account,signed_up_et,sign_in,who\nx,yesterday,Apple,Real user\n" }), /signups\.csv: row 2/);
+  assert.throws(() => seed.buildSeedPlan({ "signups.csv": "account,signed_up_et,sign_in,who\nx,2026-10-26 07:10,Google,Real user\n" }), /sign_in must be Apple or Email/);
+  assert.throws(() => seed.buildSeedPlan({ "plus.csv": "as_of,trial,paid,comp\n2026-10-26,1,x,0\n" }), /plus\.csv: row 2: paid/);
+  assert.throws(() => seed.buildSeedPlan({ "reddit.csv": "post,subreddit,posted_et,views,upvotes,comments,stats_as_of\na,apps,2026-10-26 09:23,1,1,1,\n" }), /subreddit/);
+  assert.throws(() => seed.buildSeedPlan({ "app_store.csv": "read_on,data_through,window,impressions,product_page_views,first_downloads\n2026-10-26,2026-10-24,30d,41,16\n" }), /row 2 has 5 cells/);
+});
+
+await test("page: a seeded Plus row for a later day doesn't hide the sign-up totals of the day before", () => {
+  const plan = seed.buildSeedPlan(SEED_FILES);
+  const view = pageData.buildLaunchView(pageInput({ daily: plan.daily }), NOW);
+  assert.deepEqual(
+    [view.totals.asOfDate, view.totals.realUsers, view.totals.familyAccounts, view.totals.plusTrial, view.totals.plusComp],
+    ["2026-10-26", 2, 2, 1, 3]
+  );
+});
+
+await test("seed CLI: dry run prints counts only and writes nothing; --apply refuses without a target or a host confirmation", async () => {
+  const dir = mkdtempSync(pathMod.join(tmpdir(), "launch-seed-"));
+  try {
+    for (const [name, text] of Object.entries(SEED_FILES)) writeFileSync(pathMod.join(dir, name), text);
+    const cwd = (await import("node:url")).fileURLToPath(new URL("..", import.meta.url));
+    const run = (args, env = {}) => spawnSync("npm", ["run", "-s", "launch-metrics:seed", "--", ...args], {
+      cwd,
+      encoding: "utf8",
+      env: { ...process.env, LAUNCH_SEED_SUPABASE_URL: "", LAUNCH_SEED_SERVICE_ROLE_KEY: "", LAUNCH_SEED_USER_ID: "", ...env },
+    });
+    const dry = run(["--dir", dir]);
+    assert.equal(dry.status, 0, dry.stderr);
+    assert.match(dry.stdout, /2026-10-26: real 2 \(Apple 1, email 1\), family 0/);
+    assert.match(dry.stdout, /Dry run: nothing written/);
+    for (const id of ["aaaa1111", "cccc3333", "eeee5555"]) assert.ok(!dry.stdout.includes(id) && !dry.stderr.includes(id), id);
+    assert.equal(run(["--dir", dir, "--apply"]).status, 2);
+    const remote = run(["--dir", dir, "--apply"], {
+      LAUNCH_SEED_SUPABASE_URL: "https://abcdefghijklmnopqrst.supabase.co",
+      LAUNCH_SEED_SERVICE_ROLE_KEY: "service-key-must-not-print",
+      LAUNCH_SEED_USER_ID: "0000beef-0000-4000-8000-00000000c0de",
+    });
+    assert.equal(remote.status, 2);
+    assert.match(remote.stderr, /needs --confirm-host abcdefghijklmnopqrst\.supabase\.co/);
+    assert.ok(!(remote.stdout + remote.stderr).includes("service-key-must-not-print"));
+    assert.equal(run(["--dir", dir, "--bogus"]).status, 2);
+    assert.equal(run([]).status, 2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // @@MORE_TESTS@@
 
 console.log(`\n${passed} passed, ${failures.length} failed`);

@@ -1,6 +1,6 @@
 /**
  * Headline totals from the app database's as-of rows (`total_*`, one set per
- * ET day; the newest day wins). Counts only; Plus counts are households.
+ * ET day; each total's newest day wins). Counts only; Plus counts are households.
  */
 
 import type { DailyValue } from './page-data';
@@ -28,8 +28,18 @@ export function latestTotals(daily: DailyValue[]): AppDbTotalsView | null {
   if (totals.length === 0) {
     return null;
   }
-  const asOfDate = totals.reduce((latest, row) => (row.metric_date > latest ? row.metric_date : latest), totals[0].metric_date);
-  const sameDay = new Map(totals.filter((row) => row.metric_date === asOfDate).map((row) => [row.metric, row.value]));
+  // Each total takes its own newest day: a seeded Plus row for a later day
+  // must not hide the sign-up totals of the day before.
+  const latest = new Map<string, { date: string; value: number }>();
+  for (const row of totals) {
+    const current = latest.get(row.metric);
+    if (!current || row.metric_date > current.date) {
+      latest.set(row.metric, { date: row.metric_date, value: row.value });
+    }
+  }
+  const asOfDate = latest.get('total_real_users')?.date
+    ?? [...latest.values()].reduce((max, entry) => (entry.date > max ? entry.date : max), totals[0].metric_date);
+  const sameDay = new Map([...latest.entries()].map(([metric, entry]) => [metric, entry.value]));
   const get = (metric: string) => sameDay.get(`total_${metric}`) ?? 0;
   const maybe = (metric: string) => (sameDay.has(`total_${metric}`) ? get(metric) : null);
   return {
