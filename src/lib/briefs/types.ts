@@ -26,7 +26,7 @@ export type BriefItemState = (typeof BRIEF_ITEM_STATES)[number];
 export const DISMISS_REASONS = ["already_tracked", "not_mine", "not_worth_it"] as const;
 export type DismissReason = (typeof DISMISS_REASONS)[number];
 
-export const BRIEF_ACTIONS = ["accept", "dismiss", "done", "tomorrow", "park", "pick", "undo"] as const;
+export const BRIEF_ACTIONS = ["accept", "dismiss", "done", "tomorrow", "move", "park", "pick", "undo"] as const;
 export type BriefAction = (typeof BRIEF_ACTIONS)[number];
 
 /** Accepting a proposed_task creates a task with this external source system; the id is the item_key. */
@@ -175,8 +175,10 @@ export interface BriefActionInput {
   reason: DismissReason | null;
   note: string | null;
   choice: string | null;
-  /** accept only. Absent = "tomorrow". A date must equal the item's suggested_due. */
+  /** accept only. Absent = "tomorrow". A date is any real YYYY-MM-DD on or after the brief's date. */
   due?: AcceptDueChoice | null;
+  /** move only (carry_over / carry_group): the ET day the task(s) move to, YYYY-MM-DD, on or after the brief's date. */
+  date?: string | null;
 }
 
 export interface BriefRow {
@@ -194,6 +196,17 @@ export interface BriefRow {
   updated_at: string;
 }
 
+/**
+ * What a Tomorrow / Move wrote, saved by brief_item_transition (064) in the same
+ * transaction, so Undo is exact: each task's due date before the move (null = it
+ * had none) and the one the move set (Undo only restores a task still on it).
+ */
+export interface BriefPriorDue {
+  id: string;
+  due_at: string | null;
+  applied_due_at: string;
+}
+
 export interface BriefItemRow {
   id: string;
   user_id: string;
@@ -209,6 +222,10 @@ export interface BriefItemRow {
   dismissed_note: string | null;
   choice: string | null;
   created_task_id: string | null;
+  /** Server side only: the saved snapshot (064). The brief view replaces it with can_undo. */
+  prior_due?: BriefPriorDue[] | null;
+  /** A deferred carry item whose move can be undone (it has a saved snapshot). */
+  can_undo?: boolean;
   acted_at: string | null;
   created_at: string;
   updated_at: string;

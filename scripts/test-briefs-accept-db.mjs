@@ -11,7 +11,7 @@
 // Tomorrow, "none" = no date); a repeat Accept never changes the task; the
 // function refuses a bad due_at without claiming the item. The last test
 // rolls 058 back and re-applies it (psql through `docker exec`), then leaves
-// the stack on 058.
+// the stack on 064 (the current brief_item_transition).
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -47,6 +47,7 @@ const due = await import("../src/lib/briefs/due.ts").catch(() => ({}));
 
 const MIGRATION_055 = readFileSync(new URL("../supabase/migrations/055_add_briefs.sql", import.meta.url), "utf8");
 const MIGRATION_058_URL = new URL("../supabase/migrations/058_brief_accept_owner_due.sql", import.meta.url);
+const MIGRATION_064_URL = new URL("../supabase/migrations/064_brief_item_prior_due.sql", import.meta.url);
 const ROLLBACK_058_URL = new URL("../supabase/rollbacks/058_brief_accept_owner_due.down.sql", import.meta.url);
 const read = (fileUrl) => readFileSync(fileUrl, "utf8");
 
@@ -191,12 +192,11 @@ try {
     assert.equal(none.priority_score, 50);
   });
 
-  await test("a date that isn't the item's notes date is a 400, and nothing changes", async () => {
-    await rejects(actOnBriefItems(admin, alice.id, code, actions([{ n: 6, action: "accept", due: "2026-10-13" }]), { now: NOW }), 400, /only date allowed is the one from the notes \(2026-10-12\)/);
-    await rejects(actOnBriefItems(admin, alice.id, code, actions([{ n: 7, action: "accept", due: "2026-10-12" }]), { now: NOW }), 400, /has no date from the notes/);
+  await test("a date before the brief's date is a 400, and nothing changes (any later date is allowed since 064's pick-a-date)", async () => {
+    await rejects(actOnBriefItems(admin, alice.id, code, actions([{ n: 6, action: "accept", due: "2026-09-28" }]), { now: NOW }), 400, /is before the brief's date \(2026-09-29\)/);
     // One bad entry blocks the whole batch.
     await rejects(
-      actOnBriefItems(admin, alice.id, code, actions([{ n: 7, action: "accept" }, { n: 6, action: "accept", due: "2026-10-01" }]), { now: NOW }),
+      actOnBriefItems(admin, alice.id, code, actions([{ n: 7, action: "accept" }, { n: 6, action: "accept", due: "2026-09-01" }]), { now: NOW }),
       400
     );
     for (const n of [6, 7]) {
@@ -305,6 +305,9 @@ try {
     const acceptedTasks = () =>
       psql(`SELECT md5(string_agg(to_jsonb(t)::text, ',' ORDER BY t.id)) FROM tasks t WHERE t.user_id = '${alice.id}' AND t.external_source_system = 'eod_proposal';`);
 
+    // The stack is on 064's function; this test is about 058's, so put 058's body in place first (064's own
+    // rollback/re-apply is checked in test-briefs-pick-date-db.mjs). The finally block below puts 064 back.
+    psql(read(MIGRATION_058_URL));
     const on058 = fnDef();
     const meta = fnMeta();
     assert.equal(meta, "false|search_path=public|false|true|true", "SECURITY INVOKER, search_path, anon can't execute");
@@ -344,11 +347,12 @@ try {
     assert.equal(acceptedTasks(), tasksWithOld, "re-applying touched no task either (the old-style task stays agent / no date)");
   });
 } finally {
-  // Leave the stack on 058 whatever happened above.
+  // Leave the stack on 064 (058's function, then 064's) whatever happened above.
   try {
     psql(read(MIGRATION_058_URL));
+    psql(read(MIGRATION_064_URL));
   } catch (error) {
-    console.error("could not re-apply 058:", error.message);
+    console.error("could not re-apply 058/064:", error.message);
   }
   for (const user of users) await admin.auth.admin.deleteUser(user.id).catch(() => null);
 }

@@ -14,7 +14,14 @@ import {
   resolveTomorrowDueAt,
   todayInBriefTimeZone,
 } from "@/lib/briefs/keys";
-import { DEFAULT_ACCEPT_DUE, isAcceptDuePreset, resolveAcceptDueAt } from "@/lib/briefs/due";
+import {
+  DEFAULT_ACCEPT_DUE,
+  etDateOfDueAt,
+  isAcceptDuePreset,
+  pickedDateProblem,
+  resolveAcceptDueAt,
+  resolvePickedDueAt,
+} from "@/lib/briefs/due";
 import type { TodayBriefStatus } from "@/lib/briefs/button";
 import { buildBriefNotice, telegramNotifierFromEnv, type BriefNotifier } from "@/lib/briefs/notify";
 import { normalizeBriefContent } from "@/lib/briefs/validate";
@@ -28,6 +35,7 @@ import {
   type BriefItemRow,
   type BriefItemState,
   type BriefMeeting,
+  type BriefPriorDue,
   type BriefRow,
   type BriefTaskSummary,
   type BriefView,
@@ -55,7 +63,7 @@ export class BriefServiceError extends Error {
 const BRIEF_SELECT =
   "id, user_id, edition, brief_date, code, content, covered_meeting_ids, notified_at, notify_sent_at, notify_error, created_at, updated_at";
 const ITEM_SELECT =
-  "id, user_id, brief_id, n, item_key, kind, payload, task_ids, source, state, dismissed_reason, dismissed_note, choice, created_task_id, acted_at, created_at, updated_at";
+  "id, user_id, brief_id, n, item_key, kind, payload, task_ids, source, state, dismissed_reason, dismissed_note, choice, created_task_id, prior_due, acted_at, created_at, updated_at";
 const TASK_ACTION_SELECT = "id, user_id, title, status, due_at, base_priority, priority_score, stakeholder_mentions";
 
 /** Kinds whose items come from meetings (the "decide" list); the rest need a call. */
@@ -68,14 +76,20 @@ const ACTION_RULES: Record<BriefItemKind, Partial<Record<BriefAction, { from: Br
     dismiss: { from: ["open", "dismissed"], to: "dismissed" },
     undo: { from: ["dismissed"], to: "open" },
   },
+  // Undo only exists for a deferral (Tomorrow or a picked date): it puts each task's due date back from
+  // the snapshot the transition saved (064). Parked and Done stay as they were.
   carry_over: {
     done: { from: ["open"], to: "done" },
     tomorrow: { from: ["open"], to: "deferred" },
+    move: { from: ["open"], to: "deferred" },
     park: { from: ["open"], to: "parked" },
+    undo: { from: ["deferred"], to: "open" },
   },
   carry_group: {
     tomorrow: { from: ["open"], to: "deferred" },
+    move: { from: ["open"], to: "deferred" },
     park: { from: ["open"], to: "parked" },
+    undo: { from: ["deferred"], to: "open" },
   },
   choice: {
     pick: { from: ["open", "decided"], to: "decided" },
@@ -90,9 +104,24 @@ export function allowedActionsForKind(kind: BriefItemKind): BriefAction[] {
 /** Repeating accept/done/tomorrow/park on an item already in that state is a no-op success. */
 const IDEMPOTENT_ACTIONS: ReadonlySet<BriefAction> = new Set(["accept", "done", "tomorrow", "park"]);
 
-function isRepeat(item: BriefItemRow, action: BriefAction): boolean {
-  const rule = ACTION_RULES[item.kind][action];
-  return Boolean(rule) && IDEMPOTENT_ACTIONS.has(action) && item.state === rule!.to;
+/** The ET day the saved snapshot says a deferred item's tasks were moved to, or null (moved before 064). */
+function deferredToDate(item: BriefItemRow): string | null {
+  const applied = item.prior_due?.[0]?.applied_due_at;
+  return applied ? etDateOfDueAt(applied) : null;
+}
+
+/**
+ * A repeat is a no-op success. Move repeats only for the same day it already
+ * moved to; a different day is refused (Undo first), never silently ignored.
+ */
+function isRepeat(item: BriefItemRow, input: BriefActionInput): boolean {
+  const rule = ACTION_RULES[item.kind][input.action];
+  if (!rule || item.state !== rule.to) return false;
+  if (input.action === "move") {
+    const movedTo = deferredToDate(item);
+    return movedTo !== null && movedTo === input.date;
+  }
+  return IDEMPOTENT_ACTIONS.has(input.action);
 }
 
 // ---------------------------------------------------------------------------
@@ -106,7 +135,17 @@ function asBriefRow(row: Record<string, unknown>): BriefRow {
 function asItemRow(row: Record<string, unknown>): BriefItemRow {
   const item = row as unknown as BriefItemRow;
   const source = (item.source && Array.isArray(item.source.meetings) ? item.source : { meetings: [] }) as BriefItemRow["source"];
-  return { ...item, source, payload: item.payload ?? { title: "" }, task_ids: item.task_ids ?? [] };
+  const priorDue = Array.isArray(item.prior_due) ? (item.prior_due as BriefPriorDue[]) : null;
+  return { ...item, source, payload: item.payload ?? { title: "" }, task_ids: item.task_ids ?? [], prior_due: priorDue };
+}
+
+/**
+ * What the page and the API show of an item: the saved snapshot stays on the
+ * server; callers only learn whether Undo is possible.
+ */
+function toViewItem(item: BriefItemRow): BriefItemRow {
+  const { prior_due: priorDue, ...rest } = item;
+  return { ...rest, can_undo: item.state === "deferred" && Array.isArray(priorDue) && priorDue.length > 0 };
 }
 
 /** Throws 400 listing every id that isn't one of the user's tasks. */
@@ -472,7 +511,7 @@ export async function getBrief(supabase: AnySupabase, userId: string, code: stri
     .eq("brief_id", brief.id)
     .order("n", { ascending: true });
   if (error) throw error;
-  const items = (data ?? []).map((row) => asItemRow(row as Record<string, unknown>));
+  const items = (data ?? []).map((row) => toViewItem(asItemRow(row as Record<string, unknown>)));
 
   const taskIds = new Set<string>();
   for (const item of items) {
@@ -599,7 +638,7 @@ export interface BriefActionResult {
   already?: boolean;
   task_id?: string;
   task_ids?: string[];
-  /** Tomorrow: the new due date. Accept: the created task's due date (null = no date), only when this call created it. */
+  /** Tomorrow / Move: the new due date. Accept: the created task's due date (null = no date), only when this call created it. */
   due_at?: string | null;
   /** Accept: who holds the created task ("brent"), only when this call created it. */
   owner?: string;
@@ -696,6 +735,16 @@ function errorMessage(caught: unknown): string {
   return String(caught);
 }
 
+/** Undo refused by the database because a task's date changed after the move (064, SQLSTATE MC064). */
+const TASK_CHANGED_SQLSTATE = "MC064";
+
+function actionErrorMessage(item: BriefItemRow, caught: unknown): string {
+  if (caught && typeof caught === "object" && (caught as { code?: unknown }).code === TASK_CHANGED_SQLSTATE) {
+    return `#${item.n} can't be undone: a task's due date was changed after the move, and Undo would overwrite it. Change it in Baseline.`;
+  }
+  return errorMessage(caught);
+}
+
 function conflictResult(item: BriefItemRow, action: BriefAction, outcome: TransitionOutcome): BriefActionResult {
   const current = outcome.state;
   return {
@@ -714,30 +763,64 @@ function conflictResult(item: BriefItemRow, action: BriefAction, outcome: Transi
 /**
  * The task changes a carry action makes, computed from the tasks as they are
  * now. brief_item_transition applies them in the same transaction as the item's
- * new state, so they land together or not at all.
+ * new state, so they land together or not at all. A deferral (Tomorrow, or Move
+ * to a picked day) writes only due_at and the recomputed priority, exactly like
+ * Tomorrow always has: nothing here touches the date cascade (the brief's write
+ * path never has), so a moved task's dependents stay where they are.
  */
 async function buildCarryUpdates(
   supabase: AnySupabase,
   userId: string,
   brief: BriefRow,
   item: BriefItemRow,
-  action: "done" | "tomorrow" | "park",
+  action: { action: "done" | "tomorrow" | "park" | "move"; date?: string | null },
   now: Date
 ) {
   const tasks = await assertTasksOwned(supabase, userId, item.task_ids);
   const highPriorityNames = await getHighPriorityStakeholderNames(supabase, userId);
-  const dueAt = action === "tomorrow" ? resolveTomorrowDueAt(brief.brief_date, now) : undefined;
+  const dueAt =
+    action.action === "tomorrow"
+      ? resolveTomorrowDueAt(brief.brief_date, now)
+      : action.action === "move"
+        ? resolvePickedDueAt(action.date ?? "", brief.brief_date)
+        : undefined;
 
   const updates = item.task_ids.map((taskId) => {
     const task = tasks.get(taskId)!;
     const change: Partial<Task> = {};
-    if (action === "done") change.status = "Done";
-    if (action === "park") change.status = "Parked";
+    if (action.action === "done") change.status = "Done";
+    if (action.action === "park") change.status = "Parked";
     if (dueAt) change.due_at = dueAt;
     change.priority_score = recalculateTaskPriority({ ...task, ...change } as Task, highPriorityNames);
     return { id: taskId, ...change, from_status: task.status as TaskStatus };
   });
   return { dueAt, updates };
+}
+
+/**
+ * Undo of a deferral: every task goes back to the due date the transition saved
+ * (null = it had none), priority recomputed for that date. Each update carries
+ * `expect_due_at`, the date the move set: the database refuses the whole undo if
+ * any task has been edited since, rather than overwrite a newer date.
+ */
+async function buildUndoUpdates(supabase: AnySupabase, userId: string, item: BriefItemRow) {
+  const snapshot = new Map((item.prior_due ?? []).map((entry) => [entry.id, entry] as const));
+  const missing = item.task_ids.filter((id) => !snapshot.has(id));
+  if (missing.length || snapshot.size === 0) {
+    throw new BriefServiceError(409, `#${item.n} can't be undone: its earlier due dates weren't saved. Change the task dates in Baseline.`);
+  }
+  const tasks = await assertTasksOwned(supabase, userId, item.task_ids);
+  const highPriorityNames = await getHighPriorityStakeholderNames(supabase, userId);
+  return [...new Set(item.task_ids)].map((taskId) => {
+    const before = snapshot.get(taskId)!;
+    const task = tasks.get(taskId)!;
+    return {
+      id: taskId,
+      due_at: before.due_at,
+      expect_due_at: before.applied_due_at,
+      priority_score: recalculateTaskPriority({ ...task, due_at: before.due_at } as Task, highPriorityNames),
+    };
+  });
 }
 
 export async function actOnBriefItems(
@@ -775,13 +858,26 @@ export async function actOnBriefItems(
       problems.push(`#${action.n} is a ${item.kind}; "${action.action}" doesn't apply (use ${allowedActionsForKind(item.kind).join(", ")})`);
       continue;
     }
-    if (!rule.from.includes(item.state) && !isRepeat(item, action.action)) {
+    if (!rule.from.includes(item.state) && !isRepeat(item, action)) {
+      const movedTo = action.action === "move" && item.state === "deferred" ? deferredToDate(item) : null;
       problems.push(
         item.state === "accepted"
           ? `#${action.n} was already accepted (task ${item.created_task_id ?? "deleted"}); change it in Baseline`
-          : `#${action.n} is ${item.state}; "${action.action}" isn't possible from there`
+          : movedTo
+            ? `#${action.n} is already moved to ${movedTo}; undo it first to pick another day`
+            : `#${action.n} is ${item.state}; "${action.action}" isn't possible from there`
       );
       continue;
+    }
+    if (action.action === "move") {
+      const problem = pickedDateProblem(action.date, brief.brief_date);
+      if (problem) problems.push(`#${action.n}: ${problem}`);
+    }
+    if (action.action === "undo" && item.state === "deferred" && !item.prior_due?.length) {
+      problems.push(`#${action.n} can't be undone: it was moved before earlier due dates were saved. Change the task dates in Baseline`);
+    }
+    if (action.date && action.action !== "move") {
+      problems.push(`#${action.n}: date only applies to move`);
     }
     if (action.action === "pick") {
       const keys = (item.payload.options ?? []).map((option) => option.key);
@@ -795,12 +891,9 @@ export async function actOnBriefItems(
     if (action.due && action.action !== "accept") {
       problems.push(`#${action.n}: due only applies to accept`);
     }
-    if (action.action === "accept" && action.due && !isAcceptDuePreset(action.due) && action.due !== item.payload.suggested_due) {
-      problems.push(
-        item.payload.suggested_due
-          ? `#${action.n}: the only date allowed is the one from the notes (${item.payload.suggested_due}); otherwise use today, tomorrow, this_week or none`
-          : `#${action.n} has no date from the notes; use today, tomorrow, this_week or none`
-      );
+    if (action.action === "accept" && action.due && !isAcceptDuePreset(action.due)) {
+      const problem = pickedDateProblem(action.due, brief.brief_date);
+      if (problem) problems.push(`#${action.n}: ${problem}; otherwise use today, tomorrow, this_week or none`);
     }
   }
   if (problems.length) {
@@ -813,7 +906,7 @@ export async function actOnBriefItems(
     const rule = ACTION_RULES[item.kind][action.action]!;
     const actedAt = now.toISOString();
     try {
-      if (isRepeat(item, action.action)) {
+      if (isRepeat(item, action)) {
         results.push({
           n: item.n,
           action: action.action,
@@ -868,6 +961,17 @@ export async function actOnBriefItems(
         case "dismiss":
         case "pick":
         case "undo": {
+          if (action.action === "undo" && (item.kind === "carry_over" || item.kind === "carry_group")) {
+            // One transaction: each task's due date goes back from the saved snapshot and the card reopens.
+            const updates = await buildUndoUpdates(supabase, userId, item);
+            const outcome = await transitionItem(supabase, userId, item, item.state, next, { acted_at: null }, null, updates);
+            if (!outcome.ok) {
+              results.push(conflictResult(item, action.action, outcome));
+              continue;
+            }
+            result.task_ids = item.task_ids;
+            break;
+          }
           const fields =
             action.action === "dismiss"
               ? { acted_at: actedAt, dismissed_reason: action.reason, dismissed_note: action.note }
@@ -884,10 +988,11 @@ export async function actOnBriefItems(
         }
         case "done":
         case "tomorrow":
+        case "move":
         case "park": {
           // One transaction: the item's new state and every task write commit together or not at all.
           // So "already" below can only ever mean the tasks really were updated.
-          const { dueAt, updates } = await buildCarryUpdates(supabase, userId, brief, item, action.action, now);
+          const { dueAt, updates } = await buildCarryUpdates(supabase, userId, brief, item, { action: action.action, date: action.date }, now);
           const outcome = await transitionItem(
             supabase,
             userId,
@@ -929,7 +1034,7 @@ export async function actOnBriefItems(
 
       results.push(result);
     } catch (caught) {
-      results.push({ n: item.n, action: action.action, ok: false, error: errorMessage(caught) });
+      results.push({ n: item.n, action: action.action, ok: false, error: actionErrorMessage(item, caught) });
     }
   }
 

@@ -466,16 +466,17 @@ function createMcpServer(): McpServer {
 
   mcp.tool(
     'act_on_brief_items',
-    'Act on numbered items of a stored brief, exactly as the page buttons do. proposed_task: accept (creates the Baseline task once, owned by Brent so it lands in his "Assigned to you"; repeating is safe and never changes the task; optional due = today | tomorrow | this_week (Friday of this ET week, next Friday from Fri-Sun) | none | the item payload.suggested_due as YYYY-MM-DD; without due it is due tomorrow, the next ET weekday, end of day), dismiss (needs a reason already_tracked | not_mine | not_worth_it, or a note of at most 500 characters), undo (reopens a dismissed item). carry_over: done | tomorrow (due the next ET weekday) | park. carry_group: tomorrow | park, applied to all its tasks. choice: pick with choice=<option key>, undo. Every action is validated before any runs; if one is invalid, nothing changes. If an item changed after validation (for example Brent acted on the page at the same moment), that entry comes back ok=false with conflict=true and was not applied: re-read with get_brief before trying again.',
+    'Act on numbered items of a stored brief, exactly as the page buttons do. proposed_task: accept (creates the Baseline task once, owned by Brent so it lands in his "Assigned to you"; repeating is safe and never changes the task; optional due = today | tomorrow | this_week (Friday of this ET week, next Friday from Fri-Sun) | none | any real date as YYYY-MM-DD on or after the brief date, e.g. the item payload.suggested_due or a day Brent names; the task is due the end of that ET day; without due it is due tomorrow, the next ET weekday, end of day), dismiss (needs a reason already_tracked | not_mine | not_worth_it, or a note of at most 500 characters), undo (reopens a dismissed item). carry_over: done | tomorrow (due the next ET weekday) | move (needs date = YYYY-MM-DD, on or after the brief date: the task is due the end of that ET day, the same as tomorrow does it) | park | undo (only after tomorrow or move: puts the task back on the due date it had before, including none; refused if the task\'s date was changed since). carry_group: tomorrow | move | park | undo, applied to all its tasks. choice: pick with choice=<option key>, undo. Every action is validated before any runs; if one is invalid, nothing changes. Repeating a move to the same day is a no-op; a different day needs undo first. If an item changed after validation (for example Brent acted on the page at the same moment), that entry comes back ok=false with conflict=true and was not applied: re-read with get_brief before trying again.',
     {
       code: z.string().describe('Brief code, e.g. EOD-0924'),
       actions: z.array(z.object({
         n: z.number().int().positive().describe('Item number (#n)'),
-        action: z.enum(['accept', 'dismiss', 'done', 'tomorrow', 'park', 'pick', 'undo']),
+        action: z.enum(['accept', 'dismiss', 'done', 'tomorrow', 'move', 'park', 'pick', 'undo']),
         reason: z.enum(['already_tracked', 'not_mine', 'not_worth_it']).optional().describe('Dismiss reason'),
         note: z.string().max(500).optional().describe('Dismiss note, at most 500 characters'),
         choice: z.string().optional().describe('Option key for pick'),
-        due: z.string().optional().describe('Accept only: today | tomorrow | this_week | none | YYYY-MM-DD (must equal the item\'s suggested_due). Omit for tomorrow.'),
+        due: z.string().optional().describe('Accept only: today | tomorrow | this_week | none | YYYY-MM-DD (any real date on or after the brief date). Omit for tomorrow.'),
+        date: z.string().optional().describe('Move only (carry_over / carry_group): the day to move the task(s) to, YYYY-MM-DD, on or after the brief date'),
       })).min(1).describe('One entry per item'),
     },
     async ({ code, actions }) => {

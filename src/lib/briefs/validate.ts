@@ -479,7 +479,18 @@ export function parseBriefActions(raw: unknown): ParseResult<BriefActionInput[]>
       }
     }
 
-    actions.push({ n, action, reason, note, choice, ...(due ? { due } : {}) });
+    // Move's day. Required, only on move, a real YYYY-MM-DD (whether it is on/after the brief's date is
+    // checked against the brief when the action runs).
+    let date: string | undefined;
+    if (entry.date !== undefined) {
+      if (action !== "move") errors.push(`${path}.date only applies to move`);
+      else if (isDateOnlyString(entry.date)) date = entry.date;
+      else errors.push(`${path}.date must be a real date written YYYY-MM-DD`);
+    } else if (action === "move") {
+      errors.push(`${path}: move needs a date (YYYY-MM-DD)`);
+    }
+
+    actions.push({ n, action, reason, note, choice, ...(due ? { due } : {}), ...(date ? { date } : {}) });
   });
 
   if (errors.length) return { ok: false, errors };

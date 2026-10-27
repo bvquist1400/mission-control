@@ -9,14 +9,15 @@ import {
   CARD_REGISTRY,
   TaskLink,
   defaultAcceptDue,
+  effectiveAcceptDue,
   type ActRequest,
   type BriefCardContext,
   type DismissDraft,
+  type DueSelection,
 } from "@/components/briefs/cards";
 import { DayTile, HeroTile, NextTile, RecapBento, Sheet, TILE_REGISTRY } from "@/components/briefs/tiles";
 import { dateHeading } from "@/components/briefs/format";
 import { buildDayTimeline } from "@/components/briefs/timeline";
-import type { AcceptDueChoice } from "@/lib/briefs/due";
 import type { BriefCounts, BriefItemRow, BriefMeetingRef, BriefTaskSummary, BriefTile, BriefView } from "@/lib/briefs/types";
 
 type Override = { baseUpdatedAt: string; patch: Partial<BriefItemRow> };
@@ -29,6 +30,7 @@ interface ActResult {
   choice?: string;
   due_at?: string | null;
   owner?: string;
+  already?: boolean;
   error?: string;
   conflict?: boolean;
 }
@@ -58,11 +60,22 @@ export function BriefPage({ view }: { view: BriefView }) {
   const [sources, setSources] = useState<Record<number, boolean>>({});
   const [pending, setPending] = useState<Record<number, boolean>>({});
   const [overrides, setOverrides] = useState<Record<number, Override>>({});
-  const [dueChoices, setDueChoices] = useState<Record<number, AcceptDueChoice>>({});
+  const [dueChoices, setDueChoices] = useState<Record<number, DueSelection>>({});
+  const [pickedDates, setPickedDates] = useState<Record<number, string>>({});
+  // A task's new due date right after Tomorrow / Move, before router.refresh() brings the server's copy.
+  // It only applies while the server still shows the date it replaced; the server copy wins after that.
+  const [movedTasks, setMovedTasks] = useState<Record<string, { base: string | null; due_at: string }>>({});
   // Tasks this page just created, so the accepted tile can say where it went
   // before router.refresh() brings the server's copy (which then wins).
   const [createdTasks, setCreatedTasks] = useState<Record<string, BriefTaskSummary>>({});
-  const tasks = useMemo(() => ({ ...createdTasks, ...view.tasks }), [createdTasks, view.tasks]);
+  const tasks = useMemo(() => {
+    const merged: Record<string, BriefTaskSummary> = { ...createdTasks, ...view.tasks };
+    for (const [id, moved] of Object.entries(movedTasks)) {
+      const task = merged[id];
+      if (task && task.due_at === moved.base) merged[id] = { ...task, due_at: moved.due_at };
+    }
+    return merged;
+  }, [createdTasks, movedTasks, view.tasks]);
 
   // Show an action's result immediately; once router.refresh() brings the
   // server's row (a newer updated_at), the server copy wins.
@@ -160,7 +173,19 @@ export function BriefPage({ view }: { view: BriefView }) {
           patch.dismissed_reason = request.reason ?? null;
           patch.dismissed_note = request.note ?? null;
         }
-        if (request.action === "undo") Object.assign(patch, { dismissed_reason: null, dismissed_note: null, choice: null });
+        if (request.action === "undo") Object.assign(patch, { dismissed_reason: null, dismissed_note: null, choice: null, can_undo: false });
+        if (result.state === "deferred" && !result.already) {
+          // Tomorrow / Move just saved the earlier dates (064), so Undo is on offer straight away.
+          patch.can_undo = true;
+          const dueAt = result.due_at;
+          if (dueAt) {
+            setMovedTasks((current) => {
+              const next = { ...current };
+              for (const id of item.task_ids) next[id] = { base: view.tasks[id]?.due_at ?? null, due_at: dueAt };
+              return next;
+            });
+          }
+        }
         setOverrides((current) => ({ ...current, [request.n]: { baseUpdatedAt: item.updated_at, patch } }));
         setDrafts((current) => {
           const next = { ...current };
@@ -174,7 +199,7 @@ export function BriefPage({ view }: { view: BriefView }) {
         setPending((current) => ({ ...current, [request.n]: false }));
       }
     },
-    [brief.code, router, toast, view.items]
+    [brief.code, router, toast, view.items, view.tasks]
   );
 
   const focusItem = useCallback((n: number) => {
@@ -203,7 +228,8 @@ export function BriefPage({ view }: { view: BriefView }) {
       if (!item || item.state !== "open" || CARD_REGISTRY[item.kind].keyboard !== "decide" || pending[item.n]) return;
       if (key === "a") {
         event.preventDefault();
-        void act({ n: item.n, action: "accept", due: dueChoices[item.n] ?? defaultAcceptDue(item) });
+        const due = effectiveAcceptDue(dueChoices[item.n] ?? defaultAcceptDue(item), pickedDates[item.n] ?? "", brief.brief_date);
+        if (due) void act({ n: item.n, action: "accept", due });
       } else if (key === "d") {
         event.preventDefault();
         startDismiss(item.n);
@@ -214,7 +240,7 @@ export function BriefPage({ view }: { view: BriefView }) {
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [act, dueChoices, focusItem, focusN, items, navigable, pending, sheetKey, startDismiss]);
+  }, [act, brief.brief_date, dueChoices, focusItem, focusN, items, navigable, pending, pickedDates, sheetKey, startDismiss]);
 
   const closeSheet = useCallback(() => setSheetKey(null), []);
   const toggleFilter = useCallback((meetingId: string) => setFilter((current) => (current === meetingId ? null : meetingId)), []);
@@ -224,6 +250,9 @@ export function BriefPage({ view }: { view: BriefView }) {
     briefDate: brief.brief_date,
     dueChoice: dueChoices[item.n] ?? defaultAcceptDue(item),
     setDueChoice: (choice) => setDueChoices((current) => ({ ...current, [item.n]: choice })),
+    pickedDate: pickedDates[item.n] ?? "",
+    setPickedDate: (date) => setPickedDates((current) => ({ ...current, [item.n]: date })),
+    acceptDue: effectiveAcceptDue(dueChoices[item.n] ?? defaultAcceptDue(item), pickedDates[item.n] ?? "", brief.brief_date),
     meetingColor,
     meetingLabel,
     pending: Boolean(pending[item.n]),

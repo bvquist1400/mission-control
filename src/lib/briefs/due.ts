@@ -64,13 +64,14 @@ export function resolveThisWeekDate(now: Date = new Date()): string {
 export const ACCEPT_DUE_PRESETS = ["today", "tomorrow", "this_week", "none"] as const;
 export type AcceptDuePreset = (typeof ACCEPT_DUE_PRESETS)[number];
 
-/** A preset, or a YYYY-MM-DD that must equal the proposal's suggested_due. */
+/** A preset, or any YYYY-MM-DD on or after the brief's date (the notes' date, or one Brent picked). */
 export type AcceptDueChoice = AcceptDuePreset | `${number}-${number}-${number}`;
 
 /** What Accept does when the caller sends no choice (Brent: "I don't want to miss any"). */
 export const DEFAULT_ACCEPT_DUE: AcceptDuePreset = "tomorrow";
 
-export const ACCEPT_DUE_HELP = 'due must be "today", "tomorrow", "this_week", "none" or the item\'s suggested date (YYYY-MM-DD)';
+export const ACCEPT_DUE_HELP =
+  'due must be "today", "tomorrow", "this_week", "none" or a date written YYYY-MM-DD, on or after the brief\'s date';
 
 export function isAcceptDuePreset(value: unknown): value is AcceptDuePreset {
   return typeof value === "string" && (ACCEPT_DUE_PRESETS as readonly string[]).includes(value);
@@ -87,6 +88,32 @@ export function parseAcceptDue(value: unknown): AcceptDueChoice | null {
   const preset = value.trim().toLowerCase();
   if (isAcceptDuePreset(preset)) return preset;
   return isDateOnlyString(value) ? (value as AcceptDueChoice) : null;
+}
+
+/**
+ * Why a picked date can't be used, in a plain sentence, or null when it is fine:
+ * a real calendar date written exactly YYYY-MM-DD, on or after the brief's date
+ * (ET). Accept's picked date and every "move to a date" go through this one rule,
+ * on the server and on the page.
+ */
+export function pickedDateProblem(date: unknown, briefDate: string): string | null {
+  if (typeof date !== "string" || date === "") return "pick a date, written YYYY-MM-DD";
+  if (!isDateOnlyString(date)) return `${date} isn't a real date (write it YYYY-MM-DD)`;
+  if (date < briefDate) return `${date} is before the brief's date (${briefDate}); pick that day or later`;
+  return null;
+}
+
+/** due_at for a picked date: the end of that ET day (23:59:59.999, DST-correct), like every preset. Throws on a bad date. */
+export function resolvePickedDueAt(date: string, briefDate: string): string {
+  const problem = pickedDateProblem(date, briefDate);
+  if (problem) throw new Error(problem);
+  return buildRecurringDueAt(date, BRIEF_TIME_ZONE);
+}
+
+/** The ET calendar day of a stored due_at (a 23:59:59.999 ET end of day stays on its day). */
+export function etDateOfDueAt(dueAt: string): string | null {
+  const parsed = new Date(dueAt);
+  return Number.isNaN(parsed.getTime()) ? null : getDateOnlyInTimeZone(BRIEF_TIME_ZONE, parsed);
 }
 
 /** The ET date a choice lands on, or null for "none". */

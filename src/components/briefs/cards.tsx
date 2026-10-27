@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   DISMISS_NOTE_MAX,
   DISMISS_REASONS,
@@ -17,6 +17,7 @@ import {
   isAcceptDuePreset,
   isDatePassed,
   isDateOnlyString,
+  pickedDateProblem,
   resolveAcceptDueDate,
   type AcceptDueChoice,
   type AcceptDuePreset,
@@ -31,6 +32,17 @@ export interface ActRequest {
   choice?: string | null;
   /** accept only; the page always sends the card's pick. */
   due?: AcceptDueChoice;
+  /** move only: the ET day (YYYY-MM-DD) the task(s) move to. */
+  date?: string;
+}
+
+/** What the Due row has selected: a choice Accept can send, or "Pick a date…" (the field below holds the day). */
+export type DueSelection = AcceptDueChoice | "pick";
+
+/** The choice Accept sends, or null while "Pick a date…" has no valid day yet. */
+export function effectiveAcceptDue(selection: DueSelection, pickedDate: string, briefDate: string): AcceptDueChoice | null {
+  if (selection !== "pick") return selection;
+  return pickedDateProblem(pickedDate, briefDate) === null ? (pickedDate as AcceptDueChoice) : null;
 }
 
 export interface DismissDraft {
@@ -42,9 +54,14 @@ export interface BriefCardContext {
   tasks: Record<string, BriefTaskSummary>;
   /** The brief's date (YYYY-MM-DD, ET); "Tomorrow" counts from it. */
   briefDate: string;
-  /** The due choice Accept will send for this card. */
-  dueChoice: AcceptDueChoice;
-  setDueChoice: (choice: AcceptDueChoice) => void;
+  /** The Due row's selection for this card. */
+  dueChoice: DueSelection;
+  setDueChoice: (choice: DueSelection) => void;
+  /** The day typed into "Pick a date…" (YYYY-MM-DD, or "" while empty or incomplete). */
+  pickedDate: string;
+  setPickedDate: (date: string) => void;
+  /** What Accept will send, or null while "Pick a date…" has no valid day. */
+  acceptDue: AcceptDueChoice | null;
   meetingColor: (meetingId: string) => string;
   meetingLabel: (meeting: BriefMeetingRef) => string;
   pending: boolean;
@@ -124,10 +141,67 @@ function StateIcon({ ok }: { ok: boolean }) {
   return <span className={`ic ${ok ? "ok" : "no"}`}>{ok ? <CheckIcon /> : <CrossIcon />}</span>;
 }
 
+/** "Wed 11/4" for a moved task's due date (ET day); "tomorrow" if the task isn't loaded. */
 function dueLabel(dueAt: string | null | undefined): string {
-  if (!dueAt) return "tomorrow";
-  const date = new Date(dueAt);
-  return date.toLocaleDateString("en-US", { timeZone: "America/New_York", weekday: "short", month: "numeric", day: "numeric" });
+  return etDay(dueAt) || "tomorrow";
+}
+
+/**
+ * The inline date field of "Pick a date…": native date input (earliest = the
+ * brief's date, ET), the weekday it lands on, an inline message for a day that
+ * is too early, and the card's confirm button (Move) when it has one.
+ */
+function PickRow({
+  label,
+  briefDate,
+  value,
+  onChange,
+  onEnter,
+  children,
+}: {
+  label: string;
+  briefDate: string;
+  value: string;
+  onChange: (date: string) => void;
+  onEnter?: () => void;
+  children?: ReactNode;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!value) ref.current?.focus();
+    // Only when the row opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const problem = value ? pickedDateProblem(value, briefDate) : null;
+  return (
+    <div className="pickrow">
+      <input
+        ref={ref}
+        type="date"
+        className="note-in"
+        min={briefDate}
+        value={value}
+        aria-label={label}
+        aria-invalid={problem ? true : undefined}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && onEnter) {
+            event.preventDefault();
+            onEnter();
+          }
+        }}
+      />
+      <span className="lands" aria-live="polite">
+        Lands on <span className="when">{value && !problem ? weekdayDate(value) : "pick a day"}</span>
+      </span>
+      {children}
+      {problem ? (
+        <span className="perr" role="alert">
+          Past dates aren&rsquo;t allowed.
+        </span>
+      ) : null}
+    </div>
+  );
 }
 
 function uniqueMeetings(item: BriefItemRow): BriefMeetingRef[] {
@@ -192,6 +266,9 @@ function DuePicker({ item, ctx }: CardProps) {
           {ACCEPT_DUE_LABELS[preset]}
         </button>
       ))}
+      <button type="button" aria-pressed={selected === "pick"} disabled={ctx.pending} onClick={() => ctx.setDueChoice("pick")}>
+        Pick a date&hellip;
+      </button>
       {lands ? (
         <span className="when" suppressHydrationWarning>
           {weekdayDate(lands)}
@@ -364,12 +441,15 @@ function ProposedTaskCard({ item, ctx }: CardProps) {
     <article className={cardClass("card", ctx)} tabIndex={0} data-n={item.n} id={`item-${item.n}`} onFocus={ctx.focus}>
       {body}
       <DuePicker item={item} ctx={ctx} />
+      {ctx.dueChoice === "pick" ? (
+        <PickRow label="Pick a due date" briefDate={ctx.briefDate} value={ctx.pickedDate} onChange={ctx.setPickedDate} />
+      ) : null}
       <div className="side">
         <button
           type="button"
           className="btn solid"
-          disabled={ctx.pending}
-          onClick={() => ctx.act({ n: item.n, action: "accept", due: ctx.dueChoice })}
+          disabled={ctx.pending || ctx.acceptDue === null}
+          onClick={() => ctx.acceptDue && ctx.act({ n: item.n, action: "accept", due: ctx.acceptDue })}
         >
           Accept <kbd>A</kbd>
         </button>
@@ -401,7 +481,25 @@ function HandledTile({ item, ctx, label, text, ok, children }: CardProps & { lab
   );
 }
 
+/** Undo on a deferred tile (Tomorrow or a picked date): puts each task's earlier due date back and reopens the card. */
+function UndoLink({ item, ctx }: CardProps) {
+  if (item.state !== "deferred" || !item.can_undo) return null;
+  return (
+    <button type="button" className="linkbtn lift" disabled={ctx.pending} onClick={() => ctx.act({ n: item.n, action: "undo" })}>
+      Undo
+    </button>
+  );
+}
+
+/** The "Pick a date…" chip, its field and the confirm button, shared by the single and the group card. */
+function usePickState() {
+  const [open, setOpen] = useState(false);
+  const [date, setDate] = useState("");
+  return { open, toggle: () => setOpen((current) => !current), date, setDate };
+}
+
 function CarryOverCard({ item, ctx }: CardProps) {
+  const pick = usePickState();
   const taskId = item.task_ids[0];
   const task = taskId ? ctx.tasks[taskId] : undefined;
   const label = item.payload.label ?? "Carry-over";
@@ -411,7 +509,8 @@ function CarryOverCard({ item, ctx }: CardProps) {
       item.state === "done" ? "Done" : item.state === "deferred" ? `Due ${dueLabel(task?.due_at)}` : item.state === "parked" ? "Parked" : "Expired";
     return (
       <HandledTile item={item} ctx={ctx} label={label} text={text} ok={item.state === "done"}>
-        {taskId ? <TaskLink id={taskId} /> : null}
+        {taskId ? <TaskLink id={taskId} /> : <span />}
+        <UndoLink item={item} ctx={ctx} />
       </HandledTile>
     );
   }
@@ -431,15 +530,37 @@ function CarryOverCard({ item, ctx }: CardProps) {
         <button type="button" className="btn" disabled={ctx.pending} onClick={() => ctx.act({ n: item.n, action: "tomorrow" })}>
           Tomorrow
         </button>
+        <button type="button" className="btn" aria-pressed={pick.open} disabled={ctx.pending} onClick={pick.toggle}>
+          Pick a date&hellip;
+        </button>
         <button type="button" className="btn" disabled={ctx.pending} onClick={() => ctx.act({ n: item.n, action: "park" })}>
           Park
         </button>
       </div>
+      {pick.open ? (
+        <PickRow
+          label="Move to which day?"
+          briefDate={ctx.briefDate}
+          value={pick.date}
+          onChange={pick.setDate}
+          onEnter={() => pickedDateProblem(pick.date, ctx.briefDate) === null && ctx.act({ n: item.n, action: "move", date: pick.date })}
+        >
+          <button
+            type="button"
+            className="btn sm solid"
+            disabled={ctx.pending || pickedDateProblem(pick.date, ctx.briefDate) !== null}
+            onClick={() => ctx.act({ n: item.n, action: "move", date: pick.date })}
+          >
+            Move
+          </button>
+        </PickRow>
+      ) : null}
     </article>
   );
 }
 
 function CarryGroupCard({ item, ctx }: CardProps) {
+  const pick = usePickState();
   const count = item.task_ids.length;
   const label = item.payload.label ?? `${count} tasks`;
 
@@ -452,6 +573,7 @@ function CarryGroupCard({ item, ctx }: CardProps) {
         <button type="button" className="linkbtn lift" onClick={() => ctx.openSheet(`item:${item.n}`)}>
           See the {count}
         </button>
+        <UndoLink item={item} ctx={ctx} />
       </HandledTile>
     );
   }
@@ -472,10 +594,31 @@ function CarryGroupCard({ item, ctx }: CardProps) {
         <button type="button" className="btn solid grow" disabled={ctx.pending} onClick={() => ctx.act({ n: item.n, action: "tomorrow" })}>
           All tomorrow
         </button>
+        <button type="button" className="btn" aria-pressed={pick.open} disabled={ctx.pending} onClick={pick.toggle}>
+          Pick a date&hellip;
+        </button>
         <button type="button" className="btn" disabled={ctx.pending} onClick={() => ctx.act({ n: item.n, action: "park" })}>
           Park all
         </button>
       </div>
+      {pick.open ? (
+        <PickRow
+          label={`Move all ${count} to which day?`}
+          briefDate={ctx.briefDate}
+          value={pick.date}
+          onChange={pick.setDate}
+          onEnter={() => pickedDateProblem(pick.date, ctx.briefDate) === null && ctx.act({ n: item.n, action: "move", date: pick.date })}
+        >
+          <button
+            type="button"
+            className="btn sm solid"
+            disabled={ctx.pending || pickedDateProblem(pick.date, ctx.briefDate) !== null}
+            onClick={() => ctx.act({ n: item.n, action: "move", date: pick.date })}
+          >
+            Move all {count}
+          </button>
+        </PickRow>
+      ) : null}
     </article>
   );
 }
