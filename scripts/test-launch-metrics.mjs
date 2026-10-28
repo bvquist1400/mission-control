@@ -238,6 +238,45 @@ await test("app db: unknown count fields are dropped; only `date` is the date ke
   assert.throws(() => appDb.validateAppDbSummary({ ...base, daily: [{ ...base.daily[5], date: undefined, day: "2026-10-26" }] }, NOW), (error) => error.code === "app_db_shape");
 });
 
+await test("app db: `date` is allowed only in daily rows; a `date` (or any other string) in totals is refused", () => {
+  const base = fixture("app-db-summary.json");
+  for (const value of ["synthetic-person@example.test", "0a1b2c3d", "2026-10-26", ""]) {
+    assert.throws(
+      () => appDb.validateAppDbSummary({ ...base, totals: { ...base.totals, date: value } }, NOW),
+      (error) => error.code === "app_db_not_counts",
+      `totals.date = ${JSON.stringify(value)}`
+    );
+  }
+  for (const key of ["Date", "day", "note"]) {
+    assert.throws(() => appDb.validateAppDbSummary({ ...base, totals: { ...base.totals, [key]: "2026-10-26" } }, NOW), (error) => error.code === "app_db_not_counts", key);
+    assert.throws(() => appDb.validateAppDbSummary({ ...base, daily: [{ ...base.daily[5], [key]: "2026-10-26" }] }, NOW), (error) => error.code === "app_db_not_counts", key);
+  }
+  // Each daily row's own `date` still works, and null under an unknown key is still just dropped.
+  const summary = appDb.validateAppDbSummary({ ...base, totals: { ...base.totals, date: null } }, NOW);
+  assert.equal("date" in summary.totals, false);
+  assert.deepEqual(summary.daily, base.daily);
+});
+
+await test("app db: one count ceiling, 10,000,000 (APP_DB_MAX_COUNT, paired with Grocery MAX_COUNT), inclusive", () => {
+  const base = fixture("app-db-summary.json");
+  assert.equal(appDb.APP_DB_MAX_COUNT, 10_000_000);
+  const atCeiling = appDb.validateAppDbSummary(
+    { ...base, totals: { ...base.totals, real_users: 10_000_000, deleted_accounts: 10_000_000 }, daily: [{ ...base.daily[5], signups_real: 10_000_000, signups_family: 10_000_000 }] },
+    NOW
+  );
+  assert.equal(atCeiling.totals.real_users, 10_000_000);
+  assert.equal(atCeiling.daily[0].signups_real, 10_000_000);
+  for (const raw of [
+    { ...base, totals: { ...base.totals, real_users: 10_000_001 } },
+    { ...base, totals: { ...base.totals, deleted_accounts: 10_000_001 } },
+    { ...base, totals: { ...base.totals, plus_paid: Number.MAX_SAFE_INTEGER } },
+    { ...base, daily: [{ ...base.daily[5], signups_real: 10_000_001 }] },
+    { ...base, daily: [{ ...base.daily[5], signups_internal: 10_000_001 }] },
+  ]) {
+    assert.throws(() => appDb.validateAppDbSummary(raw, NOW), (error) => error.code === "app_db_shape");
+  }
+});
+
 await test("app db: rows are daily sign-ups (ET days, deleted and internal too) plus as-of totals", () => {
   const summary = appDb.validateAppDbSummary(fixture("app-db-summary.json"), NOW);
   const rows = appDb.appDbDailyRows(summary, "2026-10-27");
@@ -1210,6 +1249,134 @@ await test("refresh: a network error ends in a message, not a silent failure", (
   const refresh = panels.slice(panels.indexOf("async function refresh()"), panels.indexOf("return (", panels.indexOf("async function refresh()")));
   assert.match(refresh, /catch\s*\{[\s\S]*toast\(/);
 });
+
+// ─── manual-entry routes: the launch owner's session only (review L2) ──────
+// The real route handlers and route-auth run; only the Supabase client is a
+// fake that records writes. Synthetic ids only.
+
+{
+  const { registerHooks } = await import("node:module");
+  const OWNER = "00000000-0000-4000-8000-0000000000a1";
+  const OTHER = "00000000-0000-4000-8000-0000000000b2";
+  const ROW = "00000000-0000-4000-8000-0000000000c3";
+  const routeState = { sessionUser: null, writes: [] };
+  globalThis.__launchRouteTestDb = {
+    auth: {
+      getUser: async () => ({ data: { user: routeState.sessionUser ? { id: routeState.sessionUser, email: "synthetic-person@example.test" } : null }, error: null }),
+      admin: { getUserById: async (id) => ({ data: { user: { id } }, error: null }) },
+    },
+    from(table) {
+      const q = { table, op: "select", filters: [], payload: null };
+      const done = (single) => {
+        if (q.op !== "select") routeState.writes.push(q);
+        const row = { id: ROW, ...(q.payload ?? {}) };
+        return { data: single ? row : [row], error: null };
+      };
+      const b = {
+        select: () => b, order: () => b, limit: () => b,
+        eq: (k, v) => { q.filters.push([k, v]); return b; },
+        insert: (v) => { q.op = "insert"; q.payload = v; return b; },
+        update: (v) => { q.op = "update"; q.payload = v; return b; },
+        delete: () => { q.op = "delete"; return b; },
+        single: async () => done(true),
+        maybeSingle: async () => done(true),
+        then: (resolve, reject) => Promise.resolve(done(false)).then(resolve, reject),
+      };
+      return b;
+    },
+  };
+  registerHooks({
+    resolve(specifier, context, next) {
+      if (specifier === "@/lib/supabase/server") {
+        return {
+          shortCircuit: true,
+          url: "data:text/javascript," + encodeURIComponent("export const createSupabaseServerClient = async () => globalThis.__launchRouteTestDb; export const createSupabaseAdminClient = () => globalThis.__launchRouteTestDb;"),
+        };
+      }
+      return next(specifier, context);
+    },
+  });
+  const savedEnv = { ...process.env };
+  for (const key of ["MISSION_CONTROL_API_KEY", "MISSION_CONTROL_ACTIONS_API_KEY", "MISSION_CONTROL_FAMCAL_API_KEY"]) delete process.env[key];
+  const { NextRequest } = await import("next/server");
+  const reddit = await import("../src/app/api/launch-metrics/reddit/route.ts");
+  const redditItem = await import("../src/app/api/launch-metrics/reddit/[id]/route.ts");
+  const milestones = await import("../src/app/api/launch-metrics/milestones/route.ts");
+  const milestoneItem = await import("../src/app/api/launch-metrics/milestones/[id]/route.ts");
+  const ctx = () => ({ params: Promise.resolve({ id: ROW }) });
+  const call = (handler, path, method, body) =>
+    handler(
+      new NextRequest(`https://baseline.example/api/launch-metrics/${path}`, {
+        method,
+        headers: { host: "baseline.example", origin: "https://baseline.example", "content-type": "application/json" },
+        ...(method === "DELETE" ? {} : { body: JSON.stringify(body) }),
+      }),
+      ctx()
+    );
+  const post = { label: "Synthetic post", subreddit: "r/apps", posted_at: "2026-10-26T14:40:00Z" };
+  const event = { label: "Synthetic event", kind: "Other", happened_at: "2026-10-26T14:40:00Z" };
+  const routes = [
+    ["reddit POST", () => call(reddit.POST, "reddit", "POST", post), 201],
+    ["reddit PATCH", () => call(redditItem.PATCH, `reddit/${ROW}`, "PATCH", { label: "Synthetic change" }), 200],
+    ["reddit DELETE", () => call(redditItem.DELETE, `reddit/${ROW}`, "DELETE"), 200],
+    ["milestones POST", () => call(milestones.POST, "milestones", "POST", event), 201],
+    ["milestones PATCH", () => call(milestoneItem.PATCH, `milestones/${ROW}`, "PATCH", { label: "Synthetic change" }), 200],
+    ["milestones DELETE", () => call(milestoneItem.DELETE, `milestones/${ROW}`, "DELETE"), 200],
+  ];
+
+  try {
+    await test("routes: every manual-entry write refuses a signed-in session that is not the launch owner (403, zero writes)", async () => {
+      process.env.MISSION_CONTROL_USER_ID = OWNER;
+      routeState.sessionUser = OTHER;
+      for (const [label, run] of routes) {
+        routeState.writes = [];
+        const response = await run();
+        assert.equal(response.status, 403, label);
+        assert.deepEqual(await response.json(), { error: "Forbidden" }, label);
+        assert.equal(routeState.writes.length, 0, `${label} wrote`);
+      }
+    });
+
+    await test("routes: with no owner configured, nobody can write (fails closed, zero writes)", async () => {
+      routeState.sessionUser = OWNER;
+      for (const unset of [undefined, "", "   "]) {
+        if (unset === undefined) delete process.env.MISSION_CONTROL_USER_ID;
+        else process.env.MISSION_CONTROL_USER_ID = unset;
+        for (const [label, run] of routes) {
+          routeState.writes = [];
+          assert.equal((await run()).status, 403, `${label} owner=${JSON.stringify(unset)}`);
+          assert.equal(routeState.writes.length, 0);
+        }
+      }
+    });
+
+    await test("routes: the launch owner's session still writes, bound to the owner's id", async () => {
+      process.env.MISSION_CONTROL_USER_ID = OWNER;
+      routeState.sessionUser = OWNER;
+      for (const [label, run, status] of routes) {
+        routeState.writes = [];
+        assert.equal((await run()).status, status, label);
+        assert.equal(routeState.writes.length, 1, label);
+        const [write] = routeState.writes;
+        if (write.op === "insert") assert.equal(write.payload.user_id, OWNER, label);
+        else assert.ok(write.filters.some(([k, v]) => k === "user_id" && v === OWNER), label);
+      }
+    });
+
+    await test("routes: no session is still 401, before the owner check", async () => {
+      process.env.MISSION_CONTROL_USER_ID = OWNER;
+      routeState.sessionUser = null;
+      for (const [label, run] of routes) {
+        routeState.writes = [];
+        assert.equal((await run()).status, 401, label);
+        assert.equal(routeState.writes.length, 0);
+      }
+    });
+  } finally {
+    for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
+    Object.assign(process.env, savedEnv);
+  }
+}
 
 // @@MORE_TESTS@@
 

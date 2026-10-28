@@ -1,13 +1,16 @@
 /**
  * Shared guard + replies for the Launch page's own routes (Refresh now aside):
  * Brent's signed-in browser session only, writes from this site only.
+ * "Brent's" means the launch owner (MISSION_CONTROL_USER_ID, the same rule as
+ * Refresh now); any other session, or no owner configured, gets 403 before
+ * the route reads its body or writes anything.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { withCorsHeaders } from '@/lib/cors';
 import { isPostgrestNotFound } from '@/lib/supabase/errors';
 import { requireAuthenticatedRoute, type AuthenticatedRouteContext } from '@/lib/supabase/route-auth';
-import { isSameOriginWrite } from './route-guards';
+import { isLaunchOwner, isSameOriginWrite } from './route-guards';
 
 export function launchReply(request: NextRequest, body: unknown, status = 200): NextResponse {
   return withCorsHeaders(NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } }), request);
@@ -23,7 +26,7 @@ export async function requireLaunchSession(
   if (auth.response || !auth.context) {
     return { context: null, response: auth.response ?? launchReply(request, { error: 'Authentication required' }, 401) };
   }
-  if (auth.context.authSource !== 'session') {
+  if (auth.context.authSource !== 'session' || !isLaunchOwner(auth.context.userId, process.env.MISSION_CONTROL_USER_ID)) {
     return { context: null, response: launchReply(request, { error: 'Forbidden' }, 403) };
   }
   return { context: auth.context, response: null };

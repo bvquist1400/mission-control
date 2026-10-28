@@ -17,7 +17,9 @@
  * - `generated_at`, `release_at`: ISO timestamps (strict pattern).
  * - `as_of_date_et`: the function's New York date, YYYY-MM-DD.
  *   These three are the ONLY strings allowed anywhere in the reply besides
- *   each day's `date`.
+ *   each daily row's `date` (a `date` in `totals` is refused like any other
+ *   extra text field).
+ * - Every count is a whole number from 0 to APP_DB_MAX_COUNT (10,000,000).
  * - `totals`: real_users, real_apple, real_email, real_unconfirmed,
  *   family_accounts, plus_paid, plus_trial, plus_comp (required);
  *   deleted_accounts, internal_accounts, real_households_own,
@@ -79,12 +81,19 @@ export interface AppDbSummary {
 
 /** Keys that would mean per-account data; their presence anywhere refuses the reply. */
 const FORBIDDEN_KEYS = new Set(['accounts', 'users', 'emails', 'email', 'user_id', 'user_ids', 'ids', 'id', 'short_id', 'name', 'display_name']);
-const MAX_COUNT = 10_000_000;
+/**
+ * Largest count accepted. Paired with the Grocery function's `MAX_COUNT`
+ * (Grocery repo supabase/functions/_shared/launch-metrics-core.ts): both sides
+ * refuse anything above 10,000,000. Change both together.
+ */
+export const APP_DB_MAX_COUNT = 10_000_000;
 // One row per ET day from release; ten years of days (the Grocery side caps at 3660).
 const MAX_DAYS = 3660;
 const EARLIEST_DATE = '2024-01-01';
 /** The Grocery function's own timestamp pattern: no other text can ride along. */
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/;
+/** A daily row's `date` is read and checked by validateAppDbSummary itself; totals get no such key. */
+const DAILY_READ_BY_CALLER = ['date'] as const;
 const TOP_LEVEL_KEYS = new Set(['schema_version', 'generated_at', 'release_at', 'as_of_date_et', 'totals', 'daily']);
 
 /**
@@ -107,7 +116,7 @@ function readTimestamp(value: unknown): string {
 }
 
 function readCount(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > MAX_COUNT) {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > APP_DB_MAX_COUNT) {
     throw new LaunchSourceError('app_db_shape');
   }
   return value;
@@ -124,7 +133,9 @@ function assertNoForbiddenKeys(record: Record<string, unknown>): void {
 function pickCounts<K extends string>(
   record: Record<string, unknown>,
   required: readonly K[],
-  optional: readonly K[]
+  optional: readonly K[],
+  /** Keys the caller reads itself (only a daily row's `date`); every other non-count is refused. */
+  readByCaller: readonly string[] = []
 ): Record<string, number> {
   const out: Record<string, number> = {};
   for (const key of required) {
@@ -141,7 +152,7 @@ function pickCounts<K extends string>(
   // Any other key is dropped. A non-count value under an unknown key is still
   // refused: counts-only means nothing but numbers comes back.
   for (const [key, value] of Object.entries(record)) {
-    if (!(required as readonly string[]).includes(key) && !(optional as readonly string[]).includes(key) && key !== 'date') {
+    if (!(required as readonly string[]).includes(key) && !(optional as readonly string[]).includes(key) && !readByCaller.includes(key)) {
       if (value !== null && typeof value !== 'number') {
         throw new LaunchSourceError('app_db_not_counts');
       }
@@ -204,7 +215,7 @@ export function validateAppDbSummary(raw: unknown, now: Date = new Date()): AppD
       throw new LaunchSourceError('app_db_shape');
     }
     seen.add(date);
-    const counts = pickCounts<DailyKey>(entry, APP_DB_DAILY_REQUIRED, APP_DB_DAILY_OPTIONAL);
+    const counts = pickCounts<DailyKey>(entry, APP_DB_DAILY_REQUIRED, APP_DB_DAILY_OPTIONAL, DAILY_READ_BY_CALLER);
     daily.push({ date, ...counts } as AppDbDay);
   }
   daily.sort((a, b) => a.date.localeCompare(b.date));
