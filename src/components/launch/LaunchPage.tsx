@@ -49,7 +49,9 @@ function sourceBadge(view: LaunchView, source: "app_db" | "web" | "search_consol
 /**
  * A counts table. Tables with more than three columns don't fit a phone, so
  * below `sm` each row becomes a small card of label/value pairs (every number
- * visible, nothing off to the side); from `sm` up it is a normal table.
+ * visible, nothing off to the side); from `sm` up it is a normal table whose
+ * first (label) column wraps, so a long search or page never pushes the
+ * numbers out of view.
  */
 function Table({ caption, head, rows, empty }: { caption: string; head: string[]; rows: ReactNode[][]; empty: string }) {
   if (rows.length === 0) {
@@ -62,14 +64,19 @@ function Table({ caption, head, rows, empty }: { caption: string; head: string[]
         <ul aria-label={caption} className="space-y-2 sm:hidden">
           {rows.map((row, rowIndex) => (
             <li key={rowIndex} className="rounded-lg border border-stroke px-3 py-2">
-              <p className="break-words text-sm font-medium text-foreground">{row[0]}</p>
+              <p className="text-sm font-medium text-foreground [overflow-wrap:anywhere]">{row[0]}</p>
               <dl className="mt-1 grid grid-cols-2 gap-x-4 gap-y-1">
-                {row.slice(1).map((cell, index) => (
-                  <div key={index} className="flex min-w-0 items-baseline justify-between gap-2">
-                    <dt className="min-w-0 text-xs text-muted-foreground">{head[index + 1]}</dt>
-                    <dd className="whitespace-nowrap text-sm tabular-nums text-foreground">{cell}</dd>
-                  </div>
-                ))}
+                {row.slice(1).map((cell, index) => {
+                  // A text value (e.g. "Since release (90-day view)") gets the full width and may wrap;
+                  // short numbers sit two to a line.
+                  const wide = typeof cell === "string" && cell.length > 10;
+                  return (
+                    <div key={index} className={`flex min-w-0 items-baseline justify-between gap-2 ${wide ? "col-span-2" : ""}`}>
+                      <dt className={`text-xs text-muted-foreground ${wide ? "shrink-0" : "min-w-0"}`}>{head[index + 1]}</dt>
+                      <dd className={`text-right text-sm tabular-nums text-foreground ${wide ? "min-w-0 [overflow-wrap:anywhere]" : "shrink-0 whitespace-nowrap"}`}>{cell}</dd>
+                    </div>
+                  );
+                })}
               </dl>
             </li>
           ))}
@@ -91,7 +98,10 @@ function Table({ caption, head, rows, empty }: { caption: string; head: string[]
             {rows.map((row, rowIndex) => (
               <tr key={rowIndex} className="border-b border-stroke/60 last:border-0">
                 {row.map((cell, index) => (
-                  <td key={index} className={`whitespace-nowrap py-2 pr-3 ${index > 0 ? "text-right tabular-nums" : "text-foreground"}`}>
+                  <td
+                    key={index}
+                    className={`py-2 pr-3 ${index > 0 ? "whitespace-nowrap text-right tabular-nums" : "min-w-[8rem] text-foreground [overflow-wrap:anywhere]"}`}
+                  >
                     {cell}
                   </td>
                 ))}

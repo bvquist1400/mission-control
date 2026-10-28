@@ -1177,6 +1177,8 @@ await test("layout: tables with more than three columns become label/value rows 
   assert.match(table, /sm:hidden/, "phone layout hidden from sm up");
   assert.match(table, /hidden sm:block/, "table hidden below sm");
   assert.match(table, /head\.length > 3/);
+  // The label column wraps; only the number columns stay on one line.
+  assert.match(table, /index > 0 \? "whitespace-nowrap text-right tabular-nums" : "[^"]*\[overflow-wrap:anywhere\]/);
   assert.match(page, /"Family"/);
 });
 
