@@ -83,7 +83,7 @@ function Table({ caption, head, rows, empty }: { caption: string; head: string[]
         </ul>
       ) : null}
       <div className={stackOnPhone ? "hidden sm:block overflow-x-auto" : "overflow-x-auto"}>
-        <table className="w-full min-w-[18rem] text-sm">
+        <table className="w-full text-sm">
           <caption className="sr-only">{caption}</caption>
           <thead>
             <tr className="border-b border-stroke text-left text-xs text-muted-foreground">
@@ -100,7 +100,7 @@ function Table({ caption, head, rows, empty }: { caption: string; head: string[]
                 {row.map((cell, index) => (
                   <td
                     key={index}
-                    className={`py-2 pr-3 ${index > 0 ? "whitespace-nowrap text-right tabular-nums" : "min-w-[8rem] text-foreground [overflow-wrap:anywhere]"}`}
+                    className={`py-2 pr-3 ${index > 0 ? "whitespace-nowrap text-right tabular-nums" : "min-w-[6rem] text-foreground [overflow-wrap:anywhere]"}`}
                   >
                     {cell}
                   </td>

@@ -1182,6 +1182,21 @@ await test("layout: tables with more than three columns become label/value rows 
   assert.match(page, /"Family"/);
 });
 
+await test("layout: 2–3 column tables fit a 274 px phone card (no fixed table width; label column min ≤ 6rem)", () => {
+  const page = launchSource("LaunchPage.tsx");
+  const table = page.slice(page.indexOf("function Table("), page.indexOf("export function LaunchPageBody"));
+  const tableClass = table.match(/<table className="([^"]*)"/)?.[1];
+  assert.ok(tableClass, "table class found");
+  // A fixed min width wider than the card (18rem = 288 px > 274 px at 390) cut the last column's digits.
+  assert.doesNotMatch(tableClass, /min-w-\[/, "the table must not set a fixed min width");
+  assert.match(tableClass, /(^|\s)w-full(\s|$)/);
+  for (const [, rem] of table.matchAll(/min-w-\[(\d+(?:\.\d+)?)rem\]/g)) {
+    assert.ok(Number(rem) <= 6, `a ${rem}rem column minimum leaves too little room for the numbers on a phone`);
+  }
+  // Number cells and their headers stay on one line, so a value is never broken across lines.
+  assert.match(table, /index > 0 \? "whitespace-nowrap text-right tabular-nums"/);
+});
+
 await test("manual: Remove asks first (two-step inline confirm, no browser dialog)", () => {
   const panels = launchSource("LaunchManualPanels.tsx");
   assert.ok(!/window\.confirm|\bconfirm\(/.test(panels));
