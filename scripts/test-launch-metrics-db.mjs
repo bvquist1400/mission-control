@@ -287,7 +287,11 @@ await test("route: a cron full run stores counts, a run row with codes only, and
   assert.equal(get("search_console", "clicks", "2026-10-26"), 5);
   const { data: snaps } = await admin.from("launch_source_snapshots").select("source, payload").eq("user_id", brent.id);
   const appSnap = snaps.find((s) => s.source === "app_db").payload;
-  assert.deepEqual(Object.keys(appSnap).sort(), ["daily", "generated_at", "totals"]);
+  assert.deepEqual(Object.keys(appSnap).sort(), ["as_of_date_et", "daily", "generated_at", "release_at", "schema_version", "totals"]);
+  // The only strings: two timestamps, one ET date (and each day's date).
+  assert.match(appSnap.release_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  assert.match(appSnap.as_of_date_et, /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(appSnap.schema_version, 1);
   assert.ok(!JSON.stringify(snaps).match(/[0-9a-f]{8}-[0-9a-f]{4}/), "no uuid-like value in any snapshot");
 });
 
