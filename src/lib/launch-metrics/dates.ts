@@ -11,6 +11,13 @@ export const SEARCH_CONSOLE_TIMEZONE = 'America/Los_Angeles';
 /** Menu & Market 1.0 went live on this New York day. */
 export const LAUNCH_RELEASE_DATE = '2026-10-21';
 
+/**
+ * The UTC day website analytics started recording menuandmarket.com. Earlier
+ * website days are "not tracked yet" on the page, not zero. A stored website
+ * number on an earlier day still wins (the page never hides real data).
+ */
+export const WEBSITE_TRACKING_START_DATE = '2026-10-26';
+
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 export function isIsoDate(value: unknown): value is string {

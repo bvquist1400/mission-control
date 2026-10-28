@@ -35,6 +35,25 @@
   --progress-fill: rgba(63, 185, 80, 0.13);
   --progress-fill-edge: rgba(63, 185, 80, 0.55);
   --progress-fill-full: rgba(63, 185, 80, 0.2);
+  /*
+   * Chart tokens (Launch page, Option A). Series hues checked with the dataviz
+   * validator on --panel (#161b22): lightness band, chroma, adjacent-pair CVD
+   * separation (worst deutan 9.4) and >= 3:1 against the surface all pass.
+   * Blue = real users / visitors, orange = started not confirmed, aqua = page
+   * views, neutral grey = family accounts (not counted). Red and amber stay for
+   * problems only; data never uses --accent.
+   */
+  --chart-1: #3987e5;
+  --chart-1-wash: rgba(57, 135, 229, 0.14);
+  --chart-2: #d95926;
+  --chart-3: #199e70;
+  --chart-neutral: #6e7681;
+  --chart-grid: #242a32;
+  --chart-axis: #3a414a;
+  --chart-hatch: #2d333b;
+  --chart-hover: rgba(230, 237, 243, 0.05);
+  /* Secondary ink for chart legends, keys and tooltips: 8.8:1 on --panel, 7.8:1 on --panel-muted (muted-foreground is 5.6:1 and 5.0:1). */
+  --chart-text-2: #b1bac4;
   --scrollbar-track: color-mix(in oklab, var(--panel) 88%, black);
   --scrollbar-thumb: color-mix(in oklab, var(--accent) 52%, var(--panel-muted));
   --scrollbar-thumb-hover: color-mix(in oklab, var(--accent) 68%, var(--panel-muted));

@@ -7,7 +7,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from '@/types/supabase.generated';
 import { appDbHasRows, latestTotals, type AppDbTotalsView } from './page-totals';
-import { addDays, dateRange, etDate, LAUNCH_RELEASE_DATE } from './dates';
+import { addDays, dateRange, etDate, LAUNCH_RELEASE_DATE, WEBSITE_TRACKING_START_DATE } from './dates';
 import { readRunSources, type RunRecord } from './store';
 import { isRunUnfinished, sourceHealth, tokenDaysLeft, type SourceHealth } from './stale';
 import type {
@@ -185,6 +185,8 @@ export interface MilestoneMarker {
   date: string;
   label: string;
   kind: LaunchMilestoneKind;
+  /** The stored instant, for the New York clock time in the chart's event key. */
+  happenedAt: string;
 }
 
 export interface LaunchView {
@@ -197,6 +199,8 @@ export interface LaunchView {
     visitorsSum: number;
     pageviewsSum: number;
     tapsSum: number;
+    /** First UTC day with website tracking; days before it are "not tracked yet", not zero. */
+    trackingSince: string;
     referrers: NamedCount[];
     referrerWindow: { since: string; until: string } | null;
     placements: NamedCount[];
@@ -282,6 +286,9 @@ export function buildLaunchView(input: LaunchPageInput, now: Date): LaunchView {
     pageviews: webGet(date, 'pageviews'),
     taps: webGet(date, 'app_store_taps'),
   }));
+  // Tracking start: the known go-live day, or an earlier day that has a stored number.
+  const firstWebDay = webDays.find((day) => day.visitors > 0 || day.pageviews > 0 || day.taps > 0)?.date ?? null;
+  const trackingSince = firstWebDay && firstWebDay < WEBSITE_TRACKING_START_DATE ? firstWebDay : WEBSITE_TRACKING_START_DATE;
   const referrerSince = addDays(utcToday, -6) < LAUNCH_RELEASE_DATE ? LAUNCH_RELEASE_DATE : addDays(utcToday, -6);
 
   // Search Console (Pacific days, lags 2–3 days).
@@ -312,6 +319,7 @@ export function buildLaunchView(input: LaunchPageInput, now: Date): LaunchView {
       visitorsSum: sumBy(webDays, (day) => day.visitors),
       pageviewsSum: sumBy(webDays, (day) => day.pageviews),
       tapsSum: sumBy(webDays, (day) => day.taps),
+      trackingSince,
       referrers: topDimensions(input.daily, 'web', 'pageviews', 'referrer:', referrerSince, utcToday, 'visitors'),
       referrerWindow: { since: referrerSince, until: utcToday },
       placements: topDimensions(input.daily, 'web', 'app_store_taps', 'placement:', LAUNCH_RELEASE_DATE, utcToday),
@@ -332,6 +340,7 @@ export function buildLaunchView(input: LaunchPageInput, now: Date): LaunchView {
       date: etDate(new Date(milestone.happened_at)),
       label: milestone.label,
       kind: milestone.kind,
+      happenedAt: milestone.happened_at,
     })),
     health: sourceHealth(input.runs, now),
     lastRun: lastRunRecord

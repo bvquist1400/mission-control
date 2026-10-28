@@ -6,6 +6,18 @@ export function formatDay(isoDate: string): string {
   return new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' }).format(new Date(`${isoDate}T00:00:00Z`));
 }
 
+/** "Mon Oct 26" for a calendar day (the chart tooltip and event key). */
+export function formatWeekdayDay(isoDate: string): string {
+  const day = new Date(`${isoDate}T00:00:00Z`);
+  const weekday = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short' }).format(day);
+  return `${weekday} ${formatDay(isoDate)}`;
+}
+
+/** "3:05 PM" New York time for an instant (the chart's event key). */
+export function formatEtClock(iso: string): string {
+  return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' }).format(new Date(iso));
+}
+
 export function formatEtTime(iso: string): string {
   return new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York',

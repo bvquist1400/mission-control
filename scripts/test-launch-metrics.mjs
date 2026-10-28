@@ -923,7 +923,7 @@ await test("page: sign-up days run release → today (ET), with unconfirmed sepa
   assert.deepEqual([oct26.real, oct26.apple, oct26.unconfirmed, oct26.totalReal], [2, 2, 1, 1]);
   assert.equal(days.find((d) => d.date === "2026-10-23").family, 2);
   assert.equal(days.find((d) => d.date === "2026-10-24").totalReal, null);
-  assert.deepEqual(view.markers, [{ date: "2026-10-26", label: "First real user", kind: "Users" }]);
+  assert.deepEqual(view.markers, [{ date: "2026-10-26", label: "First real user", kind: "Users", happenedAt: "2026-10-26T14:30:00Z" }]);
 });
 
 await test("page: website sums, top referrers (last 7 UTC days) and App Store taps by button", () => {
@@ -1210,15 +1210,23 @@ await test("layout: every grid on the Launch page has explicit shrinkable base c
   for (const match of twoUp) assert.match(match[1], /(^|\s)min-w-0(\s|$)/);
 });
 
-await test("layout: tables with more than three columns become label/value rows on phones", () => {
+await test("layout: tables with more than three columns become label/value cards when their own box is narrow", () => {
   const page = launchSource("LaunchPage.tsx");
-  const table = page.slice(page.indexOf("function Table("), page.indexOf("export function LaunchPageBody"));
-  assert.match(table, /sm:hidden/, "phone layout hidden from sm up");
-  assert.match(table, /hidden sm:block/, "table hidden below sm");
-  assert.match(table, /head\.length > 3/);
-  // The label column wraps; only the number columns stay on one line.
+  const table = page.slice(page.indexOf("const STACK_CLASSES"), page.indexOf("function rangeText"));
+  // Container queries on the table's own box (a half-width column stacks too), not the window.
+  assert.match(table, /className="@container min-w-0"/);
+  // 5+ columns (App Store hand reads, accounts by day) stack below 36rem; 4 columns below 20rem.
+  assert.match(table, /wide: \{ cards: "space-y-2 @min-\[36rem\]:hidden", table: "hidden overflow-x-auto @min-\[36rem\]:block" \}/);
+  assert.match(table, /medium: \{ cards: "space-y-2 @min-\[20rem\]:hidden", table: "hidden overflow-x-auto @min-\[20rem\]:block" \}/);
+  assert.match(table, /head\.length >= 5 \? STACK_CLASSES\.wide : head\.length > 3 \? STACK_CLASSES\.medium : null/);
+  // The label column wraps; only the number columns stay on one line. Headers may wrap (no nowrap on th).
   assert.match(table, /index > 0 \? "whitespace-nowrap text-right tabular-nums" : "[^"]*\[overflow-wrap:anywhere\]/);
+  const th = table.match(/<th [^>]*className=\{`([^`]*)`\}/)?.[1] ?? "";
+  assert.ok(th && !/whitespace-nowrap/.test(th), "table headers may wrap");
   assert.match(page, /"Family"/);
+  // The App Store table has 6 columns and the accounts table 7, so both stack.
+  assert.match(page, /head=\{\["Read on", "Window", "Impressions", "Page views", "First downloads", "Page view → download"\]\}/);
+  assert.match(page, /head=\{\["Day", "Real", "Apple", "Email", "Deleted later", "Not confirmed", "Family"\]\}/);
 });
 
 await test("layout: 2–3 column tables fit a 274 px phone card (no fixed table width; label column min ≤ 6rem)", () => {
@@ -1234,6 +1242,191 @@ await test("layout: 2–3 column tables fit a 274 px phone card (no fixed table 
   }
   // Number cells and their headers stay on one line, so a value is never broken across lines.
   assert.match(table, /index > 0 \? "whitespace-nowrap text-right tabular-nums"/);
+});
+
+// ─── chart model (Option A, Brent 10/28) ──────────────────────────────────
+
+const chart = await import("../src/lib/launch-metrics/chart-model.ts");
+
+await test("chart: y-axis ticks are clean numbers from 0, 2 to 6 of them, at or above the peak", () => {
+  assert.deepEqual(chart.axisScale(0), { max: 1, ticks: [0, 1] });
+  assert.deepEqual(chart.axisScale(1), { max: 2, ticks: [0, 1, 2] });
+  assert.deepEqual(chart.axisScale(2), { max: 2, ticks: [0, 1, 2] });
+  assert.deepEqual(chart.axisScale(3), { max: 3, ticks: [0, 1, 2, 3] });
+  assert.deepEqual(chart.axisScale(5), { max: 5, ticks: [0, 1, 2, 3, 4, 5] });
+  assert.deepEqual(chart.axisScale(7), { max: 8, ticks: [0, 2, 4, 6, 8] });
+  assert.deepEqual(chart.axisScale(12), { max: 15, ticks: [0, 5, 10, 15] });
+  assert.deepEqual(chart.axisScale(100), { max: 100, ticks: [0, 25, 50, 75, 100] });
+  assert.deepEqual(chart.axisScale(1234), { max: 1500, ticks: [0, 500, 1000, 1500] });
+  assert.deepEqual(chart.axisScale(-4), { max: 1, ticks: [0, 1] });
+  assert.deepEqual(chart.axisScale(Number.NaN), { max: 1, ticks: [0, 1] });
+  for (let peak = 0; peak <= 5000; peak += 37) {
+    const { max, ticks } = chart.axisScale(peak);
+    assert.ok(max >= peak, `max ${max} >= peak ${peak}`);
+    assert.ok(ticks.length >= 2 && ticks.length <= 6, `${ticks.length} ticks for ${peak}`);
+    assert.equal(ticks[0], 0);
+    assert.equal(ticks.at(-1), max);
+    assert.ok(ticks.every((t) => Number.isInteger(t)), `whole ticks for ${peak}`);
+    const steps = new Set(ticks.slice(1).map((t, i) => t - ticks[i]));
+    assert.equal(steps.size, 1, `even steps for ${peak}`);
+  }
+  assert.deepEqual([0, 25, 999, 1000, 1500, 2_000_000].map(chart.formatTick), ["0", "25", "999", "1K", "1.5K", "2M"]);
+});
+
+const week = dates.dateRange("2026-10-21", "2026-10-28");
+
+await test("chart: every day gets a full date when the slot is wide (desktop)", () => {
+  const labels = chart.xLabels(week, 80);
+  assert.deepEqual(labels.map((l) => l.index), [0, 1, 2, 3, 4, 5, 6, 7]);
+  assert.deepEqual(labels.map((l) => l.text), ["Oct 21", "Oct 22", "Oct 23", "Oct 24", "Oct 25", "Oct 26", "Oct 27", "Oct 28"]);
+});
+
+await test("chart: a phone-width slot keeps every day but writes the month only once", () => {
+  const labels = chart.xLabels(week, 38);
+  assert.deepEqual(labels.map((l) => l.index), [0, 1, 2, 3, 4, 5, 6, 7]);
+  assert.deepEqual(labels.map((l) => l.text), ["Oct 21", "22", "23", "24", "25", "26", "27", "28"]);
+});
+
+await test("chart: crowded days thin to every 2nd (then 3rd, 4th, 7th) day; the last day is always labelled; no two labels collide", () => {
+  const month = dates.dateRange("2026-10-21", "2026-11-19");
+  const every2 = chart.xLabels(month, 14);
+  assert.equal(every2[0].index, 0);
+  assert.equal(every2.at(-1).index, month.length - 1);
+  assert.ok(every2.slice(1, -1).every((l) => l.index % 2 === 0), "every other day");
+  // The month is written where it changes.
+  const novFirst = every2.findIndex((l) => l.index >= month.indexOf("2026-11-01"));
+  assert.match(every2[novFirst].text, /^Nov \d+$/, every2.map((l) => l.text).join(","));
+  assert.ok(every2.slice(novFirst + 1).every((l) => /^\d+$/.test(l.text)), "month only where it changes");
+  for (const slot of [4, 7, 10, 14, 20, 30, 45]) {
+    const labels = chart.xLabels(month, slot);
+    assert.equal(labels.at(-1).index, month.length - 1, `last day labelled at slot ${slot}`);
+    for (let i = 1; i < labels.length; i += 1) {
+      const gap = (labels[i].index - labels[i - 1].index) * slot;
+      assert.ok(gap >= (chart.labelWidth(labels[i].text) + chart.labelWidth(labels[i - 1].text)) / 2, `labels ${i - 1}/${i} collide at slot ${slot}`);
+    }
+  }
+  const sparse = chart.xLabels(month, 4);
+  assert.ok(sparse.length >= 3 && sparse.length < 12, `${sparse.length} labels at 4px a day`);
+  assert.deepEqual(chart.xLabels([], 50), []);
+});
+
+await test("chart: event markers are one per day, numbered 1.. in date order; days outside the chart are left out", () => {
+  const markers = chart.markerDays(week, [
+    { date: "2026-10-21", label: "Release", kind: "Release", timeLabel: "9:00 AM" },
+    { date: "2026-10-26", label: "Second thing", kind: "Users", timeLabel: "1:00 PM" },
+    { date: "2026-10-23", label: "Family joins", kind: "Users" },
+    { date: "2026-10-26", label: "Third thing", kind: "Marketing", timeLabel: "2:00 PM" },
+    { date: "2026-10-12", label: "Before the chart", kind: "Other" },
+    { date: "2026-11-02", label: "After the chart", kind: "Other" },
+  ]);
+  assert.deepEqual(markers.map((m) => [m.date, m.index, m.number, m.events.length]), [
+    ["2026-10-21", 0, 1, 1],
+    ["2026-10-23", 2, 2, 1],
+    ["2026-10-26", 5, 3, 2],
+  ]);
+  assert.deepEqual(markers[2].events.map((e) => e.label), ["Second thing", "Third thing"]);
+  assert.equal(markers[1].events[0].timeLabel, null);
+  assert.deepEqual(chart.markerDays(week, []), []);
+});
+
+await test("chart: markers that would overlap go to a second (third) row; spaced markers stay in one", () => {
+  assert.deepEqual(chart.markerRows([10, 60, 110], 24), [0, 0, 0]);
+  assert.deepEqual(chart.markerRows([10, 20, 30, 80], 24), [0, 1, 2, 0]);
+  assert.deepEqual(chart.markerRows([10, 12, 14, 16], 24, 3).slice(0, 3), [0, 1, 2]);
+});
+
+await test("chart: the running total carries a stored total over gaps, and draws nothing before the first or after the last stored day", () => {
+  assert.deepEqual(chart.runningTotal([null, null, 0, null, 2, null, 3, null]), [null, null, 0, 0, 2, 2, 3, null]);
+  assert.deepEqual(chart.runningTotal([null, null]), [null, null]);
+  assert.deepEqual(chart.runningTotal([]), []);
+  // A total can go down (an account deleted later): it is shown as stored, never recomputed.
+  assert.deepEqual(chart.runningTotal([2, null, 1]), [2, 2, 1]);
+  // From the page model: Oct 26 has total 1 and Oct 27 the summary total.
+  const view = pageData.buildLaunchView(pageInput(), NOW);
+  const line = chart.runningTotal(view.signups.days.map((d) => d.totalReal));
+  assert.deepEqual(line.slice(0, 5), [null, null, null, null, null]);
+  assert.equal(line[5], 1);
+  assert.equal(line.at(-1), view.totals.realUsers);
+});
+
+await test("chart: website days before tracking began are a 'not tracked' span, not zeros", () => {
+  assert.deepEqual(chart.notTrackedSpan(week, "2026-10-26"), { from: 0, to: 4 });
+  assert.equal(chart.notTrackedSpan(week, "2026-10-21"), null);
+  assert.equal(chart.notTrackedSpan(week, "2026-10-01"), null);
+  assert.deepEqual(chart.notTrackedSpan(week, "2026-11-30"), { from: 0, to: 7 });
+  assert.equal(chart.notTrackedSpan(week, null), null);
+  assert.equal(chart.notTrackedSpan([], "2026-10-26"), null);
+  assert.equal(dates.WEBSITE_TRACKING_START_DATE, "2026-10-26");
+  // The page model passes the start; a stored number on an earlier day moves it earlier (real data is never hidden).
+  const view = pageData.buildLaunchView(pageInput(), NOW);
+  const firstWithData = view.website.days.find((d) => d.visitors > 0 || d.pageviews > 0 || d.taps > 0)?.date;
+  assert.equal(view.website.trackingSince, firstWithData < "2026-10-26" ? firstWithData : "2026-10-26");
+  const early = pageData.buildLaunchView(pageInput({ daily: [{ metric_date: "2026-10-22", source: "web", metric: "visitors", dimension: "", value: 4 }] }), NOW);
+  assert.equal(early.website.trackingSince, "2026-10-22");
+  const empty = pageData.buildLaunchView(pageInput({ daily: [] }), NOW);
+  assert.equal(empty.website.trackingSince, "2026-10-26");
+});
+
+await test("chart: no-data states (all zero or all missing) are detected; columns never wider than 24px", () => {
+  assert.equal(chart.isAllEmpty([[0, 0], [null, 0]]), true);
+  assert.equal(chart.isAllEmpty([[]]), true);
+  assert.equal(chart.isAllEmpty([[0, 1]]), false);
+  assert.equal(chart.columnWidth(200), 24);
+  assert.equal(chart.columnWidth(20), 11);
+  assert.equal(chart.columnWidth(2), 2);
+  assert.ok(chart.columnWidth(200, 2) <= 24);
+  assert.ok(chart.columnWidth(30, 2) > 2);
+});
+
+await test("charts: one scale per chart (no own-scale line), no red on data, colour tokens defined, markers instead of dashed lines", () => {
+  const charts = launchSource("DailyChart.tsx");
+  const page = launchSource("LaunchPage.tsx");
+  assert.match(charts, /^"use client";/);
+  assert.doesNotMatch(charts, /own scale/);
+  assert.doesNotMatch(charts, /strokeDasharray/);
+  assert.doesNotMatch(charts, /preserveAspectRatio="none"/, "drawn at real width, not stretched");
+  assert.doesNotMatch(page, /\bline=\{/, "no second-scale line prop");
+  assert.doesNotMatch(page + charts, /fill-accent|bg-accent|var\(--accent\)|fill-danger|var\(--danger\)/, "data never wears the alarm red");
+  assert.doesNotMatch(page, /dashed lines/);
+  assert.match(page, /numbered markers/);
+  // Tooltips work on hover, tap and keyboard focus.
+  for (const handler of ["onPointerMove", "onPointerDown", "onKeyDown", "onFocus", "ArrowRight", "ArrowLeft", 'role="status"']) {
+    assert.ok(charts.includes(handler), handler);
+  }
+  const css = readFileSync(new URL("../src/app/globals.css", import.meta.url), "utf8");
+  for (const token of ["--chart-1", "--chart-2", "--chart-3", "--chart-neutral", "--chart-grid", "--chart-axis", "--chart-hatch", "--chart-hover", "--chart-text-2", "--chart-1-wash"]) {
+    assert.match(css, new RegExp(`${token}:\\s*[#r]`), token);
+    for (const use of [...(page + charts).matchAll(/var\((--chart-[a-z0-9-]+)\)/g)].map((m) => m[1])) {
+      assert.match(css, new RegExp(`${use}:`), `${use} is defined`);
+    }
+  }
+  // Sign-ups: real users blue, not confirmed orange, family grey and not counted.
+  assert.match(page, /label: "Real users", color: "var\(--chart-1\)"/);
+  assert.match(page, /label: "Started, not confirmed", color: "var\(--chart-2\)"/);
+  assert.match(page, /label: "Family \(not counted\)", color: "var\(--chart-neutral\)", values: [^\n]*counted: false/);
+});
+
+await test("tiles: short sentence-case labels that wrap; the status pill sits beside the number, not on the label", () => {
+  const page = launchSource("LaunchPage.tsx");
+  const tile = page.slice(page.indexOf("function Tile("), page.indexOf("function ChartTitle("));
+  assert.doesNotMatch(tile, /uppercase/);
+  assert.match(tile, /\[overflow-wrap:anywhere\]">\{label\}/);
+  // The badge is rendered in the number's row.
+  assert.match(tile, /\{value\}<\/p>\s*\{badge\}/);
+  const labels = [...page.matchAll(/<Tile\s+label="([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(labels, ["Real users", "Not confirmed", "Paying Plus", "Website visitors", "Google search clicks"]);
+  for (const label of labels) {
+    assert.ok(label.length <= 20, label);
+    assert.equal(label[0], label[0].toUpperCase());
+    // Sentence case; "Plus" is the product's name.
+    assert.equal(label.slice(1).replace(/\bPlus\b/, "plus"), label.slice(1).toLowerCase(), `${label} is sentence case`);
+  }
+});
+
+await test("words: chart-key and tooltip dates and New York clock times", () => {
+  assert.equal(format.formatWeekdayDay("2026-10-26"), "Mon Oct 26");
+  assert.equal(format.formatEtClock("2026-10-26T18:05:00Z"), "2:05 PM");
+  assert.equal(format.formatEtClock("2026-11-02T18:05:00Z"), "1:05 PM");
 });
 
 await test("manual: Remove asks first (two-step inline confirm, no browser dialog)", () => {
