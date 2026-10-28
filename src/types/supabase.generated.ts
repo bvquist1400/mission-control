@@ -966,6 +966,267 @@ export type Database = {
           },
         ]
       }
+      launch_app_store_manual_reads: {
+        Row: {
+          created_at: string
+          data_through: string
+          first_downloads: number
+          id: string
+          impressions: number
+          product_page_views: number
+          read_on: string
+          updated_at: string
+          user_id: string
+          window_label: string
+        }
+        Insert: {
+          created_at?: string
+          data_through: string
+          first_downloads: number
+          id?: string
+          impressions: number
+          product_page_views: number
+          read_on: string
+          updated_at?: string
+          user_id: string
+          window_label: string
+        }
+        Update: {
+          created_at?: string
+          data_through?: string
+          first_downloads?: number
+          id?: string
+          impressions?: number
+          product_page_views?: number
+          read_on?: string
+          updated_at?: string
+          user_id?: string
+          window_label?: string
+        }
+        Relationships: []
+      }
+      launch_apple_instances: {
+        Row: {
+          created_at: string
+          fetched_at: string
+          granularity: string
+          instance_id: string
+          processing_date: string
+          report_name: string
+          rows_parsed: number
+          segment_count: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          fetched_at?: string
+          granularity: string
+          instance_id: string
+          processing_date: string
+          report_name: string
+          rows_parsed?: number
+          segment_count?: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          fetched_at?: string
+          granularity?: string
+          instance_id?: string
+          processing_date?: string
+          report_name?: string
+          rows_parsed?: number
+          segment_count?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      launch_metric_daily: {
+        Row: {
+          apple_processing_date: string | null
+          created_at: string
+          dimension: string
+          metric: string
+          metric_date: string
+          source: string
+          updated_at: string
+          user_id: string
+          value: number
+          variant: string | null
+        }
+        Insert: {
+          apple_processing_date?: string | null
+          created_at?: string
+          dimension?: string
+          metric: string
+          metric_date: string
+          source: string
+          updated_at?: string
+          user_id: string
+          value: number
+          variant?: string | null
+        }
+        Update: {
+          apple_processing_date?: string | null
+          created_at?: string
+          dimension?: string
+          metric?: string
+          metric_date?: string
+          source?: string
+          updated_at?: string
+          user_id?: string
+          value?: number
+          variant?: string | null
+        }
+        Relationships: []
+      }
+      launch_metric_runs: {
+        Row: {
+          created_at: string
+          finished_at: string | null
+          id: string
+          kind: string
+          sources: Json
+          started_at: string
+          status: string
+          trigger: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          finished_at?: string | null
+          id?: string
+          kind: string
+          sources?: Json
+          started_at?: string
+          status?: string
+          trigger: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          finished_at?: string | null
+          id?: string
+          kind?: string
+          sources?: Json
+          started_at?: string
+          status?: string
+          trigger?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      launch_milestones: {
+        Row: {
+          created_at: string
+          happened_at: string
+          id: string
+          kind: string
+          label: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          happened_at: string
+          id?: string
+          kind: string
+          label: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          happened_at?: string
+          id?: string
+          kind?: string
+          label?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      launch_reddit_posts: {
+        Row: {
+          comments: number | null
+          created_at: string
+          id: string
+          label: string
+          posted_at: string
+          stats_as_of: string | null
+          subreddit: string
+          updated_at: string
+          upvotes: number | null
+          user_id: string
+          views: number | null
+        }
+        Insert: {
+          comments?: number | null
+          created_at?: string
+          id?: string
+          label: string
+          posted_at: string
+          stats_as_of?: string | null
+          subreddit: string
+          updated_at?: string
+          upvotes?: number | null
+          user_id: string
+          views?: number | null
+        }
+        Update: {
+          comments?: number | null
+          created_at?: string
+          id?: string
+          label?: string
+          posted_at?: string
+          stats_as_of?: string | null
+          subreddit?: string
+          updated_at?: string
+          upvotes?: number | null
+          user_id?: string
+          views?: number | null
+        }
+        Relationships: []
+      }
+      launch_source_snapshots: {
+        Row: {
+          as_of_date: string
+          captured_at: string
+          created_at: string
+          id: string
+          payload: Json
+          source: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          as_of_date: string
+          captured_at?: string
+          created_at?: string
+          id?: string
+          payload: Json
+          source: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          as_of_date?: string
+          captured_at?: string
+          created_at?: string
+          id?: string
+          payload?: Json
+          source?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       llm_model_catalog: {
         Row: {
           created_at: string

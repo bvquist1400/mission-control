@@ -1,0 +1,8 @@
+{
+  "rows": [
+    { "keys": ["https://menuandmarket.com/"], "clicks": 6, "impressions": 80, "ctr": 0.075, "position": 9.1 },
+    { "keys": ["https://www.menuandmarket.com/privacy?ref=x"], "clicks": 0, "impressions": 4, "ctr": 0, "position": 30 },
+    { "keys": ["https://evil.example.com/menuandmarket.com"], "clicks": 9, "impressions": 9, "ctr": 1, "position": 1 }
+  ],
+  "responseAggregationType": "byPage"
+}

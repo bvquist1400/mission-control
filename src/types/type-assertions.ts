@@ -32,6 +32,15 @@ import type {
   WorkSession,
   WorkSessionItem,
 } from './database';
+import type {
+  LaunchAppleInstance,
+  LaunchAppStoreManualRead,
+  LaunchMetricDaily,
+  LaunchMetricRun,
+  LaunchMilestone,
+  LaunchRedditPost,
+  LaunchSourceSnapshot,
+} from '../lib/launch-metrics/types';
 
 type Row<T extends keyof Database['public']['Tables']> = Database['public']['Tables'][T]['Row'];
 
@@ -90,6 +99,20 @@ type _WorkSessionKeys = Assert<KeysMatch<WorkSession, Row<'work_sessions'>>>;
 type _WorkSessionNulls = Assert<NullabilityMatches<WorkSession, Row<'work_sessions'>>>;
 type _WorkSessionItemKeys = Assert<KeysMatch<WorkSessionItem, Row<'work_session_items'>>>;
 type _WorkSessionItemNulls = Assert<NullabilityMatches<WorkSessionItem, Row<'work_session_items'>>>;
+type _LaunchMetricDailyKeys = Assert<KeysMatch<LaunchMetricDaily, Row<'launch_metric_daily'>>>;
+type _LaunchMetricDailyNulls = Assert<NullabilityMatches<LaunchMetricDaily, Row<'launch_metric_daily'>>>;
+type _LaunchSourceSnapshotKeys = Assert<KeysMatch<LaunchSourceSnapshot, Row<'launch_source_snapshots'>>>;
+type _LaunchSourceSnapshotNulls = Assert<NullabilityMatches<LaunchSourceSnapshot, Row<'launch_source_snapshots'>>>;
+type _LaunchAppleInstanceKeys = Assert<KeysMatch<LaunchAppleInstance, Row<'launch_apple_instances'>>>;
+type _LaunchAppleInstanceNulls = Assert<NullabilityMatches<LaunchAppleInstance, Row<'launch_apple_instances'>>>;
+type _LaunchMetricRunKeys = Assert<KeysMatch<LaunchMetricRun, Row<'launch_metric_runs'>>>;
+type _LaunchMetricRunNulls = Assert<NullabilityMatches<LaunchMetricRun, Row<'launch_metric_runs'>>>;
+type _LaunchRedditPostKeys = Assert<KeysMatch<LaunchRedditPost, Row<'launch_reddit_posts'>>>;
+type _LaunchRedditPostNulls = Assert<NullabilityMatches<LaunchRedditPost, Row<'launch_reddit_posts'>>>;
+type _LaunchMilestoneKeys = Assert<KeysMatch<LaunchMilestone, Row<'launch_milestones'>>>;
+type _LaunchMilestoneNulls = Assert<NullabilityMatches<LaunchMilestone, Row<'launch_milestones'>>>;
+type _LaunchAppStoreManualReadKeys = Assert<KeysMatch<LaunchAppStoreManualRead, Row<'launch_app_store_manual_reads'>>>;
+type _LaunchAppStoreManualReadNulls = Assert<NullabilityMatches<LaunchAppStoreManualRead, Row<'launch_app_store_manual_reads'>>>;
 /* eslint-enable @typescript-eslint/no-unused-vars */
 
 export {};

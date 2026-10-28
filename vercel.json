@@ -9,6 +9,9 @@
     },
     "src/app/api/mcp-upstream/route.ts": {
       "maxDuration": 60
+    },
+    "src/app/api/launch-metrics/sync/route.ts": {
+      "maxDuration": 120
     }
   },
   "crons": [
@@ -35,6 +38,14 @@
     {
       "path": "/api/intelligence/run",
       "schedule": "0 16 * * 1-5"
+    },
+    {
+      "path": "/api/launch-metrics/sync?kind=full",
+      "schedule": "30 11 * * *"
+    },
+    {
+      "path": "/api/launch-metrics/sync?kind=light",
+      "schedule": "15 * * * *"
     }
   ]
 }
