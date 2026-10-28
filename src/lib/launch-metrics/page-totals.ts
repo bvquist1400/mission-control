@@ -1,6 +1,10 @@
 /**
  * Headline totals from the app database's as-of rows (`total_*`, one set per
- * ET day; each total's newest day wins). Counts only; Plus counts are households.
+ * ET day; each total's newest day wins). Counts only; Plus counts and
+ * `realHouseholds` are households; `usersInOwnHousehold` / `usersJoinedHousehold`
+ * count real users by how they belong to a household (Grocery contract).
+ * A total with no stored row is `null` (unknown), never a made-up 0, where the
+ * hand-kept seed has no such number (unconfirmed, deleted, households).
  */
 
 import type { DailyValue } from './page-data';
@@ -10,10 +14,15 @@ export interface AppDbTotalsView {
   realUsers: number;
   realApple: number;
   realEmail: number;
-  unconfirmed: number;
+  /** Unknown (null) until the live sync has sent it; the seed has no unconfirmed data. */
+  unconfirmed: number | null;
   familyAccounts: number;
-  householdsOwn: number | null;
-  householdsJoined: number | null;
+  deletedAccounts: number | null;
+  realHouseholds: number | null;
+  usersInOwnHousehold: number | null;
+  usersJoinedHousehold: number | null;
+  /** The day the Plus numbers are from (can differ from asOfDate after a seed). */
+  plusAsOfDate: string;
   plusPaid: number;
   plusTrial: number;
   plusComp: number;
@@ -47,10 +56,13 @@ export function latestTotals(daily: DailyValue[]): AppDbTotalsView | null {
     realUsers: get('real_users'),
     realApple: get('real_apple'),
     realEmail: get('real_email'),
-    unconfirmed: get('real_unconfirmed'),
+    unconfirmed: maybe('real_unconfirmed'),
     familyAccounts: get('family_accounts'),
-    householdsOwn: maybe('real_households_own'),
-    householdsJoined: maybe('real_households_joined'),
+    deletedAccounts: maybe('deleted_accounts'),
+    realHouseholds: maybe('real_households'),
+    usersInOwnHousehold: maybe('real_households_own'),
+    usersJoinedHousehold: maybe('real_households_joined'),
+    plusAsOfDate: latest.get('total_plus_paid')?.date ?? asOfDate,
     plusPaid: get('plus_paid'),
     plusTrial: get('plus_trial'),
     plusComp: get('plus_comp'),

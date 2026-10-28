@@ -5,23 +5,38 @@
  * The function returns totals only. This side re-validates the reply and
  * rebuilds it from an allowlist: only known count fields are kept, every count
  * must be a whole number ≥ 0, and a reply that carries per-account data of any
- * kind (an `accounts` list, a string where a count belongs) is refused, so a
- * mistake on the Grocery side can't land an id in Baseline.
+ * kind (an `accounts` list, an id/email/name key, a string where a count
+ * belongs) is refused, so a mistake on the Grocery side can't land an id in
+ * Baseline (decision Q1: counts only).
  *
- * Contract assumptions (reconciled by the PM at integration):
- * - `generated_at`: ISO timestamp.
+ * Contract: the Grocery function's "JSON contract (schema_version 1)"
+ * (Grocery repo docs/handoffs/launch-metrics-db.md). The fixture
+ * scripts/fixtures/launch-metrics/app-db-summary.json is that function's real
+ * reply body.
+ * - `schema_version`: exactly 1; anything else is refused.
+ * - `generated_at`, `release_at`: ISO timestamps (strict pattern).
+ * - `as_of_date_et`: the function's New York date, YYYY-MM-DD.
+ *   These three are the ONLY strings allowed anywhere in the reply besides
+ *   each day's `date`.
  * - `totals`: real_users, real_apple, real_email, real_unconfirmed,
  *   family_accounts, plus_paid, plus_trial, plus_comp (required);
- *   real_households_own, real_households_joined, excluded_accounts (optional).
- *   Plus counts are households (decision 9).
+ *   deleted_accounts, internal_accounts, real_households_own,
+ *   real_households_joined, real_households_none, real_households (kept when
+ *   sent). Plus counts and `real_households` are households (decision 9);
+ *   `real_households_own/_joined/_none` count real USERS by how they belong to
+ *   a household.
  * - `daily`: [{ date (ET YYYY-MM-DD), signups_real, signups_apple,
- *   signups_email (required), signups_family, signups_unconfirmed,
- *   signups_excluded (optional) }]. `day` is accepted as the date key too.
+ *   signups_email (required), signups_deleted, signups_unconfirmed,
+ *   signups_family, signups_internal (kept when sent) }]. `signups_real`
+ *   includes `signups_deleted` (deleted accounts keep counting on their
+ *   sign-up day, decision Q2).
  */
 
 import { addDays, etDate, isIsoDate } from './dates';
 import { fetchJson, isPlainObject, LaunchSourceError, type FetchLike } from './http';
 import type { DailyMetricInput } from './types';
+
+export const APP_DB_SCHEMA_VERSION = 1;
 
 export const APP_DB_TOTAL_REQUIRED = [
   'real_users',
@@ -33,9 +48,16 @@ export const APP_DB_TOTAL_REQUIRED = [
   'plus_trial',
   'plus_comp',
 ] as const;
-export const APP_DB_TOTAL_OPTIONAL = ['real_households_own', 'real_households_joined', 'excluded_accounts'] as const;
+export const APP_DB_TOTAL_OPTIONAL = [
+  'deleted_accounts',
+  'internal_accounts',
+  'real_households_own',
+  'real_households_joined',
+  'real_households_none',
+  'real_households',
+] as const;
 export const APP_DB_DAILY_REQUIRED = ['signups_real', 'signups_apple', 'signups_email'] as const;
-export const APP_DB_DAILY_OPTIONAL = ['signups_family', 'signups_unconfirmed', 'signups_excluded'] as const;
+export const APP_DB_DAILY_OPTIONAL = ['signups_deleted', 'signups_unconfirmed', 'signups_family', 'signups_internal'] as const;
 
 type TotalKey = (typeof APP_DB_TOTAL_REQUIRED)[number] | (typeof APP_DB_TOTAL_OPTIONAL)[number];
 type DailyKey = (typeof APP_DB_DAILY_REQUIRED)[number] | (typeof APP_DB_DAILY_OPTIONAL)[number];
@@ -47,7 +69,10 @@ export type AppDbDay = { date: string } & Record<(typeof APP_DB_DAILY_REQUIRED)[
   Partial<Record<(typeof APP_DB_DAILY_OPTIONAL)[number], number>>;
 
 export interface AppDbSummary {
+  schema_version: typeof APP_DB_SCHEMA_VERSION;
   generated_at: string;
+  release_at: string;
+  as_of_date_et: string;
   totals: AppDbTotals;
   daily: AppDbDay[];
 }
@@ -55,8 +80,31 @@ export interface AppDbSummary {
 /** Keys that would mean per-account data; their presence anywhere refuses the reply. */
 const FORBIDDEN_KEYS = new Set(['accounts', 'users', 'emails', 'email', 'user_id', 'user_ids', 'ids', 'id', 'short_id', 'name', 'display_name']);
 const MAX_COUNT = 10_000_000;
-const MAX_DAYS = 1000;
+// One row per ET day from release; ten years of days (the Grocery side caps at 3660).
+const MAX_DAYS = 3660;
 const EARLIEST_DATE = '2024-01-01';
+/** The Grocery function's own timestamp pattern: no other text can ride along. */
+const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/;
+const TOP_LEVEL_KEYS = new Set(['schema_version', 'generated_at', 'release_at', 'as_of_date_et', 'totals', 'daily']);
+
+/**
+ * A top-level string the contract allows. A string that is not a timestamp
+ * (or a date) is treated as possible per-account data (`app_db_not_counts`);
+ * a missing value or a non-string is a shape error.
+ */
+function readTimestamp(value: unknown): string {
+  if (typeof value !== 'string') {
+    throw new LaunchSourceError('app_db_shape');
+  }
+  if (!TIMESTAMP.test(value)) {
+    throw new LaunchSourceError('app_db_not_counts');
+  }
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) {
+    throw new LaunchSourceError('app_db_shape');
+  }
+  return new Date(parsed).toISOString();
+}
 
 function readCount(value: unknown): number {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > MAX_COUNT) {
@@ -93,7 +141,7 @@ function pickCounts<K extends string>(
   // Any other key is dropped. A non-count value under an unknown key is still
   // refused: counts-only means nothing but numbers comes back.
   for (const [key, value] of Object.entries(record)) {
-    if (!(required as readonly string[]).includes(key) && !(optional as readonly string[]).includes(key) && key !== 'date' && key !== 'day') {
+    if (!(required as readonly string[]).includes(key) && !(optional as readonly string[]).includes(key) && key !== 'date') {
       if (value !== null && typeof value !== 'number') {
         throw new LaunchSourceError('app_db_not_counts');
       }
@@ -113,13 +161,25 @@ export function validateAppDbSummary(raw: unknown, now: Date = new Date()): AppD
   }
   assertNoForbiddenKeys(raw);
   for (const [key, value] of Object.entries(raw)) {
-    if (!['generated_at', 'totals', 'daily'].includes(key) && value !== null && typeof value !== 'number') {
+    if (!TOP_LEVEL_KEYS.has(key) && value !== null && typeof value !== 'number') {
       throw new LaunchSourceError('app_db_not_counts');
     }
   }
 
-  const generatedAt = raw.generated_at;
-  if (typeof generatedAt !== 'string' || generatedAt.length > 40 || Number.isNaN(Date.parse(generatedAt))) {
+  if (typeof raw.schema_version === 'string') {
+    throw new LaunchSourceError('app_db_not_counts');
+  }
+  if (raw.schema_version !== APP_DB_SCHEMA_VERSION) {
+    throw new LaunchSourceError('app_db_shape');
+  }
+  const generatedAt = readTimestamp(raw.generated_at);
+  const releaseAt = readTimestamp(raw.release_at);
+  const latestAllowed = addDays(etDate(now), 1);
+  if (typeof raw.as_of_date_et === 'string' && !/^\d{4}-\d{2}-\d{2}$/.test(raw.as_of_date_et)) {
+    throw new LaunchSourceError('app_db_not_counts');
+  }
+  const asOfDate = raw.as_of_date_et;
+  if (!isIsoDate(asOfDate) || asOfDate < EARLIEST_DATE || asOfDate > latestAllowed) {
     throw new LaunchSourceError('app_db_shape');
   }
 
@@ -132,7 +192,6 @@ export function validateAppDbSummary(raw: unknown, now: Date = new Date()): AppD
   if (!Array.isArray(raw.daily) || raw.daily.length > MAX_DAYS) {
     throw new LaunchSourceError('app_db_shape');
   }
-  const latestAllowed = addDays(etDate(now), 1);
   const seen = new Set<string>();
   const daily: AppDbDay[] = [];
   for (const entry of raw.daily) {
@@ -140,7 +199,7 @@ export function validateAppDbSummary(raw: unknown, now: Date = new Date()): AppD
       throw new LaunchSourceError('app_db_shape');
     }
     assertNoForbiddenKeys(entry);
-    const date = entry.date ?? entry.day;
+    const date = entry.date;
     if (!isIsoDate(date) || date < EARLIEST_DATE || date > latestAllowed || seen.has(date)) {
       throw new LaunchSourceError('app_db_shape');
     }
@@ -150,7 +209,14 @@ export function validateAppDbSummary(raw: unknown, now: Date = new Date()): AppD
   }
   daily.sort((a, b) => a.date.localeCompare(b.date));
 
-  return { generated_at: new Date(generatedAt).toISOString(), totals, daily };
+  return {
+    schema_version: APP_DB_SCHEMA_VERSION,
+    generated_at: generatedAt,
+    release_at: releaseAt,
+    as_of_date_et: asOfDate,
+    totals,
+    daily,
+  };
 }
 
 export interface AppDbConfig {

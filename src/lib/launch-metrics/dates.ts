@@ -43,11 +43,11 @@ export function addDays(isoDate: string, days: number): string {
   return base.toISOString().slice(0, 10);
 }
 
-/** Inclusive list of dates from `from` to `to` (empty when from > to; capped at 1000). */
+/** Inclusive list of dates from `from` to `to` (empty when from > to; capped at ten years, 3660 days). */
 export function dateRange(from: string, to: string): string[] {
   const out: string[] = [];
   let current = from;
-  while (current <= to && out.length < 1000) {
+  while (current <= to && out.length < 3660) {
     out.push(current);
     current = addDays(current, 1);
   }

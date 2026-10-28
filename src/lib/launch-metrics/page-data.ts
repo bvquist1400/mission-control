@@ -153,7 +153,10 @@ export interface SignupDay {
   real: number;
   apple: number;
   email: number;
-  unconfirmed: number;
+  /** Included in `real`: accounts deleted later still count on their sign-up day. */
+  deleted: number;
+  /** null = no unconfirmed number stored for that day (seeded days). */
+  unconfirmed: number | null;
   family: number;
   totalReal: number | null;
 }
@@ -257,16 +260,17 @@ export function buildLaunchView(input: LaunchPageInput, now: Date): LaunchView {
 
   // Sign-ups (ET days).
   const app = byKey(input.daily, 'app_db');
+  const hasApp = (date: string, metric: string) =>
+    input.daily.some((row) => row.source === 'app_db' && row.metric_date === date && row.metric === metric && row.dimension === '');
   const signupDays: SignupDay[] = days.map((date) => ({
     date,
     real: app(date, 'signups_real'),
     apple: app(date, 'signups_apple'),
     email: app(date, 'signups_email'),
-    unconfirmed: app(date, 'signups_unconfirmed'),
+    deleted: app(date, 'signups_deleted'),
+    unconfirmed: hasApp(date, 'signups_unconfirmed') ? app(date, 'signups_unconfirmed') : null,
     family: app(date, 'signups_family'),
-    totalReal: input.daily.some((row) => row.source === 'app_db' && row.metric_date === date && row.metric === 'total_real_users')
-      ? app(date, 'total_real_users')
-      : null,
+    totalReal: hasApp(date, 'total_real_users') ? app(date, 'total_real_users') : null,
   }));
 
   // Website (UTC days).

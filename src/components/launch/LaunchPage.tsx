@@ -3,7 +3,7 @@ import { badgeClasses, type BadgeTone } from "@/components/ui/Badge";
 import { cardClasses } from "@/components/ui/Card";
 import { DailyChart } from "@/components/launch/DailyChart";
 import { MilestonesPanel, RedditPanel } from "@/components/launch/LaunchManualPanels";
-import { formatCount, formatDay, formatEtTime, formatPercent, formatPosition, healthLine, plural } from "@/lib/launch-metrics/format";
+import { formatCount, formatDay, formatEtTime, formatPercent, formatPosition, healthLine, plural, sourceBadge as sourceBadgeState } from "@/lib/launch-metrics/format";
 import type { LaunchPageInput, LaunchView } from "@/lib/launch-metrics/page-data";
 import { isoToEtLocal } from "@/lib/launch-metrics/dates";
 
@@ -25,7 +25,7 @@ function Section({ id, title, note, badge, children }: { id: string; title: stri
 function Tile({ label, value, sub, badge }: { label: string; value: string; sub?: ReactNode; badge?: ReactNode }) {
   return (
     <div className={cardClasses({ padding: "sm" })}>
-      <div className="flex items-start justify-between gap-2">
+      <div className="flex flex-wrap items-start justify-between gap-x-2 gap-y-1">
         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
         {badge}
       </div>
@@ -36,50 +36,71 @@ function Tile({ label, value, sub, badge }: { label: string; value: string; sub?
 }
 
 function StateBadge({ tone, children }: { tone: BadgeTone; children: ReactNode }) {
-  return <span className={badgeClasses({ tone, size: "sm" })}>{children}</span>;
+  return <span className={`${badgeClasses({ tone, size: "sm" })} whitespace-nowrap`}>{children}</span>;
 }
 
-function sourceBadge(view: LaunchView, source: string): ReactNode {
-  const health = view.health.find((entry) => entry.source === source);
-  if (!health) return null;
-  if (health.state === "stale") return <StateBadge tone="warning">Out of date</StateBadge>;
-  if (health.state === "failing") return <StateBadge tone="danger">Update failing</StateBadge>;
-  if (health.state === "not_configured") return <StateBadge tone="neutral">Not set up yet</StateBadge>;
-  if (health.state === "never") return <StateBadge tone="neutral">No data yet</StateBadge>;
-  if (health.state === "not_connected") return <StateBadge tone="neutral">Not connected yet</StateBadge>;
-  return null;
+/** The state badge for a source; "No data yet" only when nothing is stored for it. */
+function sourceBadge(view: LaunchView, source: "app_db" | "web" | "search_console"): ReactNode {
+  const hasData = source === "app_db" ? view.signups.hasData : source === "web" ? view.website.hasData : view.search.hasData;
+  const badge = sourceBadgeState(view.health.find((entry) => entry.source === source), hasData);
+  return badge ? <StateBadge tone={badge.tone}>{badge.label}</StateBadge> : null;
 }
 
+/**
+ * A counts table. Tables with more than three columns don't fit a phone, so
+ * below `sm` each row becomes a small card of label/value pairs (every number
+ * visible, nothing off to the side); from `sm` up it is a normal table.
+ */
 function Table({ caption, head, rows, empty }: { caption: string; head: string[]; rows: ReactNode[][]; empty: string }) {
   if (rows.length === 0) {
     return <p className="text-sm text-muted-foreground">{empty}</p>;
   }
+  const stackOnPhone = head.length > 3;
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[18rem] text-sm">
-        <caption className="sr-only">{caption}</caption>
-        <thead>
-          <tr className="border-b border-stroke text-left text-xs text-muted-foreground">
-            {head.map((cell, index) => (
-              <th key={cell} scope="col" className={`whitespace-nowrap py-2 pr-3 font-medium ${index > 0 ? "text-right" : ""}`}>
-                {cell}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
+    <>
+      {stackOnPhone ? (
+        <ul aria-label={caption} className="space-y-2 sm:hidden">
           {rows.map((row, rowIndex) => (
-            <tr key={rowIndex} className="border-b border-stroke/60 last:border-0">
-              {row.map((cell, index) => (
-                <td key={index} className={`whitespace-nowrap py-2 pr-3 ${index > 0 ? "text-right tabular-nums" : "text-foreground"}`}>
+            <li key={rowIndex} className="rounded-lg border border-stroke px-3 py-2">
+              <p className="break-words text-sm font-medium text-foreground">{row[0]}</p>
+              <dl className="mt-1 grid grid-cols-2 gap-x-4 gap-y-1">
+                {row.slice(1).map((cell, index) => (
+                  <div key={index} className="flex min-w-0 items-baseline justify-between gap-2">
+                    <dt className="min-w-0 text-xs text-muted-foreground">{head[index + 1]}</dt>
+                    <dd className="whitespace-nowrap text-sm tabular-nums text-foreground">{cell}</dd>
+                  </div>
+                ))}
+              </dl>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <div className={stackOnPhone ? "hidden sm:block overflow-x-auto" : "overflow-x-auto"}>
+        <table className="w-full min-w-[18rem] text-sm">
+          <caption className="sr-only">{caption}</caption>
+          <thead>
+            <tr className="border-b border-stroke text-left text-xs text-muted-foreground">
+              {head.map((cell, index) => (
+                <th key={cell} scope="col" className={`whitespace-nowrap py-2 pr-3 font-medium ${index > 0 ? "text-right" : ""}`}>
                   {cell}
-                </td>
+                </th>
               ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {rows.map((row, rowIndex) => (
+              <tr key={rowIndex} className="border-b border-stroke/60 last:border-0">
+                {row.map((cell, index) => (
+                  <td key={index} className={`whitespace-nowrap py-2 pr-3 ${index > 0 ? "text-right tabular-nums" : "text-foreground"}`}>
+                    {cell}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
 
@@ -89,8 +110,16 @@ export function LaunchPageBody({ view, input, now }: { view: LaunchView; input: 
   const signupMarkers = view.markers.filter((marker) => signupDates.includes(marker.date));
   const accountRows = [...view.signups.days]
     .reverse()
-    .filter((day) => day.real + day.unconfirmed + day.family > 0)
-    .map((day) => [formatDay(day.date), formatCount(day.real), formatCount(day.apple), formatCount(day.email), formatCount(day.unconfirmed), formatCount(day.family)]);
+    .filter((day) => day.real + (day.unconfirmed ?? 0) + day.family > 0)
+    .map((day) => [
+      formatDay(day.date),
+      formatCount(day.real),
+      formatCount(day.apple),
+      formatCount(day.email),
+      formatCount(day.deleted),
+      day.unconfirmed === null ? "–" : formatCount(day.unconfirmed),
+      formatCount(day.family),
+    ]);
   const latestRead = input.manualReads[0] ?? null;
   const nowLocal = isoToEtLocal(now.toISOString());
 
@@ -115,6 +144,7 @@ export function LaunchPageBody({ view, input, now }: { view: LaunchView; input: 
                 <p>
                   {formatCount(totals.realApple)} Apple · {formatCount(totals.realEmail)} email
                 </p>
+                {totals.deletedAccounts ? <p>{plural(totals.deletedAccounts, "account", "accounts")} deleted since sign-up, not in this total</p> : null}
                 <p>plus {plural(totals.familyAccounts, "family account", "family accounts")}, not counted</p>
               </>
             ) : (
@@ -124,8 +154,12 @@ export function LaunchPageBody({ view, input, now }: { view: LaunchView; input: 
         />
         <Tile
           label="Started, not confirmed"
-          value={totals ? formatCount(totals.unconfirmed) : "–"}
-          sub="Email sign-ups that never confirmed. Counted separately, not as real users."
+          value={totals && totals.unconfirmed !== null ? formatCount(totals.unconfirmed) : "–"}
+          sub={
+            totals && totals.unconfirmed === null
+              ? "Email sign-ups that never confirmed. Shown after the first live update (the hand-kept numbers don't have it)."
+              : "Email sign-ups that never confirmed. Counted separately, not as real users."
+          }
         />
         <Tile
           label="Paying Plus (households)"
@@ -149,7 +183,12 @@ export function LaunchPageBody({ view, input, now }: { view: LaunchView; input: 
           }
         />
       </div>
-      {totals ? <p className="-mt-3 text-xs text-muted-foreground">App numbers as of {formatDay(totals.asOfDate)} (New York). Plus is counted by household.</p> : null}
+      {totals ? (
+        <p className="-mt-3 text-xs text-muted-foreground">
+          App numbers as of {formatDay(totals.asOfDate)} (New York)
+          {totals.plusAsOfDate !== totals.asOfDate ? `; Plus as of ${formatDay(totals.plusAsOfDate)}` : ""}. Plus is counted by household.
+        </p>
+      ) : null}
 
       <Section id="signups" title="Sign-ups since launch" note="Real users per day (New York days). Unconfirmed email sign-ups are shown separately. Accounts deleted later still count on the day they signed up." badge={sourceBadge(view, "app_db")}>
         {view.signups.hasData ? (
@@ -160,7 +199,7 @@ export function LaunchPageBody({ view, input, now }: { view: LaunchView; input: 
               { label: "Real users", fillClass: "fill-accent", swatchClass: "bg-accent" },
               { label: "Started, not confirmed", fillClass: "fill-warning", swatchClass: "bg-warning" },
             ]}
-            values={[view.signups.days.map((day) => day.real), view.signups.days.map((day) => day.unconfirmed)]}
+            values={[view.signups.days.map((day) => day.real), view.signups.days.map((day) => day.unconfirmed ?? 0)]}
             line={{ label: "Total real users", values: view.signups.days.map((day) => day.totalReal), strokeClass: "stroke-success", swatchClass: "bg-success" }}
             markers={signupMarkers}
             zoneNote="New York days"
@@ -171,7 +210,7 @@ export function LaunchPageBody({ view, input, now }: { view: LaunchView; input: 
         <h3 className="mb-2 mt-6 text-sm font-semibold text-foreground">Accounts by day (counts only)</h3>
         <Table
           caption="New accounts per day"
-          head={["Day", "Real", "Apple", "Email", "Not confirmed", "Family"]}
+          head={["Day", "Real", "Apple", "Email", "Deleted later", "Not confirmed", "Family"]}
           rows={accountRows}
           empty="No accounts since launch yet."
         />
@@ -212,8 +251,8 @@ export function LaunchPageBody({ view, input, now }: { view: LaunchView; input: 
         ) : (
           <p className="text-sm text-muted-foreground">No website numbers yet.</p>
         )}
-        <div className="mt-6 grid gap-6 lg:grid-cols-2">
-          <div>
+        <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <div className="min-w-0">
             <h3 className="mb-2 text-sm font-semibold text-foreground">Top referrers, last 7 days</h3>
             <Table
               caption="Top referrers"
@@ -222,7 +261,7 @@ export function LaunchPageBody({ view, input, now }: { view: LaunchView; input: 
               empty="No referrers in the last 7 days."
             />
           </div>
-          <div>
+          <div className="min-w-0">
             <h3 className="mb-2 text-sm font-semibold text-foreground">App Store taps by button, since launch</h3>
             <Table
               caption="App Store taps by placement"
@@ -252,8 +291,8 @@ export function LaunchPageBody({ view, input, now }: { view: LaunchView; input: 
         ) : (
           <p className="text-sm text-muted-foreground">No Google search numbers yet.</p>
         )}
-        <div className="mt-6 grid gap-6 lg:grid-cols-2">
-          <div>
+        <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <div className="min-w-0">
             <h3 className="mb-2 text-sm font-semibold text-foreground">Top searches{view.search.topWindow ? `, ${formatDay(view.search.topWindow.since)}–${formatDay(view.search.topWindow.until)}` : ""}</h3>
             <Table
               caption="Top searches"
@@ -262,7 +301,7 @@ export function LaunchPageBody({ view, input, now }: { view: LaunchView; input: 
               empty="Google hasn't reported any searches yet (rare searches are hidden by Google)."
             />
           </div>
-          <div>
+          <div className="min-w-0">
             <h3 className="mb-2 text-sm font-semibold text-foreground">Top pages</h3>
             <Table
               caption="Top pages from Google search"

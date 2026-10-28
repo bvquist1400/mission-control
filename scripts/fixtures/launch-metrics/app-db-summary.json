@@ -1,20 +1,31 @@
 {
-  "generated_at": "2026-10-27T19:00:00.000Z",
+  "schema_version": 1,
+  "generated_at": "2026-10-27T19:00:00.123456+00:00",
+  "release_at": "2026-10-21T17:42:00+00:00",
+  "as_of_date_et": "2026-10-27",
   "totals": {
     "real_users": 2,
     "real_apple": 2,
     "real_email": 0,
     "real_unconfirmed": 1,
+    "deleted_accounts": 1,
     "family_accounts": 2,
+    "internal_accounts": 0,
     "real_households_own": 2,
     "real_households_joined": 0,
+    "real_households_none": 0,
+    "real_households": 2,
     "plus_paid": 0,
     "plus_trial": 1,
     "plus_comp": 3
   },
   "daily": [
-    { "date": "2026-10-21", "signups_real": 0, "signups_apple": 0, "signups_email": 0, "signups_family": 0, "signups_unconfirmed": 0 },
-    { "date": "2026-10-23", "signups_real": 0, "signups_apple": 0, "signups_email": 0, "signups_family": 2, "signups_unconfirmed": 0 },
-    { "date": "2026-10-26", "signups_real": 2, "signups_apple": 2, "signups_email": 0, "signups_family": 0, "signups_unconfirmed": 1 }
+    {"date": "2026-10-21", "signups_real": 0, "signups_apple": 0, "signups_email": 0, "signups_deleted": 0, "signups_unconfirmed": 0, "signups_family": 0, "signups_internal": 0},
+    {"date": "2026-10-22", "signups_real": 0, "signups_apple": 0, "signups_email": 0, "signups_deleted": 0, "signups_unconfirmed": 0, "signups_family": 0, "signups_internal": 0},
+    {"date": "2026-10-23", "signups_real": 0, "signups_apple": 0, "signups_email": 0, "signups_deleted": 0, "signups_unconfirmed": 0, "signups_family": 2, "signups_internal": 0},
+    {"date": "2026-10-24", "signups_real": 0, "signups_apple": 0, "signups_email": 0, "signups_deleted": 0, "signups_unconfirmed": 0, "signups_family": 0, "signups_internal": 0},
+    {"date": "2026-10-25", "signups_real": 1, "signups_apple": 0, "signups_email": 0, "signups_deleted": 1, "signups_unconfirmed": 0, "signups_family": 0, "signups_internal": 0},
+    {"date": "2026-10-26", "signups_real": 2, "signups_apple": 2, "signups_email": 0, "signups_deleted": 0, "signups_unconfirmed": 1, "signups_family": 0, "signups_internal": 0},
+    {"date": "2026-10-27", "signups_real": 0, "signups_apple": 0, "signups_email": 0, "signups_deleted": 0, "signups_unconfirmed": 0, "signups_family": 0, "signups_internal": 0}
   ]
 }

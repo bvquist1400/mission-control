@@ -66,3 +66,38 @@ export function healthLine(health: SourceHealth): { text: string; tone: 'success
       return { text: name, tone: 'neutral' };
   }
 }
+
+export type SourceBadge = { label: string; tone: 'neutral' | 'warning' | 'danger' };
+
+/**
+ * The small state badge next to a source's tile or section. "No data yet" only
+ * when nothing is stored for the source: seeded numbers are data, even before
+ * the first live update.
+ */
+export function sourceBadge(health: SourceHealth | undefined, hasData: boolean): SourceBadge | null {
+  if (!health) return null;
+  switch (health.state) {
+    case 'stale':
+      return { label: 'Out of date', tone: 'warning' };
+    case 'failing':
+      return { label: 'Update failing', tone: 'danger' };
+    case 'not_configured':
+      return { label: 'Not set up yet', tone: 'neutral' };
+    case 'never':
+      return hasData ? null : { label: 'No data yet', tone: 'neutral' };
+    case 'not_connected':
+      return { label: 'Not connected yet', tone: 'neutral' };
+    default:
+      return null;
+  }
+}
+
+function countOrDash(value: number | null, one: string, many: string): string {
+  return value === null ? `– ${many}` : plural(value, one, many);
+}
+
+/** "1,600 views · 1 upvote · 2 comments"; a missing number is a dash. */
+export function redditStats(views: number | null, upvotes: number | null, comments: number | null): string {
+  const viewsText = views === null ? 'views –' : plural(views, 'view', 'views');
+  return `${viewsText} · ${countOrDash(upvotes, 'upvote', 'upvotes')} · ${countOrDash(comments, 'comment', 'comments')}`;
+}

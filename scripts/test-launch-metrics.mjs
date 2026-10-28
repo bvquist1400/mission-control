@@ -127,43 +127,80 @@ await test("http: an odd code is normalised, and errorCode() never echoes a fore
 
 // ─── app database (Grocery launch-metrics function) ───────────────────────
 
-await test("app db: the contract fixture validates and keeps counts only", () => {
-  const summary = appDb.validateAppDbSummary(fixture("app-db-summary.json"), NOW);
-  assert.equal(summary.totals.real_users, 2);
-  assert.equal(summary.totals.real_unconfirmed, 1);
-  assert.equal(summary.totals.plus_trial, 1);
-  assert.equal(summary.daily.length, 3);
-  assert.deepEqual(Object.keys(summary).sort(), ["daily", "generated_at", "totals"]);
+await test("app db: the REAL Grocery reply (schema_version 1) validates and every count it sends is kept", () => {
+  const raw = fixture("app-db-summary.json");
+  const summary = appDb.validateAppDbSummary(raw, NOW);
+  assert.equal(summary.schema_version, 1);
+  assert.equal(summary.release_at, "2026-10-21T17:42:00.000Z");
+  assert.equal(summary.as_of_date_et, "2026-10-27");
+  assert.equal(summary.generated_at, "2026-10-27T19:00:00.123Z");
+  // Every count key the Grocery function sends survives (nothing silently dropped).
+  assert.deepEqual(Object.keys(summary.totals).sort(), Object.keys(raw.totals).sort());
+  assert.deepEqual(summary.totals, raw.totals);
+  assert.equal(summary.daily.length, 7);
+  for (const [index, day] of summary.daily.entries()) assert.deepEqual(day, raw.daily[index]);
+  assert.deepEqual(Object.keys(summary).sort(), ["as_of_date_et", "daily", "generated_at", "release_at", "schema_version", "totals"]);
 });
 
-await test("app db: an accounts list, an id or an email anywhere refuses the whole reply", () => {
+await test("app db: the contract key lists match the Grocery contract exactly", () => {
+  const raw = fixture("app-db-summary.json");
+  assert.deepEqual([...appDb.APP_DB_TOTAL_REQUIRED, ...appDb.APP_DB_TOTAL_OPTIONAL].sort(), Object.keys(raw.totals).sort());
+  assert.deepEqual([...appDb.APP_DB_DAILY_REQUIRED, ...appDb.APP_DB_DAILY_OPTIONAL].sort(), Object.keys(raw.daily[0]).filter((k) => k !== "date").sort());
+});
+
+await test("app db: an accounts list, an id, an email or a name anywhere refuses the whole reply", () => {
   const base = fixture("app-db-summary.json");
   const cases = [
-    { ...base, accounts: [{ short_id: "5ee0000e", sign_in: "Apple" }] },
+    { ...base, accounts: [{ short_id: "0a1b2c3d", sign_in: "Apple" }] },
     { ...base, accounts: [] },
-    { ...base, totals: { ...base.totals, user_ids: ["5ee0000e"] } },
-    { ...base, daily: [{ ...base.daily[0], id: "5ee0000e" }] },
+    { ...base, totals: { ...base.totals, user_ids: ["0a1b2c3d"] } },
+    { ...base, daily: [{ ...base.daily[0], id: "0a1b2c3d" }] },
     { ...base, daily: [{ ...base.daily[0], note: "someone@example.com" }] },
-    { ...base, totals: { ...base.totals, latest_signup: "5ee0000e" } },
-    { ...base, extra: "5ee0000e" },
+    { ...base, totals: { ...base.totals, latest_signup: "0a1b2c3d" } },
+    { ...base, extra: "0a1b2c3d" },
+    { ...base, display_name: "Pat" },
+    { ...base, name: 3 },
     { ...base, daily: [{ ...base.daily[0], email: "a@b.c" }] },
+    // The two strings the contract allows carry only a timestamp / an ET date.
+    { ...base, release_at: "0a1b2c3d" },
+    { ...base, release_at: "someone@example.com" },
+    { ...base, release_at: "2026-10-21T17:42:00+00:00 0a1b2c3d" },
+    { ...base, as_of_date_et: "0a1b2c3d" },
+    { ...base, as_of_date_et: "2026-10-27 Pat" },
+    { ...base, generated_at: "Pat" },
+    { ...base, schema_version: "1" },
   ];
   for (const raw of cases) {
-    assert.throws(() => appDb.validateAppDbSummary(raw, NOW), (error) => error.code === "app_db_not_counts", JSON.stringify(raw).slice(0, 120));
+    assert.throws(() => appDb.validateAppDbSummary(raw, NOW), (error) => error.code === "app_db_not_counts", JSON.stringify(raw).slice(0, 160));
   }
 });
 
-await test("app db: wrong shapes are refused (missing totals, non-integers, negatives, bad or repeated dates)", () => {
+await test("app db: wrong shapes are refused (version, missing totals, non-integers, negatives, bad or repeated dates)", () => {
   const base = fixture("app-db-summary.json");
   const noRealUsers = { ...base.totals };
   delete noRealUsers.real_users;
+  const noVersion = { ...base };
+  delete noVersion.schema_version;
+  const noRelease = { ...base };
+  delete noRelease.release_at;
+  const noAsOf = { ...base };
+  delete noAsOf.as_of_date_et;
   const cases = [
     null,
     [],
-    { ...base, generated_at: "yesterday" },
+    noVersion,
+    { ...base, schema_version: 2 },
+    { ...base, schema_version: 0 },
+    noRelease,
+    noAsOf,
+    { ...base, release_at: 5 },
+    { ...base, as_of_date_et: "2026-02-30" },
+    { ...base, as_of_date_et: "2026-12-01" },
+    { ...base, release_at: "2026-13-40T99:00:00Z" },
     { ...base, totals: noRealUsers },
     { ...base, totals: { ...base.totals, real_users: 1.5 } },
     { ...base, totals: { ...base.totals, real_users: -1 } },
+    { ...base, totals: { ...base.totals, deleted_accounts: -1 } },
     { ...base, totals: { ...base.totals, real_users: "2" } },
     { ...base, daily: "none" },
     { ...base, daily: [{ ...base.daily[0], date: "2026-02-30" }] },
@@ -172,28 +209,48 @@ await test("app db: wrong shapes are refused (missing totals, non-integers, nega
     { ...base, daily: [{ date: "2026-10-26", signups_real: 1 }] },
   ];
   for (const raw of cases) {
-    assert.throws(() => appDb.validateAppDbSummary(raw, NOW), (error) => error.code === "app_db_shape", JSON.stringify(raw)?.slice(0, 120));
+    assert.throws(() => appDb.validateAppDbSummary(raw, NOW), (error) => ["app_db_shape", "app_db_not_counts"].includes(error.code), JSON.stringify(raw)?.slice(0, 160));
+  }
+  // Wrong version and a missing field are shape errors, not "not counts".
+  for (const raw of [noVersion, { ...base, schema_version: 2 }, noRelease, noAsOf]) {
+    assert.throws(() => appDb.validateAppDbSummary(raw, NOW), (error) => error.code === "app_db_shape");
   }
 });
 
-await test("app db: unknown count fields are dropped, `day` works as the date key", () => {
+await test("app db: years of daily rows are fine (no refusals from mid-2029 on)", async () => {
+  const { dateRange } = await import("../src/lib/launch-metrics/dates.ts");
+  const base = fixture("app-db-summary.json");
+  const later = new Date("2031-06-01T16:00:00Z");
+  const days = dateRange("2026-10-21", "2031-06-01");
+  assert.ok(days.length > 1000);
+  const raw = { ...base, as_of_date_et: "2031-06-01", daily: days.map((date) => ({ ...base.daily[0], date })) };
+  assert.equal(appDb.validateAppDbSummary(raw, later).daily.length, days.length);
+});
+
+await test("app db: unknown count fields are dropped; only `date` is the date key", () => {
   const base = fixture("app-db-summary.json");
   const summary = appDb.validateAppDbSummary(
-    { ...base, schema_version: 2, totals: { ...base.totals, households_total: 7 }, daily: [{ day: "2026-10-26", signups_real: 1, signups_apple: 1, signups_email: 0, future_count: 3 }] },
+    { ...base, totals: { ...base.totals, households_total: 7 }, daily: [{ ...base.daily[5], future_count: 3 }] },
     NOW
   );
   assert.equal("households_total" in summary.totals, false);
-  assert.deepEqual(summary.daily, [{ date: "2026-10-26", signups_real: 1, signups_apple: 1, signups_email: 0 }]);
+  assert.deepEqual(summary.daily, [base.daily[5]]);
+  assert.throws(() => appDb.validateAppDbSummary({ ...base, daily: [{ ...base.daily[5], date: undefined, day: "2026-10-26" }] }, NOW), (error) => error.code === "app_db_shape");
 });
 
-await test("app db: rows are daily sign-ups (ET days) plus as-of totals", () => {
+await test("app db: rows are daily sign-ups (ET days, deleted and internal too) plus as-of totals", () => {
   const summary = appDb.validateAppDbSummary(fixture("app-db-summary.json"), NOW);
   const rows = appDb.appDbDailyRows(summary, "2026-10-27");
   const find = (date, metric) => rows.find((r) => r.metric_date === date && r.metric === metric)?.value;
   assert.equal(find("2026-10-26", "signups_real"), 2);
   assert.equal(find("2026-10-26", "signups_unconfirmed"), 1);
   assert.equal(find("2026-10-23", "signups_family"), 2);
+  assert.equal(find("2026-10-25", "signups_deleted"), 1);
+  assert.equal(find("2026-10-25", "signups_internal"), 0);
   assert.equal(find("2026-10-27", "total_real_users"), 2);
+  assert.equal(find("2026-10-27", "total_deleted_accounts"), 1);
+  assert.equal(find("2026-10-27", "total_real_households"), 2);
+  assert.equal(find("2026-10-27", "total_internal_accounts"), 0);
   assert.equal(find("2026-10-27", "total_plus_comp"), 3);
   assert.ok(rows.every((r) => r.source === "app_db" && r.dimension === "" && /^[a-z][a-z0-9_]{0,59}$/.test(r.metric)));
 });
@@ -521,6 +578,23 @@ await test("sync: a full run writes all three sources, logs codes only, Apple is
   assert.ok(store.state.snapshots.has("app_db|2026-10-27"));
   assert.ok(store.state.snapshots.has("search_console|2026-10-27"));
   assert.ok(!fetchImpl.calls.some((c) => c.url.includes("appstoreconnect")));
+});
+
+await test("sync: two light runs with the real Grocery reply store every count and raise no app alert", async () => {
+  const store = memoryStore();
+  const fetchImpl = allSourcesFetch();
+  for (let i = 0; i < 2; i += 1) {
+    tick();
+    const result = await sync.runLaunchSync(deps(store, fetchImpl), { trigger: "cron", kind: "light" });
+    assert.equal(result.sources.app_db, "ok");
+    assert.ok(!result.alerts.some((a) => a.source === "app_db" && a.action !== "none"), JSON.stringify(result.alerts));
+  }
+  assert.equal(store.state.tasks.length, 0);
+  assert.equal(store.state.daily.get("2026-10-25|app_db|signups_deleted|"), 1);
+  assert.equal(store.state.daily.get("2026-10-27|app_db|total_deleted_accounts|"), 1);
+  assert.equal(store.state.daily.get("2026-10-27|app_db|total_real_households|"), 2);
+  const snapshot = JSON.stringify([...store.state.snapshots.values()]);
+  assert.ok(!/@|"accounts"|short_id|\b[0-9a-f]{8}\b/.test(snapshot));
 });
 
 await test("sync: a light run skips Search Console", async () => {
@@ -856,7 +930,7 @@ await test("page: the website token warning shows from 30 days out", () => {
 
 await test("page: the page model carries no account id, email or name from any source", () => {
   const text = JSON.stringify(pageData.buildLaunchView(pageInput(), NOW));
-  assert.ok(!/@|5ee0000e|5ee00008|5ee00001|5ee0000b|should-never-be-read/.test(text));
+  assert.ok(!/@|\b[0-9a-f]{8}\b|should-never-be-read/.test(text));
 });
 
 await test("manual: Reddit posts take only the allowlisted fields; New York times; stats stamp stats_as_of", () => {
@@ -1030,6 +1104,94 @@ await test("seed CLI: dry run prints counts only and writes nothing; --apply ref
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ─── fix round 1: contract on the page, phone layout, small fixes ─────────
+
+const launchSource = (file) => readFileSync(new URL(`../src/components/launch/${file}`, import.meta.url), "utf8");
+
+await test("page: a deleted account still counts on its sign-up day; deleted and household counts are carried", () => {
+  const view = pageData.buildLaunchView(pageInput(), NOW);
+  const oct25 = view.signups.days.find((d) => d.date === "2026-10-25");
+  assert.deepEqual([oct25.real, oct25.apple, oct25.email, oct25.deleted], [1, 0, 0, 1]);
+  assert.equal(view.totals.deletedAccounts, 1);
+  assert.equal(view.totals.realHouseholds, 2);
+  // own/joined count USERS by how they belong to a household (Grocery contract).
+  assert.equal(view.totals.usersInOwnHousehold, 2);
+  assert.equal(view.totals.usersJoinedHousehold, 0);
+  assert.equal("householdsOwn" in view.totals, false);
+});
+
+await test("page: without unconfirmed data (seed only) unconfirmed is unknown, not 0", () => {
+  const plan = seed.buildSeedPlan(SEED_FILES);
+  const view = pageData.buildLaunchView(pageInput({ daily: plan.daily }), NOW);
+  assert.equal(view.totals.unconfirmed, null);
+  assert.equal(view.signups.days.find((d) => d.date === "2026-10-26").unconfirmed, null);
+  const live = pageData.buildLaunchView(pageInput(), NOW);
+  assert.equal(live.totals.unconfirmed, 1);
+  assert.equal(live.signups.days.find((d) => d.date === "2026-10-24").unconfirmed, 0);
+});
+
+await test("page: the 'No data yet' badge shows only when the source has no rows", () => {
+  const never = { source: "app_db", state: "never", lastOkAt: null, lastCode: null };
+  assert.equal(format.sourceBadge(never, true), null);
+  assert.deepEqual(format.sourceBadge(never, false), { label: "No data yet", tone: "neutral" });
+  assert.deepEqual(format.sourceBadge({ ...never, state: "failing", lastCode: "http_500" }, true), { label: "Update failing", tone: "danger" });
+  assert.deepEqual(format.sourceBadge({ ...never, state: "stale" }, true), { label: "Out of date", tone: "warning" });
+  assert.equal(format.sourceBadge({ ...never, state: "fresh", lastOkAt: "2026-10-27T19:00:00Z" }, true), null);
+  assert.equal(format.sourceBadge(undefined, false), null);
+});
+
+await test("page: Plus says its own as-of day when it differs from the sign-up totals", () => {
+  const plan = seed.buildSeedPlan(SEED_FILES);
+  const seeded = pageData.buildLaunchView(pageInput({ daily: plan.daily }), NOW);
+  assert.deepEqual([seeded.totals.asOfDate, seeded.totals.plusAsOfDate], ["2026-10-26", "2026-10-27"]);
+  const live = pageData.buildLaunchView(pageInput(), NOW);
+  assert.equal(live.totals.plusAsOfDate, live.totals.asOfDate);
+});
+
+await test("words: Reddit stats use singular and plural correctly", () => {
+  assert.equal(format.redditStats(1600, 1, 1), "1,600 views · 1 upvote · 1 comment");
+  assert.equal(format.redditStats(null, 2, 0), "views – · 2 upvotes · 0 comments");
+  assert.equal(format.redditStats(1, null, null), "1 view · – upvotes · – comments");
+});
+
+await test("layout: every grid on the Launch page has explicit shrinkable base columns, and the two-up children can shrink", () => {
+  for (const file of ["LaunchPage.tsx", "LaunchManualPanels.tsx", "DailyChart.tsx"]) {
+    const text = launchSource(file);
+    const classNames = [...text.matchAll(/className=(?:"([^"]*)"|\{`([^`]*)`\})/g)].map((m) => m[1] ?? m[2]);
+    for (const cls of classNames.filter((c) => /(^|\s)grid(\s|$)/.test(c))) {
+      // An unprefixed grid-cols-N is repeat(N, minmax(0, 1fr)): a wide child can't widen the page.
+      assert.match(cls, /(^|\s)grid-cols-\d+(\s|$)/, `${file}: "${cls}" needs an unprefixed grid-cols-N so a wide child can't widen the page`);
+    }
+  }
+  const page = launchSource("LaunchPage.tsx");
+  const twoUp = [...page.matchAll(/<div className="mt-6 grid[^"]*">\s*<div className="([^"]*)">/g)];
+  assert.ok(twoUp.length >= 2, "both two-up table grids found");
+  for (const match of twoUp) assert.match(match[1], /(^|\s)min-w-0(\s|$)/);
+});
+
+await test("layout: tables with more than three columns become label/value rows on phones", () => {
+  const page = launchSource("LaunchPage.tsx");
+  const table = page.slice(page.indexOf("function Table("), page.indexOf("export function LaunchPageBody"));
+  assert.match(table, /sm:hidden/, "phone layout hidden from sm up");
+  assert.match(table, /hidden sm:block/, "table hidden below sm");
+  assert.match(table, /head\.length > 3/);
+  assert.match(page, /"Family"/);
+});
+
+await test("manual: Remove asks first (two-step inline confirm, no browser dialog)", () => {
+  const panels = launchSource("LaunchManualPanels.tsx");
+  assert.ok(!/window\.confirm|\bconfirm\(/.test(panels));
+  assert.ok(!/onClick=\{\(\) => remove\(/.test(panels), "Remove must not delete on the first click");
+  assert.match(panels, /Yes, remove/);
+  assert.equal((panels.match(/<ConfirmRemove\b/g) ?? []).length, 2);
+});
+
+await test("refresh: a network error ends in a message, not a silent failure", () => {
+  const panels = launchSource("LaunchManualPanels.tsx");
+  const refresh = panels.slice(panels.indexOf("async function refresh()"), panels.indexOf("return (", panels.indexOf("async function refresh()")));
+  assert.match(refresh, /catch\s*\{[\s\S]*toast\(/);
 });
 
 // @@MORE_TESTS@@

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { Input, Select } from "@/components/ui/Field";
 import { useToast } from "@/components/ui/Toast";
+import { redditStats } from "@/lib/launch-metrics/format";
 
 const KINDS = ["Release", "Tracking", "Users", "Marketing", "Feedback", "Other"] as const;
 
@@ -32,7 +33,13 @@ export function RefreshButton() {
   async function refresh() {
     setBusy(true);
     try {
-      const response = await fetch("/api/launch-metrics/sync", { method: "POST" });
+      let response: Response;
+      try {
+        response = await fetch("/api/launch-metrics/sync", { method: "POST" });
+      } catch {
+        toast({ message: "Could not reach Baseline. Check the connection and try again.", tone: "danger" });
+        return;
+      }
       const data = (await response.json().catch(() => ({}))) as { status?: string; error?: string };
       if (response.status === 429) {
         toast({ message: "Updated less than a minute ago. Try again shortly.", tone: "warning" });
@@ -56,6 +63,40 @@ export function RefreshButton() {
     <Button variant="secondary" size="sm" onClick={refresh} disabled={busy}>
       {busy ? "Refreshing…" : "Refresh now"}
     </Button>
+  );
+}
+
+/**
+ * "Remove" that asks first: the first tap shows "Yes, remove" / "Keep" in place
+ * (no browser dialog); only "Yes, remove" deletes.
+ */
+function ConfirmRemove({ label, disabled, onConfirm }: { label: string; disabled: boolean; onConfirm: () => Promise<void> | void }) {
+  const [asking, setAsking] = useState(false);
+  if (!asking) {
+    return (
+      <Button size="sm" variant="ghost" onClick={() => setAsking(true)} disabled={disabled} aria-label={`Remove ${label}`}>
+        Remove
+      </Button>
+    );
+  }
+  return (
+    <span role="group" aria-label={`Remove ${label}?`} className="inline-flex flex-wrap items-center gap-2">
+      <span className="text-xs text-muted-foreground">Remove this?</span>
+      <Button
+        size="sm"
+        variant="danger"
+        disabled={disabled}
+        onClick={async () => {
+          await onConfirm();
+          setAsking(false);
+        }}
+      >
+        Yes, remove
+      </Button>
+      <Button size="sm" variant="ghost" onClick={() => setAsking(false)}>
+        Keep
+      </Button>
+    </span>
   );
 }
 
@@ -157,10 +198,7 @@ export function RedditPanel({ posts, nowLocal }: { posts: RedditRow[]; nowLocal:
                     {post.subreddit} · posted {post.postedLabel}
                   </p>
                 </div>
-                <p className="text-sm text-foreground">
-                  {post.views === null ? "views –" : `${post.views.toLocaleString("en-US")} views`} · {post.upvotes ?? "–"} upvotes ·{" "}
-                  {post.comments ?? "–"} comments
-                </p>
+                <p className="text-sm text-foreground">{redditStats(post.views, post.upvotes, post.comments)}</p>
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
                 {post.statsAsOfLabel ? `Stats as of ${post.statsAsOfLabel}` : "No stats yet"}
@@ -178,20 +216,18 @@ export function RedditPanel({ posts, nowLocal }: { posts: RedditRow[]; nowLocal:
                   </Button>
                 </form>
               ) : (
-                <div className="mt-2 flex gap-2">
-                  <Button size="xs" variant="secondary" onClick={() => setEditing(post.id)}>
+                <div className="mt-2 flex flex-wrap items-center gap-3">
+                  <Button size="sm" variant="secondary" onClick={() => setEditing(post.id)}>
                     Update stats
                   </Button>
-                  <Button size="xs" variant="ghost" onClick={() => remove(post.id)} disabled={saving} aria-label={`Remove ${post.label}`}>
-                    Remove
-                  </Button>
+                  <ConfirmRemove label={post.label} disabled={saving} onConfirm={() => remove(post.id)} />
                 </div>
               )}
             </li>
           ))}
         </ul>
       )}
-      <form onSubmit={add} className="grid gap-2 rounded-lg border border-stroke p-3 sm:grid-cols-2">
+      <form onSubmit={add} className="grid grid-cols-1 gap-2 rounded-lg border border-stroke p-3 sm:grid-cols-2">
         <p className="text-sm font-medium text-foreground sm:col-span-2">Add a post</p>
         <label className="flex flex-col gap-1 text-xs text-muted-foreground">
           Name
@@ -271,21 +307,19 @@ export function MilestonesPanel({ milestones, nowLocal }: { milestones: Mileston
       ) : (
         <ol className="divide-y divide-stroke">
           {milestones.map((milestone) => (
-            <li key={milestone.id} className="flex items-baseline justify-between gap-2 py-2">
+            <li key={milestone.id} className="flex flex-wrap items-baseline justify-between gap-2 py-2">
               <div className="min-w-0 flex-1">
                 <p className="text-sm text-foreground">{milestone.label}</p>
                 <p className="text-xs text-muted-foreground">
                   {milestone.whenLabel} · {milestone.kind}
                 </p>
               </div>
-              <Button size="xs" variant="ghost" onClick={() => remove(milestone.id)} disabled={saving} aria-label={`Remove ${milestone.label}`}>
-                Remove
-              </Button>
+              <ConfirmRemove label={milestone.label} disabled={saving} onConfirm={() => remove(milestone.id)} />
             </li>
           ))}
         </ol>
       )}
-      <form onSubmit={add} className="grid gap-2 rounded-lg border border-stroke p-3 sm:grid-cols-[1fr_auto_auto]">
+      <form onSubmit={add} className="grid grid-cols-1 gap-2 rounded-lg border border-stroke p-3 sm:grid-cols-[1fr_auto_auto]">
         <p className="text-sm font-medium text-foreground sm:col-span-3">Add an event</p>
         <label className="flex flex-col gap-1 text-xs text-muted-foreground">
           What happened
