@@ -64,13 +64,14 @@ export function resolveThisWeekDate(now: Date = new Date()): string {
 export const ACCEPT_DUE_PRESETS = ["today", "tomorrow", "this_week", "none"] as const;
 export type AcceptDuePreset = (typeof ACCEPT_DUE_PRESETS)[number];
 
-/** A preset, or a YYYY-MM-DD that must equal the proposal's suggested_due. */
+/** A preset, or any YYYY-MM-DD from today (ET) to 2 years ahead (the notes' date, or one Brent picked). */
 export type AcceptDueChoice = AcceptDuePreset | `${number}-${number}-${number}`;
 
 /** What Accept does when the caller sends no choice (Brent: "I don't want to miss any"). */
 export const DEFAULT_ACCEPT_DUE: AcceptDuePreset = "tomorrow";
 
-export const ACCEPT_DUE_HELP = 'due must be "today", "tomorrow", "this_week", "none" or the item\'s suggested date (YYYY-MM-DD)';
+export const ACCEPT_DUE_HELP =
+  'due must be "today", "tomorrow", "this_week", "none" or a date written YYYY-MM-DD, from today (ET) to 2 years ahead';
 
 export function isAcceptDuePreset(value: unknown): value is AcceptDuePreset {
   return typeof value === "string" && (ACCEPT_DUE_PRESETS as readonly string[]).includes(value);
@@ -87,6 +88,49 @@ export function parseAcceptDue(value: unknown): AcceptDueChoice | null {
   const preset = value.trim().toLowerCase();
   if (isAcceptDuePreset(preset)) return preset;
   return isDateOnlyString(value) ? (value as AcceptDueChoice) : null;
+}
+
+/** How far ahead a picked date may be: 2 years (730 days) from today in ET. Beyond that the database refuses the timestamp anyway. */
+export const PICKED_DATE_MAX_DAYS_AHEAD = 730;
+
+/** The earliest day a picked date may land on: today in ET (never UTC). */
+export function earliestPickedDate(now: Date = new Date()): string {
+  return todayInBriefTimeZone(now);
+}
+
+/** The latest day a picked date may land on: 2 years after today in ET. */
+export function latestPickedDate(now: Date = new Date()): string {
+  return addDateOnlyDays(todayInBriefTimeZone(now), PICKED_DATE_MAX_DAYS_AHEAD)!;
+}
+
+/**
+ * Why a picked date can't be used, in a plain sentence, or null when it is fine:
+ * a real calendar date written exactly YYYY-MM-DD, from today (ET) to 2 years
+ * ahead. Today, not the brief's date: a task moved "to a date" on an old brief
+ * must not land on a day that has already passed. Accept's picked date and every
+ * "move to a date" go through this one rule, on the server and on the page.
+ */
+export function pickedDateProblem(date: unknown, now: Date = new Date()): string | null {
+  if (typeof date !== "string" || date === "") return "pick a date, written YYYY-MM-DD";
+  if (!isDateOnlyString(date)) return `${date} isn't a real date (write it YYYY-MM-DD)`;
+  const earliest = earliestPickedDate(now);
+  if (date < earliest) return `${date} is before today (${earliest}); pick today or later`;
+  const latest = latestPickedDate(now);
+  if (date > latest) return `${date} is too far ahead; pick a day on or before ${latest} (2 years from today)`;
+  return null;
+}
+
+/** due_at for a picked date: the end of that ET day (23:59:59.999, DST-correct), like every preset. Throws on a bad date. */
+export function resolvePickedDueAt(date: string, now: Date = new Date()): string {
+  const problem = pickedDateProblem(date, now);
+  if (problem) throw new Error(problem);
+  return buildRecurringDueAt(date, BRIEF_TIME_ZONE);
+}
+
+/** The ET calendar day of a stored due_at (a 23:59:59.999 ET end of day stays on its day). */
+export function etDateOfDueAt(dueAt: string): string | null {
+  const parsed = new Date(dueAt);
+  return Number.isNaN(parsed.getTime()) ? null : getDateOnlyInTimeZone(BRIEF_TIME_ZONE, parsed);
 }
 
 /** The ET date a choice lands on, or null for "none". */

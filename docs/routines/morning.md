@@ -290,3 +290,10 @@ update or act on any task or brief item yourself. Brent decides on the page.
 - **"done 1"**, **"tomorrow 2"**, **"park 3"**, **"pick 4 bootcamp"**:
   `act_on_brief_items(code, [{ n, action, choice? }])`, exactly as on the page.
   Chat may act on items when Brent asks; the scheduled routine never does.
+- **"move 3 to 11/4"**: `{ n: 3, action: "move", date: "2026-11-04" }` on a
+  carry-over or group (any real date from today (ET) to 2 years ahead; the task is
+  due the end of that ET day, like Tomorrow). **"accept 2 due 11/6"**:
+  `{ n: 2, action: "accept", due: "2026-11-06" }`. **"undo 3"** on a moved or
+  "tomorrow" item puts the earlier due date back and reopens the card (refused
+  with the reason if a task's date changed since). A different day for an item
+  already moved needs an undo first. Use the brief's year for "11/4".

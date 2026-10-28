@@ -53,6 +53,7 @@ export type Database = {
           kind: string
           n: number
           payload: Json
+          prior_due: Json | null
           source: Json
           state: string
           task_ids: string[]
@@ -72,6 +73,7 @@ export type Database = {
           kind: string
           n: number
           payload?: Json
+          prior_due?: Json | null
           source?: Json
           state?: string
           task_ids?: string[]
@@ -91,6 +93,7 @@ export type Database = {
           kind?: string
           n?: number
           payload?: Json
+          prior_due?: Json | null
           source?: Json
           state?: string
           task_ids?: string[]
