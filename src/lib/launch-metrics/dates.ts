@@ -8,8 +8,7 @@
 export const LAUNCH_TIMEZONE = 'America/New_York';
 export const SEARCH_CONSOLE_TIMEZONE = 'America/Los_Angeles';
 
-/** Menu & Market 1.0 went live 2026-10-21 13:42 ET. */
-export const LAUNCH_RELEASE_AT = '2026-10-21T17:42:00Z';
+/** Menu & Market 1.0 went live on this New York day. */
 export const LAUNCH_RELEASE_DATE = '2026-10-21';
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
