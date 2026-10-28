@@ -109,9 +109,13 @@ npm run launch-metrics:seed -- --dir /Users/owner/dev/launch-drafts/dashboard-da
 Then the PM runs it with `--apply`, `LAUNCH_SEED_SUPABASE_URL`,
 `LAUNCH_SEED_SERVICE_ROLE_KEY`, `LAUNCH_SEED_USER_ID` and
 `--confirm-host <the Baseline Supabase host>` (Brent's OK first; it refuses a
-non-local database without `--confirm-host`). Re-running is safe: every write
-is an upsert. `signups.csv` becomes counts per day; its account column is never
-read. Live numbers overwrite the seeded days.
+non-local database without `--confirm-host`). Run it once, before the first
+sync. Re-running later is still safe: the database never lets a seeded
+sign-up or Plus number replace a live one (live numbers overwrite seeded days;
+seeded numbers never overwrite live days), and Reddit posts, timeline events
+and App Store hand reads that are already stored are left as they are (stats
+updated on the page stay). `signups.csv` becomes counts per day; its account
+column is never read.
 
 ## Key rotation
 

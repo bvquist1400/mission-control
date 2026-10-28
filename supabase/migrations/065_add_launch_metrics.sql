@@ -48,12 +48,18 @@ CREATE INDEX IF NOT EXISTS idx_launch_metric_daily_source_date
 -- Apple's rule: the newest instance for a day wins; never merge two. An
 -- upsert (INSERT … ON CONFLICT DO UPDATE) runs BEFORE UPDATE triggers, so a
 -- stale instance is dropped here even if app code forgets to check.
+-- Seed rule (any source): a seeded row never replaces a live one, so re-running
+-- the seed import after go-live can't put the hand-kept numbers back over the
+-- live sync's. Live still replaces seed.
 CREATE OR REPLACE FUNCTION launch_metric_daily_keep_latest_apple()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 SET search_path = public, pg_temp
 AS $$
 BEGIN
+  IF NEW.variant = 'seed' AND OLD.variant IS DISTINCT FROM 'seed' THEN
+    RETURN NULL; -- keep the live row
+  END IF;
   IF OLD.source = 'apple'
      AND OLD.apple_processing_date IS NOT NULL
      AND (NEW.apple_processing_date IS NULL OR NEW.apple_processing_date < OLD.apple_processing_date) THEN

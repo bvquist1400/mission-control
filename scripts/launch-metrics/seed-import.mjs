@@ -7,7 +7,9 @@
 //       dry run: reads the CSVs and prints what would be written (counts only)
 //   ... --apply      writes, with LAUNCH_SEED_SUPABASE_URL, LAUNCH_SEED_SERVICE_ROLE_KEY
 //                    and LAUNCH_SEED_USER_ID set; a non-local URL also needs
-//                    --confirm-host <hostname>. Safe to re-run: every write is an upsert.
+//                    --confirm-host <hostname>. Safe to re-run: a seeded sign-up/Plus
+//                    row never replaces a live one (migration 065 trigger), and Reddit
+//                    posts, timeline events and App Store reads already stored are left as they are.
 //
 // Never prints a key. Exit 0 = done, 1 = a write failed, 2 = refused before anything was written.
 
@@ -85,15 +87,18 @@ if (!LOCAL_HOSTS.has(target.hostname)) {
 
 const db = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
 const withUser = (rows) => rows.map((row) => ({ ...row, user_id: userId }));
+// Daily rows: upsert (a corrected CSV can fix an earlier seed; the 065 trigger
+// keeps any live row). Hand-kept tables: insert only what is missing, so a
+// re-run never undoes stats or edits made on the page.
 const steps = [
-  ["launch_metric_daily", withUser(plan.daily), "user_id,metric_date,source,metric,dimension"],
-  ["launch_reddit_posts", withUser(plan.reddit), "user_id,subreddit,posted_at"],
-  ["launch_milestones", withUser(plan.milestones), "user_id,happened_at,label"],
-  ["launch_app_store_manual_reads", withUser(plan.manualReads), "user_id,read_on,window_label"],
+  ["launch_metric_daily", withUser(plan.daily), "user_id,metric_date,source,metric,dimension", false],
+  ["launch_reddit_posts", withUser(plan.reddit), "user_id,subreddit,posted_at", true],
+  ["launch_milestones", withUser(plan.milestones), "user_id,happened_at,label", true],
+  ["launch_app_store_manual_reads", withUser(plan.manualReads), "user_id,read_on,window_label", true],
 ];
-for (const [table, rows, onConflict] of steps) {
+for (const [table, rows, onConflict, ignoreDuplicates] of steps) {
   if (rows.length === 0) continue;
-  const { error } = await db.from(table).upsert(rows, { onConflict });
+  const { error } = await db.from(table).upsert(rows, { onConflict, ignoreDuplicates });
   if (error) {
     console.error(`Write to ${table} failed (code ${error.code ?? "unknown"}). Earlier tables were written; re-running is safe.`);
     process.exit(1);

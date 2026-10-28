@@ -423,6 +423,62 @@ await test("seed: --apply writes counts only, and a second run changes nothing (
   }
 });
 
+await test("065: a seeded row never replaces a live one; live replaces seed; seed replaces seed", async () => {
+  const owner = await makeUser("launch-db-seedrule");
+  const key = { user_id: owner.id, metric_date: "2026-10-26", source: "app_db", dimension: "" };
+  const upsert = (metric, value, variant) =>
+    admin.from("launch_metric_daily").upsert({ ...key, metric, value, variant }, { onConflict: "user_id,metric_date,source,metric,dimension" });
+  const read = async (metric) => {
+    const { data, error } = await admin.from("launch_metric_daily").select("value, variant").match({ ...key, metric }).single();
+    if (error) throw error;
+    return [Number(data.value), data.variant];
+  };
+  assert.equal((await upsert("signups_real", 2, "seed")).error, null);
+  assert.equal((await upsert("signups_real", 3, "seed")).error, null); // seed over seed: a corrected CSV wins
+  assert.deepEqual(await read("signups_real"), [3, "seed"]);
+  assert.equal((await upsert("signups_real", 5, null)).error, null); // live over seed: live wins
+  assert.deepEqual(await read("signups_real"), [5, null]);
+  assert.equal((await upsert("signups_real", 2, "seed")).error, null); // seed over live: ignored, no error
+  assert.deepEqual(await read("signups_real"), [5, null]);
+  assert.equal((await upsert("signups_real", 6, null)).error, null); // live over live: newest wins
+  assert.deepEqual(await read("signups_real"), [6, null]);
+});
+
+await test("seed: a re-run after go-live keeps live sign-up rows and Reddit stats updated on the page", async () => {
+  const owner = await makeUser("launch-db-seedrerun");
+  const dir = mkdtempSync(pathMod.join(tmpdir(), "launch-seed-rerun-"));
+  try {
+    writeFileSync(pathMod.join(dir, "signups.csv"), "account,signed_up_et,sign_in,who,household\nzz11aa22,2026-10-26 07:10,Apple,Real user,Own\nyy33bb44,2026-10-26 13:07,Apple,Real user,Own\n");
+    writeFileSync(pathMod.join(dir, "plus.csv"), "as_of,trial,paid,comp\n2026-10-26,0,0,3\n");
+    writeFileSync(pathMod.join(dir, "reddit.csv"), "post,subreddit,posted_et,views,upvotes,comments,stats_as_of\nr/apps post,r/apps,2026-10-26 14:40,100,1,0,2026-10-26 15:18\n");
+    const run = () => spawnSync("npm", ["run", "-s", "launch-metrics:seed", "--", "--dir", dir, "--apply"], {
+      cwd: fileURLToPath(new URL("..", import.meta.url)),
+      encoding: "utf8",
+      env: { ...process.env, LAUNCH_SEED_SUPABASE_URL: url, LAUNCH_SEED_SERVICE_ROLE_KEY: serviceKey, LAUNCH_SEED_USER_ID: owner.id },
+    });
+    const first = run();
+    assert.equal(first.status, 0, first.stderr);
+    // Go-live: the live sync writes the same days (variant null); Brent updates the post's stats on the page.
+    const live = (metric, value) => ({ user_id: owner.id, metric_date: "2026-10-26", source: "app_db", metric, dimension: "", value, variant: null });
+    let r = await admin.from("launch_metric_daily").upsert([live("signups_real", 5), live("total_real_users", 5), live("total_plus_comp", 4)], { onConflict: "user_id,metric_date,source,metric,dimension" });
+    assert.equal(r.error, null);
+    r = await admin.from("launch_reddit_posts").update({ views: 999 }).eq("user_id", owner.id);
+    assert.equal(r.error, null);
+    const second = run();
+    assert.equal(second.status, 0, second.stderr);
+    const { data: rows } = await admin.from("launch_metric_daily").select("metric, value, variant").eq("user_id", owner.id).eq("metric_date", "2026-10-26");
+    const get = (metric) => rows.find((row) => row.metric === metric);
+    assert.deepEqual([Number(get("signups_real").value), get("signups_real").variant], [5, null]);
+    assert.deepEqual([Number(get("total_real_users").value), get("total_real_users").variant], [5, null]);
+    assert.deepEqual([Number(get("total_plus_comp").value), get("total_plus_comp").variant], [4, null]);
+    assert.equal(get("signups_apple").variant, "seed"); // seeded rows with no live twin are still written
+    const { data: posts } = await admin.from("launch_reddit_posts").select("views").eq("user_id", owner.id);
+    assert.deepEqual(posts.map((p) => p.views), [999]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // @@MORE_DB_TESTS@@
 
 for (const id of users) {
