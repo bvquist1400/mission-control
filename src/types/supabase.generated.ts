@@ -3179,6 +3179,16 @@ export type Database = {
         }
         Returns: string
       }
+      task_break_lock_for_undo: {
+        Args: {
+          p_comment_id: string
+          p_project_id: string
+          p_section_id: string
+          p_task_ids: string[]
+          p_user_id: string
+        }
+        Returns: undefined
+      }
       task_date_cascade_apply_core: {
         Args: {
           p_adopt: boolean

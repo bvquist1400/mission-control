@@ -569,6 +569,31 @@ await test("FR P2-2: pace counts a converted checklist row and its step once (10
   assert.equal(left([step]), 10);
 });
 
+await test("FR2 LOW-3: a step whose checklist row had no units counts the units set on the step later (5, not 0)", async () => {
+  const pace = await import("../src/lib/pace.ts");
+  const U = "aaaaaaaa-0000-4000-8000-000000000001";
+  const C = "aaaaaaaa-0000-4000-8000-000000000002";
+  const task = (id, extra = {}) => ({ id, status: "In Progress", estimated_minutes: 60, unit_count: null, work_type: "sc", is_sample: false, section_id: null, ...extra });
+  const items = [
+    { id: "row-none", task_id: U, is_done: false, unit_count: null, work_type: "sc" },
+    { id: "row-zero", task_id: U, is_done: false, unit_count: 0, work_type: "sc" },
+    { id: "row-10", task_id: U, is_done: false, unit_count: 10, work_type: "sc" },
+  ];
+  const left = (tasks) => pace.buildUnitEntries(tasks, items).filter((e) => !e.done && !e.inactive).reduce((sum, e) => sum + e.units, 0);
+  const umbrella = task(U);
+  const fromNone = task(C, { status: "Planned", unit_count: 5, section_id: "lane", source_checklist_item_id: "row-none" });
+  assert.equal(left([umbrella, fromNone]), 15, "the row with 10 + the step's own 5 (was 10: the 5 were dropped)");
+  const own = pace.buildUnitEntries([umbrella, fromNone], items).find((e) => e.key === `task:${C}`);
+  assert.ok(own, "the step has its own entry");
+  assert.equal(own.section_id, "lane");
+  assert.equal(left([umbrella, { ...fromNone, source_checklist_item_id: "row-zero" }]), 15, "a 0-unit row doesn't speak for its step either");
+  assert.equal(left([umbrella, { ...fromNone, status: "Done" }]), 10, "step Done → its own 5 are done");
+  // A row WITH units still speaks for its step (P2-2 unchanged): 10 counted once.
+  const paired = task("aaaaaaaa-0000-4000-8000-000000000003", { status: "Planned", unit_count: 10, source_checklist_item_id: "row-10" });
+  assert.equal(left([umbrella, paired]), 10);
+  assert.equal(left([umbrella, paired, fromNone]), 15);
+});
+
 await test("FR P2-4: a Done, Missed or Parked task can't be broken (button hidden, plan refused, refusal words)", () => {
   for (const status of ["Done", "Missed", "Parked"]) {
     assert.equal(bit.canBreakIntoTasks([{ is_done: false }], 0, status), false, status);

@@ -338,7 +338,9 @@ function positive(value: number | null | undefined): number {
  * piece of work, not two: the row's entry stays (its units and the sittings
  * that cover it), it is done when the row is ticked or its step is Done, and
  * inactive when the step is Missed or Parked; the step adds no entry of its
- * own. Undo deletes the step, so the row counts alone again.
+ * own. Undo deletes the step, so the row counts alone again. Only a row WITH
+ * units speaks for its step: a step whose row had none counts the units set on
+ * the step itself, like any other task.
  */
 export function buildUnitEntries(tasks: PaceTaskInput[], items: PaceItemInput[]): UnitEntry[] {
   const itemsByTask = new Map<string, PaceItemInput[]>();
@@ -348,9 +350,11 @@ export function buildUnitEntries(tasks: PaceTaskInput[], items: PaceItemInput[])
     const list = itemsByTask.get(item.task_id) ?? [];
     list.push(item);
     itemsByTask.set(item.task_id, list);
-    if (taskIds.has(item.task_id)) itemIds.add(item.id);
+    // Only a row that carries units can speak for its step; a step whose row had
+    // none counts its own units (set on the step later), like any task.
+    if (taskIds.has(item.task_id) && positive(item.unit_count) > 0) itemIds.add(item.id);
   }
-  // Steps whose source row is here: the row speaks for them.
+  // Steps whose source row is here (with units): the row speaks for them.
   const stepByItem = new Map<string, PaceTaskInput>();
   for (const task of tasks) {
     if (task.source_checklist_item_id && itemIds.has(task.source_checklist_item_id)) {

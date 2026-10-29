@@ -138,6 +138,12 @@ export async function POST(
       .single();
 
     if (error) {
+      // The task was deleted between the check above and the insert (e.g. a
+      // "Break into tasks" Undo took the step away while this comment waited):
+      // nothing was saved, and the task is gone.
+      if ((error as { code?: string }).code === '23503') {
+        return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+      }
       throw error;
     }
 
