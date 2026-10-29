@@ -160,6 +160,8 @@ function transition(world, args) {
 
 function query(world, table) {
   const filters = [];
+  // "brief_items.user_id" style filters apply to embedded rows (PostgREST), not the parent.
+  const nestedFilters = [];
   let selected = null;
   const builder = {
     select(columns) {
@@ -167,6 +169,11 @@ function query(world, table) {
       return builder;
     },
     eq(column, value) {
+      if (column.includes(".")) {
+        const [, field] = column.split(".");
+        nestedFilters.push((row) => row[field] === value);
+        return builder;
+      }
       filters.push((row) => row[column] === value);
       return builder;
     },
@@ -191,7 +198,17 @@ function query(world, table) {
   function rowsFor() {
     const source =
       table === "briefs" ? [world.brief] : table === "brief_items" ? world.items : table === "tasks" ? [...world.tasks.values()] : [];
-    return source.filter((row) => filters.every((filter) => filter(row))).map((row) => ({ ...row }));
+    const rows = source.filter((row) => filters.every((filter) => filter(row))).map((row) => ({ ...row }));
+    // getBrief embeds the items in the brief read: brief_items(...), ordered by n.
+    if (table === "briefs" && typeof selected === "string" && selected.includes("brief_items(")) {
+      for (const row of rows) {
+        row.brief_items = world.items
+          .filter((item) => item.brief_id === row.id && nestedFilters.every((filter) => filter(item)))
+          .sort((a, b) => a.n - b.n)
+          .map((item) => ({ ...item }));
+      }
+    }
+    return rows;
   }
   void selected;
   return builder;

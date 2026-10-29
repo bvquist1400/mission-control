@@ -1202,3 +1202,37 @@
   background: var(--surface-2);
   border-color: var(--ink-2);
 }
+
+/* Loading placeholder (src/app/briefs/[code]/loading.tsx): the page frame with
+   grey bars while the brief is read. The reduced-motion rule above stops the pulse. */
+.brief-page .skel-tile {
+  min-height: 120px;
+  gap: 12px;
+}
+.brief-page .skel {
+  border-radius: 6px;
+  background: var(--surface-2);
+  animation: brief-skel-pulse 1.4s ease-in-out infinite;
+}
+.brief-page .skel-line {
+  height: 12px;
+}
+.brief-page .skel-lg {
+  height: 26px;
+}
+.brief-page .skel-w-25 { width: 25%; }
+.brief-page .skel-w-50 { width: 50%; }
+.brief-page .skel-w-70 { width: 70%; }
+.brief-page .skel-w-90 { width: 90%; }
+.brief-page .skel-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+@keyframes brief-skel-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}

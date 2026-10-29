@@ -9,12 +9,18 @@ interface UseSprintsResult {
   error: string | null;
 }
 
-export function useSprints(): UseSprintsResult {
+/** `skip`: the caller already has the sprints (e.g. TaskGrid inside the Backlog), so don't fetch them again. */
+export function useSprints(options: { skip?: boolean } = {}): UseSprintsResult {
+  const skip = options.skip === true;
   const [sprints, setSprints] = useState<SprintWithImplementation[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!skip);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (skip) {
+      return;
+    }
+
     let isMounted = true;
 
     async function loadSprints() {
@@ -52,7 +58,7 @@ export function useSprints(): UseSprintsResult {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [skip]);
 
   return { sprints, loading, error };
 }

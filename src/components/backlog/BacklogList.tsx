@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { useSearchParams } from "next/navigation";
 import { IntelligenceArtifactInbox } from "@/components/backlog/IntelligenceArtifactInbox";
 import { useSprints } from "@/hooks/useSprints";
@@ -16,8 +16,14 @@ import type {
 import { Input, Select } from "@/components/ui/Field";
 import { cardClasses } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
-
-const TASKS_PAGE_SIZE = 200;
+import {
+  attachRefreshOnReturn,
+  backlogNeedsMissed,
+  createRefreshGate,
+  fetchAllBacklogTaskPages,
+  reuseUnchangedRows,
+  withMissedRows,
+} from "@/lib/backlog/task-loader";
 
 type StatusFilter = "All" | TaskStatus;
 type ReviewFilter = "All" | "Needs review" | "Ready";
@@ -65,31 +71,6 @@ async function fetchTaskPage(params: Record<string, string>): Promise<TaskWithIm
   }
 
   return response.json();
-}
-
-async function fetchAllTaskPages(includeCompleted: boolean): Promise<TaskWithImplementation[]> {
-  const allTasks: TaskWithImplementation[] = [];
-  let offset = 0;
-
-  while (true) {
-    const page = await fetchTaskPage({
-      include_done: includeCompleted ? "true" : "false",
-      include_parked: "true",
-      include_missed: "true",
-      limit: String(TASKS_PAGE_SIZE),
-      offset: String(offset),
-    });
-
-    allTasks.push(...page);
-
-    if (page.length < TASKS_PAGE_SIZE) {
-      break;
-    }
-
-    offset += TASKS_PAGE_SIZE;
-  }
-
-  return allTasks;
 }
 
 async function fetchImplementations(): Promise<ImplementationSummary[]> {
@@ -141,7 +122,9 @@ export function BacklogList() {
   const sprintParam = searchParams.get("sprint");
   const { sprints, loading: sprintsLoading } = useSprints();
 
-  const [tasks, setTasks] = useState<TaskWithImplementation[]>([]);
+  const [tasks, setTasksState] = useState<TaskWithImplementation[]>([]);
+  // Whether `tasks` holds the Missed rows (fetched only for the "Missed" filter).
+  const [tasksIncludeMissed, setTasksIncludeMissed] = useState(false);
   const [implementations, setImplementations] = useState<ImplementationSummary[]>([]);
   const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
   const [commitments, setCommitments] = useState<CommitmentSummary[]>([]);
@@ -156,6 +139,36 @@ export function BacklogList() {
   const [sprintFilter, setSprintFilter] = useState<SprintFilter>(() => sprintFilterFromParam(sprintParam));
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>(() => reviewFilterFromParam(reviewParam));
   const isArtifactInboxView = reviewParam === "intelligence";
+
+  // Loads read the current filters through refs, so the listeners never go stale.
+  const statusFilterRef = useRef(statusFilter);
+  const includeCompletedRef = useRef(includeCompleted);
+  const mountedRef = useRef(true);
+  // Bumped by every full load: an older load's result is dropped.
+  const loadSeqRef = useRef(0);
+  // Bumped by every local change (grid edit, new task): a background refresh
+  // that started before one is dropped rather than overwriting it.
+  const localEditSeqRef = useRef(0);
+  const [refreshGate] = useState(() =>
+    createRefreshGate({ isHidden: () => typeof document !== "undefined" && document.visibilityState === "hidden" })
+  );
+
+  const setTasks = useCallback<Dispatch<SetStateAction<TaskWithImplementation[]>>>((value) => {
+    localEditSeqRef.current += 1;
+    setTasksState(value);
+  }, []);
+
+  useEffect(() => {
+    statusFilterRef.current = statusFilter;
+    includeCompletedRef.current = includeCompleted;
+  }, [includeCompleted, statusFilter]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const hasActiveFilters =
     searchQuery.trim() !== "" ||
@@ -204,82 +217,126 @@ export function BacklogList() {
       return;
     }
 
-    let isMounted = true;
+    const seq = loadSeqRef.current + 1;
+    loadSeqRef.current = seq;
+    const isCurrent = () => mountedRef.current && loadSeqRef.current === seq;
 
     async function loadData() {
       setLoading(true);
       setError(null);
+      const includeMissed = backlogNeedsMissed(statusFilterRef.current);
 
       try {
         const [taskData, implementationData, projectData, commitmentData] = await Promise.all([
-          fetchAllTaskPages(includeCompleted),
+          fetchAllBacklogTaskPages(fetchTaskPage, {
+            includeCompleted,
+            missed: includeMissed ? "include" : "exclude",
+          }),
           fetchImplementations(),
           fetchProjects(),
           fetchCommitments(),
         ]);
 
-        if (!isMounted) {
+        if (!isCurrent()) {
           return;
         }
 
-        setTasks(taskData);
+        setTasksState(taskData);
+        setTasksIncludeMissed(includeMissed);
         setImplementations(implementationData);
         setProjects(projectData);
         setCommitments(commitmentData);
       } catch (loadError) {
-        if (!isMounted) {
+        if (!isCurrent()) {
           return;
         }
 
         setError(loadError instanceof Error ? loadError.message : "Failed to load backlog data");
       } finally {
-        if (isMounted) {
+        if (isCurrent()) {
           setLoading(false);
         }
       }
     }
 
-    void loadData();
+    void refreshGate.track(loadData());
+  }, [includeCompleted, isArtifactInboxView, refreshGate]);
+
+  // Missed tasks are fetched on demand, when the Status filter asks for them.
+  const awaitingMissed = backlogNeedsMissed(statusFilter) && !tasksIncludeMissed;
+  useEffect(() => {
+    if (isArtifactInboxView || loading || !awaitingMissed) {
+      return;
+    }
+
+    let cancelled = false;
+    const seq = loadSeqRef.current;
+
+    async function loadMissed() {
+      try {
+        const missed = await fetchAllBacklogTaskPages(fetchTaskPage, { includeCompleted: false, missed: "only" });
+        if (cancelled || !mountedRef.current || loadSeqRef.current !== seq) {
+          return;
+        }
+        setTasksState((current) => withMissedRows(current, missed));
+        setTasksIncludeMissed(true);
+      } catch (loadError) {
+        if (cancelled || !mountedRef.current) {
+          return;
+        }
+        setError(loadError instanceof Error ? loadError.message : "Failed to load missed tasks");
+      }
+    }
+
+    void refreshGate.track(loadMissed());
 
     return () => {
-      isMounted = false;
+      cancelled = true;
     };
-  }, [includeCompleted, isArtifactInboxView]);
+  }, [awaitingMissed, isArtifactInboxView, loading, refreshGate]);
 
+  // No timer: the list refreshes when the tab comes back into view (never while
+  // hidden, never while another load is running).
   useEffect(() => {
     if (isArtifactInboxView) {
       return;
     }
 
-    let isMounted = true;
-
     async function refreshData() {
+      const seq = loadSeqRef.current;
+      const editSeq = localEditSeqRef.current;
+      const includeMissed = backlogNeedsMissed(statusFilterRef.current);
+
       try {
         const [taskData, commitmentData] = await Promise.all([
-          fetchAllTaskPages(includeCompleted),
+          fetchAllBacklogTaskPages(fetchTaskPage, {
+            includeCompleted: includeCompletedRef.current,
+            missed: includeMissed ? "include" : "exclude",
+          }),
           fetchCommitments(),
         ]);
 
-        if (!isMounted) {
+        if (!mountedRef.current || loadSeqRef.current !== seq) {
           return;
         }
 
-        setTasks(taskData);
-        setCommitments(commitmentData);
+        // Unchanged data keeps the same arrays, so nothing re-renders.
+        if (localEditSeqRef.current === editSeq) {
+          setTasksState((current) => reuseUnchangedRows(current, taskData));
+          setTasksIncludeMissed(includeMissed);
+        }
+        setCommitments((current) => reuseUnchangedRows(current, commitmentData));
       } catch {
         // Non-blocking refresh.
       }
     }
 
-    const intervalId = window.setInterval(() => {
-      void refreshData();
-    }, 15000);
-
-    return () => {
-      isMounted = false;
-      window.clearInterval(intervalId);
-    };
-  }, [includeCompleted, isArtifactInboxView]);
+    return attachRefreshOnReturn(document, window, () => {
+      if (refreshGate.decide() === "go") {
+        void refreshGate.track(refreshData());
+      }
+    });
+  }, [isArtifactInboxView, refreshGate]);
 
   function handleTaskCreated(task: TaskWithImplementation) {
     setTasks((current) => [{ ...task, dependencies: [], dependency_blocked: false }, ...current]);
@@ -501,7 +558,7 @@ export function BacklogList() {
       ) : null}
 
       {!isArtifactInboxView ? (
-        loading ? (
+        loading || (awaitingMissed && !error) ? (
           <TaskGridLoadingSkeleton />
         ) : (
           <TaskGrid
@@ -509,6 +566,7 @@ export function BacklogList() {
             visibleTasks={filteredTasks}
             setTasks={setTasks}
             implementations={implementations}
+            sprints={sprints}
             commitments={commitments}
             scopeMode="global"
             emptyStateTitle={hasActiveFilters ? "No tasks match these filters" : "No tasks yet"}
