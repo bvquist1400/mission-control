@@ -198,7 +198,7 @@ await test("Plan: finished steps are Done tasks with their tick time and tick da
   assert.equal(plan.ok, true, plan.error);
   const steps = plan.value.steps;
   assert.deepEqual(steps.map((s) => s.status), ["Done", "Done", "Done", "In Progress", "Done", "Planned"]);
-  assert.equal(steps[0].done_at, rows[0].completed_at);
+  assert.equal("done_at" in steps[0], false, "066 reads the tick time from the locked row itself");
   assert.equal(steps[0].due_at, endOfEt("2026-10-21"), "a finished step is dated the day it was ticked");
   assert.equal(steps[4].due_at, endOfEt("2026-10-28"));
   assert.equal(steps[3].due_at, endOfEt("2026-10-29"));
@@ -233,7 +233,6 @@ await test("Plan: steps are taken in checklist order whatever order they were se
   ]);
   assert.deepEqual(plan.value.steps.map((s) => s.title), ["Old tick", "A", "B"]);
   assert.equal(plan.value.steps[0].due_at, null);
-  assert.equal(plan.value.steps[0].done_at, null);
   assert.equal(plan.value.steps[2].waits_on_previous, true);
 });
 
@@ -433,14 +432,15 @@ await test("Route: refusals become plain 409/404s; a bad body is a 400 with no d
   assert.equal((await r3.json()).reason, "busy");
 });
 
-await test("Route: Undo is one call with only the ids it was given", async () => {
+await test("Route: Undo is one call carrying only the break's id", async () => {
   const client = fakeClient({ task: work(), rows: [], rpc: () => ({ data: { ok: true, deleted_tasks: 2 }, error: null }) });
-  const response = await post(client, { action: "undo", task_ids: ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"], section_id: null, project_id: null, umbrella_comment_id: null });
+  const response = await post(client, { action: "undo", break_id: "11111111-1111-4111-8111-111111111111" });
   assert.equal(response.status, 200);
   assert.equal(client.rpcCalls[0][0], "undo_break_task_into_tasks");
-  assert.deepEqual(client.rpcCalls[0][1].p_request.task_ids.length, 2);
-  const bad = await post(client, { action: "undo", task_ids: ["nope"] });
+  assert.deepEqual(client.rpcCalls[0][1].p_request, { break_id: "11111111-1111-4111-8111-111111111111" });
+  const bad = await post(client, { action: "undo", break_id: "nope" });
   assert.equal(bad.status, 400);
+  assert.equal(client.rpcCalls.length, 1);
 });
 
 await test("Route auth: the FamCal and actions keys may not break tasks (route-auth allowlists)", async () => {
@@ -452,6 +452,136 @@ await test("Route auth: the FamCal and actions keys may not break tasks (route-a
     }
   }
   assert.equal(isMachineKeyRouteAllowed("legacy_api_key", "POST", `/api/tasks/${TASK}/break`), true);
+});
+
+// ── Fix round 1 (Codex Astra review of 5c5c8b4): one test per finding ──────
+
+await test("FR P1-1: Undo refuses client-supplied cleanup ids (task_ids, section_id, project_id, umbrella_comment_id) before any database call", async () => {
+  const client = fakeClient({ task: work(), rows: [], rpc: () => { throw new Error("must not be called"); } });
+  const unrelatedProject = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+  for (const body of [
+    { action: "undo", task_ids: ["11111111-1111-4111-8111-111111111111"], project_id: unrelatedProject, section_id: null, umbrella_comment_id: null },
+    { action: "undo", break_id: "11111111-1111-4111-8111-111111111111", project_id: unrelatedProject },
+    { action: "undo", break_id: "11111111-1111-4111-8111-111111111111", umbrella_comment_id: "22222222-2222-4222-8222-222222222222" },
+    { action: "undo" },
+  ]) {
+    const response = await post(client, body);
+    assert.equal(response.status, 400, JSON.stringify(body));
+  }
+  assert.equal(client.rpcCalls.length, 0);
+});
+
+await test("FR P1-2: the Undo refusal says what changed (edits, comments, links, new tasks), so the toast's promise is true", () => {
+  const refusal = bit.breakRefusal("changed");
+  assert.equal(refusal.status, 409);
+  assert.match(refusal.error, /comment/);
+  assert.match(refusal.error, /link/);
+});
+
+await test("FR P1-3: every system comment has a plain variant that names neither the umbrella nor the destination", () => {
+  const rows = [row("A"), row("B", true, etAt("2026-10-27").toISOString())];
+  const standalone = work({ title: "Pick up the dog food", project_id: null, project: null, tags: ["personal"] });
+  const parsed = bit.parseBreakRequest({
+    destination: { kind: "existing_project", name: "Garage", project_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd" },
+    steps: rows.map((r) => ({ checklist_item_id: r.id, due_date: null, owner: "brent" })),
+  });
+  const plan = bit.planBreak(parsed.value, { umbrella: standalone, rows, projectName: null, destinationLabel: "CONFIDENTIAL WORK PROJECT", now: etAt("2026-10-29") });
+  assert.equal(plan.ok, true, plan.error);
+  assert.match(plan.value.umbrella_comment, /CONFIDENTIAL WORK PROJECT/, "the named one, for the same audience");
+  assert.ok(plan.value.umbrella_comment_generic, "a plain umbrella comment is sent");
+  assert.doesNotMatch(plan.value.umbrella_comment_generic, /CONFIDENTIAL|Garage/);
+  assert.match(plan.value.umbrella_comment_generic, /^Broken into 2 tasks in another project \(1 already done\)/);
+  for (const step of plan.value.steps) {
+    assert.match(step.comment, /Pick up the dog food/);
+    assert.ok(step.comment_generic, "a plain step comment is sent");
+    assert.doesNotMatch(step.comment_generic, /dog food/);
+    assert.match(step.comment_generic, /^Part of another task: broken out of its checklist on Thu 10\/29 \(step \d of 2\)/);
+  }
+});
+
+const umbrellaWith = (overrides, stepStatuses) => ({ ...work(overrides), step_tasks: stepStatuses.map((status) => ({ status })) });
+const cardFor = (task, now = etAt("2026-10-29")) => {
+  const progress = bit.progressRowsFor(task);
+  return view.buildRangeCardView(task, progress.rows, now, { stepsAreTasks: progress.source === "tasks" });
+};
+
+await test("FR P2-1: an umbrella without a range (due date only, no due date, start = due) still shows 'x/y tasks' on Today", () => {
+  const cases = {
+    dueOnly: umbrellaWith({ start_at: null, due_at: endOfEt("2026-10-30") }, ["Done", "Planned"]),
+    noDue: umbrellaWith({ start_at: null, due_at: null }, ["Done", "Planned"]),
+    sameDay: umbrellaWith({ start_at: etAt("2026-10-30", "00:00").toISOString(), due_at: endOfEt("2026-10-30") }, ["Done", "Planned"]),
+  };
+  for (const [name, task] of Object.entries(cases)) {
+    const card = cardFor(task);
+    assert.ok(card, `${name}: a card view`);
+    assert.equal(card.steps.text, "1/2 tasks", name);
+    assert.equal(card.steps.basis, "tasks", name);
+    assert.equal(card.fillPercent, 50, name);
+    assert.equal(card.isRange, false, name);
+    assert.equal(card.elapsedPercent, null, name);
+    assert.equal(card.allStepsDone, false, name);
+    assert.match(card.srText, /1 of 2 tasks done, 50%/, name);
+  }
+  assert.equal(cardFor(cases.dueOnly).chipText, "Due Fri 10/30");
+  assert.equal(cardFor(cases.noDue).chipText, "");
+  assert.equal(cardFor(umbrellaWith({ start_at: null, due_at: endOfEt("2026-10-29") }, ["Planned"])).chipText, "Due today");
+  const late = cardFor(umbrellaWith({ start_at: null, due_at: endOfEt("2026-10-27") }, ["Planned"]));
+  assert.equal(late.chipText, "Overdue");
+  assert.equal(late.tone, "late");
+  // A plain task without a range keeps the old card (null), and a closed umbrella too.
+  assert.equal(view.buildRangeCardView(work({ start_at: null }), [{ is_done: false, unit_count: null }], etAt("2026-10-29")), null);
+  assert.equal(cardFor(umbrellaWith({ start_at: null, status: "Done" }, ["Done"])), null);
+  // A real range keeps its range card.
+  assert.equal(cardFor(umbrellaWith({}, ["Done", "Planned"])).isRange, true);
+});
+
+await test("FR P2-1: every step Done lights the Done button whatever the umbrella's dates", () => {
+  for (const overrides of [{ start_at: null, due_at: endOfEt("2026-10-30") }, { start_at: null, due_at: null }]) {
+    const card = cardFor(umbrellaWith(overrides, ["Done", "Done"]));
+    assert.equal(card.allStepsDone, true);
+    assert.equal(view.stepsPillText(card), "2/2 tasks · all done");
+    assert.match(card.srText, /The Done button is ready/);
+  }
+});
+
+await test("FR P2-2: pace counts a converted checklist row and its step once (10 → 10, not 20; step Done → 0; partial; Undo)", async () => {
+  const pace = await import("../src/lib/pace.ts");
+  const U = "aaaaaaaa-0000-4000-8000-000000000001";
+  const C = "aaaaaaaa-0000-4000-8000-000000000002";
+  const task = (id, extra = {}) => ({ id, status: "In Progress", estimated_minutes: 60, unit_count: null, work_type: "sc", is_sample: false, section_id: null, ...extra });
+  const items = [
+    { id: "row-10", task_id: U, is_done: false, unit_count: 10, work_type: "sc" },
+    { id: "row-4", task_id: U, is_done: false, unit_count: 4, work_type: "sc" },
+  ];
+  const left = (tasks) => pace.buildUnitEntries(tasks, items).filter((e) => !e.done && !e.inactive).reduce((sum, e) => sum + e.units, 0);
+  const umbrella = task(U);
+  assert.equal(left([umbrella]), 14, "before the break");
+  // Partial selection: only the 10-unit row is broken out (066 copies its units to the step).
+  const step = task(C, { status: "Planned", unit_count: 10, section_id: "new-section", source_checklist_item_id: "row-10" });
+  assert.equal(left([umbrella, step]), 14, "after the break: the same work, counted once");
+  const entries = pace.buildUnitEntries([umbrella, step], items);
+  assert.equal(entries.length, 2);
+  assert.equal(entries.find((e) => e.item_id === "row-10").section_id, "new-section", "the row's work sits in the step's lane");
+  assert.equal(left([umbrella, { ...step, status: "Done" }]), 4, "step Done → its row's units are done");
+  assert.equal(left([umbrella, { ...step, status: "Parked" }]), 4, "step Parked → not work left");
+  assert.equal(left([umbrella]), 14, "Undo deletes the step: the row counts alone again");
+  // A step whose row isn't in this project's input (moved elsewhere) keeps its own units.
+  assert.equal(left([step]), 10);
+});
+
+await test("FR P2-4: a Done, Missed or Parked task can't be broken (button hidden, plan refused, refusal words)", () => {
+  for (const status of ["Done", "Missed", "Parked"]) {
+    assert.equal(bit.canBreakIntoTasks([{ is_done: false }], 0, status), false, status);
+    const rows = [row("Open")];
+    const plan = planFor(rows, [{ checklist_item_id: rows[0].id, due_date: null, owner: "brent" }], undefined, work({ status }));
+    assert.equal(plan.ok, false, status);
+    assert.match(plan.error, /can’t be broken into tasks/);
+  }
+  for (const status of ["Backlog", "Planned", "In Progress", "Blocked/Waiting"]) {
+    assert.equal(bit.canBreakIntoTasks([{ is_done: false }], 0, status), true, status);
+  }
+  assert.equal(bit.breakRefusal("task_closed").status, 409);
+  assert.match(bit.breakRefusal("task_closed").error, /closed/);
 });
 
 console.log(`\n${passed} passed, ${failures.length} failed`);

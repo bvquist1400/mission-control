@@ -111,9 +111,23 @@ export function defaultDestinationName(title: string): string {
 
 // ── When the button shows ───────────────────────────────────────────────────
 
-/** "Hidden when pointless": at least one open checklist step, and not already broken out. */
-export function canBreakIntoTasks(rows: ReadonlyArray<Pick<BreakChecklistRow, 'is_done'>>, stepCount = 0): boolean {
-  return stepCount === 0 && rows.some((row) => !row.is_done);
+/**
+ * A closed task can't be broken: its open steps would sit under a task that
+ * stays closed and counts as finished (066 refuses it under the lock too).
+ */
+export const BREAK_CLOSED_STATUSES: ReadonlyArray<string> = ['Done', 'Missed', 'Parked'];
+
+export function isClosedForBreak(status: string | null | undefined): boolean {
+  return typeof status === 'string' && BREAK_CLOSED_STATUSES.includes(status);
+}
+
+/** "Hidden when pointless": an open task, at least one open checklist step, and not already broken out. */
+export function canBreakIntoTasks(
+  rows: ReadonlyArray<Pick<BreakChecklistRow, 'is_done'>>,
+  stepCount = 0,
+  status: string | null = null
+): boolean {
+  return stepCount === 0 && !isClosedForBreak(status) && rows.some((row) => !row.is_done);
 }
 
 // ── Dates ───────────────────────────────────────────────────────────────────
@@ -350,11 +364,13 @@ export interface BreakRpcStep {
   due_at: string | null;
   owner: BreakOwner;
   priority_score: number;
-  done_at: string | null;
   unit_count: number | null;
   work_type: string | null;
   waits_on_previous: boolean;
+  /** Names the umbrella. */
   comment: string;
+  /** Used instead when the step is visible to an audience the umbrella isn't (066 checks famcal_eligible on the rows it wrote). */
+  comment_generic: string;
 }
 
 export interface BreakRpcRequest {
@@ -370,7 +386,10 @@ export interface BreakRpcRequest {
     stage: string | null;
   };
   steps: BreakRpcStep[];
+  /** Names the destination. */
   umbrella_comment: string;
+  /** Used instead unless every step is visible to exactly the umbrella's audience (066). */
+  umbrella_comment_generic: string;
 }
 
 export interface BreakPlanContext {
@@ -387,6 +406,9 @@ export interface BreakPlanContext {
 export function planBreak(request: BreakRequest, ctx: BreakPlanContext): Parsed<BreakRpcRequest> {
   const { umbrella, now } = ctx;
   const kind = request.destination.kind;
+  if (isClosedForBreak(umbrella.status)) {
+    return { ok: false, error: `This task is ${umbrella.status}, so it can’t be broken into tasks. Reopen it first.` };
+  }
   if ((kind === 'new_section' || kind === 'existing_section') && !umbrella.project_id) {
     return { ok: false, error: 'This task has no project: choose a new project or an existing project.' };
   }
@@ -429,11 +451,11 @@ export function planBreak(request: BreakRequest, ctx: BreakPlanContext): Parsed<
       due_at: dueAt,
       owner: step.owner,
       priority_score: Math.round(priority),
-      done_at: isDone ? row.completed_at : null,
       unit_count: row.unit_count,
       work_type: row.work_type,
       waits_on_previous: waits,
       comment: `Part of “${umbrella.title}”: broken out of its checklist on ${shortDay(today)} (step ${index + 1} of ${total}). Comments and notes stay on that task.`,
+      comment_generic: `Part of another task: broken out of its checklist on ${shortDay(today)} (step ${index + 1} of ${total}). Comments and notes stay on that task.`,
     };
   });
 
@@ -454,12 +476,18 @@ export function planBreak(request: BreakRequest, ctx: BreakPlanContext): Parsed<
         stage: kind === 'new_project' ? (umbrella.status === 'In Progress' ? 'In Progress' : 'Planned') : null,
       },
       steps,
-      umbrella_comment:
-        `Broken into ${plural(total, 'task')} in ${destinationText}` +
-        (doneCount ? ` (${doneCount} already done)` : '') +
-        `. This task stays open as their umbrella: its progress counts them, and it is yours to close when they are done. Its checklist is kept for the record.`,
+      umbrella_comment: umbrellaComment(total, doneCount, destinationText),
+      umbrella_comment_generic: umbrellaComment(total, doneCount, 'another project'),
     },
   };
+}
+
+function umbrellaComment(total: number, doneCount: number, where: string): string {
+  return (
+    `Broken into ${plural(total, 'task')} in ${where}` +
+    (doneCount ? ` (${doneCount} already done)` : '') +
+    `. This task stays open as their umbrella: its progress counts them, and it is yours to close when they are done. Its checklist is kept for the record.`
+  );
 }
 
 function destinationPhrase(kind: BreakDestinationKind, name: string | null, ctx: BreakPlanContext): string {
@@ -500,6 +528,8 @@ export function breakRefusal(reason: string): { status: number; error: string } 
       return { status: 409, error: 'This task has already been broken into tasks.' };
     case 'recurring_template':
       return { status: 400, error: 'A repeating task can’t be broken into tasks.' };
+    case 'task_closed':
+      return { status: 409, error: 'This task is closed (Done, Missed or Parked), so it can’t be broken into tasks. Reopen it first.' };
     case 'task_changed':
       return { status: 409, error: 'This task changed while the window was open (its project or priority). Close the window and try again.' };
     case 'checklist_changed':
@@ -511,7 +541,10 @@ export function breakRefusal(reason: string): { status: number; error: string } 
     case 'project_not_found':
       return { status: 404, error: 'That project no longer exists.' };
     case 'changed':
-      return { status: 409, error: 'Those tasks changed since, so Undo can’t take them back. Delete them by hand if you need to.' };
+      return {
+        status: 409,
+        error: 'Those tasks changed since the break (an edit, a comment, a link or a new task next to them), so Undo can’t take them back without losing that. Delete them by hand if you need to.',
+      };
     default:
       return { status: 409, error: 'That could not be done. Try again.' };
   }

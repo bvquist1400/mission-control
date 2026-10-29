@@ -119,6 +119,8 @@ export interface Task {
   due_change_id: string | null;
   /** Break into tasks (migration 066): the umbrella task this one was broken out of. */
   parent_task_id: string | null;
+  /** Break into tasks (066): the umbrella checklist row this step was made from (pace counts the pair once). */
+  source_checklist_item_id: string | null;
   created_at: string;
   updated_at: string;
 }

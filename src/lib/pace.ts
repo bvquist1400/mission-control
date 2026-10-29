@@ -247,6 +247,13 @@ export interface PaceTaskInput {
   work_type: string | null;
   is_sample: boolean;
   section_id: string | null;
+  /**
+   * Break into tasks (066): the umbrella checklist row this task was made from.
+   * When that row is in the same input, the pair counts ONCE: the row keeps the
+   * units (and the sittings logged against it), the step's status says whether
+   * they are done, and the step's own copied units are not counted again.
+   */
+  source_checklist_item_id?: string | null;
 }
 
 export interface PaceItemInput {
@@ -326,32 +333,52 @@ function positive(value: number | null | undefined): number {
  * row type ?? task type), or the task itself when none of its rows carry units.
  * Rows of a Done task count as done; units of a Missed or Parked task are
  * `inactive` (not work left, but not done either).
+ *
+ * A checklist row broken out into a step task (Break into tasks, 066) is one
+ * piece of work, not two: the row's entry stays (its units and the sittings
+ * that cover it), it is done when the row is ticked or its step is Done, and
+ * inactive when the step is Missed or Parked; the step adds no entry of its
+ * own. Undo deletes the step, so the row counts alone again.
  */
 export function buildUnitEntries(tasks: PaceTaskInput[], items: PaceItemInput[]): UnitEntry[] {
   const itemsByTask = new Map<string, PaceItemInput[]>();
+  const taskIds = new Set(tasks.map((task) => task.id));
+  const itemIds = new Set<string>();
   for (const item of items) {
     const list = itemsByTask.get(item.task_id) ?? [];
     list.push(item);
     itemsByTask.set(item.task_id, list);
+    if (taskIds.has(item.task_id)) itemIds.add(item.id);
+  }
+  // Steps whose source row is here: the row speaks for them.
+  const stepByItem = new Map<string, PaceTaskInput>();
+  for (const task of tasks) {
+    if (task.source_checklist_item_id && itemIds.has(task.source_checklist_item_id)) {
+      stepByItem.set(task.source_checklist_item_id, task);
+    }
   }
   const entries: UnitEntry[] = [];
   for (const task of tasks) {
+    if (task.source_checklist_item_id && stepByItem.get(task.source_checklist_item_id) === task) continue;
     const scope: PaceScope = task.is_sample ? "sample" : "main";
     const finished = task.status === "Done";
     const inactive = isInactive(task);
     const unitItems = (itemsByTask.get(task.id) ?? []).filter((item) => positive(item.unit_count) > 0);
     if (unitItems.length > 0) {
       for (const item of unitItems) {
+        const step = stepByItem.get(item.id);
+        const stepDone = step?.status === "Done";
         entries.push({
           key: item.id,
           item_id: item.id,
           task_id: task.id,
-          section_id: task.section_id,
+          // The work now happens in the step's section (its lane), not the umbrella's.
+          section_id: step ? step.section_id : task.section_id,
           work_type: item.work_type ?? task.work_type ?? UNTYPED_WORK_TYPE,
           units: positive(item.unit_count),
           scope,
-          done: finished || item.is_done,
-          inactive,
+          done: finished || item.is_done || stepDone,
+          inactive: inactive || (!stepDone && !item.is_done && step !== undefined && isInactive(step)),
         });
       }
     } else if (positive(task.unit_count) > 0) {

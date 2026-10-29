@@ -753,7 +753,8 @@ export function WeekBoard({
     const open = openStepsKey === key;
     return {
       context,
-      canDrag: false,
+      // A real range changes its dates in the task window; an umbrella card without one drags like any task.
+      canDrag: !view.isRange,
       stepsOpen: open,
       onToggleSteps: view.steps ? () => setOpenStepsKey((current) => (current === key ? null : key)) : undefined,
       steps: open ? (

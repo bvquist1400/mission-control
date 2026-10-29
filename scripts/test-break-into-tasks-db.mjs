@@ -122,6 +122,9 @@ const rangeView = await import("../src/lib/task-range-view.ts");
 const portfolioQueries = await import("../src/lib/portfolio-queries.ts");
 const { getDateOnlyInTimeZone, addDateOnlyDays } = await import("../src/lib/date-only.ts");
 const { buildRecurringDueAt } = await import("../src/lib/recurrence.ts");
+const { readFamcalTaskComments } = await import("../src/lib/famcal-api-key.ts");
+const { getProjectForecast } = await import("../src/lib/work-sessions/service.ts");
+const { buildWorkIntelligenceSnapshot } = await import("../src/lib/work-intelligence/snapshot.ts");
 
 const userA = await makeUser("bit-a");
 const userB = await makeUser("bit-b");
@@ -206,6 +209,40 @@ const stepsBody = (rows, { chain = true, kind = "new_section", name = "Readiness
     waits_on_previous: chain,
   })),
 });
+
+/**
+ * The toast's Undo body. Since fix round 1 the create reply carries `break_id`
+ * and Undo takes nothing else; on the 5c5c8b4 code (no break_id) this sends the
+ * old id list, so the fix-round tests below show what that code did.
+ */
+const undoOf = (made, legacyExtra = {}) =>
+  made.body.break_id
+    ? { action: "undo", break_id: made.body.break_id }
+    : {
+        action: "undo",
+        task_ids: made.body.task_ids,
+        section_id: made.body.section_created ? made.body.section_id : null,
+        project_id: made.body.project_created ? made.body.project_id : null,
+        umbrella_comment_id: made.body.umbrella_comment_id,
+        ...legacyExtra,
+      };
+
+/** A small umbrella: open/done rows, any tags/project/application, no sprint. */
+async function smallUmbrella({ owner = userA, title = "Small umbrella", tags = ["work"], projectId = null, implementationId = null, status = "Planned", rows = [["Open step", false]], units = null } = {}) {
+  const umbrella = await insert("tasks", {
+    user_id: owner, title, status, owner: "brent", project_id: projectId, implementation_id: implementationId, tags,
+    base_priority: 50, priority_score: 50, due_at: endOf(day(5)),
+  });
+  const made = [];
+  for (const [index, [text, done]] of rows.entries()) {
+    made.push(await insert("task_checklist_items", {
+      user_id: owner, task_id: umbrella.id, text, sort_order: index, is_done: done,
+      completed_at: done ? new Date(Date.parse(startOf(day(-8))) + 15 * 3600_000).toISOString() : null,
+      unit_count: units ? units[index] : null,
+    }));
+  }
+  return { umbrella, rows: made };
+}
 
 const userState = (owner) =>
   json(`SELECT json_build_object(
@@ -517,12 +554,14 @@ try {
   });
 
   await test("Guard trigger: a parent must be the same user's task; an UPDATE may only clear it; deleting the umbrella frees its steps", async () => {
-    const mine = await insert("tasks", { user_id: userA, title: "Mine" });
     const theirs = await insert("tasks", { user_id: userB, title: "Theirs" });
-    assert.match(psqlFails(`INSERT INTO tasks (user_id, title, parent_task_id) VALUES ('${userA}', 'x', '${theirs.id}');`), /same user/);
+    assert.match(psqlFails(`BEGIN; SELECT set_config('mission_control.break_umbrella_id', '${theirs.id}', true); INSERT INTO tasks (user_id, title, parent_task_id) VALUES ('${userA}', 'x', '${theirs.id}'); COMMIT;`), /same user/);
     const { error: viaApi } = await clientA.from("tasks").insert({ user_id: userA, title: "x", parent_task_id: theirs.id });
     assert.ok(viaApi, "refused through PostgREST too");
-    const child = await insert("tasks", { user_id: userA, title: "Child", parent_task_id: mine.id });
+    const { umbrella: mine, rows } = await smallUmbrella({ title: "Mine" });
+    const made = await breakTask(mine.id, { destination: { kind: "new_project", name: `Guard ${randomUUID().slice(0, 6)}` }, steps: [{ checklist_item_id: rows[0].id, due_date: null, owner: "brent" }] });
+    assert.equal(made.status, 201, JSON.stringify(made.body));
+    const child = { id: made.body.task_ids[0] };
     const other = await insert("tasks", { user_id: userA, title: "Other" });
     assert.match(psqlFails(`UPDATE tasks SET parent_task_id = '${other.id}' WHERE id = '${child.id}';`), /only be cleared/);
     assert.match(psqlFails(`UPDATE tasks SET parent_task_id = id WHERE id = '${other.id}';`), /cleared|own umbrella|parent_task_not_self/);
@@ -535,13 +574,7 @@ try {
     const before = userState(userA);
     const made = await breakTask(fixture.umbrella.id, stepsBody(fixture.rows, { name: "Undo me" }));
     assert.equal(made.status, 201);
-    const undoBody = {
-      action: "undo",
-      task_ids: made.body.task_ids,
-      section_id: made.body.section_id,
-      project_id: null,
-      umbrella_comment_id: made.body.umbrella_comment_id,
-    };
+    const undoBody = undoOf(made);
     const undone = await breakTask(fixture.umbrella.id, undoBody);
     assert.equal(undone.status, 200, JSON.stringify(undone.body));
     assert.equal(undone.body.deleted_tasks, 6);
@@ -559,7 +592,7 @@ try {
     const fixture = await mockupFixture({ project: false });
     const made = await breakTask(fixture.umbrella.id, stepsBody(fixture.rows, { kind: "new_project", name: "Undo project" }));
     assert.equal(made.status, 201);
-    const undone = await breakTask(fixture.umbrella.id, { action: "undo", task_ids: made.body.task_ids, project_id: made.body.project_id, umbrella_comment_id: made.body.umbrella_comment_id });
+    const undone = await breakTask(fixture.umbrella.id, undoOf(made));
     assert.equal(undone.status, 200);
     assert.equal(undone.body.project_deleted, true);
     assert.equal(psql(`SELECT count(*) FROM projects WHERE id = '${made.body.project_id}';`), "0");
@@ -567,11 +600,11 @@ try {
     const second = await mockupFixture();
     const made2 = await breakTask(second.umbrella.id, stepsBody(second.rows, { name: "Keep me" }));
     psql(`UPDATE tasks SET parent_task_id = NULL WHERE id = '${made2.body.task_ids[0]}';`);
-    const refused = await breakTask(second.umbrella.id, { action: "undo", task_ids: made2.body.task_ids, section_id: made2.body.section_id });
+    const refused = await breakTask(second.umbrella.id, undoOf(made2));
     assert.equal(refused.status, 409);
     assert.equal(psql(`SELECT count(*) FROM tasks WHERE id = ANY(ARRAY['${made2.body.task_ids.join("','")}']::uuid[]);`), "6");
     // Another user's Undo can't touch them either.
-    const asB = await breakTask(second.umbrella.id, { action: "undo", task_ids: made2.body.task_ids.slice(1) }, clientB, userB);
+    const asB = await breakTask(second.umbrella.id, undoOf(made2), clientB, userB);
     assert.equal(asB.status, 409);
     assert.equal(psql(`SELECT count(*) FROM tasks WHERE id = ANY(ARRAY['${made2.body.task_ids.join("','")}']::uuid[]);`), "6");
   });
@@ -583,6 +616,232 @@ try {
     assert.equal(refused.status, 400);
     assert.match(refused.body.error, /repeating task/);
   });
+
+  // ── Fix round 1 (Codex Astra review of 5c5c8b4): one test per finding ──
+
+  const countIn = (table, column, ids) => psql(`SELECT count(*) FROM ${table} WHERE ${column} = ANY(ARRAY['${ids.join("','")}']::uuid[]);`);
+  const newSectionBody = (rows, name) => ({ destination: { kind: "new_section", name }, steps: rows.map((r) => ({ checklist_item_id: r.id, due_date: r.is_done ? null : day(2), owner: "brent", waits_on_previous: true })) });
+
+  await test("FR 066: task_breaks (owner reads only; writes only inside the functions), task_break_fingerprint and tasks.source_checklist_item_id are in place", () => {
+    assert.equal(psql(`SELECT relrowsecurity FROM pg_class WHERE oid = 'public.task_breaks'::regclass;`), "t");
+    assert.equal(psql(`SELECT count(*) FROM pg_policies WHERE tablename = 'task_breaks' AND cmd = 'UPDATE';`), "0", "records are never updated");
+    // No FK on source_checklist_item_id: a second tasks ↔ task_checklist_items relationship would break every
+    // `task_checklist_items(...)` embed from tasks (PostgREST: "more than one relationship").
+    assert.equal(psql(`SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.tasks'::regclass AND confrelid = 'public.task_checklist_items'::regclass;`), "0");
+    assert.equal(psql(`SELECT has_function_privilege('anon', 'task_break_fingerprint(uuid,uuid[],uuid,uuid,uuid)', 'EXECUTE');`), "f");
+    assert.equal(psql(`SELECT prosecdef FROM pg_proc WHERE proname = 'task_break_fingerprint';`), "f", "SECURITY INVOKER");
+  });
+
+  await test("FR P1-1: Undo can't be pointed at an unrelated empty project (with history), section or comment: substituted ids are refused and they survive", async () => {
+    const fixture = await mockupFixture();
+    const made = await breakTask(fixture.umbrella.id, newSectionBody(fixture.rows, "P1-1"));
+    assert.equal(made.status, 201, JSON.stringify(made.body));
+    const victim = await insert("projects", { user_id: userA, name: "Unrelated empty project", tags: [] });
+    await insert("project_status_updates", { user_id: userA, project_id: victim.id, summary: "History that must survive" });
+    const victimSection = await insert("project_sections", { user_id: userA, project_id: fixture.proj.id, name: "Unrelated empty section", planned_start: day(1), planned_end: day(4) });
+    const victimComment = await insert("task_comments", { user_id: userA, task_id: fixture.umbrella.id, content: "Another system comment", source: "system" });
+    const before = userState(userA);
+    // The 5c5c8b4 Undo body, with the unrelated ids substituted in.
+    const substituted = {
+      action: "undo",
+      task_ids: made.body.task_ids,
+      section_id: victimSection.id,
+      project_id: victim.id,
+      umbrella_comment_id: victimComment.id,
+    };
+    const refused = await breakTask(fixture.umbrella.id, substituted);
+    assert.equal(refused.status, 400, JSON.stringify(refused.body));
+    assert.equal(psql(`SELECT count(*) FROM projects WHERE id = '${victim.id}';`), "1", "the unrelated project survives");
+    assert.equal(psql(`SELECT count(*) FROM project_status_updates WHERE project_id = '${victim.id}';`), "1", "with its history");
+    assert.equal(psql(`SELECT count(*) FROM project_sections WHERE id = '${victimSection.id}';`), "1");
+    assert.equal(psql(`SELECT count(*) FROM task_comments WHERE id = '${victimComment.id}';`), "1");
+    assert.deepEqual(userState(userA), before, "nothing at all changed");
+    // The function itself takes only break_id too (a direct RPC with ids is refused).
+    const direct = await clientA.rpc("undo_break_task_into_tasks", { p_user_id: userA, p_task_id: fixture.umbrella.id, p_request: { task_ids: made.body.task_ids, project_id: victim.id } });
+    assert.ok(direct.error, "direct RPC with ids refused");
+    // Another umbrella's break id doesn't work on this umbrella.
+    const other = await mockupFixture();
+    const madeOther = await breakTask(other.umbrella.id, newSectionBody(other.rows, "P1-1 other"));
+    const beforeCrossed = userState(userA);
+    const crossed = await breakTask(fixture.umbrella.id, { action: "undo", break_id: madeOther.body.break_id ?? randomUUID() });
+    assert.equal(crossed.status, 409);
+    assert.deepEqual(userState(userA), beforeCrossed, "another umbrella's break id deletes nothing");
+    // And a record can't be forged or removed through the API (only the functions write task_breaks).
+    const forged = await clientA.from("task_breaks").insert({ user_id: userA, umbrella_task_id: fixture.umbrella.id, task_ids: [made.body.task_ids[0]], project_id: victim.id, project_created: true, fingerprint: "x" });
+    assert.ok(forged.error, "forged record refused");
+    await clientA.from("task_breaks").delete().eq("umbrella_task_id", fixture.umbrella.id);
+    assert.equal(psql(`SELECT count(*) FROM task_breaks WHERE umbrella_task_id = '${fixture.umbrella.id}';`), "1", "RLS: the record can't be deleted through the API");
+    // The real Undo still works and deletes only what the break made.
+    const undone = await breakTask(fixture.umbrella.id, undoOf(made));
+    assert.equal(undone.status, 200, JSON.stringify(undone.body));
+    assert.equal(undone.body.project_deleted, false);
+    assert.equal(psql(`SELECT count(*) FROM projects WHERE id = '${victim.id}';`), "1");
+    assert.equal(psql(`SELECT count(*) FROM task_comments WHERE id = '${victimComment.id}';`), "1");
+  });
+
+  async function staleUndoCase(change) {
+    const fixture = await mockupFixture();
+    const made = await breakTask(fixture.umbrella.id, newSectionBody(fixture.rows, `Stale ${randomUUID().slice(0, 6)}`));
+    assert.equal(made.status, 201, JSON.stringify(made.body));
+    const ids = made.body.task_ids;
+    await change({ fixture, made, ids });
+    const before = userState(userA);
+    const undone = await breakTask(fixture.umbrella.id, undoOf(made));
+    assert.equal(undone.status, 409, `Undo must refuse: ${JSON.stringify(undone.body)}`);
+    assert.match(undone.body.error, /changed since the break/);
+    // Nothing deleted (counts, not every column: a PATCH can still be settling priorities in the background).
+    const after = userState(userA);
+    for (const key of ["tasks", "sections", "projects", "comments", "deps"]) assert.equal(after[key], before[key], `nothing deleted: ${key}`);
+    assert.deepEqual(after.rows, before.rows);
+    assert.equal(countIn("tasks", "id", ids), "6");
+    return { fixture, made, ids };
+  }
+
+  await test("FR P1-2: a comment added to a step since the break → Undo refuses, the step and the comment stay", async () => {
+    await staleUndoCase(async ({ ids }) => {
+      const { error } = await clientA.from("task_comments").insert({ user_id: userA, task_id: ids[3], content: "Real work notes", source: "manual" });
+      assert.equal(error, null);
+    });
+  });
+
+  await test("FR P1-2: another task linked to wait on a step → Undo refuses, the link stays (X stays blocked)", async () => {
+    const { ids } = await staleUndoCase(async ({ ids }) => {
+      const x = await insert("tasks", { user_id: userA, title: "X waits on step 4", status: "Planned" }, clientA);
+      const { error } = await clientA.from("task_dependencies").insert({ user_id: userA, task_id: x.id, depends_on_task_id: ids[3] });
+      assert.equal(error, null);
+    });
+    assert.equal(psql(`SELECT count(*) FROM task_dependencies WHERE depends_on_task_id = '${ids[3]}' AND NOT is_resolved;`), "2", "step 6's chain link and X's link");
+  });
+
+  await test("FR P1-2: a step edited or completed since → Undo refuses", async () => {
+    await staleUndoCase(async ({ ids }) => {
+      const done = await patchTask(ids[3], { status: "Done" });
+      assert.equal(done.status, 200, JSON.stringify(done.body));
+    });
+    await staleUndoCase(async ({ ids }) => {
+      const renamed = await patchTask(ids[5], { title: "Complete 015 (renamed)" });
+      assert.equal(renamed.status, 200, JSON.stringify(renamed.body));
+    });
+  });
+
+  await test("FR P1-2: a new task added to the section the break made, or a note linked to a step → Undo refuses", async () => {
+    await staleUndoCase(async ({ fixture, made }) => {
+      await insert("tasks", { user_id: userA, title: "Added later", project_id: fixture.proj.id, section_id: made.body.section_id }, clientA);
+    });
+    await staleUndoCase(async ({ ids }) => {
+      const note = await insert("notes", { user_id: userA, title: "Note", note_type: "working_note" }, clientA);
+      await insert("note_links", { user_id: userA, note_id: note.id, entity_type: "task", entity_id: ids[0] }, clientA);
+    });
+  });
+
+  await test("FR P1-3: a personal task broken into a WORK project: the FamCal key's comment read never shows the project's name", async () => {
+    const work = await insert("projects", { user_id: userA, name: "CONFIDENTIAL WORK PROJECT", tags: [] });
+    const { umbrella, rows } = await smallUmbrella({ title: "Pick up the dog food", tags: ["personal"], rows: [["Open step", false], ["Done step", true]] });
+    const made = await breakTask(umbrella.id, { destination: { kind: "existing_project", name: "Errands", project_id: work.id }, steps: rows.map((r) => ({ checklist_item_id: r.id, due_date: null, owner: "brent" })) });
+    assert.equal(made.status, 201, JSON.stringify(made.body));
+    const famcal = await readFamcalTaskComments(admin, userA, umbrella.id);
+    assert.ok(Array.isArray(famcal) && famcal.length === 1, "the umbrella is FamCal-visible and has its comment");
+    for (const comment of famcal) assert.doesNotMatch(comment.content, /CONFIDENTIAL|Errands/);
+    assert.match(famcal[0].content, /^Broken into 2 tasks in another project \(1 already done\)/);
+    // The steps (in the work project) aren't FamCal-visible; their comments may name the personal umbrella.
+    assert.equal(await readFamcalTaskComments(admin, userA, made.body.task_ids[0]), null);
+    // Control: into a PERSONAL project the same audience sees both, so the name is used.
+    const garden = await insert("projects", { user_id: userA, name: "Garden", tags: ["personal"] });
+    const second = await smallUmbrella({ title: "Plant bulbs", tags: ["personal"] });
+    const made2 = await breakTask(second.umbrella.id, { destination: { kind: "existing_project", name: "Bulbs", project_id: garden.id }, steps: [{ checklist_item_id: second.rows[0].id, due_date: null, owner: "brent" }] });
+    assert.equal(made2.status, 201, JSON.stringify(made2.body));
+    assert.match((await readFamcalTaskComments(admin, userA, second.umbrella.id))[0].content, /a new section “Bulbs” in Garden/);
+  });
+
+  await test("FR P1-3 (reverse): a non-FamCal task whose steps become FamCal-visible: the steps' comments don't name it", async () => {
+    const app = await insert("implementations", { user_id: userA, name: `Work app ${randomUUID().slice(0, 6)}` });
+    const { umbrella, rows } = await smallUmbrella({ title: "SECRET WORK TASK TITLE", tags: ["personal"], implementationId: app.id });
+    assert.equal(await readFamcalTaskComments(admin, userA, umbrella.id), null, "the umbrella is not FamCal-visible (it has an application)");
+    // A new project gets the task's tags (personal) but 046 keeps the application on the project; make the target a plain personal project instead.
+    const home = await insert("projects", { user_id: userA, name: "Home", tags: ["personal"] });
+    const made = await breakTask(umbrella.id, { destination: { kind: "existing_project", name: "Home steps", project_id: home.id }, steps: [{ checklist_item_id: rows[0].id, due_date: null, owner: "brent" }] });
+    assert.equal(made.status, 201, JSON.stringify(made.body));
+    const stepComments = await readFamcalTaskComments(admin, userA, made.body.task_ids[0]);
+    assert.ok(Array.isArray(stepComments) && stepComments.length === 1, "the step is FamCal-visible");
+    assert.doesNotMatch(stepComments[0].content, /SECRET/);
+    assert.match(stepComments[0].content, /^Part of another task: broken out of its checklist/);
+  });
+
+  await test("FR P2-2: the pace forecast counts a broken-out row once (10 units left stays 10, not 20; step Done → 0); partial selection; Undo", async () => {
+    const proj = await insert("projects", { user_id: userA, name: `Blanket ${randomUUID().slice(0, 6)}`, unit_label: "rows", tags: [] });
+    const { umbrella, rows } = await smallUmbrella({ title: "Rows 1-14", projectId: proj.id, rows: [["Rows 1-10", false], ["Rows 11-14", false]], units: [10, 4] });
+    psql(`UPDATE tasks SET work_type = 'sc' WHERE id = '${umbrella.id}';`);
+    const left = async () => (await getProjectForecast(clientA, userA, proj.id)).forecast.work_types.reduce((sum, t) => sum + t.units_left, 0);
+    assert.equal(await left(), 14);
+    const made = await breakTask(umbrella.id, { destination: { kind: "new_section", name: "First ten" }, steps: [{ checklist_item_id: rows[0].id, due_date: day(2), owner: "brent" }] });
+    assert.equal(made.status, 201, JSON.stringify(made.body));
+    assert.equal(await left(), 14, "the same work, counted once");
+    assert.equal(psql(`SELECT unit_count::int || ':' || source_checklist_item_id FROM tasks WHERE id = '${made.body.task_ids[0]}';`), `10:${rows[0].id}`);
+    const before = await left();
+    const done = await patchTask(made.body.task_ids[0], { status: "Done" });
+    assert.equal(done.status, 200);
+    assert.equal(await left(), before - 10, "step Done → its row's units are done");
+    // Undo (a fresh break, untouched) puts the row back on its own.
+    const second = await smallUmbrella({ title: "Rows 15-20", projectId: proj.id, rows: [["Rows 15-20", false]], units: [6] });
+    const at = await left();
+    const made2 = await breakTask(second.umbrella.id, { destination: { kind: "new_section", name: "Last six" }, steps: [{ checklist_item_id: second.rows[0].id, due_date: day(2), owner: "brent" }] });
+    assert.equal(await left(), at);
+    assert.equal((await breakTask(second.umbrella.id, undoOf(made2))).status, 200);
+    assert.equal(await left(), at);
+  });
+
+  await test("FR P2-3: historical finished steps are not today's completions (updated_at = tick time; the brief snapshot agrees)", async () => {
+    const fixture = await mockupFixture();
+    const made = await breakTask(fixture.umbrella.id, newSectionBody(fixture.rows, "P2-3"));
+    assert.equal(made.status, 201, JSON.stringify(made.body));
+    const steps = json(`SELECT json_agg(row_to_json(t) ORDER BY created_at) FROM tasks t WHERE parent_task_id = '${fixture.umbrella.id}';`);
+    for (const [index, step] of steps.entries()) {
+      const r = fixture.rows[index];
+      if (r.is_done) assert.equal(Date.parse(step.updated_at), Date.parse(r.completed_at), `step ${index + 1}: updated_at = its tick time`);
+    }
+    const dayStart = startOf(today);
+    const window = { requestedDate: today, since: dayStart, dayStartIso: dayStart, dayEndExclusiveIso: startOf(day(1)), timezone: TZ };
+    const snapshotTasks = () => json(`SELECT json_agg(row_to_json(t)) FROM tasks t WHERE parent_task_id = '${fixture.umbrella.id}';`)
+      .map((t) => ({ ...t, implementation: null, project: null, sprint: null }));
+    let snapshot = buildWorkIntelligenceSnapshot({ now: new Date(), window, tasks: snapshotTasks(), events: [], taskComments: [], currentSprint: null });
+    assert.deepEqual(snapshot.completedTodayTasks.map((t) => t.id), [], "none of the 4 old finished steps count as done today");
+    // Control: a step finished today does count.
+    assert.equal((await patchTask(made.body.task_ids[3], { status: "Done" })).status, 200);
+    snapshot = buildWorkIntelligenceSnapshot({ now: new Date(), window, tasks: snapshotTasks(), events: [], taskComments: [], currentSprint: null });
+    assert.deepEqual(snapshot.completedTodayTasks.map((t) => t.id), [made.body.task_ids[3]]);
+  });
+
+  await test("FR P2-4: a Done task can't be broken (route refused; and closed under the lock after the app planned → task_closed), nothing written", async () => {
+    for (const status of ["Done", "Parked", "Missed"]) {
+      const closed = await smallUmbrella({ title: `Closed ${status}`, status });
+      const before = userState(userA);
+      const refused = await breakTask(closed.umbrella.id, { destination: { kind: "new_project", name: `Closed ${status} ${randomUUID().slice(0, 4)}` }, steps: [{ checklist_item_id: closed.rows[0].id, due_date: null, owner: "brent" }] });
+      assert.ok(refused.status === 400 || refused.status === 409, `${status}: ${refused.status} ${JSON.stringify(refused.body)}`);
+      assert.deepEqual(userState(userA), before, status);
+    }
+    const fixture = await mockupFixture();
+    const parsed = bit.parseBreakRequest(stepsBody(fixture.rows));
+    const plan = bit.planBreak(parsed.value, { umbrella: { ...fixture.umbrella, project: { tags: [] } }, rows: fixture.rows, projectName: "P", now: new Date() });
+    assert.equal(plan.ok, true);
+    psql(`UPDATE tasks SET status = 'Done' WHERE id = '${fixture.umbrella.id}';`);
+    const before = userState(userA);
+    const { data, error } = await clientA.rpc("break_task_into_tasks", { p_user_id: userA, p_task_id: fixture.umbrella.id, p_request: plan.value });
+    assert.equal(error, null);
+    assert.deepEqual(data, { ok: false, reason: "task_closed" });
+    assert.deepEqual(userState(userA), before);
+  });
+
+  await test("FR L3: a step can't be made by a direct insert (PostgREST or SQL), even for the user's own task; nor can a source row be set", async () => {
+    const { umbrella, rows } = await smallUmbrella({ title: "L3" });
+    const viaApi = await clientA.from("tasks").insert({ user_id: userA, title: "Sneaky step", parent_task_id: umbrella.id });
+    assert.ok(viaApi.error, "PostgREST insert with parent_task_id refused");
+    assert.match(psqlFails(`INSERT INTO tasks (user_id, title, parent_task_id) VALUES ('${userA}', 'x', '${umbrella.id}');`), /only by Break into tasks|parent_task_guard/);
+    const plain = await insert("tasks", { user_id: userA, title: "Plain" }, clientA);
+    const setSource = await clientA.from("tasks").update({ source_checklist_item_id: rows[0].id }).eq("id", plain.id);
+    assert.ok(setSource.error, "setting a source row later is refused");
+    assert.equal(psql(`SELECT count(*) FROM tasks WHERE parent_task_id = '${umbrella.id}';`), "0");
+  });
+
 } finally {
   for (const id of users) {
     await admin.auth.admin.deleteUser(id).catch(() => null);

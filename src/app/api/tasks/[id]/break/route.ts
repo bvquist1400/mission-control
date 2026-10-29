@@ -5,8 +5,8 @@ import { breakTaskIntoTasks, undoBreakTaskIntoTasks } from '@/lib/break-into-tas
 /**
  * POST /api/tasks/[id]/break — "Break into tasks" (Baseline task d1f7e622).
  * Body `{ destination, steps }` creates the step tasks in one transaction
- * (migration 066); `{ action: "undo", task_ids, section_id, project_id,
- * umbrella_comment_id }` takes them back (the toast's Undo). Not on the FamCal
+ * (migration 066); `{ action: "undo", break_id }` takes them back (the toast's
+ * Undo; everything it deletes comes from the break's record). Not on the FamCal
  * or actions key allowlists (route-auth refuses those keys here).
  */
 export async function POST(

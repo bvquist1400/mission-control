@@ -2269,6 +2269,56 @@ export type Database = {
           },
         ]
       }
+      task_breaks: {
+        Row: {
+          created_at: string
+          fingerprint: string
+          id: string
+          project_created: boolean
+          project_id: string | null
+          section_created: boolean
+          section_id: string | null
+          task_ids: string[]
+          umbrella_comment_id: string | null
+          umbrella_task_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          fingerprint: string
+          id?: string
+          project_created?: boolean
+          project_id?: string | null
+          section_created?: boolean
+          section_id?: string | null
+          task_ids: string[]
+          umbrella_comment_id?: string | null
+          umbrella_task_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          fingerprint?: string
+          id?: string
+          project_created?: boolean
+          project_id?: string | null
+          section_created?: boolean
+          section_id?: string | null
+          task_ids?: string[]
+          umbrella_comment_id?: string | null
+          umbrella_task_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "task_breaks_umbrella_task_id_fkey"
+            columns: ["umbrella_task_id"]
+            isOneToOne: true
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       task_checklist_items: {
         Row: {
           completed_at: string | null
@@ -2626,6 +2676,7 @@ export type Database = {
           recurrence: Json | null
           recurring_template_id: string | null
           section_id: string | null
+          source_checklist_item_id: string | null
           source_type: string
           source_url: string | null
           sprint_id: string | null
@@ -2674,6 +2725,7 @@ export type Database = {
           recurrence?: Json | null
           recurring_template_id?: string | null
           section_id?: string | null
+          source_checklist_item_id?: string | null
           source_type?: string
           source_url?: string | null
           sprint_id?: string | null
@@ -2722,6 +2774,7 @@ export type Database = {
           recurrence?: Json | null
           recurring_template_id?: string | null
           section_id?: string | null
+          source_checklist_item_id?: string | null
           source_type?: string
           source_url?: string | null
           sprint_id?: string | null
@@ -3115,6 +3168,16 @@ export type Database = {
           skipped_pinned: number
           sync_at: string
         }[]
+      }
+      task_break_fingerprint: {
+        Args: {
+          p_comment_id: string
+          p_project_id: string
+          p_section_id: string
+          p_task_ids: string[]
+          p_user_id: string
+        }
+        Returns: string
       }
       task_date_cascade_apply_core: {
         Args: {

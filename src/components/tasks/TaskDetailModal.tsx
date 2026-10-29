@@ -67,7 +67,7 @@ export function TaskDetailModal({
   const { steps, reload: reloadSteps } = useTaskSteps(task?.id ?? null);
   const breakInto = useBreakIntoTasks({ task, onChanged: reloadSteps });
   const isUmbrella = steps.step_tasks.length > 0;
-  const showBreakButton = Boolean(task) && !task?.is_recurring_template && canBreakIntoTasks(checklist, steps.step_tasks.length);
+  const showBreakButton = Boolean(task) && !task?.is_recurring_template && canBreakIntoTasks(checklist, steps.step_tasks.length, task?.status ?? null);
 
   useEffect(() => {
     setDeleteError(null);

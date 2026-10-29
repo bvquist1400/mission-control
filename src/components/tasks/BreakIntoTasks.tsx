@@ -160,6 +160,8 @@ interface ProjectOption {
 }
 
 export interface BreakCreated {
+  /** The break's record (066's task_breaks): the only thing Undo sends. */
+  break_id: string;
   task_ids: string[];
   section_id: string | null;
   section_created: boolean;
@@ -610,13 +612,7 @@ export function useBreakIntoTasks({
               const response = await fetch(`/api/tasks/${taskId}/break`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  action: "undo",
-                  task_ids: created.task_ids,
-                  section_id: created.section_created ? created.section_id : null,
-                  project_id: created.project_created ? created.project_id : null,
-                  umbrella_comment_id: created.umbrella_comment_id,
-                }),
+                body: JSON.stringify({ action: "undo", break_id: created.break_id }),
               });
               const payload = (await response.json().catch(() => ({}))) as { error?: string };
               if (!response.ok) {

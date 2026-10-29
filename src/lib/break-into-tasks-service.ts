@@ -82,7 +82,8 @@ export async function breakTaskIntoTasks(
     project,
   };
 
-  // The name the comments use for an existing destination (read-only; the function re-checks it under the lock).
+  // The name the comments use for an existing destination (read-only; the function re-checks it under the
+  // lock, and writes the plain wording instead whenever the steps land where another audience can read them).
   let destinationLabel: string | null = null;
   const dest = parsed.value.destination;
   if (dest.kind === 'existing_section' && dest.section_id) {
@@ -124,7 +125,12 @@ export async function breakTaskIntoTasks(
   return { status: 201, body: result };
 }
 
-/** POST /api/tasks/{id}/break with `action: "undo"`. */
+/**
+ * POST /api/tasks/{id}/break with `action: "undo"` and the `break_id` the
+ * create returned. Nothing else is accepted: what Undo deletes comes only from
+ * the break's own record (066's task_breaks), never from ids in the request,
+ * and the function refuses when anything about those tasks changed since.
+ */
 export async function undoBreakTaskIntoTasks(
   supabase: SupabaseClient,
   userId: string,
@@ -132,28 +138,20 @@ export async function undoBreakTaskIntoTasks(
   body: unknown
 ): Promise<ServiceReply> {
   if (!UUID_RE.test(taskId)) return { status: 404, body: { error: 'Task not found.' } };
-  const raw = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
-  const allowed = new Set(['action', 'task_ids', 'section_id', 'project_id', 'umbrella_comment_id']);
+  const raw = (body && typeof body === 'object' && !Array.isArray(body) ? body : {}) as Record<string, unknown>;
+  const allowed = new Set(['action', 'break_id']);
   const extra = Object.keys(raw).find((key) => !allowed.has(key));
-  if (extra) return { status: 400, body: { error: `Unknown field: ${extra}` } };
-  const taskIds = raw.task_ids;
-  if (!Array.isArray(taskIds) || taskIds.length === 0 || taskIds.length > 100 || !taskIds.every((id) => typeof id === 'string' && UUID_RE.test(id))) {
-    return { status: 400, body: { error: 'task_ids must list the tasks the break created.' } };
-  }
-  const optionalId = (value: unknown): string | null | 'bad' =>
-    value === undefined || value === null || value === '' ? null : typeof value === 'string' && UUID_RE.test(value) ? value : 'bad';
-  const sectionId = optionalId(raw.section_id);
-  const projectId = optionalId(raw.project_id);
-  const commentId = optionalId(raw.umbrella_comment_id);
-  if (sectionId === 'bad' || projectId === 'bad' || commentId === 'bad') {
-    return { status: 400, body: { error: 'section_id, project_id and umbrella_comment_id must be ids or null.' } };
+  if (extra) return { status: 400, body: { error: `Unknown field: ${extra}. Undo takes only break_id.` } };
+  const breakId = raw.break_id;
+  if (typeof breakId !== 'string' || !UUID_RE.test(breakId)) {
+    return { status: 400, body: { error: 'break_id must be the id the break returned.' } };
   }
 
   const { data, error } = await withCascadeRetry(() =>
     supabase.rpc('undo_break_task_into_tasks', {
       p_user_id: userId,
       p_task_id: taskId,
-      p_request: { task_ids: taskIds, section_id: sectionId, project_id: projectId, umbrella_comment_id: commentId },
+      p_request: { break_id: breakId },
     })
   );
   if (error) return failure(error, 'undo the break');
