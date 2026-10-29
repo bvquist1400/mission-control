@@ -2198,7 +2198,7 @@
             "type": "string"
           },
           "additionalProperties": {},
-          "description": "Read-only page content: heading, narrative, first_moves[], stats[{key,label,value}] (in display order; the ready notice quotes the stat with key \"done\" if there is one, else the first stat, e.g. {key:\"due\",label:\"due today\"} first on a morning), next{label, agenda[{time,title,free?,choice_item?}]} (free=true for a free-time line; choice_item = 0-based position of a choice item in items; Baseline links that agenda line to the choice), meetings[{id?,title,short?,start,end?,url?,has_notes,prep?,task_ids?}] for the day timeline (a meeting that starts after the save draws as upcoming: prep = one or two lines on how to go in, task_ids = Brent's tasks that prepare for it), tiles[{key,type:\"narrative\"|\"list\",label,value?,suffix?,summary?,text?,list?,list_label?,groups[{label?,rows[{title,meta?,task_id?}]}],footnote?,href?}] (href links the tile to another brief page and must be \"/briefs/<CODE>\", e.g. \"/briefs/EOD-0925\"; anything else is dropped), footnote."
+          "description": "Read-only page content: heading, narrative, first_moves[], stats[{key,label,value}] (in display order; the ready notice quotes the stat with key \"done\" if there is one, else the first stat, e.g. {key:\"due\",label:\"due today\"} first on a morning), next{label, agenda[{time,title,free?,choice_item?}]} (free=true for a free-time line; choice_item = 0-based position of a choice item in items; Baseline links that agenda line to the choice), meetings[{id?,title,short?,start,end?,url?,has_notes,prep?,task_ids?}] for the day timeline (a meeting that starts after the save draws as upcoming: prep = one or two lines on how to go in, task_ids = Brent's tasks that prepare for it), tiles[{key,type:\"narrative\"|\"list\",label,value?,suffix?,summary?,text?,list?,list_label?,groups[{label?,rows[{title,meta?,task_id?}]}],footnote?,href?}] (href links the tile to another brief page and must be \"/briefs/<CODE>\", e.g. \"/briefs/EOD-0925\"; anything else is dropped), footnote, work_digest_note_ids[] (the work digest note ids this brief read, even ones that produced no items)."
         },
         "covered_meeting_ids": {
           "description": "Granola ids of every meeting read for this brief, including ones that produced no items",
@@ -2220,7 +2220,7 @@
                   "carry_group",
                   "choice"
                 ],
-                "description": "proposed_task = meeting action item (Accept/Dismiss); carry_over = one task that needs a call (Done/Tomorrow/Park); carry_group = several tasks decided together (Tomorrow/Park); choice = pick one option, e.g. a calendar clash"
+                "description": "proposed_task = a meeting or work digest action item (Accept/Dismiss); carry_over = one task that needs a call (Done/Tomorrow/Park); carry_group = several tasks decided together (Tomorrow/Park); choice = pick one option, e.g. a calendar clash"
               },
               "title": {
                 "type": "string",
@@ -2254,7 +2254,7 @@
                 }
               },
               "source": {
-                "description": "Meetings this item came from",
+                "description": "Where this item came from: meetings, a work digest item, or both",
                 "type": "object",
                 "properties": {
                   "meetings": {
@@ -2291,11 +2291,46 @@
                         "title"
                       ]
                     }
+                  },
+                  "work_digest": {
+                    "description": "proposed_task only: the work digest item(s) this came from",
+                    "type": "object",
+                    "properties": {
+                      "note_id": {
+                        "type": "string",
+                        "description": "The work digest note id (work_digest.am.note_id or work_digest.pm.note_id from get_brief_digest)"
+                      },
+                      "edition": {
+                        "type": "string",
+                        "enum": [
+                          "am",
+                          "pm"
+                        ],
+                        "description": "Which digest note: am or pm"
+                      },
+                      "blocks": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "description": "The W blocks this item came from, e.g. [\"W3\"]"
+                      },
+                      "lines": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "description": "Each cited block's `what` line, copied exactly"
+                      }
+                    },
+                    "required": [
+                      "note_id",
+                      "edition",
+                      "blocks",
+                      "lines"
+                    ]
                   }
-                },
-                "required": [
-                  "meetings"
-                ]
+                }
               },
               "maybe_tracked": {
                 "type": "object",
@@ -2369,7 +2404,7 @@
             "type": "string"
           },
           "additionalProperties": {},
-          "description": "Read-only page content: heading, narrative, first_moves[], stats[{key,label,value}] (in display order; the ready notice quotes the stat with key \"done\" if there is one, else the first stat, e.g. {key:\"due\",label:\"due today\"} first on a morning), next{label, agenda[{time,title,free?,choice_item?}]} (free=true for a free-time line; choice_item = 0-based position of a choice item in items; Baseline links that agenda line to the choice), meetings[{id?,title,short?,start,end?,url?,has_notes,prep?,task_ids?}] for the day timeline (a meeting that starts after the save draws as upcoming: prep = one or two lines on how to go in, task_ids = Brent's tasks that prepare for it), tiles[{key,type:\"narrative\"|\"list\",label,value?,suffix?,summary?,text?,list?,list_label?,groups[{label?,rows[{title,meta?,task_id?}]}],footnote?,href?}] (href links the tile to another brief page and must be \"/briefs/<CODE>\", e.g. \"/briefs/EOD-0925\"; anything else is dropped), footnote."
+          "description": "Read-only page content: heading, narrative, first_moves[], stats[{key,label,value}] (in display order; the ready notice quotes the stat with key \"done\" if there is one, else the first stat, e.g. {key:\"due\",label:\"due today\"} first on a morning), next{label, agenda[{time,title,free?,choice_item?}]} (free=true for a free-time line; choice_item = 0-based position of a choice item in items; Baseline links that agenda line to the choice), meetings[{id?,title,short?,start,end?,url?,has_notes,prep?,task_ids?}] for the day timeline (a meeting that starts after the save draws as upcoming: prep = one or two lines on how to go in, task_ids = Brent's tasks that prepare for it), tiles[{key,type:\"narrative\"|\"list\",label,value?,suffix?,summary?,text?,list?,list_label?,groups[{label?,rows[{title,meta?,task_id?}]}],footnote?,href?}] (href links the tile to another brief page and must be \"/briefs/<CODE>\", e.g. \"/briefs/EOD-0925\"; anything else is dropped), footnote, work_digest_note_ids[] (the work digest note ids this brief read, even ones that produced no items)."
         },
         "covered_meeting_ids": {
           "description": "Granola ids of every meeting read for this brief, including ones that produced no items",
@@ -2391,7 +2426,7 @@
                   "carry_group",
                   "choice"
                 ],
-                "description": "proposed_task = meeting action item (Accept/Dismiss); carry_over = one task that needs a call (Done/Tomorrow/Park); carry_group = several tasks decided together (Tomorrow/Park); choice = pick one option, e.g. a calendar clash"
+                "description": "proposed_task = a meeting or work digest action item (Accept/Dismiss); carry_over = one task that needs a call (Done/Tomorrow/Park); carry_group = several tasks decided together (Tomorrow/Park); choice = pick one option, e.g. a calendar clash"
               },
               "title": {
                 "type": "string",
@@ -2425,7 +2460,7 @@
                 }
               },
               "source": {
-                "description": "Meetings this item came from",
+                "description": "Where this item came from: meetings, a work digest item, or both",
                 "type": "object",
                 "properties": {
                   "meetings": {
@@ -2462,11 +2497,46 @@
                         "title"
                       ]
                     }
+                  },
+                  "work_digest": {
+                    "description": "proposed_task only: the work digest item(s) this came from",
+                    "type": "object",
+                    "properties": {
+                      "note_id": {
+                        "type": "string",
+                        "description": "The work digest note id (work_digest.am.note_id or work_digest.pm.note_id from get_brief_digest)"
+                      },
+                      "edition": {
+                        "type": "string",
+                        "enum": [
+                          "am",
+                          "pm"
+                        ],
+                        "description": "Which digest note: am or pm"
+                      },
+                      "blocks": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "description": "The W blocks this item came from, e.g. [\"W3\"]"
+                      },
+                      "lines": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "description": "Each cited block's `what` line, copied exactly"
+                      }
+                    },
+                    "required": [
+                      "note_id",
+                      "edition",
+                      "blocks",
+                      "lines"
+                    ]
                   }
-                },
-                "required": [
-                  "meetings"
-                ]
+                }
               },
               "maybe_tracked": {
                 "type": "object",

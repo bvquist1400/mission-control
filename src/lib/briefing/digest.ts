@@ -29,6 +29,7 @@ import {
   type PreviousBriefRef,
 } from "@/lib/briefing/comment-window";
 import { listRecentBriefSaves } from "@/lib/briefs/service";
+import { fetchWorkDigestSection, type WorkDigestSection } from "@/lib/briefing/work-digest";
 import {
   buildListTotals,
   describeDuplicates,
@@ -299,6 +300,13 @@ export interface DailyBriefDigestResponse {
    * with list_task_comments before saying what a comment means.
    */
   new_comments: NewCommentsSection;
+  /**
+   * Today's (ET) work digest notes ("Work digest YYYY-MM-DD AM" / "PM", filed
+   * from Brent's Copilot digest), re-validated on read: `am` for the morning
+   * and midday, `am` + `pm` for the EOD. Each is `ok` (parsed items and still
+   * waiting list), `missing` or `unreadable` with a reason; never throws.
+   */
+  work_digest: WorkDigestSection;
   status_update_recommendations: DailyBriefStatusUpdateRecommendation[];
   guidance_title: "Where to Start" | "Afternoon Focus" | "Tomorrow Prep";
   guidance: string[];
@@ -1890,7 +1898,7 @@ export async function buildDailyBriefDigest({
   });
   const effectiveSince = activityWindow.since;
 
-  const [todayEvents, tomorrowEvents, allTasks, openCommitments, stakeholders, windowComments, currentSprint, openReviewItems] = await Promise.all([
+  const [todayEvents, tomorrowEvents, allTasks, openCommitments, stakeholders, windowComments, currentSprint, openReviewItems, workDigest] = await Promise.all([
     fetchCalendarEvents(supabase, userId, requestedDate),
     resolvedMode === "eod" ? fetchCalendarEvents(supabase, userId, tomorrowDate) : Promise.resolve([]),
     fetchTasks(supabase, userId),
@@ -1903,6 +1911,7 @@ export async function buildDailyBriefDigest({
       : resolvedMode === "midday"
         ? readBriefingOpenReviewItems(supabase, userId, { families: [RECENTLY_UNBLOCKED_FAMILY] })
         : Promise.resolve([]),
+    fetchWorkDigestSection(supabase, userId, requestedDate, resolvedMode),
   ]);
 
   const snapshot = buildWorkIntelligenceSnapshot({
@@ -2239,6 +2248,7 @@ export async function buildDailyBriefDigest({
       tasks: allTasks,
       untilIso: dayWindows.utcRangeEndExclusive,
     }),
+    work_digest: workDigest,
     status_update_recommendations: statusUpdateRecommendations,
     guidance_title: guidanceTitle,
     guidance,

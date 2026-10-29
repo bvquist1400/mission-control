@@ -26,6 +26,7 @@ import {
   type BriefTile,
   type BriefTileGroup,
   type BriefTileRow,
+  type BriefWorkDigestRef,
   type DismissReason,
   type SaveBriefInput,
 } from "@/lib/briefs/types";
@@ -218,7 +219,57 @@ export function normalizeBriefContent(value: unknown): BriefContent {
   }
   const footnote = str(value.footnote, 500);
   if (footnote) content.footnote = footnote;
+  if (Array.isArray(value.work_digest_note_ids)) {
+    const noteIds = [...new Set(value.work_digest_note_ids.filter(isUuid).map((id) => id.toLowerCase()))].slice(0, MAX_DIGEST_NOTES);
+    if (noteIds.length) content.work_digest_note_ids = noteIds;
+  }
   return content;
+}
+
+// ---------------------------------------------------------------------------
+// Work digest citations (source.work_digest)
+// ---------------------------------------------------------------------------
+
+/** A brief reads at most today's AM and PM notes; a little room for a hand-made copy. */
+const MAX_DIGEST_NOTES = 4;
+const MAX_DIGEST_BLOCKS = 5;
+const DIGEST_BLOCK_PATTERN = /^W(?:[1-9]|1[0-9]|20)$/;
+
+/**
+ * A stored or incoming source.work_digest, cleaned the same way on save and on
+ * read. Returns the errors for a save; a read just drops a bad one.
+ */
+export function parseWorkDigestRef(value: unknown, path: string, errors: string[]): BriefWorkDigestRef | null {
+  if (!isObject(value)) {
+    errors.push(`${path} must be an object`);
+    return null;
+  }
+  const before = errors.length;
+  if (!isUuid(value.note_id)) errors.push(`${path}.note_id must be the work digest note's UUID`);
+  const edition = typeof value.edition === "string" ? value.edition.trim().toLowerCase() : "";
+  if (edition !== "am" && edition !== "pm") errors.push(`${path}.edition must be am or pm`);
+
+  const rawBlocks = Array.isArray(value.blocks) ? value.blocks : [];
+  const blocks = [...new Set(rawBlocks.map((block) => (typeof block === "string" ? block.trim().toUpperCase() : "")))];
+  if (blocks.length === 0 || blocks.length > MAX_DIGEST_BLOCKS) errors.push(`${path}.blocks must list 1 to ${MAX_DIGEST_BLOCKS} W blocks, e.g. ["W3"]`);
+  if (blocks.some((block) => !DIGEST_BLOCK_PATTERN.test(block))) errors.push(`${path}.blocks entries must be W1 to W20`);
+
+  const rawLines = value.lines ?? (value.line !== undefined ? [value.line] : []);
+  const lines = strList(rawLines, MAX_DIGEST_BLOCKS, 1000);
+  if (lines.length === 0) errors.push(`${path}.lines must give each cited block's what line, verbatim`);
+
+  if (errors.length > before) return null;
+  const ref: BriefWorkDigestRef = { note_id: (value.note_id as string).toLowerCase(), edition: edition as "am" | "pm", blocks, lines };
+  if (isDateOnlyString(value.date)) ref.date = value.date;
+  const where = str(value.where, 20);
+  if (where && ["Mail", "Teams", "Mail and Teams"].includes(where)) ref.where = where;
+  return ref;
+}
+
+/** The stored source.work_digest of an item read back from the database, or undefined when it's absent or malformed. */
+export function normalizeStoredWorkDigestRef(value: unknown): BriefWorkDigestRef | undefined {
+  if (value === undefined || value === null) return undefined;
+  return parseWorkDigestRef(value, "source.work_digest", []) ?? undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -325,6 +376,12 @@ function parseItem(value: unknown, index: number, errors: string[]): BriefItemIn
     .map((meeting, meetingIndex) => parseMeetingRef(meeting, `${path}.source.meetings[${meetingIndex}]`, errors))
     .filter((meeting): meeting is BriefMeetingRef => meeting !== null);
 
+  let workDigest: BriefWorkDigestRef | null = null;
+  if (rawSource.work_digest !== undefined && rawSource.work_digest !== null) {
+    if (kind !== "proposed_task") errors.push(`${path}.source.work_digest only applies to a proposed_task`);
+    else workDigest = parseWorkDigestRef(rawSource.work_digest, `${path}.source.work_digest`, errors);
+  }
+
   if (value.maybe_tracked !== undefined && value.maybe_tracked !== null) {
     const maybe = value.maybe_tracked;
     if (!isObject(maybe) || !isUuid(maybe.task_id)) {
@@ -336,7 +393,9 @@ function parseItem(value: unknown, index: number, errors: string[]): BriefItemIn
 
   switch (kind) {
     case "proposed_task":
-      if (meetings.length === 0) errors.push(`${path}: a proposed_task must cite at least one meeting in source.meetings`);
+      if (meetings.length === 0 && !workDigest && (rawSource.work_digest === undefined || rawSource.work_digest === null)) {
+        errors.push(`${path}: a proposed_task must cite at least one meeting in source.meetings or a work digest item in source.work_digest`);
+      }
       if (taskIds.length) errors.push(`${path}: a proposed_task has no task_ids (it creates its task on Accept)`);
       break;
     case "carry_over":
@@ -352,7 +411,7 @@ function parseItem(value: unknown, index: number, errors: string[]): BriefItemIn
   }
 
   if (errors.length > before) return null;
-  return { kind, payload, task_ids: taskIds, source: { meetings } };
+  return { kind, payload, task_ids: taskIds, source: workDigest ? { meetings, work_digest: workDigest } : { meetings } };
 }
 
 export function parseSaveBriefInput(raw: unknown, now: Date = new Date()): ParseResult<SaveBriefInput> {

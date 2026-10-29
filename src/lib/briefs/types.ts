@@ -45,8 +45,29 @@ export interface BriefMeetingRef {
   lines: string[];
 }
 
+/**
+ * A proposal that comes from the work digest (Baseline task edb01f58): the
+ * Baseline note "Work digest <date> AM|PM" and the W block(s) it cites. The
+ * server checks every cited line against the note (it must be that block's
+ * `what` line, verbatim) and fills `date` and `where` from the note.
+ */
+export interface BriefWorkDigestRef {
+  note_id: string;
+  edition: "am" | "pm";
+  /** "W3", in the order given. */
+  blocks: string[];
+  /** The cited blocks' `what` lines, verbatim. The item key hashes these, never the note id. */
+  lines: string[];
+  /** The note's date (YYYY-MM-DD, ET), from its title. */
+  date?: string;
+  /** Where the cited items came from: "Mail", "Teams" or "Mail and Teams". */
+  where?: string;
+}
+
 export interface BriefItemSource {
   meetings: BriefMeetingRef[];
+  /** proposed_task only. A proposal cites meetings, a work digest item, or both. */
+  work_digest?: BriefWorkDigestRef;
 }
 
 export interface BriefChoiceOption {
@@ -152,6 +173,12 @@ export interface BriefContent {
   meetings?: BriefMeeting[];
   tiles?: BriefTile[];
   footnote?: string;
+  /**
+   * The work digest notes this brief read (Baseline note ids). The EOD uses
+   * the AM note's items only when this morning's brief didn't record it; a
+   * same-day rerun only appends digest proposals from notes not recorded here.
+   */
+  work_digest_note_ids?: string[];
 }
 
 export interface BriefItemInput {

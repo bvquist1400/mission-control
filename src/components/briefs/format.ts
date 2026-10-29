@@ -61,8 +61,9 @@ export function weekdayDate(dateOnly: string): string {
 }
 
 /** The notes' date chip on a proposal: day "Mon 10/12" + note "· from notes", or "· from notes, passed". */
-export function notesDueParts(dateOnly: string, passed: boolean): { day: string; note: string } {
-  return { day: weekdayDate(dateOnly), note: `\u00b7 from notes${passed ? ", passed" : ""}` };
+/** `from` names where the date came from: "notes" (meeting notes, the default), or "mail" / "Teams" for a work digest item. */
+export function notesDueParts(dateOnly: string, passed: boolean, from = "notes"): { day: string; note: string } {
+  return { day: weekdayDate(dateOnly), note: `\u00b7 from ${from}${passed ? ", passed" : ""}` };
 }
 
 /** The whole chip text, e.g. "Mon 9/28 · from notes, passed". */

@@ -1,0 +1,1239 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Work digest dry run</title><style>/*
+ * Brief pages (/briefs/[code]) — the v5 design. Everything is scoped under
+ * .brief-page so the rest of Baseline keeps its own (dark-only) theme. Unlike
+ * the app, this page follows the OS light/dark setting.
+ */
+
+.brief-page {
+  --canvas: #e6e8ee;
+  --bg: #f5f6f9;
+  --surface: #ffffff;
+  --surface-2: #f0f1f5;
+  --ink: #12141c;
+  --ink-2: #3a3e4c;
+  --muted: #6a6f80;
+  --hair: #e4e6ec;
+  --hair-strong: #d3d6df;
+  --accent: #e11d48;
+  --g2: #8b5cf6;
+  --g3: #5b6cff;
+  --mesh-a: rgba(225, 29, 72, 0.1);
+  --mesh-b: rgba(91, 108, 255, 0.13);
+  --mesh-c: rgba(139, 92, 246, 0.08);
+  --ok: #15803d;
+  --ok-soft: rgba(21, 128, 61, 0.1);
+  --warn: #b45309;
+  --warn-soft: rgba(180, 83, 9, 0.1);
+  --danger: #b91c1c;
+  --solid-bg: #12141c;
+  --solid-fg: #ffffff;
+  --shadow-sm: 0 1px 2px rgba(18, 20, 28, 0.04), 0 2px 10px rgba(18, 20, 28, 0.04);
+  --shadow-md: 0 1px 2px rgba(18, 20, 28, 0.05), 0 12px 32px rgba(18, 20, 28, 0.09);
+  --m-1: #5b6cff;
+  --m-2: #0f9f86;
+  --m-3: #c7880a;
+  --m-4: #8b5cf6;
+  --m-5: #0e9fc4;
+  --m-6: #d9467a;
+  --backdrop: rgba(18, 20, 28, 0.28);
+  --sans: var(--font-geist), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: var(--font-geist-mono), ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  color-scheme: light;
+  min-height: 100vh;
+  background:
+    radial-gradient(70% 40% at 0% 0%, var(--mesh-a), transparent 70%),
+    radial-gradient(60% 35% at 100% 0%, var(--mesh-b), transparent 70%),
+    var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+@media (prefers-color-scheme: dark) {
+  .brief-page {
+    color-scheme: dark;
+    --canvas: #050608;
+    --bg: #0b0c10;
+    --surface: #14161b;
+    --surface-2: #1c1f26;
+    --ink: #eef0f5;
+    --ink-2: #c5c9d4;
+    --muted: #8d93a3;
+    --hair: rgba(255, 255, 255, 0.07);
+    --hair-strong: rgba(255, 255, 255, 0.13);
+    --accent: #ff5c7a;
+    --g2: #a98bff;
+    --g3: #8391ff;
+    --mesh-a: rgba(255, 92, 122, 0.16);
+    --mesh-b: rgba(131, 145, 255, 0.17);
+    --mesh-c: rgba(169, 139, 255, 0.12);
+    --ok: #4ade80;
+    --ok-soft: rgba(74, 222, 128, 0.1);
+    --warn: #fbbf24;
+    --warn-soft: rgba(251, 191, 36, 0.1);
+    --danger: #f87171;
+    --solid-bg: #eef0f5;
+    --solid-fg: #0b0c10;
+    --shadow-sm: 0 0 0 1px rgba(255, 255, 255, 0.04);
+    --shadow-md: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 14px 36px rgba(0, 0, 0, 0.45);
+    --m-1: #8391ff;
+    --m-2: #2dd4b0;
+    --m-3: #f0b53a;
+    --m-4: #a98bff;
+    --m-5: #38c6ea;
+    --m-6: #f472a6;
+    --backdrop: rgba(0, 0, 0, 0.55);
+  }
+}
+
+.brief-page *,
+.brief-page *::before,
+.brief-page *::after {
+  box-sizing: border-box;
+}
+.brief-page a {
+  color: inherit;
+  text-decoration-color: var(--hair-strong);
+  text-underline-offset: 3px;
+}
+.brief-page a:hover {
+  text-decoration-color: currentColor;
+}
+.brief-page button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.brief-page :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.brief-page .mono {
+  font-family: var(--mono);
+}
+.brief-page kbd {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  border: 1px solid currentColor;
+  opacity: 0.45;
+  line-height: 1.3;
+}
+
+.brief-page .page {
+  container: page / inline-size;
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 28px 24px 56px;
+  display: grid;
+  gap: 30px;
+}
+@media (max-width: 560px) {
+  .brief-page .page {
+    padding: 18px 14px 40px;
+  }
+}
+
+.brief-page .topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.brief-page .topbar a {
+  text-decoration: none;
+}
+.brief-page .topbar a:hover {
+  color: var(--ink);
+}
+
+/* ---------- bento ---------- */
+.brief-page .bento {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 12px;
+}
+.brief-page .span-2 { grid-column: span 2; }
+.brief-page .span-3 { grid-column: span 3; }
+.brief-page .span-4 { grid-column: span 4; }
+.brief-page .span-6 { grid-column: 1 / -1; }
+.brief-page .row-2 { grid-row: span 2; }
+@container page (max-width: 720px) {
+  .brief-page .bento { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .brief-page .span-3,
+  .brief-page .span-4,
+  .brief-page .span-6 { grid-column: 1 / -1; }
+  .brief-page .span-2 { grid-column: span 1; }
+  .brief-page .row-2 { grid-row: auto; }
+  .brief-page .bento.calls .span-2 { grid-column: 1 / -1; }
+}
+@container page (max-width: 440px) {
+  .brief-page .bento .span-2 { grid-column: 1 / -1; }
+}
+
+.brief-page .tile {
+  position: relative;
+  background: var(--surface);
+  border-radius: 20px;
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--hair);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.2s;
+}
+.brief-page .tile.link:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+.brief-page .tile.link::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, var(--accent), var(--g2) 55%, var(--g3));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;
+}
+.brief-page .tile.link:hover::before,
+.brief-page .tile.link:focus-within::before {
+  opacity: 0.85;
+}
+.brief-page .tile-k {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--muted);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.brief-page .tile-n {
+  font-size: 34px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.brief-page .tile-n small {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--muted);
+  letter-spacing: 0;
+  margin-left: 4px;
+}
+.brief-page .tile-p {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+.brief-page .tile-foot {
+  margin-top: auto;
+  padding-top: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.brief-page .open {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+.brief-page .open .chev {
+  transition: transform 0.2s;
+}
+.brief-page .tile.link:hover .open .chev {
+  transform: translateX(3px);
+}
+.brief-page .stretch::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 20px;
+}
+.brief-page .tile a,
+.brief-page .tile .lift {
+  position: relative;
+  z-index: 2;
+}
+
+/* hero */
+.brief-page .hero {
+  background:
+    radial-gradient(90% 120% at 0% 0%, var(--mesh-a), transparent 62%),
+    radial-gradient(80% 100% at 100% 100%, var(--mesh-b), transparent 62%),
+    radial-gradient(60% 70% at 70% 0%, var(--mesh-c), transparent 60%),
+    var(--surface);
+  padding: 22px 22px 18px;
+}
+.brief-page .hero-text {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  height: 100%;
+}
+.brief-page .where {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+.brief-page .where span {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+.brief-page .where b {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.brief-page .eyebrow {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.brief-page .eyebrow .code {
+  color: var(--accent);
+  font-weight: 500;
+}
+.brief-page .hero h1 {
+  margin: 10px 0 0;
+  font-size: clamp(44px, 7vw, 62px);
+  line-height: 0.95;
+  font-weight: 600;
+  letter-spacing: -0.045em;
+}
+.brief-page .hero h1 .dim {
+  display: block;
+  font-size: 0.42em;
+  letter-spacing: -0.02em;
+  color: var(--muted);
+  font-weight: 500;
+  margin-top: 8px;
+}
+.brief-page .prog {
+  margin-top: 16px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.brief-page .prog span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--g2) 60%, var(--g3));
+  transition: width 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.brief-page .prog-l {
+  font-size: 12.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.brief-page .stats {
+  margin-top: auto;
+  padding-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.brief-page .stats b {
+  color: var(--ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* next-day agenda */
+.brief-page .agenda {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 7px;
+  font-size: 13.5px;
+}
+.brief-page .agenda li {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+.brief-page .agenda .tm {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.brief-page .agenda li.clash span:last-child {
+  color: var(--warn);
+  font-weight: 500;
+}
+.brief-page .agenda li.picked span:last-child {
+  color: var(--ok);
+  font-weight: 500;
+}
+
+/* day timeline */
+.brief-page .track-wrap {
+  position: relative;
+  height: 52px;
+  margin-top: 4px;
+}
+.brief-page .ticks {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 14px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.brief-page .ticks span {
+  position: absolute;
+  transform: translateX(-50%);
+}
+.brief-page .bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 20px;
+  height: 26px;
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.brief-page .blk {
+  position: absolute;
+  top: 20px;
+  height: 26px;
+  border-radius: 7px;
+  border: 0;
+  padding: 0;
+  min-width: 7px;
+}
+.brief-page .blk.notes {
+  background: linear-gradient(180deg, color-mix(in oklab, var(--mc) 62%, white), var(--mc));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 3px 10px color-mix(in oklab, var(--mc) 35%, transparent);
+}
+.brief-page .blk.nonotes {
+  background: repeating-linear-gradient(135deg, var(--hair-strong) 0 3px, transparent 3px 6px);
+  box-shadow: inset 0 0 0 1px var(--hair-strong);
+  cursor: default;
+}
+.brief-page .blk.dim {
+  opacity: 0.25;
+}
+.brief-page .blk.now {
+  width: 2px;
+  min-width: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+  top: 15px;
+  height: 36px;
+  cursor: default;
+  box-shadow: none;
+}
+.brief-page .mchips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.brief-page .mchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--hair);
+  background: transparent;
+  border-radius: 999px;
+  padding: 4px 11px 4px 9px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.brief-page .mchip .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mc);
+  flex: none;
+}
+.brief-page .mchip .t {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+.brief-page .mchip .c {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--surface-2);
+  border-radius: 999px;
+  padding: 0 6px;
+}
+.brief-page .mchip[aria-pressed="true"] {
+  border-color: var(--mc);
+  background: color-mix(in oklab, var(--mc) 12%, transparent);
+  color: var(--ink);
+}
+.brief-page .mchip.nonote {
+  color: var(--muted);
+  cursor: default;
+  border-style: dashed;
+}
+
+/* sections */
+.brief-page .sec {
+  display: grid;
+  gap: 12px;
+}
+.brief-page .sec-h {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.brief-page .sec-h h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+.brief-page .sec-h .count {
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--hair);
+  border-radius: 999px;
+  padding: 0 8px;
+}
+.brief-page .sec-h .hint {
+  font-size: 13px;
+  color: var(--muted);
+}
+.brief-page .grp {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  margin: 6px 0 -2px 4px;
+}
+.brief-page .filternote {
+  font-size: 13px;
+  color: var(--muted);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.brief-page .linkbtn {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--hair-strong);
+  text-underline-offset: 3px;
+  font-size: 13px;
+}
+.brief-page .list {
+  display: grid;
+  gap: 10px;
+}
+
+/* decide cards */
+.brief-page .card {
+  background: var(--surface);
+  border: 1px solid var(--hair);
+  border-radius: 18px;
+  box-shadow: var(--shadow-sm);
+  padding: 16px 18px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px 22px;
+  align-items: center;
+  outline: none;
+  transition: box-shadow 0.18s, opacity 0.18s;
+}
+.brief-page .card:hover {
+  box-shadow: var(--shadow-md);
+}
+.brief-page .card:focus-visible,
+.brief-page .card.kfocus,
+.brief-page .call.kfocus {
+  box-shadow: 0 0 0 2px var(--accent), var(--shadow-md);
+}
+.brief-page .card.pending,
+.brief-page .call.pending,
+.brief-page .slim.pending {
+  opacity: 0.55;
+}
+.brief-page .card .body {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.brief-page .card .side {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.brief-page .card .side .btn {
+  width: 132px;
+  justify-content: space-between;
+}
+/* Accept's due choice: a row under the card, above the buttons on a phone. */
+.brief-page .card .due {
+  grid-column: 1 / -1;
+  padding-top: 10px;
+  border-top: 1px solid var(--hair);
+}
+.brief-page .seg button[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.brief-page .seg.due button {
+  padding: 3px 11px;
+}
+.brief-page .seg.due .from {
+  font-size: 12px;
+  opacity: 0.7;
+}
+.brief-page .seg.due .when {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  margin-left: 2px;
+}
+@container page (max-width: 620px) {
+  .brief-page .card { grid-template-columns: minmax(0, 1fr); }
+  .brief-page .card .side { grid-column: auto; grid-row: auto; flex-direction: row; justify-content: flex-end; }
+  .brief-page .card .side .btn { width: auto; }
+}
+.brief-page .src-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: center;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.brief-page .src-row .m {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.brief-page .src-row .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--mc);
+}
+.brief-page .src-row .t,
+.brief-page .src-row .n {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.brief-page .src-row .n {
+  margin-left: auto;
+}
+.brief-page .card h3,
+.brief-page .call h3 {
+  margin: 0;
+  font-size: 15.5px;
+  line-height: 1.45;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  text-wrap: pretty;
+  max-width: 64ch;
+}
+.brief-page .detail {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--ink-2);
+  max-width: 64ch;
+}
+.brief-page .maybe {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 13px;
+  color: var(--ink-2);
+  background: var(--warn-soft);
+  border-radius: 10px;
+  padding: 7px 10px;
+}
+.brief-page .maybe .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+  flex: none;
+  transform: translateY(-1px);
+}
+.brief-page .srcbtn {
+  justify-self: start;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.brief-page .srcbtn:hover {
+  color: var(--ink);
+}
+.brief-page .quotes {
+  display: grid;
+  gap: 6px;
+}
+.brief-page .quote {
+  font-size: 13px;
+  color: var(--ink-2);
+  border-left: 2px solid var(--mc);
+  padding: 2px 0 2px 10px;
+}
+.brief-page .quote .from {
+  font-size: 12px;
+  color: var(--muted);
+  display: block;
+}
+.brief-page .btn {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--hair-strong);
+  background: transparent;
+  color: var(--ink);
+  transition: background 0.15s, opacity 0.15s;
+  white-space: nowrap;
+}
+.brief-page .btn:hover {
+  background: var(--surface-2);
+}
+.brief-page .btn.solid {
+  background: var(--solid-bg);
+  color: var(--solid-fg);
+  border-color: var(--solid-bg);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+.brief-page .btn.solid:hover {
+  opacity: 0.88;
+  background: var(--solid-bg);
+}
+.brief-page .btn.sm {
+  height: 30px;
+  padding: 0 11px;
+  font-size: 13px;
+}
+.brief-page .btn.grow {
+  flex: 1;
+  justify-content: center;
+}
+.brief-page .btn[disabled] {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.brief-page .badge {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--g2));
+  color: #fff;
+}
+.brief-page .dbox {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hair);
+}
+.brief-page .seg {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  font-size: 13px;
+  color: var(--muted);
+}
+.brief-page .seg button {
+  border: 1px solid var(--hair-strong);
+  background: transparent;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 13px;
+}
+.brief-page .seg button[aria-pressed="true"] {
+  background: var(--solid-bg);
+  color: var(--solid-fg);
+  border-color: var(--solid-bg);
+}
+.brief-page .note-in {
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid transparent;
+  color: var(--ink);
+  border-radius: 10px;
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 14px;
+}
+.brief-page .note-in:focus {
+  border-color: var(--hair-strong);
+  outline: none;
+}
+.brief-page .row-end {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+.brief-page .row-end .left {
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.brief-page .slim {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  border: 1px dashed var(--hair-strong);
+  font-size: 14px;
+  min-width: 0;
+}
+.brief-page .ic {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.brief-page .ic.ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+.brief-page .ic.no {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.brief-page .slim .tx {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-2);
+}
+.brief-page .slim .tx .n {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-right: 6px;
+}
+.brief-page .slim .st {
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.brief-page .slim .dn {
+  font-style: italic;
+}
+@container page (max-width: 560px) {
+  .brief-page .slim { flex-wrap: wrap; }
+  .brief-page .slim .tx { white-space: normal; flex-basis: calc(100% - 32px); }
+  .brief-page .slim .st { white-space: normal; flex-wrap: wrap; padding-left: 32px; }
+  .brief-page .topbar .mono { display: none; }
+}
+
+/* call tiles */
+.brief-page .call {
+  outline: none;
+}
+.brief-page .call .why {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.brief-page .call-actions {
+  margin-top: auto;
+  padding-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.brief-page .call-actions.stack {
+  flex-direction: column;
+}
+.brief-page .call-actions.stack .btn {
+  justify-content: space-between;
+  white-space: normal;
+  height: auto;
+  min-height: 34px;
+  padding-block: 6px;
+  text-align: left;
+}
+.brief-page .call.handled {
+  border-style: dashed;
+  box-shadow: none;
+  background: transparent;
+}
+.brief-page .handled-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-weight: 500;
+}
+
+/* recap */
+.brief-page .narr {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--ink-2);
+  max-width: 64ch;
+  white-space: pre-line;
+}
+.brief-page .kbdhint {
+  font-size: 12px;
+  color: var(--muted);
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.brief-page .fine {
+  font-size: 12.5px;
+  color: var(--muted);
+  text-align: center;
+  margin: 0;
+}
+
+/* sheet */
+.brief-page .sheet-host {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  justify-content: flex-end;
+}
+.brief-page .sheet-bd {
+  position: absolute;
+  inset: 0;
+  background: var(--backdrop);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: brief-fade 0.2s ease;
+}
+.brief-page .sheet {
+  position: relative;
+  width: min(480px, 100%);
+  height: 100%;
+  overflow-y: auto;
+  background: var(--surface);
+  box-shadow: -24px 0 60px rgba(0, 0, 0, 0.18);
+  padding: calc(20px + env(safe-area-inset-top, 0px)) 22px calc(24px + env(safe-area-inset-bottom, 0px));
+  display: grid;
+  gap: 16px;
+  align-content: start;
+  animation: brief-slide 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.brief-page .sheet header {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.brief-page .sheet header h2 {
+  margin: 2px 0 0;
+  font-size: 20px;
+  letter-spacing: -0.02em;
+}
+.brief-page .sheet .x {
+  margin-left: auto;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid var(--hair-strong);
+  background: transparent;
+  font-size: 18px;
+  line-height: 1;
+  flex: none;
+}
+@keyframes brief-slide {
+  from { transform: translateX(40px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+@keyframes brief-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.brief-page .rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.brief-page .rows li {
+  display: grid;
+  gap: 2px;
+  padding: 11px 0;
+  border-top: 1px solid var(--hair);
+  font-size: 14px;
+}
+.brief-page .rows li:first-child {
+  border-top: 0;
+}
+.brief-page .rows .r {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+.brief-page .rows .meta {
+  font-size: 13px;
+  color: var(--muted);
+}
+.brief-page .idlink {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.brief-page .subh {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 4px 0 0;
+}
+.brief-page .moves {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 8px;
+  font-size: 14.5px;
+  color: var(--ink-2);
+}
+
+.brief-page .missing {
+  max-width: 520px;
+  margin: 12vh auto 0;
+  text-align: center;
+  display: grid;
+  gap: 10px;
+}
+.brief-page .missing h1 {
+  margin: 0;
+  font-size: 28px;
+  letter-spacing: -0.02em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brief-page *,
+  .brief-page *::before,
+  .brief-page *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+/* Upcoming meetings (start after the save): solid, with a prep row each; free time is a soft band */
+.brief-page .agenda li.free span:last-child {
+  color: var(--muted);
+}
+.brief-page .blk.up {
+  background: linear-gradient(180deg, color-mix(in oklab, var(--mc) 62%, white), var(--mc));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 3px 10px color-mix(in oklab, var(--mc) 35%, transparent);
+  cursor: default;
+}
+.brief-page .blk.up.prep {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+.brief-page .blk.freeblk {
+  top: 26px;
+  height: 14px;
+  border-radius: 5px;
+  background: color-mix(in oklab, var(--ok) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ok) 30%, transparent);
+  cursor: default;
+}
+.brief-page .preplist {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: grid;
+}
+.brief-page .preplist li {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px 0;
+  border-top: 1px solid var(--hair);
+}
+.brief-page .preplist li:first-child {
+  border-top: 0;
+  padding-top: 6px;
+}
+.brief-page .preplist .pt {
+  font-size: 11.5px;
+  color: var(--muted);
+  padding-top: 2px;
+}
+.brief-page .preplist .pb {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.brief-page .preplist .pn {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
+  font-weight: 500;
+  font-size: 14.5px;
+}
+.brief-page .preplist .pn .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mc);
+  flex: none;
+}
+.brief-page .preplist .pd {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 400;
+}
+.brief-page .preplist .pp {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--ink-2);
+  max-width: 70ch;
+}
+.brief-page .plinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: baseline;
+}
+.brief-page .plink {
+  display: inline-flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+/* Pick a date: the inline date field on Accept's Due row and on the carry cards,
+   the "lands on" text, and the pressed state of a button chip. Page variables only. */
+.brief-page .pickrow {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.brief-page .tile .pickrow {
+  padding-top: 12px;
+  margin-top: 4px;
+  border-top: 1px solid var(--hair);
+}
+.brief-page .pickrow .note-in {
+  width: auto;
+  min-width: 138px;
+  flex: 0 1 150px;
+}
+.brief-page .pickrow .lands {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.brief-page .pickrow .when {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink);
+  margin-left: 2px;
+}
+.brief-page .pickrow .perr {
+  flex-basis: 100%;
+  font-size: 12.5px;
+  color: var(--danger);
+}
+.brief-page .pickrow .btn {
+  margin-left: auto;
+}
+.brief-page .call-actions .btn[aria-pressed="true"] {
+  background: var(--surface-2);
+  border-color: var(--ink-2);
+}
+
+/* Loading placeholder (src/app/briefs/[code]/loading.tsx): the page frame with
+   grey bars while the brief is read. The reduced-motion rule above stops the pulse. */
+.brief-page .skel-tile {
+  min-height: 120px;
+  gap: 12px;
+}
+.brief-page .skel {
+  border-radius: 6px;
+  background: var(--surface-2);
+  animation: brief-skel-pulse 1.4s ease-in-out infinite;
+}
+.brief-page .skel-line {
+  height: 12px;
+}
+.brief-page .skel-lg {
+  height: 26px;
+}
+.brief-page .skel-w-25 { width: 25%; }
+.brief-page .skel-w-50 { width: 50%; }
+.brief-page .skel-w-70 { width: 70%; }
+.brief-page .skel-w-90 { width: 90%; }
+.brief-page .skel-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+@keyframes brief-skel-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+</style><div class="brief-page"><main style="max-width:980px;margin:0 auto;padding:16px"><h1 style="font:600 18px system-ui;margin:32px 0 8px">AM-1029 (dry run: am-1029-save.json)</h1><div class="bento"><article class="tile span-2 link"><div class="tile-k">Waiting on others</div><div class="tile-n">3</div><p class="tile-p">Morgan · Susan · Lisa, all with no reply</p><div class="tile-foot"><button type="button" class="open stretch">Open <span class="chev">›</span></button></div></article><article class="tile span-2 link"><div class="tile-k">From mail and Teams · 3 since 3:00 PM yesterday</div><div class="tile-n">3</div><p class="tile-p">2 with no owner · 1 FYI · nothing asked of you</p><div class="tile-foot"><button type="button" class="open stretch">Open <span class="chev">›</span></button></div></article></div><section class="sec"><div class="sec-h"><h2>Waiting on others</h2></div><div><p class="subh">No reply yet</p><ul class="rows"><li><div class="r"><span style="font-weight:500">Morgan · Change ticket handling for builds</span></div><span class="meta">Mail · no reply in mail or Teams since 10/22</span></li><li><div class="r"><span style="font-weight:500">Susan · Role override build approval path</span></div><span class="meta">Teams · no reply in mail or Teams since 10/22</span></li><li><div class="r"><span style="font-weight:500">Lisa · Department build move to test</span></div><span class="meta">Mail · no reply in mail or Teams since 10/26</span></li></ul></div></section><section class="sec"><div class="sec-h"><h2>From mail and Teams · 3 since 3:00 PM yesterday</h2></div><div><p class="subh">Open, no owner</p><ul class="rows"><li><div class="r"><span style="font-weight:500">Study record import: which location value to use?</span></div><span class="meta">Mail · Nathan asked; the import failed without one</span></li><li><div class="r"><span style="font-weight:500">Test one migrated study record before the rest move</span></div><span class="meta">Mail · Nathan asked Saif; confirm whether it&#x27;s yours</span></li></ul></div><div><p class="subh">FYI</p><ul class="rows"><li><div class="r"><span style="font-weight:500">Provider lookup interface needs an identity record</span></div><span class="meta">Mail · Bill opened a request about alternatives</span></li></ul></div></section><p class="foot" style="font:13px system-ui;opacity:.7">Built by the morning run from Baseline, your calendar and this morning's work digest (3 items, 2 left out as sensitive).</p><h1 style="font:600 18px system-ui;margin:32px 0 8px">EOD-1028 (dry run: eod-1028-as-filed-save.json)</h1><p class="foot" style="font:13px system-ui;opacity:.7">Built by the 4:15 run from Baseline, Granola and your calendar. This afternoon's work digest couldn't be read: the header has no still_waiting line (an older digest layout?).</p><h1 style="font:600 18px system-ui;margin:32px 0 8px">EOD-1028 (dry run: eod-1028-upgraded-save.json)</h1><div class="bento"><article class="tile span-2 link"><div class="tile-k">Waiting on others</div><div class="tile-n">3</div><p class="tile-p">Alex · an Epic contact · Saif</p><div class="tile-foot"><button type="button" class="open stretch">Open <span class="chev">›</span></button></div></article><article class="tile span-2 link"><div class="tile-k">From mail and Teams · 20 since 7:15 AM</div><div class="tile-n">20</div><p class="tile-p">1 due tonight · 7 asked of you (3 proposed) · 6 with no owner · 4 FYI</p><div class="tile-foot"><button type="button" class="open stretch">Open <span class="chev">›</span></button></div></article></div><section class="sec"><div class="sec-h"><h2>From mail and Teams</h2></div><article class="card" tabindex="0" data-n="1" id="item-1"><div class="body"><div class="src-row"><span class="m wd" style="--mc:var(--muted)"><span class="dot"></span>Teams · Work digest PM <span class="t">W1</span></span><span class="n">#1</span></div><h3>Present the research change request at tomorrow&#x27;s change control</h3><p class="detail">Teams: Saif asked you directly.</p><div class="quotes"><div class="quote" style="--mc:var(--muted)"><div>“Saif asked you to present the research change request at tomorrow&#x27;s change control meeting.”</div><a href="/r/note/00000000-0000-4000-8000-0000000000b2"><span class="from">Teams · Work digest PM 10/28 · W1 · open note</span></a></div></div><button type="button" class="srcbtn">Hide note line</button></div><div class="seg due" role="group" aria-label="Due date if you accept #1"><span>Due</span><button type="button" aria-pressed="false">Thu 10/29 <span class="from">· from Teams</span></button><button type="button" aria-pressed="false">Today</button><button type="button" aria-pressed="true">Tomorrow</button><button type="button" aria-pressed="false">This week</button><button type="button" aria-pressed="false">No date</button><button type="button" aria-pressed="false">Pick a date…</button><span class="when">Thu 10/29</span></div><div class="side"><button type="button" class="btn solid">Accept <kbd>A</kbd></button><button type="button" class="btn">Dismiss <kbd>D</kbd></button></div></article><article class="card" tabindex="0" data-n="2" id="item-2"><div class="body"><div class="src-row"><span class="m wd" style="--mc:var(--muted)"><span class="dot"></span>Teams · Work digest PM <span class="t">W2</span></span><span class="n">#2</span></div><h3>Walk the two untrained team members through eReg</h3><p class="detail">Teams: you said you would, tomorrow.</p><div class="quotes"><div class="quote" style="--mc:var(--muted)"><div>“You said you would walk two untrained team members through eReg tomorrow; you created an account for one other member today.”</div><a href="/r/note/00000000-0000-4000-8000-0000000000b2"><span class="from">Teams · Work digest PM 10/28 · W2 · open note</span></a></div></div><button type="button" class="srcbtn">Hide note line</button></div><div class="seg due" role="group" aria-label="Due date if you accept #2"><span>Due</span><button type="button" aria-pressed="false">Thu 10/29 <span class="from">· from Teams</span></button><button type="button" aria-pressed="false">Today</button><button type="button" aria-pressed="true">Tomorrow</button><button type="button" aria-pressed="false">This week</button><button type="button" aria-pressed="false">No date</button><button type="button" aria-pressed="false">Pick a date…</button><span class="when">Thu 10/29</span></div><div class="side"><button type="button" class="btn solid">Accept <kbd>A</kbd></button><button type="button" class="btn">Dismiss <kbd>D</kbd></button></div></article><article class="card" tabindex="0" data-n="3" id="item-3"><div class="body"><div class="src-row"><span class="m wd" style="--mc:var(--muted)"><span class="dot"></span>Teams · Work digest PM <span class="t">W3</span></span><span class="n">#3</span></div><h3>Prep a yes or no on each investigator workflow task for Julie</h3><p class="detail">Teams: Julie asked for a short Friday chat.</p><div class="quotes"><div class="quote" style="--mc:var(--muted)"><div>“Julie asked for a short Friday chat to get your yes or no on each investigator workflow task.”</div><a href="/r/note/00000000-0000-4000-8000-0000000000b2"><span class="from">Teams · Work digest PM 10/28 · W3 · open note</span></a></div></div><button type="button" class="srcbtn">Hide note line</button></div><div class="seg due" role="group" aria-label="Due date if you accept #3"><span>Due</span><button type="button" aria-pressed="false">Fri 10/30 <span class="from">· from Teams</span></button><button type="button" aria-pressed="false">Today</button><button type="button" aria-pressed="true">Tomorrow</button><button type="button" aria-pressed="false">This week</button><button type="button" aria-pressed="false">No date</button><button type="button" aria-pressed="false">Pick a date…</button><span class="when">Thu 10/29</span></div><div class="side"><button type="button" class="btn solid">Accept <kbd>A</kbd></button><button type="button" class="btn">Dismiss <kbd>D</kbd></button></div></article></section><section class="sec"><div class="sec-h"><h2>Waiting on others</h2></div><div><ul class="rows"><li><div class="r"><span style="font-weight:500">Alex · ClinCard SSO updated link</span></div><span class="meta">Teams · you told Andrew you&#x27;re still waiting</span></li><li><div class="r"><span style="font-weight:500">An Epic contact · End-to-end research demo script</span></div><span class="meta">Mail · drafting a skeleton for you to edit</span></li><li><div class="r"><span style="font-weight:500">Saif · OnCore calendar and budget announcement</span></div><span class="meta">Teams · no reply yet</span></li></ul></div></section><section class="sec"><div class="sec-h"><h2>From mail and Teams · 20 since 7:15 AM</h2></div><div><p class="subh">Due tonight</p><ul class="rows"><li><div class="r"><span style="font-weight:500">Nova note reviews for the upgrade package</span></div><span class="meta">Teams · asked of everyone, by end of day</span></li></ul></div><div><p class="subh">Asked of you</p><ul class="rows"><li><div class="r"><span style="font-weight:500">Present the research change request at change control</span></div><span class="meta">Teams · proposed as #1</span></li><li><div class="r"><span style="font-weight:500">eReg walkthrough for two untrained team members</span></div><span class="meta">Teams · proposed as #2</span></li><li><div class="r"><span style="font-weight:500">Yes or no on each investigator workflow task for Julie</span></div><span class="meta">Teams · proposed as #3</span></li><li><div class="r"><span style="font-weight:500">Research security points for next week&#x27;s workgroup</span></div><span class="meta">Mail · an Epic contact confirmed the two points go together</span></li><li><div class="r"><span style="font-weight:500">Help Roseann remove a former member from a study staff log</span></div><span class="meta">Mail</span></li><li><div class="r"><span style="font-weight:500">Answer Andrew: would leadership outreach help the ClinCard SSO switch?</span></div><span class="meta">Mail</span></li><li><div class="r"><span style="font-weight:500">Explain a recent mix-up to Amy at the meeting Payton sent</span></div><span class="meta">Teams · check the chat for the exact point</span></li></ul></div><div><p class="subh">Open, no owner</p><ul class="rows"><li><div class="r"><span style="font-weight:500">DocuSign routing for Cayuse: assign the proposed approver now?</span></div><span class="meta">Teams · Adnan&#x27;s suggestion, pending Marina</span></li><li><div class="r"><span style="font-weight:500">Is Cait&#x27;s team using eReg for a live study yet?</span></div><span class="meta">Teams · Saif wasn&#x27;t sure</span></li><li><div class="r"><span style="font-weight:500">Mentor account for a new IRB office staff member</span></div><span class="meta">Mail · asked of you and Saif</span></li><li><div class="r"><span style="font-weight:500">Mentor students: internal or external users?</span></div><span class="meta">Mail</span></li><li><div class="r"><span style="font-weight:500">Upgrade test script signoff</span></div><span class="meta">Teams · due 11/20, asked of everyone</span></li></ul></div><div><p class="subh">FYI</p><ul class="rows"><li><div class="r"><span style="font-weight:500">Release restriction applied only to the legal template in test</span></div><span class="meta">Mail · full rollout waits for go-live</span></li><li><div class="r"><span style="font-weight:500">Andrew joins education calls</span></div><span class="meta">Teams</span></li><li><div class="r"><span style="font-weight:500">Saif revalidated the merged identifier file</span></div><span class="meta">Mail · Nathan has questions for Epic</span></li><li><div class="r"><span style="font-weight:500">Research executive dashboard ownership being settled</span></div><span class="meta">Mail</span></li></ul></div></section><p class="foot" style="font:13px system-ui;opacity:.7">Built by the 4:15 run from Baseline, Granola, your calendar and this afternoon's work digest (20 items, 1 left out as sensitive; no AM digest today).</p></main></div>

@@ -66,6 +66,7 @@
     "test:briefs-accept": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-briefs-accept.mjs",
     "test:intake-email": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-intake-email.mjs",
     "test:backlog-speed": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-backlog-speed.mjs",
+    "test:work-digest": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-work-digest.mjs",
     "test:briefs-accept-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-briefs-accept-db.mjs",
     "backfill:project-sections:dry-run": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/backfill-project-sections.mjs",
     "backfill:project-sections:apply": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/backfill-project-sections.mjs --apply",

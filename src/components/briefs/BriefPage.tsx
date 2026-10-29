@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useToast } from "@/components/ui/Toast";
 import {
   BRIEF_SECTIONS,
+  proposalSectionTitle,
   CARD_REGISTRY,
   TaskLink,
   defaultAcceptDue,
@@ -407,7 +408,7 @@ export function BriefPage({ view }: { view: BriefView }) {
       {meetingItems.length || filter ? (
         <section className="sec" aria-labelledby="sec-meetings">
           <div className="sec-h">
-            <h2 id="sec-meetings">{BRIEF_SECTIONS.meetings.title}</h2>
+            <h2 id="sec-meetings">{proposalSectionTitle(meetingItems)}</h2>
             <span className="count">{openMeetings}</span>
             {BRIEF_SECTIONS.meetings.hint ? <span className="hint">{BRIEF_SECTIONS.meetings.hint}</span> : null}
           </div>

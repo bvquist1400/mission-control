@@ -1,0 +1,34 @@
+{
+  "_dry_run": "Morning prompt (docs/routines/morning.md) applied by hand to work_digest-fields.json > morning_1029. No Baseline, calendar or Granola data was read (fixtures only), so only the parts the work digest drives are filled in; the 'not in Baseline' check had nothing to search.",
+  "edition": "am",
+  "date": "2026-10-29",
+  "content": {
+    "heading": "Thu, Oct 29",
+    "narrative": "Overnight mail asked nothing of you directly: three threads moved, none with you as the owner. Nathan's study record import is the live one: he moved one record to test and wants it checked before the rest, and he's stuck on a location value. Three asks of yours have had no reply: Morgan and Susan since 10/22, Lisa since Monday.",
+    "stats": [
+      { "key": "waiting", "label": "waiting on others", "value": 3 }
+    ],
+    "tiles": [
+      { "key": "waiting", "type": "list", "label": "Waiting on others", "value": 3, "summary": "Morgan · Susan · Lisa, all with no reply",
+        "groups": [{ "label": "No reply yet", "rows": [
+          { "title": "Morgan · Change ticket handling for builds", "meta": "Mail · no reply in mail or Teams since 10/22" },
+          { "title": "Susan · Role override build approval path", "meta": "Teams · no reply in mail or Teams since 10/22" },
+          { "title": "Lisa · Department build move to test", "meta": "Mail · no reply in mail or Teams since 10/26" }
+        ] }] },
+      { "key": "mail", "type": "list", "label": "From mail and Teams · 3 since 3:00 PM yesterday", "value": 3, "summary": "2 with no owner · 1 FYI · nothing asked of you",
+        "groups": [
+          { "label": "Open, no owner", "rows": [
+            { "title": "Study record import: which location value to use?", "meta": "Mail · Nathan asked; the import failed without one" },
+            { "title": "Test one migrated study record before the rest move", "meta": "Mail · Nathan asked Saif; confirm whether it's yours" }
+          ] },
+          { "label": "FYI", "rows": [
+            { "title": "Provider lookup interface needs an identity record", "meta": "Mail · Bill opened a request about alternatives" }
+          ] }
+        ] }
+    ],
+    "footnote": "Built by the morning run from Baseline, your calendar and this morning's work digest (3 items, 2 left out as sensitive).",
+    "work_digest_note_ids": ["00000000-0000-4000-8000-0000000000a1"]
+  },
+  "covered_meeting_ids": [],
+  "items": []
+}

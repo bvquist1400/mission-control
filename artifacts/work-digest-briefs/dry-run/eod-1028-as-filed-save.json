@@ -1,0 +1,11 @@
+{
+  "_dry_run": "EOD prompt (docs/routines/eod.md) applied by hand to work_digest-fields.json > eod_1028_as_filed: the real 10/28 PM file in the old layout is unreadable and there is no AM note, so the digest adds only a footnote clause. No Baseline, calendar or Granola data was read.",
+  "edition": "eod",
+  "date": "2026-10-28",
+  "content": {
+    "heading": "Wed, Oct 28",
+    "footnote": "Built by the 4:15 run from Baseline, Granola and your calendar. This afternoon's work digest couldn't be read: the header has no still_waiting line (an older digest layout?)."
+  },
+  "covered_meeting_ids": [],
+  "items": []
+}

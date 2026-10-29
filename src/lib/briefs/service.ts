@@ -25,7 +25,8 @@ import {
 } from "@/lib/briefs/due";
 import type { TodayBriefStatus } from "@/lib/briefs/button";
 import { buildBriefNotice, telegramNotifierFromEnv, type BriefNotifier } from "@/lib/briefs/notify";
-import { normalizeBriefContent } from "@/lib/briefs/validate";
+import { normalizeBriefContent, normalizeStoredWorkDigestRef } from "@/lib/briefs/validate";
+import { parseWorkDigestNote, parseWorkDigestTitle } from "@/lib/briefing/work-digest";
 import {
   type BriefAction,
   type BriefActionInput,
@@ -40,6 +41,7 @@ import {
   type BriefRow,
   type BriefTaskSummary,
   type BriefView,
+  type BriefWorkDigestRef,
   type SaveBriefInput,
 } from "@/lib/briefs/types";
 import type { Task, TaskStatus } from "@/types/database";
@@ -145,7 +147,11 @@ function asBriefRow(row: Record<string, unknown>): BriefRow {
 
 function asItemRow(row: Record<string, unknown>): BriefItemRow {
   const item = row as unknown as BriefItemRow;
-  const source = (item.source && Array.isArray(item.source.meetings) ? item.source : { meetings: [] }) as BriefItemRow["source"];
+  const stored = (item.source && Array.isArray(item.source.meetings) ? item.source : { meetings: [] }) as BriefItemRow["source"];
+  const workDigest = normalizeStoredWorkDigestRef(stored.work_digest);
+  const { work_digest: _dropped, ...rest } = stored;
+  void _dropped;
+  const source = (workDigest ? { ...rest, work_digest: workDigest } : rest) as BriefItemRow["source"];
   const priorDue = Array.isArray(item.prior_due) ? (item.prior_due as BriefPriorDue[]) : null;
   return { ...item, source, payload: item.payload ?? { title: "" }, task_ids: item.task_ids ?? [], prior_due: priorDue };
 }
@@ -213,7 +219,12 @@ function resolveAgendaChoices(agenda: BriefAgendaLine[], nByIndex: Map<number, n
 
 export interface SaveBriefSkip {
   index: number;
-  reason: "meeting_already_covered" | "rerun_only_appends_meeting_items" | "duplicate_in_request" | "already_in_a_brief";
+  reason:
+    | "meeting_already_covered"
+    | "work_digest_already_covered"
+    | "rerun_only_appends_meeting_items"
+    | "duplicate_in_request"
+    | "already_in_a_brief";
   item_key: string;
 }
 
@@ -347,6 +358,82 @@ async function notifyOnce(
   return { status: "sent", error: null, notified_at: attemptedAt, sent_at: sentAt };
 }
 
+function collapseSpaces(value: string): string {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+/**
+ * Checks every source.work_digest against its note before anything is saved:
+ * the note is Brent's, active, titled "Work digest <date> AM|PM" for that
+ * edition, still readable, every cited block exists, and the lines are exactly
+ * those blocks' `what` lines. Returns the items with each citation rebuilt
+ * from the note (its lines in block order, date and where), so the page, the
+ * task description and the item key never carry text the note doesn't have.
+ */
+async function resolveWorkDigestCitations(
+  supabase: AnySupabase,
+  userId: string,
+  items: SaveBriefInput["items"]
+): Promise<SaveBriefInput["items"]> {
+  const noteIds = [...new Set(items.map((item) => item.source.work_digest?.note_id).filter((id): id is string => Boolean(id)))];
+  if (noteIds.length === 0) return items;
+
+  const { data, error } = await supabase
+    .from("notes")
+    .select("id, title, body_markdown, status")
+    .eq("user_id", userId)
+    .in("id", noteIds);
+  if (error) throw error;
+  const notes = new Map(((data ?? []) as Array<{ id: string; title: string; body_markdown: string | null; status: string | null }>).map((note) => [note.id, note]));
+
+  const errors: string[] = [];
+  const resolved = items.map((item, index) => {
+    const ref = item.source.work_digest;
+    if (!ref) return item;
+    const path = `items[${index}].source.work_digest`;
+    const note = notes.get(ref.note_id);
+    const named = note ? parseWorkDigestTitle(note.title) : null;
+    if (!note || !named || (note.status ?? "active") !== "active") {
+      errors.push(`${path}.note_id is not an active work digest note of yours`);
+      return item;
+    }
+    if (named.edition !== ref.edition) {
+      errors.push(`${path}.edition is ${ref.edition} but the note is the ${named.edition.toUpperCase()} digest`);
+      return item;
+    }
+    const parsed = parseWorkDigestNote(note.body_markdown);
+    if (!parsed.ok) {
+      errors.push(`${path}: the note can't be read (${parsed.reason}), so it can't be cited`);
+      return item;
+    }
+    const blocks = ref.blocks.map((block) => parsed.value.items.find((entry) => entry.block === block));
+    const missing = ref.blocks.filter((_, blockIndex) => !blocks[blockIndex]);
+    if (missing.length) {
+      errors.push(`${path}.blocks ${missing.join(", ")} not in the note`);
+      return item;
+    }
+    const expected = blocks.map((entry) => entry!.what);
+    const given = new Set(ref.lines.map(collapseSpaces));
+    const wanted = new Set(expected.map(collapseSpaces));
+    if (given.size !== wanted.size || [...given].some((line) => !wanted.has(line))) {
+      errors.push(`${path}.lines must be the what line of each cited block, copied exactly (${ref.blocks.join(", ")})`);
+      return item;
+    }
+    const wheres = [...new Set(blocks.map((entry) => entry!.where))].sort();
+    const citation: BriefWorkDigestRef = {
+      note_id: ref.note_id,
+      edition: ref.edition,
+      blocks: ref.blocks,
+      lines: expected,
+      date: named.date,
+      where: wheres.length > 1 ? "Mail and Teams" : wheres[0],
+    };
+    return { ...item, source: { ...item.source, work_digest: citation } };
+  });
+  if (errors.length) throw new BriefServiceError(400, errors[0], { errors });
+  return resolved;
+}
+
 export async function saveBrief(
   supabase: AnySupabase,
   userId: string,
@@ -358,6 +445,7 @@ export async function saveBrief(
     ...(item.payload.maybe_tracked ? [item.payload.maybe_tracked.task_id] : []),
   ]);
   await assertTasksOwned(supabase, userId, referencedTaskIds);
+  input = { ...input, items: await resolveWorkDigestCitations(supabase, userId, input.items) };
 
   let brief = await loadBriefByDate(supabase, userId, input.edition, input.brief_date);
   let created = false;
@@ -369,6 +457,7 @@ export async function saveBrief(
   }
 
   const covered = new Set(created ? [] : brief.covered_meeting_ids);
+  const coveredNotes = new Set(created ? [] : brief.content.work_digest_note_ids ?? []);
   const skipped: SaveBriefSkip[] = [];
   const candidates: Array<{ index: number; key: string; item: SaveBriefInput["items"][number] }> = [];
   const keysInRequest = new Set<string>();
@@ -376,13 +465,19 @@ export async function saveBrief(
   input.items.forEach((item, index) => {
     const key = computeBriefItemKey(input.edition, input.brief_date, item);
     if (!created) {
+      // A rerun appends only items with a source this brief hasn't covered yet:
+      // a meeting not in covered_meeting_ids, or a work digest note not in
+      // content.work_digest_note_ids (the late PM note on an EOD rerun).
       const meetingIds = item.source.meetings.map((meeting) => meeting.id);
-      if (meetingIds.length === 0) {
+      const digestNoteId = item.source.work_digest?.note_id ?? null;
+      if (meetingIds.length === 0 && !digestNoteId) {
         skipped.push({ index, reason: "rerun_only_appends_meeting_items", item_key: key });
         return;
       }
-      if (meetingIds.every((id) => covered.has(id))) {
-        skipped.push({ index, reason: "meeting_already_covered", item_key: key });
+      const newMeeting = meetingIds.some((id) => !covered.has(id));
+      const newNote = digestNoteId !== null && !coveredNotes.has(digestNoteId);
+      if (!newMeeting && !newNote) {
+        skipped.push({ index, reason: meetingIds.length ? "meeting_already_covered" : "work_digest_already_covered", item_key: key });
         return;
       }
     }
@@ -466,6 +561,17 @@ export async function saveBrief(
   if (!created && input.content.meetings?.length) {
     // Only the timeline grows on a rerun, so new items have their meeting on the page.
     briefUpdates.content = { ...brief.content, meetings: mergeMeetings(brief.content.meetings, input.content.meetings) };
+  }
+  // Work digest notes read = what the brief had, what the caller says it read, and every note an appended item cites.
+  const knownNotes = brief.content.work_digest_note_ids ?? [];
+  const nextNotes = [...new Set([...knownNotes, ...(input.content.work_digest_note_ids ?? [])])];
+  for (const candidate of candidates) {
+    const noteId = candidate.item.source.work_digest?.note_id;
+    if (noteId && !nextNotes.includes(noteId)) nextNotes.push(noteId);
+  }
+  if (nextNotes.length !== knownNotes.length) {
+    const base = (briefUpdates.content as BriefContent | undefined) ?? brief.content;
+    briefUpdates.content = { ...base, work_digest_note_ids: nextNotes.slice(0, 4) };
   }
   if (Object.keys(briefUpdates).length) {
     const { error: updateError } = await supabase.from("briefs").update(briefUpdates).eq("id", brief.id).eq("user_id", userId);
@@ -682,8 +788,17 @@ export interface BriefActionResult {
   undo_blocked?: boolean;
 }
 
-function describeSources(item: BriefItemRow): string {
-  return item.source.meetings
+/** "Work digest 2026-10-29 AM, W3" for a digest citation. */
+export function workDigestCitationLabel(ref: BriefWorkDigestRef, fallbackDate: string): string {
+  return `Work digest ${ref.date ?? fallbackDate} ${ref.edition.toUpperCase()}, ${ref.blocks.join(", ")}`;
+}
+
+function describeSources(item: BriefItemRow, briefDate: string): string {
+  const digest = item.source.work_digest;
+  const digestLines = digest
+    ? [[`- ${workDigestCitationLabel(digest, briefDate)}${digest.where ? ` (${digest.where})` : ""}`, ...digest.lines.map((line) => `  "${line}"`)].join("\n")]
+    : [];
+  const meetingLines = item.source.meetings
     .map((meeting) => {
       const when = meeting.start
         ? new Date(meeting.start).toLocaleString("en-US", {
@@ -696,8 +811,25 @@ function describeSources(item: BriefItemRow): string {
         : null;
       const head = `- ${meeting.title}${when ? ` (${when})` : ""}${meeting.url ? ` ${meeting.url}` : ""}`;
       return [head, ...meeting.lines.map((line) => `  "${line}"`)].join("\n");
-    })
-    .join("\n");
+    });
+  return [...meetingLines, ...digestLines].join("\n");
+}
+
+/**
+ * Where an accepted proposal says it came from. Meeting proposals are
+ * unchanged; a work digest citation adds the "from-work-digest" tag, and a
+ * digest-only proposal is source_type "Work digest" linking its note.
+ */
+export function proposalTaskSource(item: Pick<BriefItemRow, "source">): { tags: string[]; source_type: string; source_url: string | null } {
+  const hasMeetings = item.source.meetings.length > 0;
+  const digest = item.source.work_digest;
+  const tags = [...(hasMeetings || !digest ? ["from-meeting"] : []), ...(digest ? ["from-work-digest"] : [])];
+  const meetingUrl = item.source.meetings.find((meeting) => meeting.url)?.url ?? null;
+  return {
+    tags,
+    source_type: hasMeetings || !digest ? "Meeting" : "Work digest",
+    source_url: meetingUrl ?? (digest ? `/r/note/${digest.note_id}` : null),
+  };
 }
 
 /**
@@ -707,7 +839,7 @@ function describeSources(item: BriefItemRow): string {
  */
 async function buildProposalTask(supabase: AnySupabase, userId: string, brief: BriefRow, item: BriefItemRow, dueAt: string | null) {
   const title = item.payload.title.slice(0, 500);
-  const description = [item.payload.detail, `From ${brief.code} #${item.n}:`, describeSources(item)]
+  const description = [item.payload.detail, `From ${brief.code} #${item.n}:`, describeSources(item, brief.brief_date)]
     .filter(Boolean)
     .join("\n\n")
     .slice(0, 8000);
@@ -719,9 +851,7 @@ async function buildProposalTask(supabase: AnySupabase, userId: string, brief: B
     due_at: dueAt,
     base_priority: 50,
     priority_score: calculateFinalPriorityScore(50, boosts),
-    tags: ["from-meeting"],
-    source_type: "Meeting",
-    source_url: item.source.meetings.find((meeting) => meeting.url)?.url ?? null,
+    ...proposalTaskSource(item),
   };
 }
 

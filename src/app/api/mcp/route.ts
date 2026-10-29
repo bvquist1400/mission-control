@@ -333,7 +333,7 @@ function createMcpServer(): McpServer {
 
   mcp.tool(
     'get_brief_digest',
-    'Get a deterministic daily brief digest with sprint health, task buckets, stakeholder commitments, remaining meetings, guidance, and email-ready markdown. This is the preferred low-token brief for morning, midday, and eod. Activity (comments, task updates) is read since the previous brief was saved, at most 4 days back; `new_comments` lists every work task commented on in that window (hand-backs, REVIEW and HANDOFF first). Read a thread with list_task_comments.',
+    'Get a deterministic daily brief digest with sprint health, task buckets, stakeholder commitments, remaining meetings, guidance, and email-ready markdown. This is the preferred low-token brief for morning, midday, and eod. Activity (comments, task updates) is read since the previous brief was saved, at most 4 days back; `new_comments` lists every work task commented on in that window (hand-backs, REVIEW and HANDOFF first). Read a thread with list_task_comments. `work_digest` has today\'s work digest notes from Brent\'s mail and Teams (morning: `am`; eod: `am` and `pm`), each `ok` with its W items and still-waiting S entries, `missing`, or `unreadable` with a reason; on the EOD, `am.in_morning_brief` says whether this morning\'s brief already read the AM note.',
     {
       mode: z.enum(['morning', 'midday', 'eod', 'auto']).default('auto').describe('Briefing mode'),
       date: z.string().optional().describe('ISO date (YYYY-MM-DD). Defaults to today ET.'),
@@ -384,13 +384,20 @@ function createMcpServer(): McpServer {
     lines: z.array(z.string()).optional().describe('The note line(s) this item came from'),
   });
 
+  const BRIEF_WORK_DIGEST_REF_SCHEMA = z.object({
+    note_id: z.string().describe('The work digest note id (work_digest.am.note_id or work_digest.pm.note_id from get_brief_digest)'),
+    edition: z.enum(['am', 'pm']).describe('Which digest note: am or pm'),
+    blocks: z.array(z.string()).describe('The W blocks this item came from, e.g. ["W3"]'),
+    lines: z.array(z.string()).describe('Each cited block\'s `what` line, copied exactly'),
+  });
+
   // save_brief and its EOD alias share one input shape; only the edition differs.
   const SAVE_BRIEF_FIELDS = {
     date: z.string().optional().describe('Brief date YYYY-MM-DD (ET). Defaults to today ET.'),
-    content: z.record(z.string(), z.unknown()).describe('Read-only page content: heading, narrative, first_moves[], stats[{key,label,value}] (in display order; the ready notice quotes the stat with key "done" if there is one, else the first stat, e.g. {key:"due",label:"due today"} first on a morning), next{label, agenda[{time,title,free?,choice_item?}]} (free=true for a free-time line; choice_item = 0-based position of a choice item in items; Baseline links that agenda line to the choice), meetings[{id?,title,short?,start,end?,url?,has_notes,prep?,task_ids?}] for the day timeline (a meeting that starts after the save draws as upcoming: prep = one or two lines on how to go in, task_ids = Brent\'s tasks that prepare for it), tiles[{key,type:"narrative"|"list",label,value?,suffix?,summary?,text?,list?,list_label?,groups[{label?,rows[{title,meta?,task_id?}]}],footnote?,href?}] (href links the tile to another brief page and must be "/briefs/<CODE>", e.g. "/briefs/EOD-0925"; anything else is dropped), footnote.'),
+    content: z.record(z.string(), z.unknown()).describe('Read-only page content: heading, narrative, first_moves[], stats[{key,label,value}] (in display order; the ready notice quotes the stat with key "done" if there is one, else the first stat, e.g. {key:"due",label:"due today"} first on a morning), next{label, agenda[{time,title,free?,choice_item?}]} (free=true for a free-time line; choice_item = 0-based position of a choice item in items; Baseline links that agenda line to the choice), meetings[{id?,title,short?,start,end?,url?,has_notes,prep?,task_ids?}] for the day timeline (a meeting that starts after the save draws as upcoming: prep = one or two lines on how to go in, task_ids = Brent\'s tasks that prepare for it), tiles[{key,type:"narrative"|"list",label,value?,suffix?,summary?,text?,list?,list_label?,groups[{label?,rows[{title,meta?,task_id?}]}],footnote?,href?}] (href links the tile to another brief page and must be "/briefs/<CODE>", e.g. "/briefs/EOD-0925"; anything else is dropped), footnote, work_digest_note_ids[] (the work digest note ids this brief read, even ones that produced no items).'),
     covered_meeting_ids: z.array(z.string()).optional().describe('Granola ids of every meeting read for this brief, including ones that produced no items'),
     items: z.array(z.object({
-      kind: z.enum(['proposed_task', 'carry_over', 'carry_group', 'choice']).describe('proposed_task = meeting action item (Accept/Dismiss); carry_over = one task that needs a call (Done/Tomorrow/Park); carry_group = several tasks decided together (Tomorrow/Park); choice = pick one option, e.g. a calendar clash'),
+      kind: z.enum(['proposed_task', 'carry_over', 'carry_group', 'choice']).describe('proposed_task = a meeting or work digest action item (Accept/Dismiss); carry_over = one task that needs a call (Done/Tomorrow/Park); carry_group = several tasks decided together (Tomorrow/Park); choice = pick one option, e.g. a calendar clash'),
       title: z.string().describe('What the item says, max 500 characters'),
       detail: z.string().optional().describe('Extra context; becomes the task description on Accept'),
       why: z.string().optional().describe('One line on why this needs a call'),
@@ -398,7 +405,10 @@ function createMcpServer(): McpServer {
       label: z.string().optional().describe('Short eyebrow, e.g. "Due today" or "Tomorrow 10 AM"'),
       suggested_due: z.string().optional().describe('proposed_task only: the due date the meeting notes give, YYYY-MM-DD (ET). Only when the notes state a date; never invent one. Accept offers it and pre-selects it.'),
       task_ids: z.array(z.string()).optional().describe('carry_over: exactly one task UUID; carry_group: 2-50 task UUIDs'),
-      source: z.object({ meetings: z.array(BRIEF_MEETING_REF_SCHEMA) }).optional().describe('Meetings this item came from'),
+      source: z.object({
+        meetings: z.array(BRIEF_MEETING_REF_SCHEMA).optional(),
+        work_digest: BRIEF_WORK_DIGEST_REF_SCHEMA.optional().describe('proposed_task only: the work digest item(s) this came from'),
+      }).optional().describe('Where this item came from: meetings, a work digest item, or both'),
       maybe_tracked: z.object({
         task_id: z.string().describe('UUID of an existing task that may already cover this'),
         text: z.string().describe('Why it might already be tracked'),
@@ -424,7 +434,7 @@ function createMcpServer(): McpServer {
     return { ...toMcpResponse(data), ...(res.ok ? {} : { isError: true }) };
   }
 
-  const SAVE_BRIEF_RULES = 'Proposals are NOT tasks: nothing is created until Brent accepts an item. Every proposed_task must cite at least one meeting in source.meetings. The first save of the day creates the brief; a later save the same day only appends proposed_task items from meetings the brief has not covered yet, and never changes existing items, their numbers or their states. All task_ids and maybe_tracked.task_id must be Brent\'s own tasks. Baseline itself sends Brent one "brief ready" notice on the first save of the day (never on reruns); do not email or message him yourself. The notify.status in the result says sent, failed (with the reason) or already_claimed (an earlier save owns the one notice; notify.sent_at says whether it was delivered).';
+  const SAVE_BRIEF_RULES = 'Proposals are NOT tasks: nothing is created until Brent accepts an item. Every proposed_task must cite at least one meeting in source.meetings or a work digest item in source.work_digest (its lines must be the cited W blocks\' what lines, exactly; record every digest note read in content.work_digest_note_ids). The first save of the day creates the brief; a later save the same day only appends proposed_task items from meetings (or work digest notes) the brief has not covered yet, and never changes existing items, their numbers or their states. All task_ids and maybe_tracked.task_id must be Brent\'s own tasks. Baseline itself sends Brent one "brief ready" notice on the first save of the day (never on reruns); do not email or message him yourself. The notify.status in the result says sent, failed (with the reason) or already_claimed (an earlier save owns the one notice; notify.sent_at says whether it was delivered).';
 
   mcp.tool(
     'save_brief',

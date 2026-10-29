@@ -9,6 +9,7 @@ import {
   type BriefItemRow,
   type BriefMeetingRef,
   type BriefTaskSummary,
+  type BriefWorkDigestRef,
   type DismissReason,
 } from "@/lib/briefs/types";
 import {
@@ -88,6 +89,20 @@ export const BRIEF_SECTIONS: Record<BriefSection, { title: string; hint?: string
   meetings: { title: "From meetings", hint: "Nothing becomes a task until you accept it." },
   calls: { title: "Needs a call" },
 };
+
+/**
+ * The proposals section's heading, from the items' sources (never the
+ * edition): "From meetings", "From mail and Teams" when every proposal comes
+ * from the work digest, "From meetings and mail" when both appear.
+ */
+export function proposalSectionTitle(items: Pick<BriefItemRow, "kind" | "source">[]): string {
+  const proposals = items.filter((item) => item.kind === "proposed_task");
+  const digest = proposals.some((item) => item.source.work_digest);
+  const meetings = proposals.some((item) => item.source.meetings.length > 0);
+  if (digest && meetings) return "From meetings and mail";
+  if (digest) return "From mail and Teams";
+  return BRIEF_SECTIONS.meetings.title;
+}
 
 export const ACCEPT_DUE_LABELS: Record<AcceptDuePreset, string> = {
   today: "Today",
@@ -218,7 +233,28 @@ function cardClass(base: string, ctx: BriefCardContext): string {
 // proposed_task — a meeting action item: Accept / Dismiss
 // ---------------------------------------------------------------------------
 
+/** The chip for a work digest source: "Mail · Work digest AM". Never names the tool that wrote the digest. */
+export function workDigestChipLabel(ref: BriefWorkDigestRef): string {
+  return `${ref.where ?? "Mail"} · Work digest ${ref.edition.toUpperCase()}`;
+}
+
+/** Where a work digest quote links: the note, on the record page. */
+export function workDigestNoteHref(ref: BriefWorkDigestRef): string {
+  return `/r/note/${encodeURIComponent(ref.note_id)}`;
+}
+
+/** Where a proposal's suggested date came from: meeting notes, or the digest's mail / Teams item. */
+export function dueSourceWord(item: Pick<BriefItemRow, "source">): string {
+  const digest = item.source.work_digest;
+  if (!digest || item.source.meetings.length > 0) return "notes";
+  return digest.where === "Teams" ? "Teams" : digest.where === "Mail and Teams" ? "mail and Teams" : "mail";
+}
+
+/** The colour of a work digest source; meetings use their timeline colours. */
+const WORK_DIGEST_COLOR = "var(--muted)";
+
 function SourceRow({ item, ctx }: CardProps) {
+  const digest = item.source.work_digest;
   return (
     <div className="src-row">
       {uniqueMeetings(item).map((meeting) => (
@@ -227,6 +263,12 @@ function SourceRow({ item, ctx }: CardProps) {
           {ctx.meetingLabel(meeting)} <span className="t">{etClock(meeting.start)}</span>
         </span>
       ))}
+      {digest ? (
+        <span className="m wd" style={{ ["--mc" as string]: WORK_DIGEST_COLOR }}>
+          <span className="dot" />
+          {workDigestChipLabel(digest)} <span className="t">{digest.blocks.join(" ")}</span>
+        </span>
+      ) : null}
       <span className="n">#{item.n}</span>
     </div>
   );
@@ -243,7 +285,7 @@ function DuePicker({ item, ctx }: CardProps) {
   const suggested = suggestedDue(item);
   const selected = ctx.dueChoice;
   // "Passed" is judged in ET at render time, so a stale page can't offer yesterday as the default.
-  const notesParts = suggested ? notesDueParts(suggested, isDatePassed(suggested)) : null;
+  const notesParts = suggested ? notesDueParts(suggested, isDatePassed(suggested), dueSourceWord(item)) : null;
   // Show which day a relative choice lands on (the notes' date already says it).
   const lands = isAcceptDuePreset(selected) && selected !== "none" ? resolveAcceptDueDate(selected, ctx.briefDate) : null;
   return (
@@ -331,7 +373,8 @@ function ProposedTaskCard({ item, ctx }: CardProps) {
 
   const maybe = item.payload.maybe_tracked;
   const maybeTask = maybe ? ctx.tasks[maybe.task_id] : undefined;
-  const lineCount = item.source.meetings.reduce((sum, meeting) => sum + meeting.lines.length, 0);
+  const digest = item.source.work_digest;
+  const lineCount = item.source.meetings.reduce((sum, meeting) => sum + meeting.lines.length, 0) + (digest?.lines.length ?? 0);
 
   const body = (
     <div className="body">
@@ -370,6 +413,19 @@ function ProposedTaskCard({ item, ctx }: CardProps) {
               </div>
             );
           })}
+          {digest ? (
+            <div className="quote" style={{ ["--mc" as string]: WORK_DIGEST_COLOR }}>
+              {digest.lines.map((line) => (
+                <div key={line}>“{line}”</div>
+              ))}
+              <a href={workDigestNoteHref(digest)}>
+                <span className="from">
+                  {workDigestChipLabel(digest)}
+                  {digest.date ? ` ${digest.date.slice(5).replace("-", "/")}` : ""} · {digest.blocks.join(", ")} · open note
+                </span>
+              </a>
+            </div>
+          ) : null}
         </div>
       ) : null}
       {!ctx.draft ? (

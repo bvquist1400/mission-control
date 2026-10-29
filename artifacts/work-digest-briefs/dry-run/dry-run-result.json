@@ -1,0 +1,110 @@
+[
+  {
+    "file": "am-1029-save.json",
+    "about": "Morning prompt (docs/routines/morning.md) applied by hand to work_digest-fields.json > morning_1029. No Baseline, calendar or Granola data was read (fixtures only), so only the parts the work digest drives are filled in; the 'not in Baseline' check had nothing to search.",
+    "ok": true,
+    "code": "AM-1029",
+    "appended": [],
+    "skipped": [],
+    "counts": {
+      "total": 0,
+      "open": 0,
+      "from_meetings": 0,
+      "calls": 0
+    },
+    "stored_work_digest_note_ids": [
+      "00000000-0000-4000-8000-0000000000a1"
+    ],
+    "stored_citations": [],
+    "tiles": [
+      "Waiting on others",
+      "From mail and Teams · 3 since 3:00 PM yesterday"
+    ],
+    "footnote": "Built by the morning run from Baseline, your calendar and this morning's work digest (3 items, 2 left out as sensitive).",
+    "names_the_ai": false
+  },
+  {
+    "file": "eod-1028-as-filed-save.json",
+    "about": "EOD prompt (docs/routines/eod.md) applied by hand to work_digest-fields.json > eod_1028_as_filed: the real 10/28 PM file in the old layout is unreadable and there is no AM note, so the digest adds only a footnote clause. No Baseline, calendar or Granola data was read.",
+    "ok": true,
+    "code": "EOD-1028",
+    "appended": [],
+    "skipped": [],
+    "counts": {
+      "total": 0,
+      "open": 0,
+      "from_meetings": 0,
+      "calls": 0
+    },
+    "stored_work_digest_note_ids": [],
+    "stored_citations": [],
+    "tiles": [],
+    "footnote": "Built by the 4:15 run from Baseline, Granola and your calendar. This afternoon's work digest couldn't be read: the header has no still_waiting line (an older digest layout?).",
+    "names_the_ai": false
+  },
+  {
+    "file": "eod-1028-upgraded-save.json",
+    "about": "EOD prompt (docs/routines/eod.md) applied by hand to work_digest-fields.json > eod_1028_upgraded_layout: the 10/28 PM text with only still_waiting: 0 and status: open added. Compare with /Users/owner/dev/work-digest-skills/mock-EOD-1028-with-digest.md. No Baseline, calendar or Granola data was read, so nothing could be folded into an existing item and the 'not in Baseline' check had nothing to search: with Baseline, W1 (change control) would fold into tomorrow's meeting and W11/W15 would change #8/#11, as in the mock.",
+    "ok": true,
+    "code": "EOD-1028",
+    "appended": [
+      "#1 Present the research change request at tomorrow's change control",
+      "#2 Walk the two untrained team members through eReg",
+      "#3 Prep a yes or no on each investigator workflow task for Julie"
+    ],
+    "skipped": [],
+    "counts": {
+      "total": 3,
+      "open": 3,
+      "from_meetings": 3,
+      "calls": 0
+    },
+    "stored_work_digest_note_ids": [
+      "00000000-0000-4000-8000-0000000000b2"
+    ],
+    "stored_citations": [
+      {
+        "note_id": "00000000-0000-4000-8000-0000000000b2",
+        "edition": "pm",
+        "blocks": [
+          "W1"
+        ],
+        "lines": [
+          "Saif asked you to present the research change request at tomorrow's change control meeting."
+        ],
+        "date": "2026-10-28",
+        "where": "Teams"
+      },
+      {
+        "note_id": "00000000-0000-4000-8000-0000000000b2",
+        "edition": "pm",
+        "blocks": [
+          "W2"
+        ],
+        "lines": [
+          "You said you would walk two untrained team members through eReg tomorrow; you created an account for one other member today."
+        ],
+        "date": "2026-10-28",
+        "where": "Teams"
+      },
+      {
+        "note_id": "00000000-0000-4000-8000-0000000000b2",
+        "edition": "pm",
+        "blocks": [
+          "W3"
+        ],
+        "lines": [
+          "Julie asked for a short Friday chat to get your yes or no on each investigator workflow task."
+        ],
+        "date": "2026-10-28",
+        "where": "Teams"
+      }
+    ],
+    "tiles": [
+      "Waiting on others",
+      "From mail and Teams · 20 since 7:15 AM"
+    ],
+    "footnote": "Built by the 4:15 run from Baseline, Granola, your calendar and this afternoon's work digest (20 items, 1 left out as sensitive; no AM digest today).",
+    "names_the_ai": false
+  }
+]

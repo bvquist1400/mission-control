@@ -1,0 +1,60 @@
+{
+  "_dry_run": "EOD prompt (docs/routines/eod.md) applied by hand to work_digest-fields.json > eod_1028_upgraded_layout: the 10/28 PM text with only still_waiting: 0 and status: open added. Compare with /Users/owner/dev/work-digest-skills/mock-EOD-1028-with-digest.md. No Baseline, calendar or Granola data was read, so nothing could be folded into an existing item and the 'not in Baseline' check had nothing to search: with Baseline, W1 (change control) would fold into tomorrow's meeting and W11/W15 would change #8/#11, as in the mock.",
+  "edition": "eod",
+  "date": "2026-10-28",
+  "content": {
+    "heading": "Wed, Oct 28",
+    "narrative": "Mail and Teams were busy: 20 threads, 7 of them asks of you. One thing is due tonight that no meeting note caught: the upgrade team wants Nova note reviews for the post-May package done by end of day. Tomorrow you present at change control (Saif asked) and owe two people an eReg walkthrough; Julie wants your yes or no on each investigator workflow task on Friday.",
+    "stats": [
+      { "key": "done", "label": "done", "value": 0 },
+      { "key": "waiting", "label": "waiting on others", "value": 3 }
+    ],
+    "tiles": [
+      { "key": "waiting", "type": "list", "label": "Waiting on others", "value": 3, "summary": "Alex · an Epic contact · Saif",
+        "groups": [{ "rows": [
+          { "title": "Alex · ClinCard SSO updated link", "meta": "Teams · you told Andrew you're still waiting" },
+          { "title": "An Epic contact · End-to-end research demo script", "meta": "Mail · drafting a skeleton for you to edit" },
+          { "title": "Saif · OnCore calendar and budget announcement", "meta": "Teams · no reply yet" }
+        ] }] },
+      { "key": "mail", "type": "list", "label": "From mail and Teams · 20 since 7:15 AM", "value": 20, "summary": "1 due tonight · 7 asked of you (3 proposed) · 6 with no owner · 4 FYI",
+        "groups": [
+          { "label": "Due tonight", "rows": [
+            { "title": "Nova note reviews for the upgrade package", "meta": "Teams · asked of everyone, by end of day" }
+          ] },
+          { "label": "Asked of you", "rows": [
+            { "title": "Present the research change request at change control", "meta": "Teams · proposed as #1" },
+            { "title": "eReg walkthrough for two untrained team members", "meta": "Teams · proposed as #2" },
+            { "title": "Yes or no on each investigator workflow task for Julie", "meta": "Teams · proposed as #3" },
+            { "title": "Research security points for next week's workgroup", "meta": "Mail · an Epic contact confirmed the two points go together" },
+            { "title": "Help Roseann remove a former member from a study staff log", "meta": "Mail" },
+            { "title": "Answer Andrew: would leadership outreach help the ClinCard SSO switch?", "meta": "Mail" },
+            { "title": "Explain a recent mix-up to Amy at the meeting Payton sent", "meta": "Teams · check the chat for the exact point" }
+          ] },
+          { "label": "Open, no owner", "rows": [
+            { "title": "DocuSign routing for Cayuse: assign the proposed approver now?", "meta": "Teams · Adnan's suggestion, pending Marina" },
+            { "title": "Is Cait's team using eReg for a live study yet?", "meta": "Teams · Saif wasn't sure" },
+            { "title": "Mentor account for a new IRB office staff member", "meta": "Mail · asked of you and Saif" },
+            { "title": "Mentor students: internal or external users?", "meta": "Mail" },
+            { "title": "Upgrade test script signoff", "meta": "Teams · due 11/20, asked of everyone" }
+          ] },
+          { "label": "FYI", "rows": [
+            { "title": "Release restriction applied only to the legal template in test", "meta": "Mail · full rollout waits for go-live" },
+            { "title": "Andrew joins education calls", "meta": "Teams" },
+            { "title": "Saif revalidated the merged identifier file", "meta": "Mail · Nathan has questions for Epic" },
+            { "title": "Research executive dashboard ownership being settled", "meta": "Mail" }
+          ] }
+        ] }
+    ],
+    "footnote": "Built by the 4:15 run from Baseline, Granola, your calendar and this afternoon's work digest (20 items, 1 left out as sensitive; no AM digest today).",
+    "work_digest_note_ids": ["00000000-0000-4000-8000-0000000000b2"]
+  },
+  "covered_meeting_ids": [],
+  "items": [
+    { "kind": "proposed_task", "title": "Present the research change request at tomorrow's change control", "detail": "Teams: Saif asked you directly.", "group": "Teams · Change control", "suggested_due": "2026-10-29",
+      "source": { "work_digest": { "note_id": "00000000-0000-4000-8000-0000000000b2", "edition": "pm", "blocks": ["W1"], "lines": ["Saif asked you to present the research change request at tomorrow's change control meeting."] } } },
+    { "kind": "proposed_task", "title": "Walk the two untrained team members through eReg", "detail": "Teams: you said you would, tomorrow.", "group": "Teams · eReg", "suggested_due": "2026-10-29",
+      "source": { "work_digest": { "note_id": "00000000-0000-4000-8000-0000000000b2", "edition": "pm", "blocks": ["W2"], "lines": ["You said you would walk two untrained team members through eReg tomorrow; you created an account for one other member today."] } } },
+    { "kind": "proposed_task", "title": "Prep a yes or no on each investigator workflow task for Julie", "detail": "Teams: Julie asked for a short Friday chat.", "group": "Teams · Investigator roles", "suggested_due": "2026-10-30",
+      "source": { "work_digest": { "note_id": "00000000-0000-4000-8000-0000000000b2", "edition": "pm", "blocks": ["W3"], "lines": ["Julie asked for a short Friday chat to get your yes or no on each investigator workflow task."] } } }
+  ]
+}
