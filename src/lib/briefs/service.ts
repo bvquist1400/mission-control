@@ -513,16 +513,35 @@ async function loadBriefByCode(supabase: AnySupabase, userId: string, code: stri
   return asBriefRow(data as Record<string, unknown>);
 }
 
-export async function getBrief(supabase: AnySupabase, userId: string, code: string, options: { appUrl: string }): Promise<BriefView> {
-  const brief = await loadBriefByCode(supabase, userId, code);
+/**
+ * The brief and its items in ONE request (items embedded through the
+ * brief_items (brief_id, user_id) → briefs (id, user_id) key, ordered by n and
+ * filtered by user like the separate read was). Speed check fix 2: the page
+ * used to wait for the brief, then its items, then the tasks.
+ */
+async function loadBriefWithItems(
+  supabase: AnySupabase,
+  userId: string,
+  code: string
+): Promise<{ brief: BriefRow; itemRows: Record<string, unknown>[] }> {
   const { data, error } = await supabase
-    .from("brief_items")
-    .select(ITEM_SELECT)
+    .from("briefs")
+    .select(`${BRIEF_SELECT}, brief_items(${ITEM_SELECT})`)
     .eq("user_id", userId)
-    .eq("brief_id", brief.id)
-    .order("n", { ascending: true });
+    .eq("code", normalizeBriefCode(code))
+    .eq("brief_items.user_id", userId)
+    .order("n", { referencedTable: "brief_items", ascending: true })
+    .maybeSingle();
   if (error) throw error;
-  const items = (data ?? []).map((row) => toViewItem(asItemRow(row as Record<string, unknown>)));
+  if (!data) throw new BriefServiceError(404, `No brief ${normalizeBriefCode(code)}`);
+  const { brief_items: embedded, ...briefFields } = data as Record<string, unknown>;
+  const itemRows = (Array.isArray(embedded) ? embedded : []) as Record<string, unknown>[];
+  return { brief: asBriefRow(briefFields), itemRows };
+}
+
+export async function getBrief(supabase: AnySupabase, userId: string, code: string, options: { appUrl: string }): Promise<BriefView> {
+  const { brief, itemRows } = await loadBriefWithItems(supabase, userId, code);
+  const items = itemRows.map((row) => toViewItem(asItemRow(row)));
 
   const taskIds = new Set<string>();
   for (const item of items) {
@@ -610,7 +629,14 @@ export async function getTodayBriefStatus(
   options: { now?: Date; edition?: string } = {}
 ): Promise<TodayBriefStatus | null> {
   const briefDate = todayInBriefTimeZone(options.now ?? new Date());
-  let query = supabase.from("briefs").select("id, code, brief_date").eq("user_id", userId).eq("brief_date", briefDate);
+  // One request: the brief with its items' states embedded (was two in a row;
+  // this runs in the root layout on every page).
+  let query = supabase
+    .from("briefs")
+    .select("id, code, brief_date, brief_items(state)")
+    .eq("user_id", userId)
+    .eq("brief_date", briefDate)
+    .eq("brief_items.user_id", userId);
   if (options.edition) query = query.eq("edition", options.edition);
   const { data: brief, error } = await query
     .order("created_at", { ascending: false })
@@ -620,14 +646,8 @@ export async function getTodayBriefStatus(
   if (error) throw error;
   if (!brief) return null;
 
-  const { data: items, error: itemsError } = await supabase
-    .from("brief_items")
-    .select("state")
-    .eq("user_id", userId)
-    .eq("brief_id", (brief as { id: string }).id);
-  if (itemsError) throw itemsError;
-
-  const rows = (items ?? []) as Array<{ state: string }>;
+  const embedded = (brief as { brief_items?: unknown }).brief_items;
+  const rows = (Array.isArray(embedded) ? embedded : []) as Array<{ state: string }>;
   return {
     code: (brief as { code: string }).code,
     brief_date: (brief as { brief_date: string }).brief_date,

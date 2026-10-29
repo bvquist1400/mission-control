@@ -32,6 +32,7 @@ import type {
   ImplementationSummary,
   TaskChecklistItem,
   TaskComment,
+  SprintWithImplementation,
   TaskDependencySummary,
   TaskStatus,
   TaskUpdatePayload,
@@ -65,6 +66,8 @@ interface TaskGridProps {
   setTasks: Dispatch<SetStateAction<TaskWithImplementation[]>>;
   implementations: ImplementationSummary[];
   commitments: CommitmentSummary[];
+  /** Sprints the parent already loaded; without it the grid fetches its own. */
+  sprints?: SprintWithImplementation[];
   scopeMode: TaskGridScopeMode;
   emptyStateTitle: string;
   emptyStateBody: string;
@@ -149,6 +152,7 @@ export function TaskGrid({
   setTasks,
   implementations,
   commitments,
+  sprints: sprintsFromParent,
   scopeMode,
   emptyStateTitle,
   emptyStateBody,
@@ -180,7 +184,8 @@ export function TaskGrid({
   const [modalTaskId, setModalTaskId] = useState<string | null>(null);
   const [taskDetailsById, setTaskDetailsById] = useState<Record<string, TaskDetailData>>({});
   const [loadingDetailIds, setLoadingDetailIds] = useState<Record<string, boolean>>({});
-  const { sprints } = useSprints();
+  const ownSprints = useSprints({ skip: sprintsFromParent !== undefined });
+  const sprints = sprintsFromParent ?? ownSprints.sprints;
   const isMountedRef = useRef(true);
   const taskDetailsByIdRef = useRef(taskDetailsById);
   const activeDetailRequestIdsRef = useRef<Record<string, number>>({});
