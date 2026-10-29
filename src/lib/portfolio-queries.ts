@@ -3,9 +3,10 @@ import { isOpenTask, type ChecklistProgress, type PortfolioInput, type Portfolio
 import type { PaceForecast } from "@/lib/pace";
 import { fetchTaskDependencySummaries } from "@/lib/task-dependencies";
 import { getProjectForecast } from "@/lib/work-sessions/service";
+import { withStepProgress } from "@/lib/break-into-tasks";
 
 const TASK_COLUMNS =
-  "id, title, status, owner, owner_label, status_line, due_at, created_at, updated_at, priority_score, implementation_id, project_id, section_id, is_recurring_template, tags, waiting_on, blocked_reason, follow_up_at, project:projects(tags)";
+  "id, title, status, owner, owner_label, status_line, due_at, created_at, updated_at, priority_score, implementation_id, project_id, section_id, is_recurring_template, tags, waiting_on, blocked_reason, follow_up_at, parent_task_id, project:projects(tags)";
 
 /** Keeps each dependency lookup's id list (a URL filter) short. */
 const DEPENDENCY_CHUNK = 100;
@@ -158,7 +159,8 @@ export async function loadPortfolioInput(
     projects: projectRows,
     sections: sections.data ?? [],
     blockers,
-    checklist,
+    // An umbrella (Break into tasks, 066) earns credit from its step tasks, not its kept checklist.
+    checklist: withStepProgress(tasks, checklist),
     pace: await loadPortfolioPace(supabase, userId, projectRows, deps),
   };
 }

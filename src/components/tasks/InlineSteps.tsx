@@ -16,6 +16,10 @@ import type { TaskChecklistItem } from "@/types/database";
  * value from the reply, a failed save puts back the last value the server
  * confirmed. Ticking the last step only lights up Done: the task closes when
  * Done is pressed (`onDone`), never on its own.
+ *
+ * Break into tasks (066): for an umbrella the caller passes `stepTasks` and the
+ * list shows those tasks with their status instead (read-only: a step is
+ * finished by marking that task Done in its own window). Nothing is loaded.
  */
 export function InlineSteps({
   id,
@@ -26,6 +30,7 @@ export function InlineSteps({
   onSaved,
   onDone,
   doneDisabled = false,
+  stepTasks,
 }: {
   id: string;
   taskId: string;
@@ -35,7 +40,10 @@ export function InlineSteps({
   onSaved?: () => void;
   onDone: () => void;
   doneDisabled?: boolean;
+  /** An umbrella's step tasks: shown read-only instead of the checklist. */
+  stepTasks?: ReadonlyArray<{ id: string; title?: string; status: string }>;
 }) {
+  const showsTasks = Boolean(stepTasks && stepTasks.length > 0);
   const [items, setItemsState] = useState<TaskChecklistItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   // The latest rows, so two quick ticks never apply to a stale list.
@@ -58,6 +66,7 @@ export function InlineSteps({
   const ackedRef = useRef<Map<string, boolean>>(new Map());
 
   useEffect(() => {
+    if (showsTasks) return;
     const controller = new AbortController();
     fetch(`/api/tasks/${taskId}/checklist`, { cache: "no-store", signal: controller.signal })
       .then(async (response) => {
@@ -75,7 +84,7 @@ export function InlineSteps({
         }
       });
     return () => controller.abort();
-  }, [taskId]);
+  }, [taskId, showsTasks]);
 
   async function toggle(itemId: string) {
     const current = itemsRef.current?.find((row) => row.id === itemId);
@@ -116,7 +125,27 @@ export function InlineSteps({
       id={id}
       className={`relative border-t border-stroke bg-panel ${compact ? "-mx-2.5 -mb-2.5 mt-2 px-2.5 pb-2.5 pt-1.5" : "-mx-3 -mb-3 mt-2.5 px-3 pb-3 pt-2"}`}
     >
-      {items === null && !error ? (
+      {showsTasks && stepTasks ? (
+        <ul className="space-y-0.5" aria-label="Steps of this task">
+          {stepTasks.map((step) => (
+            <li key={step.id} className="flex items-start gap-2 rounded-lg px-1.5 py-1.5">
+              <span
+                aria-hidden="true"
+                className={`mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border text-xs ${
+                  step.status === "Done" ? "border-success-border bg-success-soft text-success" : "border-stroke"
+                }`}
+              >
+                {step.status === "Done" ? "✓" : ""}
+              </span>
+              <span className={`text-sm ${step.status === "Done" ? "text-muted-foreground line-through" : "text-foreground"}`}>
+                {step.title ?? "Step"}
+              </span>
+              <span className="ml-auto whitespace-nowrap pl-1.5 text-xs text-muted-foreground">{step.status}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {!showsTasks && items === null && !error ? (
         <p className="px-1.5 py-1 text-xs text-muted-foreground" role="status">
           Loading steps…
         </p>
@@ -152,7 +181,7 @@ export function InlineSteps({
       ) : null}
       {view.allStepsDone ? (
         <div className="mx-1.5 mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-success-border bg-success-soft px-2.5 py-2 text-sm text-success">
-          <span>All steps done. Mark the task done?</span>
+          <span>{showsTasks ? "All its tasks are done. Mark this task done?" : "All steps done. Mark the task done?"}</span>
           <Button variant="ready" size="sm" onClick={onDone} disabled={doneDisabled} aria-label="Mark task complete">
             ✓ Done
           </Button>

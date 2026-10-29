@@ -7,6 +7,7 @@ import { useTaskMutation } from "@/hooks/useTaskMutation";
 import type { TaskWithImplementation } from "@/types/database";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
 import { buildRangeCardView } from "@/lib/task-range-view";
+import { progressRowsFor } from "@/lib/break-into-tasks";
 import { NowTaskCard, nowStepsId } from "@/components/today/cards/NowTaskCard";
 import { InlineSteps } from "@/components/tasks/InlineSteps";
 
@@ -161,8 +162,11 @@ export function NowPanel({ topTasks, nextMeeting, syncNote }: NowPanelProps) {
         ) : (
           <ul className="mt-2 space-y-2.5">
             {visibleTasks.map((task) => {
-              const rows = rowOverrides.get(task.id) ?? task.checklist_rows ?? [];
-              const range = buildRangeCardView(task, rows, new Date(nowMs));
+              // An umbrella (Break into tasks) counts its step tasks; others their checklist.
+              const progress = progressRowsFor(task);
+              const stepsAreTasks = progress.source === "tasks";
+              const rows = stepsAreTasks ? progress.rows : rowOverrides.get(task.id) ?? progress.rows;
+              const range = buildRangeCardView(task, rows, new Date(nowMs), { stepsAreTasks });
               const stepsOpen = openStepsId === task.id;
               return (
                 <NowTaskCard
@@ -181,6 +185,7 @@ export function NowPanel({ topTasks, nextMeeting, syncNote }: NowPanelProps) {
                         id={nowStepsId(task.id)}
                         taskId={task.id}
                         view={range}
+                        stepTasks={stepsAreTasks ? task.step_tasks : undefined}
                         onRowsChange={(next) =>
                           setRowOverrides((prev) => new Map(prev).set(task.id, next))
                         }

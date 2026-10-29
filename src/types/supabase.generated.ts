@@ -2269,6 +2269,56 @@ export type Database = {
           },
         ]
       }
+      task_breaks: {
+        Row: {
+          created_at: string
+          fingerprint: string
+          id: string
+          project_created: boolean
+          project_id: string | null
+          section_created: boolean
+          section_id: string | null
+          task_ids: string[]
+          umbrella_comment_id: string | null
+          umbrella_task_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          fingerprint: string
+          id?: string
+          project_created?: boolean
+          project_id?: string | null
+          section_created?: boolean
+          section_id?: string | null
+          task_ids: string[]
+          umbrella_comment_id?: string | null
+          umbrella_task_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          fingerprint?: string
+          id?: string
+          project_created?: boolean
+          project_id?: string | null
+          section_created?: boolean
+          section_id?: string | null
+          task_ids?: string[]
+          umbrella_comment_id?: string | null
+          umbrella_task_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "task_breaks_umbrella_task_id_fkey"
+            columns: ["umbrella_task_id"]
+            isOneToOne: true
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       task_checklist_items: {
         Row: {
           completed_at: string | null
@@ -2618,6 +2668,7 @@ export type Database = {
           needs_review: boolean
           owner: string
           owner_label: string | null
+          parent_task_id: string | null
           pinned: boolean
           pinned_excerpt: string | null
           priority_score: number
@@ -2625,6 +2676,7 @@ export type Database = {
           recurrence: Json | null
           recurring_template_id: string | null
           section_id: string | null
+          source_checklist_item_id: string | null
           source_type: string
           source_url: string | null
           sprint_id: string | null
@@ -2665,6 +2717,7 @@ export type Database = {
           needs_review?: boolean
           owner?: string
           owner_label?: string | null
+          parent_task_id?: string | null
           pinned?: boolean
           pinned_excerpt?: string | null
           priority_score?: number
@@ -2672,6 +2725,7 @@ export type Database = {
           recurrence?: Json | null
           recurring_template_id?: string | null
           section_id?: string | null
+          source_checklist_item_id?: string | null
           source_type?: string
           source_url?: string | null
           sprint_id?: string | null
@@ -2712,6 +2766,7 @@ export type Database = {
           needs_review?: boolean
           owner?: string
           owner_label?: string | null
+          parent_task_id?: string | null
           pinned?: boolean
           pinned_excerpt?: string | null
           priority_score?: number
@@ -2719,6 +2774,7 @@ export type Database = {
           recurrence?: Json | null
           recurring_template_id?: string | null
           section_id?: string | null
+          source_checklist_item_id?: string | null
           source_type?: string
           source_url?: string | null
           sprint_id?: string | null
@@ -2753,6 +2809,13 @@ export type Database = {
           {
             foreignKeyName: "tasks_latest_instance_id_fkey"
             columns: ["latest_instance_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tasks_parent_task_id_fkey"
+            columns: ["parent_task_id"]
             isOneToOne: false
             referencedRelation: "tasks"
             referencedColumns: ["id"]
@@ -2960,6 +3023,10 @@ export type Database = {
         }
         Returns: Json
       }
+      break_task_into_tasks: {
+        Args: { p_request: Json; p_task_id: string; p_user_id: string }
+        Returns: Json
+      }
       brief_item_transition: {
         Args: {
           p_expected_state: string
@@ -3071,6 +3138,7 @@ export type Database = {
           project_id: string
         }[]
       }
+      note_link_target_uuid: { Args: { p_entity_id: string }; Returns: string }
       prune_llm_usage_events: { Args: { p_max_age?: string }; Returns: number }
       replace_task_date_cascade: {
         Args: {
@@ -3101,6 +3169,26 @@ export type Database = {
           skipped_pinned: number
           sync_at: string
         }[]
+      }
+      task_break_fingerprint: {
+        Args: {
+          p_comment_id: string
+          p_project_id: string
+          p_section_id: string
+          p_task_ids: string[]
+          p_user_id: string
+        }
+        Returns: string
+      }
+      task_break_lock_for_undo: {
+        Args: {
+          p_comment_id: string
+          p_project_id: string
+          p_section_id: string
+          p_task_ids: string[]
+          p_user_id: string
+        }
+        Returns: boolean
       }
       task_date_cascade_apply_core: {
         Args: {
@@ -3160,6 +3248,10 @@ export type Database = {
         Returns: Json
       }
       task_graph_lock_key: { Args: { p_user_id: string }; Returns: number }
+      undo_break_task_into_tasks: {
+        Args: { p_request: Json; p_task_id: string; p_user_id: string }
+        Returns: Json
+      }
       undo_task_date_cascade: {
         Args: {
           p_cascade_id: string

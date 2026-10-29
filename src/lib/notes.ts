@@ -285,14 +285,14 @@ export async function listNotes(
           .select('note_id')
           .eq('user_id', userId)
           .eq('entity_type', resolved.entity_type)
-          .eq('entity_id', resolved.entity_id)
+          .in('entity_id', resolved.entity_id_matches)
           .eq('link_role', options.link_role)
       : await supabase
           .from('note_links')
           .select('note_id')
           .eq('user_id', userId)
           .eq('entity_type', resolved.entity_type)
-          .eq('entity_id', resolved.entity_id);
+          .in('entity_id', resolved.entity_id_matches);
 
     const { data: linkRows, error: linkRowsError } = linkRowsResult;
 
@@ -395,14 +395,17 @@ export async function unlinkNoteFromEntity(
   await requireOwnedNote(supabase, userId, noteId);
   const resolved = await resolveEntityLink(supabase, userId, input, { validateExists: false });
 
+  // Either spelling: a row saved before ids were canonical keeps the caller's.
   const existingResult = await supabase
     .from('note_links')
     .select('id')
     .eq('user_id', userId)
     .eq('note_id', noteId)
     .eq('entity_type', resolved.entity_type)
-    .eq('entity_id', resolved.entity_id)
+    .in('entity_id', resolved.entity_id_matches)
     .eq('link_role', resolved.link_role)
+    .order('created_at', { ascending: true })
+    .limit(1)
     .maybeSingle();
 
   if (existingResult.error) {

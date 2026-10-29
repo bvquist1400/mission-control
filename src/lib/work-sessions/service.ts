@@ -120,7 +120,7 @@ async function loadProjectTasks(supabase: SupabaseClient, userId: string, projec
   return pagedSelect<TaskRow>((from, to) =>
     supabase
       .from("tasks")
-      .select("id, title, project_id, status, estimated_minutes, unit_count, work_type, is_sample, section_id")
+      .select("id, title, project_id, status, estimated_minutes, unit_count, work_type, is_sample, section_id, source_checklist_item_id")
       .eq("user_id", userId)
       .eq("project_id", projectId)
       .eq("is_recurring_template", false)
@@ -474,7 +474,7 @@ async function resolveTarget(
     const taskId = requireUuid(taskIdInput, "task_id");
     const { data, error } = await supabase
       .from("tasks")
-      .select("id, title, project_id, status, estimated_minutes, unit_count, work_type, is_sample, section_id")
+      .select("id, title, project_id, status, estimated_minutes, unit_count, work_type, is_sample, section_id, source_checklist_item_id")
       .eq("id", taskId)
       .eq("user_id", userId)
       .maybeSingle();

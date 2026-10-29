@@ -42,6 +42,8 @@ export interface PortfolioTaskRow {
   waiting_on?: string | null;
   blocked_reason?: string | null;
   follow_up_at?: string | null;
+  /** Break into tasks (066): the umbrella this task is a step of; the umbrella's credit counts its steps. */
+  parent_task_id?: string | null;
 }
 
 export interface PortfolioImplementationRow {

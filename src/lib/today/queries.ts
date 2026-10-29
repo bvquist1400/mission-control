@@ -22,8 +22,12 @@ import { addDateOnlyDays, getDateStartInTimeZone } from '@/lib/today/week-board'
  * checklist rows (`is_done`, `unit_count`) so the card fill and "3/5 steps"
  * come from the same query (one request, no per-task reads). Exposed on the
  * task as `checklist_rows`.
+ *
+ * Break into tasks (066): an umbrella's step tasks ride along the same way
+ * (`step_tasks`, id/title/status), so its card counts the new tasks instead of
+ * its checklist (Brent 10/29: "Today counts the new tasks"; `progressRowsFor`).
  */
-export const TODAY_TASK_SELECT = `${TASK_WITH_RELATIONS_SELECT}, checklist_rows:task_checklist_items(is_done, unit_count)`;
+export const TODAY_TASK_SELECT = `${TASK_WITH_RELATIONS_SELECT}, checklist_rows:task_checklist_items(is_done, unit_count), step_tasks:tasks!parent_task_id(id, title, status)`;
 
 /** A PostgREST filter value in double quotes (timestamps carry ':' and '.', reserved inside or=()). */
 function quotedFilterValue(value: string): string {
@@ -34,6 +38,7 @@ function normalizeTodayTasks(rows: Array<Record<string, unknown>>): TaskWithImpl
   return normalizeTaskWithRelationsList(rows).map((task) => ({
     ...task,
     checklist_rows: Array.isArray(task.checklist_rows) ? task.checklist_rows : [],
+    step_tasks: Array.isArray(task.step_tasks) ? task.step_tasks : [],
   }));
 }
 

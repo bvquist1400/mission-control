@@ -69,6 +69,8 @@ export function RangeFillLayers({ view, elapsedPercent }: { view: RangeCardView;
 
 /** "Mon–Fri · Day 4 of 5" (violet), "Due today · Day 5 of 5", "Overdue · Mon–Wed ended Wed", "Starts Wed 10/28". */
 export function RangeChip({ view }: { view: RangeCardView }) {
+  // An umbrella without a due date has no chip words.
+  if (!view.chipText) return null;
   return (
     <span
       data-range-chip={view.tone}

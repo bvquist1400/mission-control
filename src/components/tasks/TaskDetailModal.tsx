@@ -6,6 +6,8 @@ import { TaskMetaEditor } from "@/components/tasks/TaskMetaEditor";
 import { TaskOwnerSection } from "@/components/tasks/TaskOwnerSection";
 import { TaskNotesPanel } from "@/components/tasks/TaskNotesPanel";
 import { ChecklistSection } from "@/components/tasks/ChecklistSection";
+import { BreakIntoTasksDialog, TaskStepsPanel, useBreakIntoTasks, useTaskSteps } from "@/components/tasks/BreakIntoTasks";
+import { canBreakIntoTasks } from "@/lib/break-into-tasks";
 import { TaskComments } from "@/components/tasks/TaskComments";
 import { TaskDependencies } from "@/components/tasks/TaskDependencies";
 import { StatusSelector } from "@/components/ui/StatusSelector";
@@ -61,6 +63,11 @@ export function TaskDetailModal({
     addDependency,
     removeDependency,
   } = useTaskDetail({ taskId: task?.id ?? null, onTaskUpdated, onDatesChanged });
+  // Break into tasks (066): the umbrella's steps / "Part of", the dialog and its Undo toast.
+  const { steps, reload: reloadSteps } = useTaskSteps(task?.id ?? null);
+  const breakInto = useBreakIntoTasks({ task, onChanged: reloadSteps });
+  const isUmbrella = steps.step_tasks.length > 0;
+  const showBreakButton = Boolean(task) && !task?.is_recurring_template && canBreakIntoTasks(checklist, steps.step_tasks.length, task?.status ?? null);
 
   useEffect(() => {
     setDeleteError(null);
@@ -162,7 +169,7 @@ export function TaskDetailModal({
                 </span>
               )}
               <Button
-                variant="primary"
+                variant={steps.steps_progress?.all_done && task.status !== "Done" ? "ready" : "primary"}
                 size="sm"
                 onClick={() => void updateTask({ status: "Done" }).then((saved) => { if (saved) onClose(); })}
                 disabled={task.status === "Done" || isSaving || isDeleting}
@@ -194,6 +201,8 @@ export function TaskDetailModal({
             onHandBack={handleHandBack}
           />
 
+          <TaskStepsPanel steps={steps} />
+
           {/* Meta editor */}
           <TaskMetaEditor
             task={task}
@@ -217,6 +226,14 @@ export function TaskDetailModal({
                   onAdd={(text) => void addChecklistItem(text)}
                   onUpdate={(itemId, text) => void updateChecklistItem(itemId, text)}
                   onDelete={(itemId) => void deleteChecklistItem(itemId)}
+                  note={isUmbrella ? "Kept for the record. This task's progress now counts its steps (above)." : null}
+                  headingAction={
+                    showBreakButton ? (
+                      <Button variant="secondary" size="xs" onClick={() => breakInto.setOpen(true)} disabled={isSaving || isDeleting}>
+                        Break into tasks
+                      </Button>
+                    ) : null
+                  }
                 />
                 <TaskDependencies
                   taskId={task.id}
@@ -239,6 +256,15 @@ export function TaskDetailModal({
               <TaskNotesPanel taskId={task.id} />
             </div>
           )}
+          {breakInto.open ? (
+            <BreakIntoTasksDialog
+              open
+              task={task}
+              checklist={checklist}
+              onClose={() => breakInto.setOpen(false)}
+              onCreated={breakInto.handleCreated}
+            />
+          ) : null}
         </div>
       )}
     </Modal>
