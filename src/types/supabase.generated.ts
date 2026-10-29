@@ -3138,6 +3138,7 @@ export type Database = {
           project_id: string
         }[]
       }
+      note_link_target_uuid: { Args: { p_entity_id: string }; Returns: string }
       prune_llm_usage_events: { Args: { p_max_age?: string }; Returns: number }
       replace_task_date_cascade: {
         Args: {
@@ -3187,7 +3188,7 @@ export type Database = {
           p_task_ids: string[]
           p_user_id: string
         }
-        Returns: undefined
+        Returns: boolean
       }
       task_date_cascade_apply_core: {
         Args: {

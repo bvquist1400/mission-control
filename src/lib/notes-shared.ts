@@ -105,6 +105,21 @@ export function isValidEstimateSource(value: string): value is EstimateSource {
   return VALID_ESTIMATE_SOURCES.includes(value as EstimateSource);
 }
 
+/**
+ * The canonical text of a uuid (lowercase, 8-4-4-4-12) when `value` is one in
+ * any spelling Postgres reads as a uuid (any case, {braces}, hyphens dropped
+ * after any group of four), else `value` unchanged. Note links store task and
+ * project ids as text, so every write stores this form (migration 066 also
+ * compares links as uuids; Baseline d1f7e622 fix round 3).
+ */
+const UUID_SPELLING_RE = /^(?:\{([0-9a-f]{4}(?:-?[0-9a-f]{4}){7})\}|([0-9a-f]{4}(?:-?[0-9a-f]{4}){7}))$/i;
+export function canonicalUuidText(value: string): string {
+  const match = UUID_SPELLING_RE.exec(value);
+  if (!match) return value;
+  const hex = (match[1] ?? match[2]).replace(/-/g, '').toLowerCase();
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 export function asTrimmedString(value: unknown): string | null {
   if (typeof value !== 'string') {
     return null;

@@ -609,6 +609,55 @@ await test("FR P2-4: a Done, Missed or Parked task can't be broken (button hidde
   assert.match(bit.breakRefusal("task_closed").error, /closed/);
 });
 
+// ── Fix round 3 ──────────────────────────────────────────────────────────────
+const { readFileSync: readSource } = await import("node:fs");
+const MIGRATION_066 = readSource(new URL("../supabase/migrations/066_break_task_into_tasks.sql", import.meta.url), "utf8");
+const fenceBody = () => {
+  const start = MIGRATION_066.indexOf("FUNCTION task_break_lock_for_undo(");
+  return MIGRATION_066.slice(start, MIGRATION_066.indexOf("$$;", start));
+};
+
+await test("FR3 P2-1: Undo's write fence never waits: every row lock in task_break_lock_for_undo is NOWAIT, a busy row returns false, and Undo answers `changed`", () => {
+  const body = fenceBody();
+  const locks = body.match(/FOR UPDATE OF \w+(?: NOWAIT)?/g) ?? [];
+  assert.ok(locks.length >= 6, `found ${locks.length} row locks`);
+  for (const lock of locks) assert.match(lock, /NOWAIT$/, lock);
+  assert.match(body, /RETURNS BOOLEAN/);
+  assert.match(body, /EXCEPTION WHEN lock_not_available THEN[\s\S]*RETURN false/);
+  assert.match(MIGRATION_066, /IF NOT public\.task_break_lock_for_undo\([\s\S]*?\) THEN[\s\S]*?'reason', 'changed'/);
+});
+
+await test("FR3 P2-2: 066 compares every note link to a task/project as a uuid (note_link_target_uuid), never as raw text", () => {
+  const code = MIGRATION_066.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
+  const raw = code.match(/entity_id\s*(=|IN|<>)\s*(ANY|\w)/g) ?? [];
+  assert.deepEqual(raw, [], `raw text comparisons left: ${raw.join(", ")}`);
+  assert.equal((code.match(/note_link_target_uuid\(l\.entity_id\)/g) ?? []).length, 4, "fingerprint + fence, task + project");
+  assert.match(code, /v_id := public\.note_link_target_uuid\(NEW\.entity_id\)/, "the trigger reads the same spellings");
+});
+
+await test("FR3 P2-2: canonicalUuidText gives the lowercase 8-4-4-4-12 form for every spelling Postgres reads as a uuid, and leaves anything else alone", async () => {
+  const { canonicalUuidText } = await import("../src/lib/notes-shared.ts");
+  const id = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+  for (const spelled of [id, id.toUpperCase(), `{${id}}`, `{${id.toUpperCase()}}`, id.replace(/-/g, ""), id.replace(/-/g, "").toUpperCase(), "0A1B-2C3D-4E5F-4A6B-8C7D-9E0F-1A2B-3C4D"]) {
+    assert.equal(canonicalUuidText(spelled), id, spelled);
+  }
+  for (const other of ["evt-123", `{${id}`, `${id}}`, `${id}-`, `-${id}`, id.slice(0, 35), "", "google:abc|2026-10-29T10:00:00Z"]) {
+    assert.equal(canonicalUuidText(other), other, other);
+  }
+});
+
+await test("FR3 P2-2: resolveEntityLink stores task/project/other uuid ids canonically and matches both spellings on lookup", async () => {
+  const { resolveEntityLink } = await import("../src/lib/notes-relations.ts");
+  const id = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+  for (const entity_type of ["task", "project", "implementation", "stakeholder", "commitment", "sprint"]) {
+    const r = await resolveEntityLink(null, "user", { entity_type, entity_id: ` ${id.toUpperCase()} ` }, { validateExists: false });
+    assert.equal(r.entity_id, id, entity_type);
+    assert.deepEqual(r.entity_id_matches, [id, id.toUpperCase()], entity_type);
+    const plain = await resolveEntityLink(null, "user", { entity_type, entity_id: id }, { validateExists: false });
+    assert.deepEqual(plain.entity_id_matches, [id], entity_type);
+  }
+});
+
 console.log(`\n${passed} passed, ${failures.length} failed`);
 if (failures.length > 0) {
   console.log(`Failed:\n- ${failures.join("\n- ")}`);

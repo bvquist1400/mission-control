@@ -89,11 +89,14 @@
 --
 -- 4. undo_break_task_into_tasks(p_user_id, p_task_id, p_request JSONB): the
 --    toast's Undo, p_request = { break_id }. Same lock protocol, then the write
---    fence (task_break_lock_for_undo, fix round 2: the steps, the created
---    section/project and every row pointing at them FOR UPDATE, so a comment,
---    link, edit or note link still in flight is waited for and seen, and one
---    that starts later waits and is then refused; new note links are fenced by
---    trg_note_links_lock_target); refuses
+--    fence (task_break_lock_for_undo, fix rounds 2 and 3: the steps, the
+--    created section/project, every row pointing at them and the note links
+--    naming them FOR UPDATE NOWAIT, so a comment, link, edit, work session or
+--    note link still in flight makes Undo refuse at once (it never waits on a
+--    writer, so it can't deadlock with one), and one that starts later waits
+--    and is then refused; new note links are fenced by
+--    trg_note_links_lock_target; note links match in any uuid spelling,
+--    note_link_target_uuid); refuses
 --    (nothing changes) unless the record is this umbrella's, every step still
 --    exists as its step, and the fingerprint is unchanged; then deletes the
 --    steps, the section or project only if the break created it, the
@@ -309,12 +312,12 @@ BEGIN
     END LOOP;
   END LOOP;
 
-  -- Note links name tasks/projects by text id (no foreign key).
+  -- Note links name tasks/projects by text id (no foreign key), in any spelling of the uuid.
   SELECT md5(COALESCE(string_agg(l::TEXT, '|' ORDER BY l.id), '')) INTO v_part
     FROM public.note_links l
    WHERE l.user_id = p_user_id
-     AND ((l.entity_type = 'task' AND l.entity_id = ANY (COALESCE(p_task_ids, '{}'::UUID[])::TEXT[]))
-       OR (p_project_id IS NOT NULL AND l.entity_type = 'project' AND l.entity_id = p_project_id::TEXT));
+     AND ((l.entity_type = 'task' AND public.note_link_target_uuid(l.entity_id) = ANY (COALESCE(p_task_ids, '{}'::UUID[])))
+       OR (p_project_id IS NOT NULL AND l.entity_type = 'project' AND public.note_link_target_uuid(l.entity_id) = p_project_id));
   v_parts := v_parts || ('note_links:' || v_part);
 
   IF p_comment_id IS NOT NULL THEN
@@ -330,41 +333,70 @@ $$;
 COMMENT ON FUNCTION task_break_fingerprint(UUID, UUID[], UUID, UUID, UUID) IS
   'Break into tasks (066): md5 of the step tasks, every row pointing at them, the created section/project and its rows, and the umbrella comment. Undo refuses when it changed.';
 
--- The write fence Undo takes before it fingerprints (fix round 2). The
--- fingerprint is a check; this makes it a fence. Locks, in this order:
---   1. the step tasks FOR UPDATE (id order). A FOREIGN KEY insert pointing at a
---      step (a comment, a dependency either way, a status-history row, a work
---      session, ...) holds FOR KEY SHARE on the step until it commits, and
---      KEY SHARE conflicts only with FOR UPDATE: so a write still in flight makes
---      Undo wait until it commits (the fingerprint, a later statement with a new
---      READ COMMITTED snapshot, then sees it and Undo refuses), and a write that
---      starts after this waits for Undo (after Undo's DELETE its foreign key
---      check fails: the write is refused, never saved and then cascade-deleted).
---      062's FOR NO KEY UPDATE, held until now, does not conflict with KEY SHARE.
---   2. the section and the project this break CREATED, FOR UPDATE (a new task or
---      section filed into them is fenced the same way).
+-- A note link names its task or project by TEXT (no foreign key), and Postgres
+-- reads the same uuid from several spellings (any case, {braces}, hyphens
+-- dropped). Every 066 comparison of a link to a task/project goes through this
+-- (fix round 3): the uuid the text names, or NULL when it names none. The
+-- pattern is exactly what the uuid type accepts (an optional {…} around 32 hex
+-- digits, a hyphen allowed after any group of four but the last), so the cast
+-- never fails; test:break-into-tasks-db pins it against the cast itself.
+CREATE OR REPLACE FUNCTION note_link_target_uuid(p_entity_id TEXT)
+RETURNS UUID
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+  SELECT CASE
+    WHEN p_entity_id ~ '^(\{[0-9A-Fa-f]{4}(-?[0-9A-Fa-f]{4}){7}\}|[0-9A-Fa-f]{4}(-?[0-9A-Fa-f]{4}){7})$'
+      THEN p_entity_id::UUID
+  END;
+$$;
+
+-- Pure (no table access), so it keeps the default EXECUTE: every role that
+-- writes note_links runs it through the trigger below.
+COMMENT ON FUNCTION note_link_target_uuid(TEXT) IS
+  'Break into tasks (066, fix round 3): the uuid a note link''s text entity_id names in any spelling Postgres accepts, else NULL.';
+
+-- The write fence Undo takes before it fingerprints (fix rounds 2 and 3). The
+-- fingerprint is a check; this makes it a fence. Locks, FOR UPDATE NOWAIT:
+--   1. the step tasks (id order). A FOREIGN KEY insert pointing at a step (a
+--      comment, a dependency either way, a status-history row, a work session,
+--      ...) and a new note link (trg_note_links_lock_target) hold FOR KEY SHARE
+--      on the step until they commit; KEY SHARE conflicts only with FOR UPDATE.
+--      062's FOR NO KEY UPDATE, already held, does not.
+--   2. the section and the project this break CREATED (a new task or section
+--      filed into them is fenced the same way).
 --   3. every existing row that points at those through a single-column foreign
---      key (found from pg_constraint, like the fingerprint), FOR UPDATE, so an
---      edit or delete still in flight (e.g. a PATCH of the step's own system
---      comment) is waited for and then seen, rather than overwritten by the
---      cascade. Only tables this caller may UPDATE: rows nobody here can edit
---      need no fence (new rows are fenced by 1 and 2).
---   4. the note links naming a step or the created project, and the umbrella's
---      system comment, FOR UPDATE. NEW note links have no foreign key: the
---      trigger trg_note_links_lock_target (below) takes FOR KEY SHARE on the task
---      or project a link names, so they are fenced by 1 and 2 like a foreign key.
--- Everything else Undo needs (the advisory lock, the projects FOR SHARE, the
--- umbrella and steps FOR NO KEY UPDATE) is already held from 062's protocol, and
--- two Undos never interleave (the advisory lock), so the only waits here are on
--- single-row writers that do not wait on Undo: no new deadlock.
-CREATE OR REPLACE FUNCTION task_break_lock_for_undo(
+--      key (found from pg_constraint, like the fingerprint), so an edit or
+--      delete of one (a PATCH of a step's system comment, a work-session edit)
+--      can't run under the cascade. Only tables this caller may UPDATE.
+--   4. the note links naming a step or the created project (in any spelling,
+--      note_link_target_uuid) and the umbrella's system comment.
+-- NOWAIT (fix round 3): Undo never waits on a row another transaction holds.
+-- If any of these rows is locked, some write touching what Undo would delete
+-- is in flight, so the answer is `changed` (false here; the caller refuses,
+-- nothing deleted) and Undo's locks go at once. Waiting instead deadlocked:
+-- the session RPCs (059) lock the session row and then its task, Undo held the
+-- task (062) and waited for the session row; a note link being re-pointed from
+-- one step to another, or a multi-row link insert, crossed the same way.
+-- A writer that comes AFTER the fence waits for Undo (its KEY SHARE or row lock
+-- conflicts) and is then refused (foreign key / note_links_target_exists), or
+-- finds the row gone; a writer that committed BEFORE it is in the fingerprint.
+-- So after 062's protocol (advisory lock, projects FOR SHARE, tasks FOR NO KEY
+-- UPDATE, all in id order, which every cascade, break and session RPC also
+-- follows) Undo waits on nothing, and holds every lock its deletes need.
+-- A waiter queued behind Undo's own task lock is not "in flight" (Undo is the
+-- sole locker, so the upgrade is granted without waiting; DB-tested).
+-- Fix round 2 returned VOID; CREATE OR REPLACE can't change a return type.
+DROP FUNCTION IF EXISTS task_break_lock_for_undo(UUID, UUID[], UUID, UUID, UUID);
+CREATE FUNCTION task_break_lock_for_undo(
   p_user_id UUID,
   p_task_ids UUID[],
   p_project_id UUID,
   p_section_id UUID,
   p_comment_id UUID
 )
-RETURNS VOID
+RETURNS BOOLEAN
 LANGUAGE plpgsql
 SECURITY INVOKER
 SET search_path = public
@@ -373,57 +405,65 @@ DECLARE
   v_ref RECORD;
   v_target RECORD;
 BEGIN
-  PERFORM 1 FROM public.tasks t
-   WHERE t.user_id = p_user_id AND t.id = ANY (COALESCE(p_task_ids, '{}'::UUID[]))
-   ORDER BY t.id
-     FOR UPDATE OF t;
-  IF p_section_id IS NOT NULL THEN
-    PERFORM 1 FROM public.project_sections s WHERE s.id = p_section_id AND s.user_id = p_user_id FOR UPDATE OF s;
-  END IF;
-  IF p_project_id IS NOT NULL THEN
-    PERFORM 1 FROM public.projects p WHERE p.id = p_project_id AND p.user_id = p_user_id FOR UPDATE OF p;
-  END IF;
+  BEGIN
+    PERFORM 1 FROM public.tasks t
+     WHERE t.user_id = p_user_id AND t.id = ANY (COALESCE(p_task_ids, '{}'::UUID[]))
+     ORDER BY t.id
+       FOR UPDATE OF t NOWAIT;
+    IF p_section_id IS NOT NULL THEN
+      PERFORM 1 FROM public.project_sections s WHERE s.id = p_section_id AND s.user_id = p_user_id FOR UPDATE OF s NOWAIT;
+    END IF;
+    IF p_project_id IS NOT NULL THEN
+      PERFORM 1 FROM public.projects p WHERE p.id = p_project_id AND p.user_id = p_user_id FOR UPDATE OF p NOWAIT;
+    END IF;
 
-  FOR v_target IN
-    SELECT 'public.tasks'::regclass AS rel, COALESCE(p_task_ids, '{}'::UUID[]) AS ids
-    UNION ALL SELECT 'public.project_sections'::regclass, ARRAY[p_section_id] WHERE p_section_id IS NOT NULL
-    UNION ALL SELECT 'public.projects'::regclass, ARRAY[p_project_id] WHERE p_project_id IS NOT NULL
-  LOOP
-    FOR v_ref IN
-      SELECT c.conrelid::regclass AS rel, a.attname AS col
-        FROM pg_constraint c
-        JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
-       WHERE c.contype = 'f'
-         AND c.confrelid = v_target.rel
-         AND cardinality(c.conkey) = 1
-       ORDER BY c.conrelid::regclass::TEXT, a.attname
+    FOR v_target IN
+      SELECT 'public.tasks'::regclass AS rel, COALESCE(p_task_ids, '{}'::UUID[]) AS ids
+      UNION ALL SELECT 'public.project_sections'::regclass, ARRAY[p_section_id] WHERE p_section_id IS NOT NULL
+      UNION ALL SELECT 'public.projects'::regclass, ARRAY[p_project_id] WHERE p_project_id IS NOT NULL
     LOOP
-      CONTINUE WHEN NOT has_table_privilege(v_ref.rel, 'SELECT') OR NOT has_table_privilege(v_ref.rel, 'UPDATE');
-      EXECUTE format('SELECT 1 FROM %s x WHERE x.%I = ANY ($1) FOR UPDATE OF x', v_ref.rel, v_ref.col)
-        USING v_target.ids;
+      FOR v_ref IN
+        SELECT c.conrelid::regclass AS rel, a.attname AS col
+          FROM pg_constraint c
+          JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+         WHERE c.contype = 'f'
+           AND c.confrelid = v_target.rel
+           AND cardinality(c.conkey) = 1
+         ORDER BY c.conrelid::regclass::TEXT, a.attname
+      LOOP
+        CONTINUE WHEN NOT has_table_privilege(v_ref.rel, 'SELECT') OR NOT has_table_privilege(v_ref.rel, 'UPDATE');
+        EXECUTE format('SELECT 1 FROM %s x WHERE x.%I = ANY ($1) FOR UPDATE OF x NOWAIT', v_ref.rel, v_ref.col)
+          USING v_target.ids;
+      END LOOP;
     END LOOP;
-  END LOOP;
 
-  PERFORM 1 FROM public.note_links l
-   WHERE l.user_id = p_user_id
-     AND ((l.entity_type = 'task' AND l.entity_id = ANY (COALESCE(p_task_ids, '{}'::UUID[])::TEXT[]))
-       OR (p_project_id IS NOT NULL AND l.entity_type = 'project' AND l.entity_id = p_project_id::TEXT))
-     FOR UPDATE OF l;
-  IF p_comment_id IS NOT NULL THEN
-    PERFORM 1 FROM public.task_comments c WHERE c.id = p_comment_id AND c.user_id = p_user_id FOR UPDATE OF c;
-  END IF;
+    PERFORM 1 FROM public.note_links l
+     WHERE l.user_id = p_user_id
+       AND ((l.entity_type = 'task' AND public.note_link_target_uuid(l.entity_id) = ANY (COALESCE(p_task_ids, '{}'::UUID[])))
+         OR (p_project_id IS NOT NULL AND l.entity_type = 'project' AND public.note_link_target_uuid(l.entity_id) = p_project_id))
+       FOR UPDATE OF l NOWAIT;
+    IF p_comment_id IS NOT NULL THEN
+      PERFORM 1 FROM public.task_comments c WHERE c.id = p_comment_id AND c.user_id = p_user_id FOR UPDATE OF c NOWAIT;
+    END IF;
+  EXCEPTION WHEN lock_not_available THEN
+    -- A write is in flight on something Undo would delete: refuse (the block's
+    -- locks are released with it).
+    RETURN false;
+  END;
+  RETURN true;
 END;
 $$;
 
 COMMENT ON FUNCTION task_break_lock_for_undo(UUID, UUID[], UUID, UUID, UUID) IS
-  'Break into tasks (066, fix round 2): the write fence Undo takes before task_break_fingerprint, so a comment, link or edit in flight is either seen (Undo refuses) or refused itself; never saved and then cascade-deleted.';
+  'Break into tasks (066, fix rounds 2 and 3): the write fence Undo takes before task_break_fingerprint, FOR UPDATE NOWAIT. True = fenced (a later write waits, then is refused); false = a write is in flight on something Undo would delete, so Undo refuses. Never waits, so it can''t deadlock with a session, comment or link writer.';
 
 -- Note links name a task or project by text id (no foreign key), so a new link
 -- would not wait for Undo's fence on its own. This takes the same FOR KEY SHARE
 -- a foreign key check takes on the task or project the link names (only for
--- those two kinds and a uuid-shaped id; other kinds are untouched), and refuses
--- the link, like a foreign key, when that task or project is gone by the time
--- the lock is granted (e.g. Undo deleted it while the link waited).
+-- those two kinds and an id that names a uuid in any spelling,
+-- note_link_target_uuid; other kinds are untouched), and refuses the link,
+-- like a foreign key, when that task or project is gone by the time the lock
+-- is granted (e.g. Undo deleted it while the link waited).
 CREATE OR REPLACE FUNCTION note_links_lock_target()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -432,14 +472,17 @@ AS $$
 DECLARE
   v_id UUID;
 BEGIN
-  IF NEW.entity_type NOT IN ('task', 'project')
-     OR NEW.entity_id !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+  IF NEW.entity_type NOT IN ('task', 'project') THEN
     RETURN NEW;
   END IF;
-  IF TG_OP = 'UPDATE' AND NEW.entity_type IS NOT DISTINCT FROM OLD.entity_type AND NEW.entity_id IS NOT DISTINCT FROM OLD.entity_id THEN
+  v_id := public.note_link_target_uuid(NEW.entity_id);
+  IF v_id IS NULL THEN
     RETURN NEW;
   END IF;
-  v_id := NEW.entity_id::UUID;
+  IF TG_OP = 'UPDATE' AND NEW.entity_type IS NOT DISTINCT FROM OLD.entity_type
+     AND v_id IS NOT DISTINCT FROM public.note_link_target_uuid(OLD.entity_id) THEN
+    RETURN NEW;
+  END IF;
   IF NEW.entity_type = 'task' THEN
     PERFORM 1 FROM public.tasks t WHERE t.id = v_id FOR KEY SHARE OF t;
   ELSE
@@ -878,20 +921,24 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'reason', 'changed');
   END IF;
 
-  -- Fence every writer first (task_break_lock_for_undo: a write in flight is
-  -- waited for and seen, a later one waits and is then refused), then check.
+  -- Fence every writer first (task_break_lock_for_undo: a write in flight
+  -- means `changed`, a later one waits and is then refused), then check.
   -- The fence relies on READ COMMITTED's fresh snapshot per statement (PostgREST's
   -- default); a stricter isolation level could check against an older snapshot.
   IF current_setting('transaction_isolation') <> 'read committed' THEN
     RAISE EXCEPTION 'Undo runs at READ COMMITTED only' USING ERRCODE = '25001';
   END IF;
-  PERFORM public.task_break_lock_for_undo(
+  IF NOT public.task_break_lock_for_undo(
     p_user_id,
     v_break.task_ids,
     CASE WHEN v_break.project_created THEN v_break.project_id END,
     CASE WHEN v_break.section_created THEN v_break.section_id END,
     v_break.umbrella_comment_id
-  );
+  ) THEN
+    -- A write is in flight on a step, the created section/project, a row
+    -- pointing at them or a link naming them: that is a change (never wait).
+    RETURN jsonb_build_object('ok', false, 'reason', 'changed');
+  END IF;
 
   -- Anything added, edited or linked since the break → refuse; nothing is deleted.
   IF public.task_break_fingerprint(

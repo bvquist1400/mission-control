@@ -1,6 +1,7 @@
 -- Rollback for 066_break_task_into_tasks.sql: drops break_task_into_tasks,
 -- undo_break_task_into_tasks, task_break_fingerprint, task_break_lock_for_undo,
 -- the note-link lock trigger (trg_note_links_lock_target) and its function,
+-- note_link_target_uuid,
 -- the task_breaks table
 -- (Undo records), the umbrella guard trigger and its function, the indexes,
 -- constraints, tasks.parent_task_id and tasks.source_checklist_item_id.
@@ -22,6 +23,7 @@ DROP FUNCTION IF EXISTS task_break_fingerprint(UUID, UUID[], UUID, UUID, UUID);
 DROP FUNCTION IF EXISTS task_break_lock_for_undo(UUID, UUID[], UUID, UUID, UUID);
 DROP TRIGGER IF EXISTS trg_note_links_lock_target ON note_links;
 DROP FUNCTION IF EXISTS note_links_lock_target();
+DROP FUNCTION IF EXISTS note_link_target_uuid(TEXT);
 DROP TABLE IF EXISTS task_breaks;
 DROP TRIGGER IF EXISTS trg_tasks_guard_parent_task ON tasks;
 DROP FUNCTION IF EXISTS tasks_guard_parent_task();

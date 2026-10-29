@@ -14,6 +14,7 @@ import type {
 import {
   NotesServiceError,
   asTrimmedString,
+  canonicalUuidText,
   isValidLinkEntityType,
   isValidLinkRole,
   normalizeNoteDecisionRow,
@@ -25,8 +26,11 @@ import {
 
 export interface LinkResolution {
   entity_type: NoteLinkEntityType;
+  /** Canonical (lowercase uuid text for every kind but calendar_event). */
   entity_id: string;
   link_role: NoteLinkRole;
+  /** Every stored spelling that names this entity: the canonical id, plus the caller's spelling when it differs (rows saved before canonical ids). */
+  entity_id_matches: string[];
 }
 
 interface HydratedNoteRelations {
@@ -173,10 +177,14 @@ export async function resolveEntityLink(
     throw new NotesServiceError('entity_type is invalid', 400, 'invalid_entity_type');
   }
 
-  const entityId = asTrimmedString(input.entity_id);
-  if (!entityId) {
+  const typedEntityId = asTrimmedString(input.entity_id);
+  if (!typedEntityId) {
     throw new NotesServiceError('entity_id is required', 400, 'missing_entity_id');
   }
+  // Task, project and the other uuid kinds are stored in one spelling (lowercase),
+  // so an uppercase or braced id can't hide a link from a lookup by id.
+  const entityId = input.entity_type === 'calendar_event' ? typedEntityId : canonicalUuidText(typedEntityId);
+  const matches = [...new Set([entityId, typedEntityId])];
 
   const linkRole = input.link_role ?? 'reference';
   if (!isValidLinkRole(linkRole)) {
@@ -188,38 +196,41 @@ export async function resolveEntityLink(
       if (options.validateExists) {
         await requireOwnedTaskSummary(supabase, userId, entityId);
       }
-      return { entity_type: input.entity_type, entity_id: entityId, link_role: linkRole };
+      return { entity_type: input.entity_type, entity_id: entityId, link_role: linkRole, entity_id_matches: matches };
     case 'implementation':
       if (options.validateExists) {
         await requireOwnedEntityId(supabase, userId, 'implementations', entityId, 'implementation_id is invalid');
       }
-      return { entity_type: input.entity_type, entity_id: entityId, link_role: linkRole };
+      return { entity_type: input.entity_type, entity_id: entityId, link_role: linkRole, entity_id_matches: matches };
     case 'project':
       if (options.validateExists) {
         await requireOwnedEntityId(supabase, userId, 'projects', entityId, 'project_id is invalid');
       }
-      return { entity_type: input.entity_type, entity_id: entityId, link_role: linkRole };
+      return { entity_type: input.entity_type, entity_id: entityId, link_role: linkRole, entity_id_matches: matches };
     case 'stakeholder':
       if (options.validateExists) {
         await requireOwnedEntityId(supabase, userId, 'stakeholders', entityId, 'stakeholder_id is invalid');
       }
-      return { entity_type: input.entity_type, entity_id: entityId, link_role: linkRole };
+      return { entity_type: input.entity_type, entity_id: entityId, link_role: linkRole, entity_id_matches: matches };
     case 'commitment':
       if (options.validateExists) {
         await requireOwnedEntityId(supabase, userId, 'commitments', entityId, 'commitment_id is invalid');
       }
-      return { entity_type: input.entity_type, entity_id: entityId, link_role: linkRole };
+      return { entity_type: input.entity_type, entity_id: entityId, link_role: linkRole, entity_id_matches: matches };
     case 'sprint':
       if (options.validateExists) {
         await requireOwnedEntityId(supabase, userId, 'sprints', entityId, 'sprint_id is invalid');
       }
-      return { entity_type: input.entity_type, entity_id: entityId, link_role: linkRole };
-    case 'calendar_event':
+      return { entity_type: input.entity_type, entity_id: entityId, link_role: linkRole, entity_id_matches: matches };
+    case 'calendar_event': {
+      const calendarId = await resolveCalendarEventEntityId(supabase, userId, entityId, options.validateExists);
       return {
         entity_type: input.entity_type,
-        entity_id: await resolveCalendarEventEntityId(supabase, userId, entityId, options.validateExists),
+        entity_id: calendarId,
         link_role: linkRole,
+        entity_id_matches: [calendarId],
       };
+    }
     default:
       throw new NotesServiceError('entity_type is invalid', 400, 'invalid_entity_type');
   }
@@ -348,8 +359,9 @@ export async function ensureRelatedTaskEntityLink(
   supabase: SupabaseClient,
   userId: string,
   noteId: string,
-  taskId: string
+  rawTaskId: string
 ): Promise<void> {
+  const taskId = canonicalUuidText(rawTaskId);
   const { data, error } = await supabase
     .from('note_links')
     .select('*')

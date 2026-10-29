@@ -100,11 +100,21 @@ class Session {
       }, 60);
     }
   }
-  run(sql) {
+  run(sql, ms = 30_000) {
     this.n += 1;
     const marker = `__BIT_DONE_${this.n}__`;
-    const done = new Promise((resolve) => this.waiters.push({ marker, resolve }));
-    this.proc.stdin.write(`${sql}\nSELECT '${marker}';\n`);
+    const done = new Promise((resolve) => {
+      const waiter = { marker, resolve };
+      this.waiters.push(waiter);
+      // Never hang the suite: a statement still blocked after `ms` resolves as an error.
+      setTimeout(() => {
+        if (!this.waiters.includes(waiter)) return;
+        this.waiters.splice(this.waiters.indexOf(waiter), 1);
+        resolve({ out: "", err: `session still blocked after ${ms} ms` });
+      }, ms).unref();
+    });
+    // \echo, not SELECT: it prints even inside a transaction an error has aborted.
+    this.proc.stdin.write(`${sql}\n\\echo ${marker}\n`);
     return done;
   }
   async signIn(userId) {
@@ -199,6 +209,7 @@ const { buildRecurringDueAt } = await import("../src/lib/recurrence.ts");
 const { readFamcalTaskComments } = await import("../src/lib/famcal-api-key.ts");
 const { getProjectForecast } = await import("../src/lib/work-sessions/service.ts");
 const { buildWorkIntelligenceSnapshot } = await import("../src/lib/work-intelligence/snapshot.ts");
+const notesLib = await import("../src/lib/notes.ts");
 
 const userA = await makeUser("bit-a");
 const userB = await makeUser("bit-b");
@@ -361,7 +372,7 @@ try {
   await test("066 rollback drops the column, trigger and functions; re-applying (twice) puts them back", async () => {
     psql(ROLLBACK);
     assert.equal(psql(`SELECT count(*) FROM information_schema.columns WHERE table_name = 'tasks' AND column_name = 'parent_task_id';`), "0");
-    assert.equal(psql(`SELECT count(*) FROM pg_proc WHERE proname IN ('break_task_into_tasks', 'undo_break_task_into_tasks', 'tasks_guard_parent_task', 'task_break_lock_for_undo', 'note_links_lock_target');`), "0");
+    assert.equal(psql(`SELECT count(*) FROM pg_proc WHERE proname IN ('break_task_into_tasks', 'undo_break_task_into_tasks', 'tasks_guard_parent_task', 'task_break_lock_for_undo', 'note_links_lock_target', 'note_link_target_uuid');`), "0");
     assert.equal(psql(`SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_note_links_lock_target';`), "0");
     await waitForColumn(false);
     psql(MIGRATION);
@@ -369,7 +380,8 @@ try {
     // The test stack grants every function to the API roles; production relies on 066's own grants (checked above).
     assert.equal(psql(`SELECT count(*) FROM pg_proc WHERE proname IN ('break_task_into_tasks', 'undo_break_task_into_tasks', 'tasks_guard_parent_task');`), "3");
     assert.equal(psql(`SELECT has_function_privilege('anon', 'break_task_into_tasks(uuid,uuid,jsonb)', 'EXECUTE');`), "f");
-    assert.equal(psql(`SELECT count(*) FROM pg_proc WHERE proname IN ('task_break_lock_for_undo', 'note_links_lock_target');`), "2");
+    assert.equal(psql(`SELECT count(*) FROM pg_proc WHERE proname IN ('task_break_lock_for_undo', 'note_links_lock_target', 'note_link_target_uuid');`), "3");
+    assert.equal(psql(`SELECT prorettype::regtype::text FROM pg_proc WHERE proname = 'task_break_lock_for_undo';`), "boolean");
     assert.equal(psql(`SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_note_links_lock_target';`), "1", "one trigger, however often 066 runs");
     assert.equal(psql(`SELECT has_function_privilege('anon', 'task_break_lock_for_undo(uuid,uuid[],uuid,uuid,uuid)', 'EXECUTE');`), "f");
     await waitForColumn(true);
@@ -579,7 +591,7 @@ try {
       psql(`DROP TRIGGER IF EXISTS bit_test_fail ON task_comments; DROP FUNCTION IF EXISTS bit_test_fail_umbrella_comment();`);
     }
     assert.deepEqual(userState(userA), before);
-    assert.equal(psql(`SELECT count(*) FROM project_sections WHERE name = 'Will roll back';`), "0");
+    assert.equal(psql(`SELECT count(*) FROM project_sections WHERE name = 'Will roll back' AND user_id = '${userA}';`), "0");
     // And it works once the failure is gone.
     const ok = await breakTask(fixture.umbrella.id, stepsBody(fixture.rows, { name: "Will roll back" }));
     assert.equal(ok.status, 201);
@@ -924,8 +936,9 @@ try {
   // Each case is a deterministic two-session schedule: session 1 holds a write
   // open (not committed), Undo (the real route) starts and must either wait for
   // it or finish; then session 1 commits. On 7ea9257 Undo answered ok and the
-  // committed comment/edit/link was cascade-deleted (or left dangling); now Undo
-  // waits under its fence, sees the write and refuses with nothing deleted.
+  // committed comment/edit/link was cascade-deleted (or left dangling); since
+  // fix round 2 Undo refuses with nothing deleted (since fix round 3 without
+  // waiting: its fence is NOWAIT, a write in flight = changed).
 
   async function raceFixture() {
     const fixture = await mockupFixture();
@@ -949,17 +962,17 @@ try {
     }
   }
 
-  await test("FR2 P1-2 race: a comment insert still in flight when Undo starts → Undo waits, sees it and refuses; the step and the comment stay", async () => {
+  await test("FR2 P1-2 race: a comment insert still in flight when Undo starts → Undo refuses at once (FR3: never waits on a writer); the step and the comment stay", async () => {
     const race = await raceFixture();
     const { undone, state } = await undoAgainstOpenWrite(race, `INSERT INTO task_comments (user_id, task_id, content, source) VALUES ('${userA}', '${race.ids[3]}', 'Typed while Undo ran', 'manual');`);
-    assert.equal(state, "waiting", "Undo waited for the open comment");
+    assert.equal(state, "settled", "Undo answered without waiting on the open comment");
     assert.equal(undone.status, 409, `Undo must refuse: ${JSON.stringify(undone.body)}`);
     assert.match(undone.body.error, /changed since the break/);
     assert.equal(psql(`SELECT count(*) FROM task_comments WHERE task_id = '${race.ids[3]}' AND content = 'Typed while Undo ran';`), "1", "the comment survives");
     assert.equal(countIn("tasks", "id", race.ids), "6", "no step deleted");
   });
 
-  await test("FR2 P1-2 race: an edit of a step's comment in flight → Undo waits and refuses; the edit stays", async () => {
+  await test("FR2 P1-2 race: an edit of a step's comment in flight → Undo refuses; the edit stays", async () => {
     const race = await raceFixture();
     const { undone } = await undoAgainstOpenWrite(race, `UPDATE task_comments SET content = 'Edited while Undo ran' WHERE task_id = '${race.ids[0]}' AND source = 'system';`);
     assert.equal(undone.status, 409, `Undo must refuse: ${JSON.stringify(undone.body)}`);
@@ -967,7 +980,7 @@ try {
     assert.equal(countIn("tasks", "id", race.ids), "6");
   });
 
-  await test("FR2 P1-2 race: a note link to a step in flight (no foreign key) → Undo waits and refuses; the link and its step stay", async () => {
+  await test("FR2 P1-2 race: a note link to a step in flight (no foreign key) → Undo refuses; the link and its step stay", async () => {
     const race = await raceFixture();
     const note = await insert("notes", { user_id: userA, title: "Race note", note_type: "working_note" }, clientA);
     const { undone } = await undoAgainstOpenWrite(race, `INSERT INTO note_links (user_id, note_id, entity_type, entity_id) VALUES ('${userA}', '${note.id}', 'task', '${race.ids[1]}');`);
@@ -1047,6 +1060,217 @@ try {
       assert.equal(result.step, "refused", `${reason}: a direct step insert is still refused`);
       assert.equal(result.record, "refused", `${reason}: a forged break record is still refused`);
     }
+  });
+
+  // ── Fix round 3 ────────────────────────────────────────────────────────────
+  // P2-1: Undo vs a work-session edit/delete. The session RPCs (059) lock the
+  // session row, then its task; b37adf6's Undo locked the step (062), then
+  // waited for the session row under its fence: A→B→A, Postgres aborted one.
+  // Each schedule pauses one side at exactly that point (deterministic), and
+  // must finish with no deadlock, Undo refusing (`changed`) and the session
+  // write saved.
+
+  const lockArgs = (race) => `'${userA}', ARRAY['${[race.fixture.umbrella.id, ...race.ids].join("','")}']::uuid[], 'all', '{}'::uuid[]`;
+  async function sessionOnStep(race, stepIndex = 2) {
+    const step = race.ids[stepIndex];
+    const project = psql(`SELECT project_id FROM tasks WHERE id = '${step}';`);
+    const id = psql(`SELECT work_session_create('${userA}', jsonb_build_object('project_id', '${project}', 'task_id', '${step}', 'session_date', current_date, 'minutes', 30), '{}'::uuid[], false) ->> 'session_id';`);
+    assert.match(id, /^[0-9a-f-]{36}$/);
+    return { id, step };
+  }
+  // As postgres: the auth service can't delete a user who still has sessions (059's
+  // rollup trigger reads tasks as supabase_auth_admin), so the test removes its own.
+  const dropSession = (s) => psql(`DELETE FROM work_sessions WHERE id = '${s.id}';`);
+  const sessionOps = {
+    update: (s) => `SELECT work_session_update('${userA}', '${s.id}', '{"minutes": 45}'::jsonb) IS NOT NULL;`,
+    delete: (s) => `SELECT work_session_delete('${userA}', '${s.id}') IS NOT NULL;`,
+  };
+  const sessionAfter = { update: "45", delete: "" };
+
+  for (const op of ["update", "delete"]) {
+    await test(`FR3 P2-1 (Undo first): Undo holds the step (062), a session ${op} locks its session and waits for the step, then Undo's fence runs → no deadlock; Undo refuses, the ${op} is saved`, async () => {
+      const race = await raceFixture();
+      const session = await sessionOnStep(race);
+      const undoSession = await new Session().signIn(userA);
+      const writer = await new Session().signIn(userA);
+      try {
+        const locked = await undoSession.run(`BEGIN; SELECT cardinality(task_date_cascade_lock(${lockArgs(race)})) > 0;`);
+        assert.equal(locked.err, "", locked.err);
+        const write = tracked(writer.run(`BEGIN; ${sessionOps[op](session)}`));
+        assert.equal(await untilWaitingOrSettled(`%work_session_${op}%`, () => write.settled), "waiting", `the session ${op} waits for the step`);
+        const undo = await undoSession.run(`SELECT undo_break_task_into_tasks('${userA}', '${race.fixture.umbrella.id}', '{"break_id":"${race.made.body.break_id}"}'::jsonb)::text;`);
+        const undoCommit = await undoSession.run("COMMIT;");
+        const written = await write.promise;
+        const writeCommit = await writer.run("COMMIT;");
+        const errors = [undo.err, undoCommit.err, written.err, writeCommit.err].join(" ");
+        assert.doesNotMatch(errors, /deadlock/i, `no deadlock: ${errors}`);
+        assert.equal(written.err, "", `the session ${op} goes through: ${written.err}`);
+        assert.equal(undo.err, "", undo.err);
+        assert.equal(JSON.parse(undo.out).reason, "changed", `Undo refuses: ${undo.out}`);
+        assert.equal(psql(`SELECT minutes FROM work_sessions WHERE id = '${session.id}';`), sessionAfter[op]);
+        assert.equal(countIn("tasks", "id", race.ids), "6", "no step deleted");
+      } finally {
+        undoSession.close();
+        writer.close();
+        dropSession(session);
+      }
+    });
+
+    await test(`FR3 P2-1 (session first): a session ${op} holds its session row, Undo runs (the real route), then the ${op} locks the step → no deadlock; Undo refuses, the ${op} is saved`, async () => {
+      const race = await raceFixture();
+      const session = await sessionOnStep(race);
+      const writer = await new Session().signIn(userA);
+      try {
+        const held = await writer.run(`BEGIN; SELECT id FROM work_sessions WHERE id = '${session.id}' FOR UPDATE;`);
+        assert.equal(held.err, "", held.err);
+        assert.equal(held.out, session.id);
+        const undo = tracked(breakTask(race.fixture.umbrella.id, undoOf(race.made)));
+        await untilWaitingOrSettled("%undo_break_task_into_tasks%", () => undo.settled);
+        const write = tracked(writer.run(sessionOps[op](session)));
+        const undone = await undo.promise;
+        const written = await write.promise;
+        const writeCommit = await writer.run("COMMIT;");
+        assert.doesNotMatch(`${written.err} ${writeCommit.err} ${JSON.stringify(undone.body)}`, /deadlock/i);
+        assert.equal(written.err, "", `the session ${op} goes through: ${written.err}`);
+        assert.equal(undone.status, 409, `Undo refuses (not a 500): ${JSON.stringify(undone.body)}`);
+        assert.equal(psql(`SELECT minutes FROM work_sessions WHERE id = '${session.id}';`), sessionAfter[op]);
+        assert.equal(countIn("tasks", "id", race.ids), "6", "no step deleted");
+      } finally {
+        writer.close();
+        dropSession(session);
+      }
+    });
+  }
+
+  await test("FR3 P2-1 sweep: a note link to one step being re-pointed at another step (link row locked first) while Undo runs → no deadlock; Undo refuses, the link moves", async () => {
+    const race = await raceFixture();
+    const note = await insert("notes", { user_id: userA, title: "Retarget note", note_type: "working_note" }, clientA);
+    const link = await insert("note_links", { user_id: userA, note_id: note.id, entity_type: "task", entity_id: race.ids[0] }, clientA);
+    const writer = await new Session().signIn(userA);
+    try {
+      const held = await writer.run(`BEGIN; SELECT id FROM note_links WHERE id = '${link.id}' FOR UPDATE;`);
+      assert.equal(held.err, "", held.err);
+      const undo = tracked(breakTask(race.fixture.umbrella.id, undoOf(race.made)));
+      await untilWaitingOrSettled("%undo_break_task_into_tasks%", () => undo.settled);
+      const write = tracked(writer.run(`UPDATE note_links SET entity_id = '${race.ids[1]}' WHERE id = '${link.id}';`));
+      const undone = await undo.promise;
+      const written = await write.promise;
+      const writeCommit = await writer.run("COMMIT;");
+      assert.doesNotMatch(`${written.err} ${writeCommit.err} ${JSON.stringify(undone.body)}`, /deadlock/i);
+      assert.equal(written.err, "", written.err);
+      assert.equal(undone.status, 409, JSON.stringify(undone.body));
+      assert.equal(psql(`SELECT entity_id FROM note_links WHERE id = '${link.id}';`), race.ids[1]);
+      assert.equal(countIn("tasks", "id", race.ids), "6");
+    } finally {
+      writer.close();
+    }
+  });
+
+  await test("FR3 control: a step edit queued behind Undo's task locks is not a reason to refuse; Undo goes through and the late edit finds nothing", async () => {
+    const race = await raceFixture();
+    const undoSession = await new Session().signIn(userA);
+    const writer = await new Session().signIn(userA);
+    try {
+      const locked = await undoSession.run(`BEGIN; SELECT cardinality(task_date_cascade_lock(${lockArgs(race)})) > 0;`);
+      assert.equal(locked.err, "", locked.err);
+      const write = tracked(writer.run(`UPDATE tasks SET title = 'Late edit' WHERE id = '${race.ids[0]}' RETURNING id;`));
+      assert.equal(await untilWaitingOrSettled("%Late edit%", () => write.settled), "waiting");
+      const undo = await undoSession.run(`SELECT undo_break_task_into_tasks('${userA}', '${race.fixture.umbrella.id}', '{"break_id":"${race.made.body.break_id}"}'::jsonb)::text;`);
+      assert.equal(undo.err, "", undo.err);
+      assert.equal(JSON.parse(undo.out).ok, true, `Undo goes through: ${undo.out}`);
+      assert.equal((await undoSession.run("COMMIT;")).err, "");
+      const written = await write.promise;
+      assert.equal(written.err, "", written.err);
+      assert.equal(written.out, "", "the late edit updated nothing");
+      assert.equal(countIn("tasks", "id", race.ids), "0");
+    } finally {
+      undoSession.close();
+      writer.close();
+    }
+  });
+
+  // P2-2: a note link may name a step in any spelling Postgres reads as that
+  // uuid (uppercase, braces, no hyphens). b37adf6 compared the stored text to
+  // the lowercase id, so Undo didn't see the link: it deleted the step and left
+  // the link pointing at nothing.
+  const spellings = (id) => ({
+    uppercase: id.toUpperCase(),
+    braces: `{${id}}`,
+    "no hyphens, uppercase": id.replace(/-/g, "").toUpperCase(),
+  });
+
+  await test("FR3 P2-2: note_link_target_uuid reads exactly the spellings Postgres's uuid cast reads (and NULL for the rest)", () => {
+    const id = randomUUID();
+    const inputs = [id, ...Object.values(spellings(id)), `{${id}`, `${id}}`, ` ${id}`, `${id} `, `${id.slice(0, 4)}-${id.slice(4)}`, id.replace(/-/g, "").replace(/(.{4})/g, "$1-").replace(/-$/, ""), `${id}-`, "evt-123", "", "not-a-uuid", id.slice(0, 35)];
+    const values = inputs.map((v) => `('${v.replace(/'/g, "''")}')`).join(", ");
+    const out = psql(`DO $$
+      DECLARE r RECORD; v_cast UUID;
+      BEGIN
+        FOR r IN SELECT x FROM (VALUES ${values}) AS t(x) LOOP
+          BEGIN v_cast := r.x::uuid; EXCEPTION WHEN invalid_text_representation THEN v_cast := NULL; END;
+          IF public.note_link_target_uuid(r.x) IS DISTINCT FROM v_cast THEN
+            RAISE EXCEPTION 'mismatch for %: helper %, cast %', r.x, public.note_link_target_uuid(r.x), v_cast;
+          END IF;
+        END LOOP;
+      END $$; SELECT 'agree';`);
+    assert.equal(out, "agree");
+  });
+
+  for (const [name, spell] of Object.entries(spellings(randomUUID())).map(([k]) => [k, (id) => spellings(id)[k]])) {
+    await test(`FR3 P2-2 (sequential): a note link naming a step as ${name} → Undo refuses; the step and the link stay`, async () => {
+      const race = await raceFixture();
+      const note = await insert("notes", { user_id: userA, title: `Spelling ${name}`, note_type: "working_note" }, clientA);
+      await insert("note_links", { user_id: userA, note_id: note.id, entity_type: "task", entity_id: spell(race.ids[1]) }, clientA);
+      const undone = await breakTask(race.fixture.umbrella.id, undoOf(race.made));
+      assert.equal(undone.status, 409, `Undo must refuse: ${JSON.stringify(undone.body)}`);
+      assert.equal(countIn("tasks", "id", race.ids), "6");
+      assert.equal(psql(`SELECT count(*) FROM note_links WHERE note_id = '${note.id}';`), "1");
+    });
+
+    await test(`FR3 P2-2 (overlap): a note link naming a step as ${name}, still in flight when Undo starts → Undo refuses; the step and the link stay`, async () => {
+      const race = await raceFixture();
+      const note = await insert("notes", { user_id: userA, title: `Spelling ${name} open`, note_type: "working_note" }, clientA);
+      const { undone } = await undoAgainstOpenWrite(race, `INSERT INTO note_links (user_id, note_id, entity_type, entity_id) VALUES ('${userA}', '${note.id}', 'task', '${spell(race.ids[1])}');`);
+      assert.equal(undone.status, 409, `Undo must refuse: ${JSON.stringify(undone.body)}`);
+      assert.equal(countIn("tasks", "id", race.ids), "6");
+      assert.equal(psql(`SELECT count(*) FROM note_links WHERE note_id = '${note.id}';`), "1");
+    });
+  }
+
+  await test("FR3 P2-2: a created project named in uppercase by a note link → Undo refuses; a link to a gone task in any spelling is refused", async () => {
+    const fixture = await mockupFixture({ project: false });
+    const made = await breakTask(fixture.umbrella.id, stepsBody(fixture.rows, { kind: "new_project", name: `Spelling project ${randomUUID().slice(0, 6)}` }));
+    assert.equal(made.status, 201, JSON.stringify(made.body));
+    const note = await insert("notes", { user_id: userA, title: "Project spelling", note_type: "working_note" }, clientA);
+    await insert("note_links", { user_id: userA, note_id: note.id, entity_type: "project", entity_id: made.body.project_id.toUpperCase() }, clientA);
+    const undone = await breakTask(fixture.umbrella.id, undoOf(made));
+    assert.equal(undone.status, 409, JSON.stringify(undone.body));
+    assert.equal(psql(`SELECT count(*) FROM projects WHERE id = '${made.body.project_id}';`), "1");
+    const gone = randomUUID();
+    for (const spelled of Object.values(spellings(gone))) {
+      const { error } = await clientA.from("note_links").insert({ user_id: userA, note_id: note.id, entity_type: "task", entity_id: spelled });
+      assert.ok(error, `a link to a missing task (${spelled}) is refused`);
+    }
+  });
+
+  await test("FR3 P2-2 (app): linking a note to a task or project by an uppercase / braced id stores the canonical lowercase id; unlinking by the same spelling still works", async () => {
+    const task = await insert("tasks", { user_id: userA, title: "Canonical link target" }, clientA);
+    const fixtureProjectId = (await insert("projects", { user_id: userA, name: `Canonical ${randomUUID().slice(0, 6)}`, tags: [] }, clientA)).id;
+    const note = await insert("notes", { user_id: userA, title: "Canonical note", note_type: "working_note" }, clientA);
+    const upper = await notesLib.linkNoteToEntity(clientA, userA, note.id, { entity_type: "task", entity_id: task.id.toUpperCase(), link_role: "reference" });
+    assert.equal(upper.entity_id, task.id);
+    const braced = await notesLib.linkNoteToEntity(clientA, userA, note.id, { entity_type: "project", entity_id: `{${fixtureProjectId.toUpperCase()}}`, link_role: "reference" });
+    assert.equal(braced.entity_id, fixtureProjectId);
+    assert.equal(psql(`SELECT string_agg(entity_id, ',' ORDER BY entity_type) FROM note_links WHERE note_id = '${note.id}';`), `${fixtureProjectId},${task.id}`);
+    const listed = await notesLib.listNotesForEntity(clientA, userA, "task", task.id.toUpperCase());
+    assert.deepEqual(listed.map((n) => n.id), [note.id], "listing by another spelling finds it");
+    assert.deepEqual(await notesLib.unlinkNoteFromEntity(clientA, userA, note.id, { entity_type: "task", entity_id: task.id.toUpperCase(), link_role: "reference" }), { removed: true });
+    // An older row stored with an uppercase id (before this fix) can still be unlinked by that spelling.
+    await insert("note_links", { user_id: userA, note_id: note.id, entity_type: "task", entity_id: task.id.toUpperCase(), link_role: "reference" }, clientA);
+    assert.deepEqual(await notesLib.unlinkNoteFromEntity(clientA, userA, note.id, { entity_type: "task", entity_id: task.id.toUpperCase(), link_role: "reference" }), { removed: true });
+    // linkTaskToNote's related_task entity link uses the canonical id too.
+    await notesLib.linkTaskToNote(clientA, userA, note.id, { task_id: task.id.toUpperCase() });
+    assert.equal(psql(`SELECT entity_id FROM note_links WHERE note_id = '${note.id}' AND link_role = 'related_task';`), task.id);
   });
 
   await test("FR2: rollback with break records, steps and note links present keeps every task; re-applying 066 makes break + Undo work again", async () => {
