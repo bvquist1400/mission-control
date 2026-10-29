@@ -26,7 +26,8 @@ import {
 import type { TodayBriefStatus } from "@/lib/briefs/button";
 import { buildBriefNotice, telegramNotifierFromEnv, type BriefNotifier } from "@/lib/briefs/notify";
 import { normalizeBriefContent, normalizeStoredWorkDigestRef } from "@/lib/briefs/validate";
-import { parseWorkDigestNote, parseWorkDigestTitle } from "@/lib/briefing/work-digest";
+import { checkWorkDigestBody, parseWorkDigestTitle, workDigestEditionsForMode } from "@/lib/briefing/work-digest";
+import { countBriefItems } from "@/lib/briefs/counts";
 import {
   type BriefAction,
   type BriefActionInput,
@@ -182,10 +183,8 @@ async function assertTasksOwned(supabase: AnySupabase, userId: string, taskIds: 
   return found;
 }
 
-function countItems(items: Pick<BriefItemRow, "kind" | "state">[]): BriefCounts {
-  const open = items.filter((item) => item.state === "open");
-  const fromMeetings = open.filter((item) => MEETING_ITEM_KINDS.has(item.kind)).length;
-  return { total: items.length, open: open.length, from_meetings: fromMeetings, calls: open.length - fromMeetings };
+function countItems(items: Pick<BriefItemRow, "kind" | "state" | "source">[]): BriefCounts {
+  return countBriefItems(items, (kind) => MEETING_ITEM_KINDS.has(kind));
 }
 
 export function briefUrl(appUrl: string, code: string): string {
@@ -365,16 +364,22 @@ function collapseSpaces(value: string): string {
 /**
  * Checks every source.work_digest against its note before anything is saved:
  * the note is Brent's, active, titled "Work digest <date> AM|PM" for that
- * edition, still readable, every cited block exists, and the lines are exactly
- * those blocks' `what` lines. Returns the items with each citation rebuilt
- * from the note (its lines in block order, date and where), so the page, the
- * task description and the item key never carry text the note doesn't have.
+ * edition, of the brief's own day (the morning brief cites today's AM note,
+ * the EOD today's AM or PM), readable by the same checks the digest makes
+ * (`checkWorkDigestBody`: it parses and its body's date and edition match the
+ * title), every cited block exists, and the lines are exactly those blocks'
+ * `what` lines. Returns the items with each citation rebuilt from the note
+ * (its lines in block order, date and where) and with no `detail` (the only
+ * digest text a brief keeps is the cited lines), so the page, the task
+ * description and the item key never carry text the note doesn't have.
  */
 async function resolveWorkDigestCitations(
   supabase: AnySupabase,
   userId: string,
-  items: SaveBriefInput["items"]
+  input: Pick<SaveBriefInput, "edition" | "brief_date" | "items">
 ): Promise<SaveBriefInput["items"]> {
+  const items = input.items;
+  const citable = workDigestEditionsForMode(input.edition === "eod" ? "eod" : "morning");
   const noteIds = [...new Set(items.map((item) => item.source.work_digest?.note_id).filter((id): id is string => Boolean(id)))];
   if (noteIds.length === 0) return items;
 
@@ -401,7 +406,15 @@ async function resolveWorkDigestCitations(
       errors.push(`${path}.edition is ${ref.edition} but the note is the ${named.edition.toUpperCase()} digest`);
       return item;
     }
-    const parsed = parseWorkDigestNote(note.body_markdown);
+    if (named.date !== input.brief_date) {
+      errors.push(`${path}: the note is the ${named.date} ${named.edition.toUpperCase()} digest; this brief (${input.brief_date}) may cite only that day's notes`);
+      return item;
+    }
+    if (!citable.includes(named.edition)) {
+      errors.push(`${path}: the morning brief cites only the AM digest`);
+      return item;
+    }
+    const parsed = checkWorkDigestBody(note.body_markdown, named.date, named.edition);
     if (!parsed.ok) {
       errors.push(`${path}: the note can't be read (${parsed.reason}), so it can't be cited`);
       return item;
@@ -428,7 +441,10 @@ async function resolveWorkDigestCitations(
       date: named.date,
       where: wheres.length > 1 ? "Mail and Teams" : wheres[0],
     };
-    return { ...item, source: { ...item.source, work_digest: citation } };
+    // No detail on a digest proposal: it would reach the page and the task uncited.
+    const { detail: _uncited, ...payload } = item.payload;
+    void _uncited;
+    return { ...item, payload, source: { ...item.source, work_digest: citation } };
   });
   if (errors.length) throw new BriefServiceError(400, errors[0], { errors });
   return resolved;
@@ -445,7 +461,7 @@ export async function saveBrief(
     ...(item.payload.maybe_tracked ? [item.payload.maybe_tracked.task_id] : []),
   ]);
   await assertTasksOwned(supabase, userId, referencedTaskIds);
-  input = { ...input, items: await resolveWorkDigestCitations(supabase, userId, input.items) };
+  input = { ...input, items: await resolveWorkDigestCitations(supabase, userId, input) };
 
   let brief = await loadBriefByDate(supabase, userId, input.edition, input.brief_date);
   let created = false;
@@ -581,11 +597,11 @@ export async function saveBrief(
 
   const { data: allItems, error: itemsError } = await supabase
     .from("brief_items")
-    .select("kind, state")
+    .select("kind, state, source")
     .eq("user_id", userId)
     .eq("brief_id", brief.id);
   if (itemsError) throw itemsError;
-  const counts = countItems((allItems ?? []) as Pick<BriefItemRow, "kind" | "state">[]);
+  const counts = countItems((allItems ?? []) as Pick<BriefItemRow, "kind" | "state" | "source">[]);
   const url = briefUrl(options.appUrl, brief.code);
 
   const notify = await notifyOnce(supabase, userId, brief, buildBriefNotice(brief.code, url, counts, brief.content), options.notifier);
@@ -839,7 +855,10 @@ export function proposalTaskSource(item: Pick<BriefItemRow, "source">): { tags: 
  */
 async function buildProposalTask(supabase: AnySupabase, userId: string, brief: BriefRow, item: BriefItemRow, dueAt: string | null) {
   const title = item.payload.title.slice(0, 500);
-  const description = [item.payload.detail, `From ${brief.code} #${item.n}:`, describeSources(item, brief.brief_date)]
+  // A proposal that cites the work digest carries only its attribution and the
+  // validated lines: never `detail`, even on a row stored with one.
+  const detail = item.source.work_digest ? null : item.payload.detail;
+  const description = [detail, `From ${brief.code} #${item.n}:`, describeSources(item, brief.brief_date)]
     .filter(Boolean)
     .join("\n\n")
     .slice(0, 8000);
@@ -1212,10 +1231,10 @@ export async function actOnBriefItems(
 
   const { data: allItems, error: countError } = await supabase
     .from("brief_items")
-    .select("kind, state")
+    .select("kind, state, source")
     .eq("user_id", userId)
     .eq("brief_id", brief.id);
   if (countError) throw countError;
 
-  return { code: brief.code, results, counts: countItems((allItems ?? []) as Pick<BriefItemRow, "kind" | "state">[]) };
+  return { code: brief.code, results, counts: countItems((allItems ?? []) as Pick<BriefItemRow, "kind" | "state" | "source">[]) };
 }

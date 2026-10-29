@@ -75,7 +75,12 @@ export interface ParsedWorkDigest {
   date: string;
   edition: WorkDigestEdition;
   window: { start: string; end: string };
-  /** The filer's "Filed from the Cooper digest file on …" text (stripped from the body), or null. */
+  /**
+   * When the filer filed it, from its last "Filed from the Cooper digest file
+   * on …" line, rebuilt as "M/D/YYYY h:mm AM ET" from the numbers it read.
+   * Null when the line is missing or isn't an ET date and time: the line's
+   * own text is never passed on.
+   */
   filed_at: string | null;
   items: WorkDigestItem[];
   still_waiting: WorkDigestWait[];
@@ -158,6 +163,42 @@ function scanProblem(lines: string[]): string | null {
 // ---------------------------------------------------------------------------
 
 const FILED_LINE = /^Filed from the Cooper digest file on (.+?)\.?$/;
+const FILED_US = /^(\d{1,2})\/(\d{1,2})\/(\d{4}),?\s+(\d{1,2}):(\d{2})\s*([AaPp][Mm])\s+(?:ET|EDT|EST)$/;
+const FILED_ISO_12H = /^(\d{4})-(\d{2})-(\d{2}),?\s+(\d{1,2}):(\d{2})\s*([AaPp][Mm])\s+(?:ET|EDT|EST)$/;
+const FILED_ISO_24H = /^(\d{4})-(\d{2})-(\d{2}),?\s+(\d{2}):(\d{2})\s+(?:ET|EDT|EST)$/;
+
+/**
+ * The filer's "<today's date and time, ET>" read strictly: M/D/YYYY h:mm AM ET
+ * (the filer's own form), or YYYY-MM-DD with a 12- or 24-hour time, each
+ * ending ET/EDT/EST. Anything else is null. The result is rebuilt from the
+ * numbers, so no text from the line itself can come back.
+ */
+export function parseFiledAt(text: string): string | null {
+  let year: number, month: number, day: number, hour: number, minute: number;
+  let meridiem: "AM" | "PM";
+  const us = FILED_US.exec(text);
+  const iso12 = us ? null : FILED_ISO_12H.exec(text);
+  const iso24 = us || iso12 ? null : FILED_ISO_24H.exec(text);
+  if (us) {
+    [month, day, year, hour, minute] = [us[1], us[2], us[3], us[4], us[5]].map(Number);
+    meridiem = us[6].toUpperCase() as "AM" | "PM";
+  } else if (iso12) {
+    [year, month, day, hour, minute] = [iso12[1], iso12[2], iso12[3], iso12[4], iso12[5]].map(Number);
+    meridiem = iso12[6].toUpperCase() as "AM" | "PM";
+  } else if (iso24) {
+    [year, month, day, hour, minute] = [iso24[1], iso24[2], iso24[3], iso24[4], iso24[5]].map(Number);
+    if (hour > 23) return null;
+    meridiem = hour < 12 ? "AM" : "PM";
+    hour = hour % 12 || 12;
+  } else {
+    return null;
+  }
+  if (hour < 1 || hour > 12 || minute > 59) return null;
+  const isoDate = `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  if (!isDateOnlyString(isoDate)) return null;
+  return `${month}/${day}/${year} ${hour}:${String(minute).padStart(2, "0")} ${meridiem} ET`;
+}
+
 const KEY_VALUE = /^([a-z_]+):\s*(.*)$/;
 const BLOCK_HEADING = /^##\s+(.+)$/;
 const ITEM_BLOCK = /^W(\d{1,2})$/;
@@ -185,25 +226,31 @@ function isIsoTimestamp(value: string): boolean {
 interface RawBlock {
   id: string;
   fields: Map<string, string>;
-  duplicate: string | null;
+  /** Keys seen more than once. Only a repeated known key matters (unknown keys are dropped). */
+  duplicates: Set<string>;
+}
+
+/** The first repeated key that the layout knows, or null. Never a key the note made up. */
+function repeatedKnownKey(block: RawBlock, known: readonly string[]): string | null {
+  return known.find((key) => block.duplicates.has(key)) ?? null;
 }
 
 /** Splits the body into header fields and `## ` blocks. Unknown keys are kept here and dropped by the readers. */
 function splitBlocks(lines: string[]): { header: RawBlock; blocks: RawBlock[] } {
-  const header: RawBlock = { id: "header", fields: new Map(), duplicate: null };
+  const header: RawBlock = { id: "header", fields: new Map(), duplicates: new Set() };
   const blocks: RawBlock[] = [];
   let current = header;
   for (const line of lines) {
     const heading = BLOCK_HEADING.exec(line);
     if (heading) {
-      current = { id: heading[1].trim(), fields: new Map(), duplicate: null };
+      current = { id: heading[1].trim(), fields: new Map(), duplicates: new Set() };
       blocks.push(current);
       continue;
     }
     const pair = KEY_VALUE.exec(line);
     if (!pair) continue; // stray text is dropped, never passed on
     const key = pair[1];
-    if (current.fields.has(key)) current.duplicate ??= key;
+    if (current.fields.has(key)) current.duplicates.add(key);
     else current.fields.set(key, pair[2].trim());
   }
   return { header, blocks };
@@ -297,23 +344,24 @@ export function parseWorkDigestNote(body: unknown): WorkDigestParse {
   const lines = body.replace(/\r\n?/g, "\n").split("\n").map((line) => line.trim());
   while (lines.length && !lines[lines.length - 1]) lines.pop();
 
-  // The filer's own last line is metadata, not digest text.
-  let filedAt: string | null = null;
-  const last = lines[lines.length - 1] ?? "";
-  const filed = FILED_LINE.exec(last);
-  if (filed) {
-    filedAt = cap(filed[1], 80);
-    lines.pop();
-  }
-
+  // Every line is scanned, the filer's own last line too: it is hand-editable like the rest.
   const scan = scanProblem(lines);
   if (scan) return { ok: false, reason: `${scan}; the filer would have refused it` };
+
+  // The filer's last line is metadata, not digest text: only a strict ET date and time is kept.
+  let filedAt: string | null = null;
+  const filed = FILED_LINE.exec(lines[lines.length - 1] ?? "");
+  if (filed) {
+    filedAt = parseFiledAt(filed[1].trim());
+    lines.pop();
+  }
 
   const content = lines.filter(Boolean);
   if (content[0] !== "# Work digest") return { ok: false, reason: "the first line is not '# Work digest'" };
 
   const { header, blocks } = splitBlocks(content.slice(1));
-  if (header.duplicate) return { ok: false, reason: `the header has two ${header.duplicate} lines` };
+  const headerRepeat = repeatedKnownKey(header, HEADER_KEYS);
+  if (headerRepeat) return { ok: false, reason: `the header has two ${headerRepeat} lines` };
   for (const key of HEADER_KEYS) {
     if (!header.fields.get(key)) return { ok: false, reason: `the header has no ${key} line (an older digest layout?)` };
   }
@@ -343,7 +391,8 @@ export function parseWorkDigestNote(body: unknown): WorkDigestParse {
     const itemMatch = ITEM_BLOCK.exec(block.id);
     const waitMatch = WAIT_BLOCK.exec(block.id);
     if (!itemMatch && !waitMatch) continue; // an unknown section is dropped with its lines
-    if (block.duplicate) return { ok: false, reason: `${block.id} has two ${block.duplicate} lines` };
+    const blockRepeat = repeatedKnownKey(block, itemMatch ? W_KEYS : S_KEYS);
+    if (blockRepeat) return { ok: false, reason: `${block.id} has two ${blockRepeat} lines` };
     if (itemMatch) {
       if (waits.length) return { ok: false, reason: `${block.id} comes after the still-waiting blocks` };
       if (Number(itemMatch[1]) !== items.length + 1) return { ok: false, reason: `${block.id} is out of order (expected W${items.length + 1})` };
@@ -386,6 +435,21 @@ export interface WorkDigestNoteRow {
 }
 
 /**
+ * The reader's checks on one note body for the date and edition its title
+ * names: it parses, and the body's own date and edition match the title.
+ * The brief's save check (`resolveWorkDigestCitations`) runs this same
+ * function, so a note the digest calls unreadable can never be cited.
+ */
+export function checkWorkDigestBody(body: unknown, date: string, edition: WorkDigestEdition): WorkDigestParse {
+  const parsed = parseWorkDigestNote(body);
+  if (!parsed.ok) return parsed;
+  if (parsed.value.date !== date || parsed.value.edition !== edition) {
+    return { ok: false, reason: "the note's date or edition doesn't match its title" };
+  }
+  return parsed;
+}
+
+/**
  * One edition's read: the note with exactly that title (the newest if a
  * hand-made copy exists), parsed, or `missing` / `unreadable`. The note's own
  * date and edition must match its title.
@@ -396,11 +460,8 @@ export function readWorkDigestNote(rows: WorkDigestNoteRow[], date: string, edit
     .filter((row) => row && row.title === title && (row.status ?? "active") === "active")
     .sort((a, b) => String(b.updated_at ?? "").localeCompare(String(a.updated_at ?? "")))[0];
   if (!note) return { status: "missing", title };
-  const parsed = parseWorkDigestNote(note.body_markdown);
+  const parsed = checkWorkDigestBody(note.body_markdown, date, edition);
   if (!parsed.ok) return { status: "unreadable", note_id: note.id, title, reason: parsed.reason };
-  if (parsed.value.date !== date || parsed.value.edition !== edition) {
-    return { status: "unreadable", note_id: note.id, title, reason: "the note's date or edition doesn't match its title" };
-  }
   return { status: "ok", note_id: note.id, title, ...parsed.value };
 }
 

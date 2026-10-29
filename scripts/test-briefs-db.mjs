@@ -206,7 +206,7 @@ try {
     assert.equal(saved.url, "http://localhost:3000/briefs/EOD-0924");
     assert.equal(saved.notify.status, "sent");
     assert.equal(quiet.sent.length, 1);
-    assert.match(quiet.sent[0], /^EOD-0924 is ready · 7 to decide · 19 done\nhttp:\/\/localhost:3000\/briefs\/EOD-0924\nOr in Claude: review EOD-0924$/);
+    assert.match(quiet.sent[0], /^EOD-0924 is ready · 7 to decide · 19 done\nhttp:\/\/localhost:3000\/briefs\/EOD-0924\nOr ask your AI assistant: review EOD-0924$/);
     const { data: stored } = await admin.from("briefs").select("content").eq("id", saved.brief_id).single();
     assert.deepEqual(stored.content.next.agenda[1], { time: "10:00", title: "Two meetings", choice_n: 7 });
   });

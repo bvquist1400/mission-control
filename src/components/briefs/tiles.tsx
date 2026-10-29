@@ -74,6 +74,11 @@ export function HeroTile({
               <b>{counts.from_meetings}</b> from meetings
             </span>
           ) : null}
+          {counts.from_mail ? (
+            <span>
+              <b>{counts.from_mail}</b> from mail and Teams
+            </span>
+          ) : null}
           {counts.calls ? (
             <span>
               <b>{counts.calls}</b> {counts.calls === 1 ? "needs" : "need"} a call

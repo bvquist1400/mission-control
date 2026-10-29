@@ -153,7 +153,7 @@ try {
       "am:2026-09-28:carry_group",
     ]);
     assert.equal(result.notify.status, "sent");
-    assert.deepEqual(notifier.sent, [`AM-0928 is ready · 3 to decide · 9 due today\n${APP_URL}/briefs/AM-0928\nOr in Claude: review AM-0928`]);
+    assert.deepEqual(notifier.sent, [`AM-0928 is ready · 3 to decide · 9 due today\n${APP_URL}/briefs/AM-0928\nOr ask your AI assistant: review AM-0928`]);
     const { data } = await admin.from("briefs").select("edition, code").eq("id", result.brief_id).single();
     assert.deepEqual(data, { edition: "am", code: "AM-0928" });
   });

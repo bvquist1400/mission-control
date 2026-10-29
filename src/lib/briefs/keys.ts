@@ -27,25 +27,30 @@ function sortedUnique(values: string[]): string[] {
  * free to change between runs, or on the order items/meetings/lines arrive in.
  *
  * - proposed_task: the cited meetings plus the cited note lines (the title only
- *   when no line is cited), plus any cited work digest lines (never the
- *   digest note's id or edition). No date: a meeting id already pins the day, and the
- *   key doubles as the created task's external_source_id, so the same proposal
- *   can never produce two tasks across briefs.
+ *   when no line is cited). A proposal that cites the work digest is keyed by
+ *   its cited `what` lines alone (never the digest note's id or edition, nor
+ *   any meeting it also cites), so the same quote is one item whether it comes
+ *   from the AM or PM note and whether or not a meeting corroborates it. No
+ *   date: a meeting id already pins the day, and the key doubles as the
+ *   created task's external_source_id, so the same proposal can never produce
+ *   two tasks across briefs.
  * - carry_over / carry_group / choice: scoped to the brief date, because the
  *   same task can legitimately need a call again on another day.
  */
 export function computeBriefItemKey(edition: BriefEdition, briefDate: string, item: BriefItemInput): string {
   switch (item.kind) {
     case "proposed_task": {
+      // Work digest lines (the cited `what` lines), never the note id: the am and pm
+      // windows overlap on purpose, so the same line in both notes is the same item.
+      // The meetings stay out of it (the empty m/b keep 8e89ff0's digest-only keys),
+      // so adding a meeting citation to the same quote at EOD is still that item.
+      const digestLines = sortedUnique((item.source.work_digest?.lines ?? []).map(normalizeText).filter(Boolean));
+      if (digestLines.length > 0) return `proposal:${shortHash({ m: [], b: [], w: digestLines })}`;
+      // Unchanged for meeting-only proposals, so keys already saved keep matching.
       const meetings = sortedUnique(item.source.meetings.map((meeting) => meeting.id.trim()));
       const lines = sortedUnique(
         item.source.meetings.flatMap((meeting) => meeting.lines).map(normalizeText).filter(Boolean)
       );
-      // Work digest lines (the cited `what` lines), never the note id: the am and pm
-      // windows overlap on purpose, so the same line in both notes is the same item.
-      const digestLines = sortedUnique((item.source.work_digest?.lines ?? []).map(normalizeText).filter(Boolean));
-      if (digestLines.length > 0) return `proposal:${shortHash({ m: meetings, b: lines, w: digestLines })}`;
-      // Unchanged for meeting-only proposals, so keys already saved keep matching.
       const basis = lines.length > 0 ? lines : [normalizeText(item.payload.title)];
       return `proposal:${shortHash({ m: meetings, b: basis })}`;
     }

@@ -56,7 +56,8 @@
     "counts": {
       "total": 3,
       "open": 3,
-      "from_meetings": 3,
+      "from_meetings": 0,
+      "from_mail": 3,
       "calls": 0
     },
     "stored_work_digest_note_ids": [

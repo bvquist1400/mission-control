@@ -50,11 +50,11 @@
   },
   "covered_meeting_ids": [],
   "items": [
-    { "kind": "proposed_task", "title": "Present the research change request at tomorrow's change control", "detail": "Teams: Saif asked you directly.", "group": "Teams · Change control", "suggested_due": "2026-10-29",
+    { "kind": "proposed_task", "title": "Present the research change request at tomorrow's change control", "group": "Teams · Change control", "suggested_due": "2026-10-29",
       "source": { "work_digest": { "note_id": "00000000-0000-4000-8000-0000000000b2", "edition": "pm", "blocks": ["W1"], "lines": ["Saif asked you to present the research change request at tomorrow's change control meeting."] } } },
-    { "kind": "proposed_task", "title": "Walk the two untrained team members through eReg", "detail": "Teams: you said you would, tomorrow.", "group": "Teams · eReg", "suggested_due": "2026-10-29",
+    { "kind": "proposed_task", "title": "Walk the two untrained team members through eReg", "group": "Teams · eReg", "suggested_due": "2026-10-29",
       "source": { "work_digest": { "note_id": "00000000-0000-4000-8000-0000000000b2", "edition": "pm", "blocks": ["W2"], "lines": ["You said you would walk two untrained team members through eReg tomorrow; you created an account for one other member today."] } } },
-    { "kind": "proposed_task", "title": "Prep a yes or no on each investigator workflow task for Julie", "detail": "Teams: Julie asked for a short Friday chat.", "group": "Teams · Investigator roles", "suggested_due": "2026-10-30",
+    { "kind": "proposed_task", "title": "Prep a yes or no on each investigator workflow task for Julie", "group": "Teams · Investigator roles", "suggested_due": "2026-10-30",
       "source": { "work_digest": { "note_id": "00000000-0000-4000-8000-0000000000b2", "edition": "pm", "blocks": ["W3"], "lines": ["Julie asked for a short Friday chat to get your yes or no on each investigator workflow task."] } } }
   ]
 }

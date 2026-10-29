@@ -399,7 +399,7 @@ function createMcpServer(): McpServer {
     items: z.array(z.object({
       kind: z.enum(['proposed_task', 'carry_over', 'carry_group', 'choice']).describe('proposed_task = a meeting or work digest action item (Accept/Dismiss); carry_over = one task that needs a call (Done/Tomorrow/Park); carry_group = several tasks decided together (Tomorrow/Park); choice = pick one option, e.g. a calendar clash'),
       title: z.string().describe('What the item says, max 500 characters'),
-      detail: z.string().optional().describe('Extra context; becomes the task description on Accept'),
+      detail: z.string().optional().describe('Extra context; becomes the task description on Accept. Dropped on a proposed_task that cites source.work_digest (its task carries only the quoted lines)'),
       why: z.string().optional().describe('One line on why this needs a call'),
       group: z.string().optional().describe('Optional grouping label for proposals, e.g. a workstream'),
       label: z.string().optional().describe('Short eyebrow, e.g. "Due today" or "Tomorrow 10 AM"'),
@@ -434,7 +434,7 @@ function createMcpServer(): McpServer {
     return { ...toMcpResponse(data), ...(res.ok ? {} : { isError: true }) };
   }
 
-  const SAVE_BRIEF_RULES = 'Proposals are NOT tasks: nothing is created until Brent accepts an item. Every proposed_task must cite at least one meeting in source.meetings or a work digest item in source.work_digest (its lines must be the cited W blocks\' what lines, exactly; record every digest note read in content.work_digest_note_ids). The first save of the day creates the brief; a later save the same day only appends proposed_task items from meetings (or work digest notes) the brief has not covered yet, and never changes existing items, their numbers or their states. All task_ids and maybe_tracked.task_id must be Brent\'s own tasks. Baseline itself sends Brent one "brief ready" notice on the first save of the day (never on reruns); do not email or message him yourself. The notify.status in the result says sent, failed (with the reason) or already_claimed (an earlier save owns the one notice; notify.sent_at says whether it was delivered).';
+  const SAVE_BRIEF_RULES = 'Proposals are NOT tasks: nothing is created until Brent accepts an item. Every proposed_task must cite at least one meeting in source.meetings or a work digest item in source.work_digest (its lines must be the cited W blocks\' what lines, exactly; only notes of the brief\'s own day: the morning brief cites today\'s AM note, the EOD today\'s AM or PM; a proposal citing the digest keeps no detail; record every digest note read in content.work_digest_note_ids). The first save of the day creates the brief; a later save the same day only appends proposed_task items from meetings (or work digest notes) the brief has not covered yet, and never changes existing items, their numbers or their states. All task_ids and maybe_tracked.task_id must be Brent\'s own tasks. Baseline itself sends Brent one "brief ready" notice on the first save of the day (never on reruns); do not email or message him yourself. The notify.status in the result says sent, failed (with the reason) or already_claimed (an earlier save owns the one notice; notify.sent_at says whether it was delivered).';
 
   mcp.tool(
     'save_brief',

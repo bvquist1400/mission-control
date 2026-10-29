@@ -111,15 +111,18 @@ use (step 5) with `kind: act`, `owner: mine` and `status: open`.
 - `suggested_due` only from the item's own `due` (never from urgency or the
   calendar). `group`: "Mail" or "Teams" plus the topic, e.g. "Teams · Nova
   reviews".
-- Title it as the action, in your words; `detail`: one line saying who asked
-  and where ("Teams: Saif asked you directly").
+- Title it as the action, in your words. No `detail`: the page and the task
+  show the quoted line and where it came from, and Baseline drops a `detail`
+  on any proposal that cites the digest.
 
 **Changes an item.** When a digest item (any kind) clearly concerns a task,
 meeting proposal, call or tomorrow's meeting already on this page (same topic
 nouns and the same first name), don't add a new item: fold it into that
-item's `why` or `detail`, or the first moves, naming the source: "Teams:
-Adnan suggests assigning the proposed approver now." List it in the mail tile
-under "Changes an item" with the item's number.
+item's `why` or the first moves, naming the source: "Teams: Adnan suggests
+assigning the proposed approver now." Never into a proposal's `detail` (Accept
+copies it into the task): on a proposal, cite the block in its
+`source.work_digest` instead. List it in the mail tile under "Changes an item"
+with the item's number.
 
 **Waits.** `owner: waiting-on <name>` items and every `still_waiting` entry go
 in the "Waiting on others" tile. Merge with Baseline's own waits by person plus
@@ -254,11 +257,13 @@ of every work digest note you used (status `ok`) in
   PM note filed late). Existing items and their states never change.
 - A proposal skipped as `already_in_a_brief` was already proposed on an
   earlier brief (often this morning's, from the AM note's copy of the same
-  line); that's expected. An error about `source.work_digest` means a cited
-  line isn't the block's `what` line exactly: copy it again or drop the item.
+  line); that's expected. An error about `source.work_digest` means the
+  citation doesn't match today's AM or PM note (a line not copied exactly,
+  another day's note, or a note Baseline can't read): copy it again or drop
+  the item.
 - Don't email or message Brent. Baseline sends him the "EOD-MMDD is ready ·
-  N to decide · N done" notice with the link and "Or in Claude: review
-  EOD-MMDD" on the first save of the day, and never again for that brief. The
+  N to decide · N done" notice with the link and "Or ask your AI assistant:
+  review EOD-MMDD" on the first save of the day, and never again for that brief. The
   result's `notify.status` says `sent`, `failed` (with the reason) or
   `already_claimed` (an earlier save owns the one notice; `notify.sent_at` says
   whether it was delivered).

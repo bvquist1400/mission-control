@@ -2227,7 +2227,7 @@
                 "description": "What the item says, max 500 characters"
               },
               "detail": {
-                "description": "Extra context; becomes the task description on Accept",
+                "description": "Extra context; becomes the task description on Accept. Dropped on a proposed_task that cites source.work_digest (its task carries only the quoted lines)",
                 "type": "string"
               },
               "why": {
@@ -2433,7 +2433,7 @@
                 "description": "What the item says, max 500 characters"
               },
               "detail": {
-                "description": "Extra context; becomes the task description on Accept",
+                "description": "Extra context; becomes the task description on Accept. Dropped on a proposed_task that cites source.work_digest (its task carries only the quoted lines)",
                 "type": "string"
               },
               "why": {

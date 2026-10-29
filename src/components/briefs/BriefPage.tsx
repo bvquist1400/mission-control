@@ -19,6 +19,8 @@ import {
 import { DayTile, HeroTile, NextTile, RecapBento, Sheet, TILE_REGISTRY } from "@/components/briefs/tiles";
 import { dateHeading } from "@/components/briefs/format";
 import { patchForRefusedAction } from "@/lib/briefs/act-patch";
+import { countBriefItems } from "@/lib/briefs/counts";
+import { assistantReviewLine } from "@/lib/briefs/copy";
 import { buildDayTimeline } from "@/components/briefs/timeline";
 import type { BriefCounts, BriefItemRow, BriefMeetingRef, BriefTaskSummary, BriefTile, BriefView } from "@/lib/briefs/types";
 
@@ -45,9 +47,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
 }
 
 function countOpen(items: BriefItemRow[]): BriefCounts {
-  const open = items.filter((item) => item.state === "open");
-  const fromMeetings = open.filter((item) => CARD_REGISTRY[item.kind].section === "meetings").length;
-  return { total: items.length, open: open.length, from_meetings: fromMeetings, calls: open.length - fromMeetings };
+  return countBriefItems(items, (kind) => CARD_REGISTRY[kind].section === "meetings");
 }
 
 export function BriefPage({ view }: { view: BriefView }) {
@@ -376,7 +376,7 @@ export function BriefPage({ view }: { view: BriefView }) {
     <div className="page">
       <div className="topbar">
         <Link href="/">← Baseline</Link>
-        <span className="mono">Or in Claude: review {brief.code}</span>
+        <span className="mono">{assistantReviewLine(brief.code)}</span>
       </div>
 
       <div className="bento">

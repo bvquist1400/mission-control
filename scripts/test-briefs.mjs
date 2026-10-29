@@ -220,7 +220,7 @@ await test("ready notice is EOD-MMDD is ready · N to decide · N done, the link
     { total: 13, open: 6, from_meetings: 4, calls: 2 },
     { stats: [{ key: "done", label: "done", value: 19 }] }
   );
-  assert.equal(text, "EOD-0925 is ready · 6 to decide · 19 done\nhttps://example.test/briefs/EOD-0925\nOr in Claude: review EOD-0925");
+  assert.equal(text, "EOD-0925 is ready · 6 to decide · 19 done\nhttps://example.test/briefs/EOD-0925\nOr ask your AI assistant: review EOD-0925");
   assert.equal(buildBriefNotice("EOD-0925", "u", { total: 0, open: 0, from_meetings: 0, calls: 0 }, {}).split("\n")[0], "EOD-0925 is ready · 0 to decide");
 });
 

@@ -270,7 +270,10 @@ export interface BriefTaskSummary {
 export interface BriefCounts {
   total: number;
   open: number;
+  /** Open proposals citing a meeting (meeting + digest counts here). */
   from_meetings: number;
+  /** Open proposals citing only the work digest; absent when 0. */
+  from_mail?: number;
   calls: number;
 }
 

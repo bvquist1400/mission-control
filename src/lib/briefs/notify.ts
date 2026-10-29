@@ -1,3 +1,4 @@
+import { assistantReviewLine } from "@/lib/briefs/copy";
 import type { BriefContent, BriefCounts } from "@/lib/briefs/types";
 
 // Baseline tells Brent a brief is ready with one Telegram message, sent by the
@@ -12,7 +13,8 @@ const TELEGRAM_TIMEOUT_MS = 8000;
 const ERROR_MAX = 500;
 
 /**
- * "EOD-0925 is ready · 6 to decide · 19 done", the link, and the Claude fallback.
+ * "EOD-0925 is ready · 6 to decide · 19 done", the link, and the "ask your AI
+ * assistant" fallback (`assistantReviewLine`).
  * The third part is the brief's headline stat: a "done" stat wherever it sits
  * (so an EOD reads exactly as before), else the first stat ("9 due today" on a
  * morning); no stats, no third part.
@@ -24,7 +26,7 @@ export function buildBriefNotice(code: string, url: string, counts: BriefCounts,
   const head = [`${code} is ready`, `${counts.open} to decide`, headline]
     .filter(Boolean)
     .join(" · ");
-  return [head, url, `Or in Claude: review ${code}`].join("\n");
+  return [head, url, assistantReviewLine(code)].join("\n");
 }
 
 export function telegramNotifierFromEnv(

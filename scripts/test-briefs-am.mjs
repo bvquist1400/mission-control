@@ -88,7 +88,7 @@ await test("notice: the morning's first stat is the headline (no 'done' key need
   });
   assert.equal(
     text,
-    "AM-0928 is ready · 3 to decide · 9 due today\nhttps://example.test/briefs/AM-0928\nOr in Claude: review AM-0928"
+    "AM-0928 is ready · 3 to decide · 9 due today\nhttps://example.test/briefs/AM-0928\nOr ask your AI assistant: review AM-0928"
   );
 });
 

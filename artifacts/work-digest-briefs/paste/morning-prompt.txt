@@ -109,15 +109,18 @@ items with `kind: act`, `owner: mine` and `status: open`.
 - `suggested_due` only from the item's own `due` (never from urgency or the
   calendar). `group`: "Mail" or "Teams" plus the topic, e.g. "Mail · REDCap
   ticket".
-- Title it as the action, in your words; `detail`: one line saying who asked
-  and where ("Mail: Daniel at Epic asked you directly").
+- Title it as the action, in your words. No `detail`: the page and the task
+  show the quoted line and where it came from, and Baseline drops a `detail`
+  on any proposal that cites the digest.
 
 **Changes an item.** When a digest item (any kind) clearly concerns a task,
 carry item, proposal or meeting already on this page (same topic nouns and
-the same first name), don't add a new item: fold it into that item's `why` or
-`detail`, or the meeting's `prep`, naming the source: "Mail: Nathan already
-merged the identifiers; the open question is who rechecks them." List it in
-the mail tile under "Changes an item" with the item's number.
+the same first name), don't add a new item: fold it into that item's `why`,
+or the meeting's `prep`, naming the source: "Mail: Nathan already merged the
+identifiers; the open question is who rechecks them." Never into a proposal's
+`detail` (Accept copies it into the task): on a proposal, cite the block in
+its `source.work_digest` instead. List it in the mail tile under "Changes an
+item" with the item's number.
 
 **Waits.** `owner: waiting-on <name>` items and every `still_waiting` entry go
 in the "Waiting on others" tile. Merge with Baseline's own waits by person plus
@@ -281,11 +284,13 @@ tell that you read it); leave it out otherwise.
 - A proposal skipped as `already_in_a_brief` was already proposed on an
   earlier brief; that's expected, not an error. The same goes for
   `work_digest_already_covered` on a rerun.
-- An error about `source.work_digest` means a cited line isn't the block's
-  `what` line exactly: copy it again from `work_digest.am.items`, or drop
+- An error about `source.work_digest` means the citation doesn't match
+  today's AM note (a line not copied exactly, another day's note, or a note
+  Baseline can't read): copy it again from `work_digest.am.items`, or drop
   the item.
 - Don't email or message Brent. Baseline sends him "AM-MMDD is ready · N to
-  decide · N due today" with the link and "Or in Claude: review AM-MMDD" on the
+  decide · N due today" with the link and "Or ask your AI assistant: review
+  AM-MMDD" on the
   first save of the day, and never again for that brief. The result's
   `notify.status` says `sent`, `failed` (with the reason) or `already_claimed`.
 
