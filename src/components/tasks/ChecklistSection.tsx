@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type KeyboardEvent } from "react";
+import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { TaskChecklistItem } from "@/types/database";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Field";
@@ -11,6 +11,10 @@ interface ChecklistSectionProps {
   onAdd: (text: string) => void;
   onUpdate: (itemId: string, text: string) => void;
   onDelete: (itemId: string) => void;
+  /** Shown on the heading (Break into tasks: the "Break into tasks" button). */
+  headingAction?: ReactNode;
+  /** A line under the heading (an umbrella: "kept for the record"). */
+  note?: string | null;
 }
 
 interface ParsedChecklistText {
@@ -133,7 +137,7 @@ function buildChecklistLayout(checklist: TaskChecklistItem[]) {
   };
 }
 
-export function ChecklistSection({ checklist, onToggle, onAdd, onUpdate, onDelete }: ChecklistSectionProps) {
+export function ChecklistSection({ checklist, onToggle, onAdd, onUpdate, onDelete, headingAction, note }: ChecklistSectionProps) {
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
   const [pendingDeleteItemId, setPendingDeleteItemId] = useState<string | null>(null);
@@ -325,9 +329,13 @@ export function ChecklistSection({ checklist, onToggle, onAdd, onUpdate, onDelet
 
   return (
     <div className="space-y-3">
-      <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        Checklist ({checklist.length})
-      </h4>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Checklist ({checklist.length})
+        </h4>
+        {headingAction}
+      </div>
+      {note ? <p className="text-xs text-muted-foreground">{note}</p> : null}
       {checklist.length > 0 ? (
         hasTaggedItems ? (
           <div className="space-y-3">

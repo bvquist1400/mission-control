@@ -64,6 +64,7 @@ import {
 import type { Task, TaskStatus, TaskType, BlockedReason } from '@/types/database';
 import { parseTaskOwnerFields } from '@/lib/task-owner';
 import { normalizeUnitCount, normalizeWorkType } from '@/lib/pace';
+import { loadTaskSteps } from '@/lib/break-into-tasks-service';
 
 const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Missed', 'Done'];
 const VALID_TASK_TYPES: TaskType[] = ['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build'];
@@ -138,7 +139,16 @@ export async function GET(
     }
 
     const links = await fetchTaskDependencyLinks(supabase, userId, id, { famcal: false });
-    return NextResponse.json({ ...normalizeTaskWithRelations(data as Record<string, unknown>), ...links });
+    // Break into tasks (066): the umbrella this task came from and its own steps.
+    // Never for the FamCal key (returned above, with its own projection).
+    // A failed read only leaves these fields out; the task itself still comes back.
+    const steps = await loadTaskSteps(supabase, userId, id, (data as { parent_task_id?: string | null }).parent_task_id ?? null).catch(
+      (stepsError: unknown) => {
+        console.error('Error loading task steps:', stepsError);
+        return {};
+      }
+    );
+    return NextResponse.json({ ...normalizeTaskWithRelations(data as Record<string, unknown>), ...links, ...steps });
   } catch (error) {
     if (error instanceof DependencyReadIncompleteError) {
       return NextResponse.json({ error: error.message }, { status: 503 });

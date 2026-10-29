@@ -21,6 +21,8 @@ import { Button } from "@/components/ui/Button";
 import { Input, Select } from "@/components/ui/Field";
 import { cardClasses } from "@/components/ui/Card";
 import { badgeClasses } from "@/components/ui/Badge";
+import { sectionUmbrella } from "@/lib/break-into-tasks";
+import { SectionUmbrellaSummary } from "@/components/tasks/BreakIntoTasks";
 
 interface ProjectTaskSectionsPanelProps {
   projectId: string;
@@ -768,6 +770,11 @@ export function ProjectTaskSectionsPanel({
                       <p className="mt-1 text-xs text-muted-foreground">
                         Sort order {section.sort_order}
                       </p>
+                      {(() => {
+                        // Break into tasks (066): a section whose tasks are all steps of one umbrella.
+                        const umbrella = sectionUmbrella(sectionTasks);
+                        return umbrella ? <SectionUmbrellaSummary umbrellaId={umbrella.umbrellaId} /> : null;
+                      })()}
                     </div>
 
                     <div className="flex items-center gap-2">

@@ -117,6 +117,8 @@ export interface Task {
   is_sample: boolean;
   /** Change token of the last due-date save (migration 062's trigger; never set by callers). */
   due_change_id: string | null;
+  /** Break into tasks (migration 066): the umbrella task this one was broken out of. */
+  parent_task_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -364,6 +366,8 @@ export interface TaskWithImplementation extends Task {
   dependency_blocked?: boolean;
   /** Today page reads only (multi-day tasks S2): the checklist rows' tick + units, for the card fill. */
   checklist_rows?: Array<Pick<TaskChecklistItem, 'is_done' | 'unit_count'>>;
+  /** Today page reads only (Break into tasks, 066): an umbrella's step tasks; its progress counts them. */
+  step_tasks?: Array<{ id: string; title?: string; status: TaskStatus }>;
 }
 
 // Allowed fields for task updates via API

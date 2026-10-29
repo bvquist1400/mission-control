@@ -2618,6 +2618,7 @@ export type Database = {
           needs_review: boolean
           owner: string
           owner_label: string | null
+          parent_task_id: string | null
           pinned: boolean
           pinned_excerpt: string | null
           priority_score: number
@@ -2665,6 +2666,7 @@ export type Database = {
           needs_review?: boolean
           owner?: string
           owner_label?: string | null
+          parent_task_id?: string | null
           pinned?: boolean
           pinned_excerpt?: string | null
           priority_score?: number
@@ -2712,6 +2714,7 @@ export type Database = {
           needs_review?: boolean
           owner?: string
           owner_label?: string | null
+          parent_task_id?: string | null
           pinned?: boolean
           pinned_excerpt?: string | null
           priority_score?: number
@@ -2753,6 +2756,13 @@ export type Database = {
           {
             foreignKeyName: "tasks_latest_instance_id_fkey"
             columns: ["latest_instance_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tasks_parent_task_id_fkey"
+            columns: ["parent_task_id"]
             isOneToOne: false
             referencedRelation: "tasks"
             referencedColumns: ["id"]
@@ -2960,6 +2970,10 @@ export type Database = {
         }
         Returns: Json
       }
+      break_task_into_tasks: {
+        Args: { p_request: Json; p_task_id: string; p_user_id: string }
+        Returns: Json
+      }
       brief_item_transition: {
         Args: {
           p_expected_state: string
@@ -3160,6 +3174,10 @@ export type Database = {
         Returns: Json
       }
       task_graph_lock_key: { Args: { p_user_id: string }; Returns: number }
+      undo_break_task_into_tasks: {
+        Args: { p_request: Json; p_task_id: string; p_user_id: string }
+        Returns: Json
+      }
       undo_task_date_cascade: {
         Args: {
           p_cascade_id: string

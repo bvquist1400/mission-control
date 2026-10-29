@@ -23,6 +23,7 @@ import {
 import { Button } from "@/components/ui/Button";
 import { isPastDue } from "@/lib/task-range";
 import { buildRangeCardView, type RangeCardView } from "@/lib/task-range-view";
+import { progressRowsFor } from "@/lib/break-into-tasks";
 import {
   dayStrip,
   laneContinuesText,
@@ -697,7 +698,11 @@ export function WeekBoard({
           task,
           getDueState(task.due_at, now, TIME_ZONE),
           syncedSet.has(task.id),
-          buildRangeCardView(task, task.checklist_rows ?? [], now)
+          (() => {
+            // An umbrella (Break into tasks) counts its step tasks; others their checklist.
+            const progress = progressRowsFor(task);
+            return buildRangeCardView(task, progress.rows, now, { stepsAreTasks: progress.source === "tasks" });
+          })()
         )
       ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -757,6 +762,7 @@ export function WeekBoard({
           taskId={task.id}
           view={view}
           compact
+          stepTasks={view.steps?.basis === "tasks" ? tasks.find((candidate) => candidate.id === task.id)?.step_tasks : undefined}
           onRowsChange={(rows) => applyChecklistRows(task.id, rows)}
           onSaved={() => router.refresh()}
           onDone={() => handleQuickComplete(task.id)}

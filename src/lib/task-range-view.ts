@@ -26,8 +26,8 @@ export interface RangeStepsView {
   /** "3/5 steps" (compact cards: "3/5"). */
   text: string;
   compactText: string;
-  /** "units" when rows are weighted by their unit counts. */
-  basis: 'units' | 'rows';
+  /** "units" when rows are weighted by their unit counts; "tasks" when they are an umbrella's step tasks (Break into tasks, 066). */
+  basis: 'units' | 'rows' | 'tasks';
 }
 
 export interface RangeCardView {
@@ -77,9 +77,9 @@ function dueDayName(state: TaskRangeState): string {
   return weekday === null ? 'the due date' : WEEKDAY_NAMES[weekday];
 }
 
-function buildNote(state: TaskRangeState, progressPercent: number | null, elapsedShare: number | null): string | null {
+function buildNote(state: TaskRangeState, progressPercent: number | null, elapsedShare: number | null, stepsAreTasks = false): string | null {
   if (state.allStepsDone) return null;
-  const workWord = state.progress.basis === 'units' ? 'of the work is' : 'of the steps are';
+  const workWord = stepsAreTasks ? 'of the tasks are' : state.progress.basis === 'units' ? 'of the work is' : 'of the steps are';
   switch (state.kind) {
     case 'late':
       return 'Due date passed. Move the due date or finish the last steps.';
@@ -105,7 +105,7 @@ function buildSrText(state: TaskRangeState, chipText: string, steps: RangeStepsV
   parts.push(state.kind === 'late' ? `${chipText}.` : `Multi-day task, ${chipText}.`);
   if (steps && progressPercent !== null) {
     const unitsNote = steps.basis === 'units' ? ', weighted by size' : '';
-    parts.push(`${steps.done} of ${steps.total} steps done, ${progressPercent}%${unitsNote}.`);
+    parts.push(`${steps.done} of ${steps.total} ${steps.basis === 'tasks' ? 'tasks' : 'steps'} done, ${progressPercent}%${unitsNote}.`);
   }
   if (state.behindPace && elapsedShare !== null) {
     parts.push(`Behind pace: about ${percent(elapsedShare)}% of the time is gone.`);
@@ -124,8 +124,10 @@ function buildSrText(state: TaskRangeState, chipText: string, steps: RangeStepsV
 export function buildRangeCardView(
   task: RangeTaskInput,
   checklistRows: ReadonlyArray<ChecklistRowInput>,
-  now: Date
+  now: Date,
+  options: { stepsAreTasks?: boolean } = {}
 ): RangeCardView | null {
+  const stepsAreTasks = options.stepsAreTasks === true;
   const state = taskRangeState(task, checklistRows, now);
   if (!state.range || !state.range.isRange || state.kind === 'closed' || state.kind === 'none') return null;
   const chipText = rangeChipText(state);
@@ -137,9 +139,9 @@ export function buildRangeCardView(
     ? {
         done: state.progress.doneRows,
         total: state.progress.totalRows,
-        text: `${state.progress.doneRows}/${state.progress.totalRows} steps`,
+        text: `${state.progress.doneRows}/${state.progress.totalRows} ${stepsAreTasks ? 'tasks' : 'steps'}`,
         compactText: `${state.progress.doneRows}/${state.progress.totalRows}`,
-        basis: state.progress.basis === 'units' ? 'units' : 'rows',
+        basis: stepsAreTasks ? 'tasks' : state.progress.basis === 'units' ? 'units' : 'rows',
       }
     : null;
   const showsElapsed = (state.kind === 'in_range' || state.kind === 'due_today') && state.elapsed !== null && state.elapsed > 0;
@@ -154,7 +156,7 @@ export function buildRangeCardView(
     steps,
     allStepsDone: state.allStepsDone,
     srText: buildSrText(state, chipText, steps, progressPercent, state.elapsed),
-    note: buildNote(state, progressPercent, state.elapsed),
+    note: buildNote(state, progressPercent, state.elapsed, stepsAreTasks),
     day: state.day ? { day: state.day.day, of: state.day.of } : null,
   };
 }
