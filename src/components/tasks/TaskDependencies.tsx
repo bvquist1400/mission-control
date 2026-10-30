@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CommitmentStatus,
   CommitmentSummary,
@@ -11,6 +11,7 @@ import type {
 import { Button } from "@/components/ui/Button";
 import { Input, Select } from "@/components/ui/Field";
 import { formatDay } from "@/lib/date-cascade-view";
+import { dependencyTaskCandidates, fetchOpenTasksForPicker, pickerHint } from "@/lib/dependency-picker";
 import type { TaskBlocksLink } from "@/lib/task-detail";
 
 interface TaskDependenciesProps {
@@ -18,6 +19,7 @@ interface TaskDependenciesProps {
   dependencies: TaskDependencySummary[];
   /** Tasks that wait on this one (cascade S2 "Blocks" list); null = couldn't be read; omitted = not shown. */
   blocks?: TaskBlocksLink[] | null;
+  /** The page's tasks; the picker also loads every open task itself (src/lib/dependency-picker.ts). */
   availableTasks?: TaskWithImplementation[];
   availableCommitments?: CommitmentSummary[];
   onDependencyAdded?: (dependency: TaskDependencySummary) => void;
@@ -78,6 +80,35 @@ export function TaskDependencies({
   const [selectedId, setSelectedId] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Every open task, loaded once per window on "+ Add dependency" (the page
+  // may know only the opened task). null = not loaded yet.
+  const [loadedTasks, setLoadedTasks] = useState<TaskWithImplementation[] | null>(null);
+  const [loadingTasks, setLoadingTasks] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const loadingRef = useRef(false);
+  const loadAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => () => loadAbortRef.current?.abort(), []);
+
+  const loadOpenTasks = useCallback(() => {
+    if (loadedTasks || loadingRef.current) return;
+    loadingRef.current = true;
+    const controller = new AbortController();
+    loadAbortRef.current = controller;
+    setLoadingTasks(true);
+    setLoadFailed(false);
+    fetchOpenTasksForPicker(fetch, controller.signal)
+      .then((tasks) => {
+        if (!controller.signal.aborted) setLoadedTasks(tasks);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setLoadFailed(true);
+      })
+      .finally(() => {
+        loadingRef.current = false;
+        if (!controller.signal.aborted) setLoadingTasks(false);
+      });
+  }, [loadedTasks]);
 
   const unresolvedDependencies = useMemo(
     () => dependencies.filter((dependency) => dependency.unresolved),
@@ -108,20 +139,14 @@ export function TaskDependencies({
 
   const selectableTasks = useMemo(
     () =>
-      availableTasks
-        .filter((task) => task.id !== taskId)
-        .filter((task) => !dependencyTaskIds.has(task.id))
-        .filter((task) => task.status !== "Done" && task.status !== "Parked" && task.status !== "Missed")
-        .filter((task) => {
-          if (!normalizedSearch) {
-            return true;
-          }
-
-          const implementationName = task.implementation?.name || "";
-          return `${task.title} ${implementationName}`.toLowerCase().includes(normalizedSearch);
-        })
-        .sort((a, b) => b.priority_score - a.priority_score),
-    [availableTasks, dependencyTaskIds, normalizedSearch, taskId]
+      dependencyTaskCandidates({
+        taskId,
+        passed: availableTasks,
+        loaded: loadedTasks,
+        linkedIds: dependencyTaskIds,
+        search: normalizedSearch,
+      }),
+    [availableTasks, dependencyTaskIds, loadedTasks, normalizedSearch, taskId]
   );
 
   const selectableCommitments = useMemo(
@@ -142,6 +167,7 @@ export function TaskDependencies({
   );
 
   const selectableItems = dependencyType === "task" ? selectableTasks : selectableCommitments;
+  const hint = pickerHint(dependencyType, { loading: loadingTasks, failed: loadFailed, count: selectableItems.length });
 
   const handleAdd = useCallback(async () => {
     if (!selectedId) {
@@ -215,6 +241,7 @@ export function TaskDependencies({
               setSelectedId("");
               setSearchQuery("");
               setIsAdding(true);
+              loadOpenTasks();
             }}
             className="rounded-lg px-2 py-1 text-xs font-semibold text-accent-text transition hover:bg-accent/10"
           >
@@ -312,8 +339,8 @@ export function TaskDependencies({
             ))}
           </Select>
 
-          {selectableItems.length === 0 && (
-            <p className="text-xs text-muted-foreground">No matching {dependencyType}s available.</p>
+          {hint && (
+            <p className="text-xs text-muted-foreground" aria-live="polite">{hint}</p>
           )}
 
           <div className="flex justify-end gap-2">

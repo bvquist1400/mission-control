@@ -15,7 +15,9 @@
  *   work, every day for personal, Brent 10/22 "weekends only for personal").
  *   Too many steps for the days left: several share a day. A task with no due
  *   date (or one already past) gets today + 1 counted day, + 2, … instead.
- * - Who and status: every step starts with the original's owner. The first
+ * - Who and status: every step starts as Brent's, whatever the original's
+ *   owner (Brent 10/30: steps landed on the agent when the original was the
+ *   agent's); the dialog still lets him pick Agent per step. The first
  *   open step starts In Progress when the original is In Progress (else
  *   Planned); the rest Planned ("Blocked by dependency" is how a waiting step
  *   is shown, not a status).
@@ -226,8 +228,9 @@ export function finishedStepDate(row: Pick<BreakChecklistRow, 'completed_at'>): 
 
 // ── Status and owner ────────────────────────────────────────────────────────
 
-export function defaultOwner(umbrella: Pick<BreakUmbrella, 'owner'>): BreakOwner {
-  return umbrella.owner === 'agent' ? 'agent' : 'brent';
+/** Who a new step starts with in the dialog: always Brent (not the umbrella's owner). */
+export function defaultOwner(): BreakOwner {
+  return 'brent';
 }
 
 /** The first open step follows an In Progress task; the rest start Planned. */

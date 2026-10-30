@@ -174,7 +174,7 @@ function draftsFor(task: TaskWithImplementation, checklist: TaskChecklistItem[],
   const openCount = checklist.filter((item) => !item.is_done).length;
   const proposed = proposeStepDates(task, openCount, now);
   let openIndex = 0;
-  const owner = defaultOwner(task);
+  const owner = defaultOwner();
   return checklist.map((item) => {
     if (item.is_done) return { item, include: true, due: finishedStepDate(item) ?? "", owner, waits: false };
     const due = proposed.dates[openIndex] ?? "";
