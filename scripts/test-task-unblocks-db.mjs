@@ -140,7 +140,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function untilWaiting(like, ms = 10_000) {
   const end = Date.now() + ms;
   while (Date.now() < end) {
-    const waiting = psql(`SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query ILIKE '${like}' AND pid <> pg_backend_pid();`);
+    const waiting = psql(`SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query ILIKE '${like.replace(/'/g, "''")}' AND pid <> pg_backend_pid();`);
     if (Number(waiting) > 0) return;
     await sleep(50);
   }
@@ -217,7 +217,7 @@ try {
     assert.equal(psql(`SELECT is_nullable || '|' || COALESCE(column_default, '<none>') FROM information_schema.columns WHERE table_name = 'tasks' AND column_name = 'unblocked_at';`), "YES|<none>");
     assert.equal(psql(`SELECT relrowsecurity FROM pg_class WHERE oid = 'public.task_unblocks'::regclass;`), "t");
     assert.equal(psql(`SELECT string_agg(cmd, ',' ORDER BY cmd) FROM pg_policies WHERE tablename = 'task_unblocks';`), "INSERT,SELECT,UPDATE");
-    assert.equal(psql(`SELECT has_table_privilege('authenticated', 'public.task_unblocks', 'DELETE');`), "f");
+    // (No DELETE grant in 067; up.sh grants ALL like production's default privileges, so RLS (no DELETE policy) is what denies it: see Part 5.)
     assert.equal(psql(`SELECT has_function_privilege('anon', 'public.clear_task_unblock(uuid, uuid, text)', 'EXECUTE');`), "f");
     assert.equal(psql(`SELECT has_function_privilege('authenticated', 'public.clear_task_unblock(uuid, uuid, text)', 'EXECUTE');`), "t");
     assert.equal(psql(`SELECT count(*) FROM pg_trigger WHERE tgname IN ('trg_tasks_unblock_dependents','trg_commitments_unblock_dependents','trg_tasks_unblock_pill','trg_tasks_unblock_pill_insert','trg_task_dependencies_unblock_reblock');`), "5");
@@ -577,7 +577,16 @@ try {
     const { waiting } = pilledTask();
     assert.match(asUserFails(userA, `INSERT INTO task_unblocks (user_id, task_id, blocker_type, unblocked_at, landing_date, prior_status, new_status) VALUES (${q(userA)}, ${q(waiting)}, 'task', now(), CURRENT_DATE, 'Planned', 'Planned')`), /row-level security/);
     assert.equal(asUser(userA, `WITH u AS (UPDATE task_unblocks SET cleared_at = now(), cleared_reason = 'manual' WHERE task_id = ${q(waiting)} RETURNING 1) SELECT count(*) FROM u`), "0");
-    assert.match(asUserFails(userA, `DELETE FROM task_unblocks WHERE task_id = ${q(waiting)}`), /permission denied/);
+    // No DELETE policy: denied (permission denied without a grant, 0 rows with one).
+    const deleted = (() => {
+      try {
+        return asUser(userA, `WITH d AS (DELETE FROM task_unblocks WHERE task_id = ${q(waiting)} RETURNING 1) SELECT count(*) FROM d`);
+      } catch (error) {
+        assert.match(String(error.stderr ?? error.message), /permission denied/);
+        return "0";
+      }
+    })();
+    assert.equal(deleted, "0");
     assert.equal(asUser(userB, `SELECT count(*) FROM task_unblocks WHERE task_id = ${q(waiting)}`), "0");
     assert.equal(asUser(userA, `SELECT count(*) FROM task_unblocks WHERE task_id = ${q(waiting)}`), "1");
     assert.equal(psql(`SELECT current_setting('mission_control.unblock_writer', true) IS DISTINCT FROM 'on';`), "t");
