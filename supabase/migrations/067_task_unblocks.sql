@@ -104,6 +104,8 @@
 --         again (the app computes that from the reopened link);
 --       - older than 7 days: only the pill clears (reason 'reopened'), nothing
 --         else changes and no comment is written;
+--       - a closed task (Done, Parked, Missed): no status, due date or priority
+--         change and no comment; only the row closes (and a leftover pill);
 --       - the pill already cleared and the unblock changed nothing (pill-only):
 --         the row is marked reverted, the task is not written, no comment.
 --    Failure isolation: the work runs in a sub-transaction (BEGIN ... EXCEPTION).
@@ -482,6 +484,20 @@ BEGIN
             UPDATE public.task_unblocks SET cleared_at = v_now, cleared_reason = 'reopened' WHERE id = v_row.id;
             UPDATE public.tasks SET unblocked_at = NULL WHERE id = v_task.id AND unblocked_at IS NOT NULL;
           END IF;
+          CONTINUE;
+        END IF;
+
+        -- A closed task (Done, Parked, Missed) is Brent's: nothing on it changes and
+        -- no comment lands on it. Only the bookkeeping closes (the row, and a pill
+        -- if one is somehow left, so unblocked_at and the open row stay in step).
+        IF v_task.status::TEXT NOT IN ('Backlog', 'Planned', 'In Progress', 'Blocked/Waiting') THEN
+          UPDATE public.task_unblocks
+             SET reverted_at = v_now, reverted_by_type = v_type, reverted_by_id = v_target_id,
+                 revert_status_restored = false, revert_due_restored = false,
+                 cleared_at = COALESCE(cleared_at, v_now),
+                 cleared_reason = COALESCE(cleared_reason, 'reopened')
+           WHERE id = v_row.id;
+          UPDATE public.tasks SET unblocked_at = NULL WHERE id = v_task.id AND unblocked_at IS NOT NULL;
           CONTINUE;
         END IF;
 

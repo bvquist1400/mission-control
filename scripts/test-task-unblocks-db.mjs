@@ -26,7 +26,8 @@
 //         unblocked_at is ignored; an insert can't set it; a new blocker clears
 //         it; clear_task_unblock (own user, other user refused).
 // Part 4: reopen: within 7 days everything back (compare-and-set), after a
-//         re-date the date stays, after 7 days only the pill; pill-only rows.
+//         re-date the date stays, after 7 days only the pill; pill-only rows;
+//         a closed task (Done, Parked, Missed) gets no write and no comment.
 // Part 5: RLS (no direct writes, no cross-user reads), failure isolation (a
 //         held row lock past lock_timeout: the Done still saves), two blockers
 //         finished at once in two sessions (exactly one unblock), and a bulk
@@ -559,6 +560,53 @@ try {
     assert.equal(psql(`SELECT updated_at FROM tasks WHERE id = ${q(waiting)};`), before);
     assert.equal(systemComments(waiting).length, comments);
     assert.ok(unblockRows(waiting)[0].reverted_at);
+  });
+
+  await test("reopen when the waiting task is closed (Done, Parked, Missed): nothing on the task changes, no comment, the row closes", () => {
+    for (const status of ["Done", "Parked", "Missed"]) {
+      const blocker = makeTask(userA, { tags: P });
+      const waiting = makeTask(userA, { status: "Blocked/Waiting", tags: P });
+      link(userA, waiting, blocker);
+      setStatus(userA, blocker, "Done");
+      const set = task(waiting);
+      assert.ok(set.due_at, "the unblock set a due date");
+      setStatus(userA, waiting, status);
+      const closed = task(waiting);
+      const updatedAt = psql(`SELECT updated_at FROM tasks WHERE id = ${q(waiting)};`);
+      const comments = systemComments(waiting);
+      const history = transitions(waiting);
+      setStatus(userA, blocker, "Planned");
+      assert.deepEqual(task(waiting), closed, `${status}: status, due date, priority and token stay`);
+      assert.equal(task(waiting).status, status);
+      assert.ok(sameInstant(task(waiting).due_at, set.due_at), `${status}: the due date isn't cleared`);
+      assert.equal(psql(`SELECT updated_at FROM tasks WHERE id = ${q(waiting)};`), updatedAt, `${status}: no task write`);
+      assert.deepEqual(systemComments(waiting), comments, `${status}: no comment`);
+      assert.deepEqual(transitions(waiting), history, `${status}: no transition`);
+      const [row] = unblockRows(waiting);
+      assert.ok(row.reverted_at, `${status}: the row is closed`);
+      assert.deepEqual([row.revert_status_restored, row.revert_due_restored, row.revert_comment_id], [false, false, null]);
+    }
+  });
+
+  await test("reopen with a closed task still holding a pill (bookkeeping only): the pill and its row clear together", () => {
+    const blocker = makeTask(userA, { tags: P });
+    const waiting = makeTask(userA, { status: "Blocked/Waiting", tags: P });
+    link(userA, waiting, blocker);
+    setStatus(userA, blocker, "Done");
+    // Only a write under the setting can leave a closed task with a pill; stand in for it as postgres.
+    psql(`BEGIN; SELECT set_config('mission_control.unblock_writer', 'on', true); UPDATE tasks SET status = 'Parked' WHERE id = ${q(waiting)}; COMMIT;`);
+    assert.ok(task(waiting).unblocked_at);
+    const comments = systemComments(waiting);
+    const due = task(waiting).due_at;
+    setStatus(userA, blocker, "Planned");
+    const after = task(waiting);
+    assert.equal(after.unblocked_at, null);
+    assert.equal(after.status, "Parked");
+    assert.ok(sameInstant(after.due_at, due));
+    assert.deepEqual(systemComments(waiting), comments);
+    const [row] = unblockRows(waiting);
+    assert.ok(row.reverted_at);
+    assert.equal(row.cleared_reason, "reopened");
   });
 
   await test("the SQL path (as postgres, like brief_item_transition) unblocks and reopens the same way", () => {

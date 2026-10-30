@@ -279,6 +279,10 @@ await test("the unblock locks each waiting task before re-reading its links, and
   assert.match(fn, /NULLIF\(btrim\(COALESCE\(v_task\.waiting_on, ''\)\), ''\) IS NULL\s+OR v_task\.blocked_reason::TEXT IS NOT DISTINCT FROM 'prerequisite'/);
   // Recurring: pill only.
   assert.match(fn, /IF NOT v_recurring THEN/);
+  // Reopen: a closed task is guarded before any compare-and-set write.
+  const guard = fn.indexOf("v_task.status::TEXT NOT IN ('Backlog', 'Planned', 'In Progress', 'Blocked/Waiting') THEN\n          UPDATE public.task_unblocks");
+  const compare = fn.indexOf("v_status_back := v_row.status_changed");
+  assert.ok(guard > 0 && compare > guard, "closed-task guard before the compare-and-set");
   // Resolved = Done, exactly as isDependencyResolved.
   assert.match(fn, /COALESCE\(bt\.status::TEXT, bc\.status::TEXT, ''\) <> 'Done'/);
 });
