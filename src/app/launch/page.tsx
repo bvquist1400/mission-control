@@ -30,8 +30,8 @@ async function LaunchContent({ userId }: { userId: string }) {
 function LaunchSkeleton() {
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
-        {Array.from({ length: 5 }, (_, index) => (
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-6">
+        {Array.from({ length: 6 }, (_, index) => (
           <CardSkeleton key={index} padding="sm" className="h-28" />
         ))}
       </div>
@@ -53,7 +53,7 @@ export default async function LaunchPage() {
     <div className="space-y-6">
       <PageHeader
         title="Menu & Market launch numbers"
-        description="Counts only: no account is listed by name, email or id. Sign-ups use New York days, the website UTC days, Google search Pacific days."
+        description="Counts only: no account is listed by name, email or id. Sign-ups use New York days, the website UTC days, Google search Pacific days, the App Store Apple's report days."
         actions={<RefreshButton />}
       />
       <Suspense fallback={<LaunchSkeleton />}>

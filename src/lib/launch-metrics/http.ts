@@ -39,6 +39,11 @@ export interface SafeRequest {
   headers?: Record<string, string>;
   body?: string;
   allowedHosts: readonly string[];
+  /**
+   * Also allow any host ending in one of these (each must start with a dot,
+   * e.g. `.apple.com`). Only for downloads that carry no credentials.
+   */
+  allowedHostSuffixes?: readonly string[];
   timeoutMs?: number;
   maxBytes?: number;
 }
@@ -46,7 +51,16 @@ export interface SafeRequest {
 const DEFAULT_TIMEOUT_MS = 20_000;
 const DEFAULT_MAX_BYTES = 2_000_000;
 
-export function assertAllowedUrl(rawUrl: string, allowedHosts: readonly string[]): URL {
+function hostAllowed(hostname: string, allowedHosts: readonly string[], suffixes: readonly string[]): boolean {
+  if (allowedHosts.includes(hostname)) {
+    return true;
+  }
+  return suffixes.some(
+    (suffix) => suffix.startsWith('.') && suffix.length > 1 && hostname.endsWith(suffix) && hostname.length > suffix.length
+  );
+}
+
+export function assertAllowedUrl(rawUrl: string, allowedHosts: readonly string[], allowedHostSuffixes: readonly string[] = []): URL {
   let url: URL;
   try {
     url = new URL(rawUrl);
@@ -58,20 +72,20 @@ export function assertAllowedUrl(rawUrl: string, allowedHosts: readonly string[]
     || url.username !== ''
     || url.password !== ''
     || url.port !== ''
-    || !allowedHosts.includes(url.hostname)
+    || !hostAllowed(url.hostname, allowedHosts, allowedHostSuffixes)
   ) {
     throw new LaunchSourceError('host_not_allowed');
   }
   return url;
 }
 
-async function readLimitedText(response: Response, maxBytes: number): Promise<string> {
+async function readLimitedBytes(response: Response, maxBytes: number): Promise<Uint8Array> {
   const declared = Number(response.headers.get('content-length'));
   if (Number.isFinite(declared) && declared > maxBytes) {
     throw new LaunchSourceError('too_large');
   }
   if (!response.body) {
-    return '';
+    return new Uint8Array(0);
   }
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -94,15 +108,24 @@ async function readLimitedText(response: Response, maxBytes: number): Promise<st
     merged.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return new TextDecoder().decode(merged);
+  return merged;
+}
+
+function transportCode(error: unknown): string {
+  if (error instanceof LaunchSourceError) {
+    return error.code;
+  }
+  const name = (error as { name?: unknown } | null)?.name;
+  return name === 'TimeoutError' || name === 'AbortError' ? 'timeout' : 'network';
 }
 
 /**
- * Sends the request and returns the parsed JSON body of a 2xx reply.
- * Non-2xx → `http_<status>`; network failure → `network`; timeout → `timeout`.
+ * Sends the request and returns the raw body of a 2xx reply (at most
+ * `maxBytes`). Non-2xx → `http_<status>`; network failure → `network`;
+ * timeout → `timeout`; 3xx → `redirect_refused`.
  */
-export async function fetchJson(fetchImpl: FetchLike, request: SafeRequest): Promise<unknown> {
-  const url = assertAllowedUrl(request.url, request.allowedHosts);
+export async function fetchBytes(fetchImpl: FetchLike, request: SafeRequest): Promise<Uint8Array> {
+  const url = assertAllowedUrl(request.url, request.allowedHosts, request.allowedHostSuffixes ?? []);
   let response: Response;
   try {
     response = await fetchImpl(url.toString(), {
@@ -114,11 +137,7 @@ export async function fetchJson(fetchImpl: FetchLike, request: SafeRequest): Pro
       signal: AbortSignal.timeout(request.timeoutMs ?? DEFAULT_TIMEOUT_MS),
     });
   } catch (error) {
-    if (error instanceof LaunchSourceError) {
-      throw error;
-    }
-    const name = (error as { name?: unknown } | null)?.name;
-    throw new LaunchSourceError(name === 'TimeoutError' || name === 'AbortError' ? 'timeout' : 'network');
+    throw new LaunchSourceError(transportCode(error));
   }
 
   if (response.status >= 300 && response.status < 400) {
@@ -133,19 +152,21 @@ export async function fetchJson(fetchImpl: FetchLike, request: SafeRequest): Pro
     throw new LaunchSourceError(`http_${status}`);
   }
 
-  let text: string;
   try {
-    text = await readLimitedText(response, request.maxBytes ?? DEFAULT_MAX_BYTES);
+    return await readLimitedBytes(response, request.maxBytes ?? DEFAULT_MAX_BYTES);
   } catch (error) {
-    if (error instanceof LaunchSourceError) {
-      throw error;
-    }
-    const name = (error as { name?: unknown } | null)?.name;
-    throw new LaunchSourceError(name === 'TimeoutError' || name === 'AbortError' ? 'timeout' : 'network');
+    throw new LaunchSourceError(transportCode(error));
   }
+}
 
+/**
+ * Sends the request and returns the parsed JSON body of a 2xx reply.
+ * Non-2xx → `http_<status>`; network failure → `network`; timeout → `timeout`.
+ */
+export async function fetchJson(fetchImpl: FetchLike, request: SafeRequest): Promise<unknown> {
+  const bytes = await fetchBytes(fetchImpl, request);
   try {
-    return JSON.parse(text) as unknown;
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
   } catch {
     throw new LaunchSourceError('bad_json');
   }

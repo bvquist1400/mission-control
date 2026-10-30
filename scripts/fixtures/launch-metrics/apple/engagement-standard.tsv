@@ -1,0 +1,9 @@
+Date	App Name	App Apple Identifier	Event	Page Type	Source Type	Engagement Type	Device	Platform Version	Territory	Counts	Unique Counts
+2026-10-25	Menu & Market	6740000001	Impression	Search	App Store search		iPhone	iOS 26.0	US	12	10
+2026-10-25	Menu & Market	6740000001	Page view	Product page	App Store search		iPhone	iOS 26.0	US	3	3
+2026-10-26	Menu & Market	6740000001	Impression	Search	App Store search		iPhone	iOS 26.0	US	30	25
+2026-10-26	Menu & Market	6740000001	Impression	Product page	Web referrer		iPhone	iOS 26.0	CA	5	5
+2026-10-26	Menu & Market	6740000001	Page view	Product page	App Store search		iPhone	iOS 26.0	US	6	5
+2026-10-26	Menu & Market	6740000001	Page view	Product page	Web referrer		iPad	iPadOS 26.0	US	4	4
+2026-10-26	Menu & Market	6740000001	Tap	Product page	Web referrer	Tap	iPhone	iOS 26.0	US	2	2
+2026-10-26	Another App	6749999999	Impression	Search	App Store search		iPhone	iOS 26.0	US	900	800

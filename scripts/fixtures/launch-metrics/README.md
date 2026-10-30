@@ -17,3 +17,10 @@ Shapes, not recordings: no live call was made to build these (phase 1 rule).
   200 body was saved as is. Counts are synthetic (2 real Apple users, 1 unconfirmed,
   2 family, 1 deleted on 10-25, Plus trial 1 / comp 3). No account id of any kind.
 - `gsc-*.json`: Google's documented `token` and `searchAnalytics.query` replies.
+- `apple/*.tsv`: App Store report files built by hand from Apple's documented
+  report fields (developer.apple.com Analytics Reports, "App Store Discovery and
+  Engagement" and "App Downloads", Standard and Detailed). NOT a real Apple file:
+  no Apple call was made. Column names, value spellings ("Impression", "Page view",
+  "First-time download", "Redownload"), the YYYY-MM-DD date and the checksum
+  algorithm are unverified until the first live run. App ids are made up
+  (6740000001 = ours, 6749999999 = another app, whose rows must be dropped).
