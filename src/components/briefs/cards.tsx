@@ -25,6 +25,9 @@ import {
   type AcceptDueChoice,
   type AcceptDuePreset,
 } from "@/lib/briefs/due";
+import { isUnblockedRow, keepLabel, keepLeads, keptText } from "@/lib/briefs/unblocked";
+import { UNBLOCK_OPEN_STATUSES } from "@/lib/task-unblocks";
+import type { TaskStatus } from "@/types/database";
 import { etClock, etDay, etTime, notesDueParts, shortId, weekdayDate } from "@/components/briefs/format";
 
 export interface ActRequest {
@@ -82,13 +85,19 @@ export interface BriefCardContext {
 
 type CardProps = { item: BriefItemRow; ctx: BriefCardContext };
 
-export type BriefSection = "meetings" | "calls";
+export type BriefSection = "meetings" | "unblocked" | "calls";
 
 /** Section headings come from the kind, never from the edition. */
 export const BRIEF_SECTIONS: Record<BriefSection, { title: string; hint?: string }> = {
   meetings: { title: "From meetings", hint: "Nothing becomes a task until you accept it." },
+  unblocked: { title: "Recently unblocked", hint: "Ready to move now." },
   calls: { title: "Needs a call" },
 };
+
+/** Where an item is drawn: its kind's section, except that a Recently unblocked row has its own. */
+export function sectionOf(item: Pick<BriefItemRow, "kind" | "payload">): BriefSection {
+  return isUnblockedRow(item) ? "unblocked" : CARD_REGISTRY[item.kind].section;
+}
 
 /**
  * The proposals section's heading, from the items' sources (never the
@@ -539,9 +548,12 @@ function HandledTile({ item, ctx, label, text, ok, children }: CardProps & { lab
   );
 }
 
-/** Undo on a deferred tile (Tomorrow or a picked date): puts each task's earlier due date back and reopens the card. */
+/**
+ * Undo on a deferred tile (Tomorrow or a picked date): puts each task's earlier due
+ * date back and reopens the card. On a kept Recently unblocked row it reopens the card.
+ */
 function UndoLink({ item, ctx }: CardProps) {
-  if (item.state !== "deferred" || !item.can_undo) return null;
+  if ((item.state !== "deferred" && item.state !== "decided") || !item.can_undo) return null;
   return (
     <button type="button" className="linkbtn lift" disabled={ctx.pending} onClick={() => ctx.act({ n: item.n, action: "undo" })}>
       Undo
@@ -554,6 +566,101 @@ function usePickState() {
   const [open, setOpen] = useState(false);
   const [date, setDate] = useState("");
   return { open, toggle: () => setOpen((current) => !current), date, setDate };
+}
+
+/**
+ * A "Recently unblocked" row: Today, Pick a date… and Keep (Brent 10/30). Keep and
+ * a move to the date it already has clear the pill on the server; the row's task
+ * link stays. A task closed since the row was added has nothing left to decide.
+ */
+function UnblockedCard({ item, ctx }: CardProps) {
+  const pick = usePickState();
+  const taskId = item.task_ids[0];
+  const task = taskId ? ctx.tasks[taskId] : undefined;
+  const label = item.payload.label ?? BRIEF_SECTIONS.unblocked.title;
+  const closed = task && !UNBLOCK_OPEN_STATUSES.includes(task.status as TaskStatus);
+
+  if (item.state !== "open" || closed) {
+    const text =
+      item.state === "decided"
+        ? keptText(task?.due_at)
+        : item.state === "deferred"
+          ? `Due ${dueLabel(task?.due_at)}`
+          : item.state === "open"
+            ? (task?.status ?? "Handled")
+            : item.state === "done"
+              ? "Done"
+              : item.state === "parked"
+                ? "Parked"
+                : "Expired";
+    return (
+      <HandledTile item={item} ctx={ctx} label={label} text={text} ok={item.state !== "expired"}>
+        {taskId ? <TaskLink id={taskId} /> : <span />}
+        <UndoLink item={item} ctx={ctx} />
+      </HandledTile>
+    );
+  }
+
+  const keepFirst = keepLeads(task?.due_at);
+  const today = (
+    <button
+      type="button"
+      className={`btn ${keepFirst ? "" : "solid grow"}`}
+      disabled={ctx.pending}
+      onClick={() => ctx.act({ n: item.n, action: "move", date: earliestPickedDate() })}
+    >
+      Today
+    </button>
+  );
+  const keep = (
+    <button
+      type="button"
+      className={`btn ${keepFirst ? "solid grow" : ""}`}
+      disabled={ctx.pending}
+      suppressHydrationWarning
+      onClick={() => ctx.act({ n: item.n, action: "keep" })}
+    >
+      {keepLabel(task?.due_at)}
+    </button>
+  );
+  const pickButton = (
+    <button type="button" className="btn" aria-pressed={pick.open} disabled={ctx.pending} onClick={pick.toggle}>
+      Pick a date&hellip;
+    </button>
+  );
+
+  return (
+    <article className={cardClass("tile call span-2", ctx)} tabIndex={0} data-n={item.n} id={`item-${item.n}`} onFocus={ctx.focus}>
+      <div className="tile-k">
+        #{item.n} · <span className="ub-pill">{label}</span>
+        {taskId ? <> · <TaskLink id={taskId} /></> : null}
+      </div>
+      <h3>{item.payload.title}</h3>
+      {item.payload.why ? <p className="why">{item.payload.why}</p> : null}
+      <div className="call-actions">
+        {keepFirst ? keep : today}
+        {keepFirst ? today : pickButton}
+        {keepFirst ? pickButton : keep}
+      </div>
+      {pick.open ? (
+        <PickRow
+          label="Move to which day?"
+          value={pick.date}
+          onChange={pick.setDate}
+          onEnter={() => pickedDateProblem(pick.date) === null && ctx.act({ n: item.n, action: "move", date: pick.date })}
+        >
+          <button
+            type="button"
+            className="btn sm solid"
+            disabled={ctx.pending || pickedDateProblem(pick.date) !== null}
+            onClick={() => ctx.act({ n: item.n, action: "move", date: pick.date })}
+          >
+            Move
+          </button>
+        </PickRow>
+      ) : null}
+    </article>
+  );
 }
 
 function CarryOverCard({ item, ctx }: CardProps) {
@@ -733,7 +840,11 @@ export const CARD_REGISTRY: Record<
   { section: BriefSection; Card: (props: CardProps) => ReactNode; keyboard: "decide" | "call" }
 > = {
   proposed_task: { section: "meetings", Card: ProposedTaskCard, keyboard: "decide" },
-  carry_over: { section: "calls", Card: CarryOverCard, keyboard: "call" },
+  carry_over: {
+    section: "calls",
+    Card: ({ item, ctx }) => (isUnblockedRow(item) ? <UnblockedCard item={item} ctx={ctx} /> : <CarryOverCard item={item} ctx={ctx} />),
+    keyboard: "call",
+  },
   carry_group: { section: "calls", Card: CarryGroupCard, keyboard: "call" },
   choice: { section: "calls", Card: ChoiceCard, keyboard: "call" },
 };

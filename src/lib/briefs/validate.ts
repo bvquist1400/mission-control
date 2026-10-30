@@ -223,6 +223,9 @@ export function normalizeBriefContent(value: unknown): BriefContent {
     const noteIds = [...new Set(value.work_digest_note_ids.filter(isUuid).map((id) => id.toLowerCase()))].slice(0, MAX_DIGEST_NOTES);
     if (noteIds.length) content.work_digest_note_ids = noteIds;
   }
+  if (Number.isSafeInteger(value.unblock_stuck) && (value.unblock_stuck as number) > 0) {
+    content.unblock_stuck = value.unblock_stuck as number;
+  }
   return content;
 }
 

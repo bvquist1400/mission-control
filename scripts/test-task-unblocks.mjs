@@ -380,23 +380,30 @@ function fakeClient(tables) {
     calls,
     from(table) {
       const filters = [];
+      let orderBy = null;
+      let pageLimit = Infinity;
       const query = {
         select() { return query; },
         eq(column, value) { filters.push(["eq", column, value]); return query; },
         in(column, values) { filters.push(["in", column, values]); return query; },
         is(column, value) { filters.push(["is", column, value]); return query; },
         gte(column, value) { filters.push(["gte", column, value]); return query; },
-        order() { return query; },
-        limit() { return query; },
+        gt(column, value) { filters.push(["gt", column, value]); return query; },
+        order(column) { orderBy = column; return query; },
+        limit(count) { pageLimit = count; return query; },
         then(resolve) {
           calls.push({ table, filters });
-          let rows = tables[table] ?? [];
+          let rows = [...(tables[table] ?? [])];
           for (const [op, column, value] of filters) {
             if (op === "eq") rows = rows.filter((row) => row[column] === value);
             if (op === "in") rows = rows.filter((row) => value.includes(row[column]));
             if (op === "is") rows = rows.filter((row) => row[column] === value);
             if (op === "gte") rows = rows.filter((row) => row[column] >= value);
+            if (op === "gt") rows = rows.filter((row) => row[column] > value);
           }
+          if (orderBy) rows.sort((a, b) => (a[orderBy] < b[orderBy] ? -1 : a[orderBy] > b[orderBy] ? 1 : 0));
+          // PostgREST's max_rows: one response never holds more than 1,000 rows.
+          rows = rows.slice(0, Math.min(pageLimit, 1000));
           return Promise.resolve({ data: rows, error: null }).then(resolve);
         },
       };
@@ -404,6 +411,31 @@ function fakeClient(tables) {
     },
   };
 }
+
+await test("detector feed: pages past the 1,000-row cap and comes back newest first", async () => {
+  const user = "u1";
+  const rows = Array.from({ length: 2345 }, (_, index) => ({
+    id: `ub-${String(index).padStart(5, "0")}`,
+    user_id: user,
+    task_id: `w${index % 7}`,
+    blocker_type: "task",
+    blocker_task_id: "b1",
+    blocker_commitment_id: null,
+    // The newest row has the highest id, so a capped read would lose it.
+    unblocked_at: new Date(Date.parse("2026-10-30T00:00:00.000Z") + index * 1000).toISOString(),
+    created_at: "2026-10-30T00:00:00.000Z",
+    reverted_at: null,
+  }));
+  const client = fakeClient({ task_unblocks: rows, tasks: [{ id: "b1", user_id: user, title: "Get sign-off", status: "Done" }], commitments: [] });
+  const taskIds = Array.from({ length: 7 }, (_, index) => `w${index}`);
+  const map = await fetchRecentUnblockDependencySummaries(client, user, taskIds, "2026-10-27T15:00:00.000Z");
+  const total = [...map.values()].reduce((sum, list) => sum + list.length, 0);
+  assert.equal(total, 2345);
+  assert.equal(map.get(`w${2344 % 7}`)[0].id, "ub-02344", "the newest row survives and leads");
+  const pages = client.calls.filter((call) => call.table === "task_unblocks");
+  assert.equal(pages.length, 3 + 1, "three pages and the empty one that proves the end");
+  assert.ok(pages.slice(1).every((call) => call.filters.some(([op, column]) => op === "gt" && column === "id")), "keyset paging on the row id");
+});
 
 await test("detector feed: recent, not reverted unblocks become resolved-dependency summaries", async () => {
   const user = "u1";
@@ -423,7 +455,7 @@ await test("detector feed: recent, not reverted unblocks become resolved-depende
   assert.deepEqual(map.get("w1").map((row) => row.id), ["ub1"]);
   assert.deepEqual(
     { ...map.get("w2")[0] },
-    { id: "ub2", task_id: "w2", depends_on_task_id: null, depends_on_commitment_id: "c1", type: "commitment", title: "Send the contract", status: "Done", resolved_at: "2026-10-30T14:00:00.000Z", created_at: "2026-10-30T14:00:00.000Z" }
+    { id: "ub2", task_id: "w2", depends_on_task_id: null, depends_on_commitment_id: "c1", type: "commitment", title: "Send the contract", status: "Done", resolved_at: "2026-10-30T14:00:00.000Z", created_at: "2026-10-30T14:00:00.000Z", from_unblock: true }
   );
   assert.equal(map.get("w1")[0].title, "Get sign-off");
   for (const call of client.calls) {

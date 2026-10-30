@@ -237,6 +237,13 @@ wait.
   (an open `choice` item on it). Re-ask it with the same options and your pick
   `recommended: true`, and link the agenda line with `choice_item` (the
   choice's 0-based position in `items`).
+- **Recently unblocked is Baseline's, not yours.** On every save the server
+  adds a row for each work task still showing the green "Now unblocked" pill,
+  above "Needs a call", until Brent acts on it. Never add a `carry_over` for
+  such a task (one you send becomes its row) and never use the group name
+  "Recently unblocked". Those rows don't count toward your three calls. The
+  save reply's `unblocked.added` says how many it added; `unblocked.read_failed`
+  true means the section couldn't be read this time (the brief still saved).
 - No other `proposed_task` items: only the late meetings from step 5 and the
   work digest (above) produce proposals. Everything else from meeting notes
   is the EOD's job.
@@ -397,3 +404,7 @@ update or act on any task or brief item yourself. Brent decides on the page.
   "tomorrow" item puts the earlier due date back and reopens the card (refused
   with the reason if a task's date changed since). A different day for an item
   already moved needs an undo first. Use the brief's year for "11/4".
+- **"keep 3"** on a Recently unblocked row: `{ n: 3, action: "keep" }`: the task
+  stays exactly as it is and its pill clears. "Today" on such a row is
+  `{ n: 3, action: "move", date: <today> }`. "undo 3" after a keep reopens the
+  row; the pill does not come back.

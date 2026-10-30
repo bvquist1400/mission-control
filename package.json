@@ -65,6 +65,8 @@
     "test:pace-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-pace-db.mjs",
     "backfill:pace:dry-run": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/pace-backfill.mjs",
     "test:briefs-am-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-briefs-am-db.mjs",
+    "test:briefs-unblocked": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-briefs-unblocked.mjs",
+    "test:briefs-unblocked-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-briefs-unblocked-db.mjs",
     "test:briefs-pick-date": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-briefs-pick-date.mjs",
     "test:briefs-pick-date-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-briefs-pick-date-db.mjs",
     "test:briefs-accept": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-briefs-accept.mjs",

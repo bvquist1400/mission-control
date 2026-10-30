@@ -26,7 +26,7 @@ export type BriefItemState = (typeof BRIEF_ITEM_STATES)[number];
 export const DISMISS_REASONS = ["already_tracked", "not_mine", "not_worth_it"] as const;
 export type DismissReason = (typeof DISMISS_REASONS)[number];
 
-export const BRIEF_ACTIONS = ["accept", "dismiss", "done", "tomorrow", "move", "park", "pick", "undo"] as const;
+export const BRIEF_ACTIONS = ["accept", "dismiss", "done", "tomorrow", "move", "keep", "park", "pick", "undo"] as const;
 export type BriefAction = (typeof BRIEF_ACTIONS)[number];
 
 /** Accepting a proposed_task creates a task with this external source system; the id is the item_key. */
@@ -179,6 +179,13 @@ export interface BriefContent {
    * same-day rerun only appends digest proposals from notes not recorded here.
    */
   work_digest_note_ids?: string[];
+  /**
+   * Server side only (a save overwrites whatever the caller sends): how many
+   * "Now unblocked" retries had given up when the brief was saved (067:
+   * task_unblock_retries still open after 8 attempts). Absent when 0; the page
+   * shows a plain line only then.
+   */
+  unblock_stuck?: number;
 }
 
 export interface BriefItemInput {
@@ -251,7 +258,7 @@ export interface BriefItemRow {
   created_task_id: string | null;
   /** Server side only: the saved snapshot (064). The brief view replaces it with can_undo. */
   prior_due?: BriefPriorDue[] | null;
-  /** A deferred carry item whose move can be undone (it has a saved snapshot). */
+  /** A deferred carry item whose move can be undone (it has a saved snapshot), or a kept Recently unblocked row. */
   can_undo?: boolean;
   acted_at: string | null;
   created_at: string;

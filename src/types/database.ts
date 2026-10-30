@@ -248,6 +248,8 @@ export interface RecentlyResolvedTaskDependencySummary {
   status: TaskDependencyStatus;
   resolved_at: string;
   created_at: string;
+  /** From a task_unblocks row (067): the last open item finished. Absent for a link removed by hand. */
+  from_unblock?: boolean;
 }
 
 /** Why a "Now unblocked" pill went away (067's task_unblocks.cleared_reason). */

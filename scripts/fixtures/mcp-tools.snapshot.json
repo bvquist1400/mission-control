@@ -47,6 +47,7 @@
                   "done",
                   "tomorrow",
                   "move",
+                  "keep",
                   "park",
                   "pick",
                   "undo"
@@ -2235,7 +2236,7 @@
                 "type": "string"
               },
               "group": {
-                "description": "Optional grouping label for proposals, e.g. a workstream",
+                "description": "Optional grouping label for proposals, e.g. a workstream. \"Recently unblocked\" is reserved for the rows Baseline adds.",
                 "type": "string"
               },
               "label": {
@@ -2441,7 +2442,7 @@
                 "type": "string"
               },
               "group": {
-                "description": "Optional grouping label for proposals, e.g. a workstream",
+                "description": "Optional grouping label for proposals, e.g. a workstream. \"Recently unblocked\" is reserved for the rows Baseline adds.",
                 "type": "string"
               },
               "label": {

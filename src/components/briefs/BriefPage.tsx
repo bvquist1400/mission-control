@@ -9,6 +9,7 @@ import {
   proposalSectionTitle,
   CARD_REGISTRY,
   TaskLink,
+  sectionOf,
   defaultAcceptDue,
   effectiveAcceptDue,
   type ActRequest,
@@ -21,6 +22,7 @@ import { dateHeading } from "@/components/briefs/format";
 import { patchForRefusedAction } from "@/lib/briefs/act-patch";
 import { countBriefItems } from "@/lib/briefs/counts";
 import { assistantReviewLine } from "@/lib/briefs/copy";
+import { stuckUnblocksText } from "@/lib/briefs/unblocked";
 import { buildDayTimeline } from "@/components/briefs/timeline";
 import type { BriefCounts, BriefItemRow, BriefMeetingRef, BriefTaskSummary, BriefTile, BriefView } from "@/lib/briefs/types";
 
@@ -133,11 +135,12 @@ export function BriefPage({ view }: { view: BriefView }) {
       CARD_REGISTRY[item.kind].section === "meetings" &&
       (!filter || item.source.meetings.some((meeting) => meeting.id === filter))
   );
-  const callItems = filter ? [] : items.filter((item) => CARD_REGISTRY[item.kind].section === "calls");
+  const unblockedItems = filter ? [] : items.filter((item) => sectionOf(item) === "unblocked");
+  const callItems = filter ? [] : items.filter((item) => sectionOf(item) === "calls");
   const groups = [...new Set(meetingItems.map((item) => item.payload.group ?? ""))];
 
   // J/K walk the open, visible items in page order.
-  const navigable = [...meetingItems, ...callItems].filter((item) => item.state === "open").map((item) => item.n);
+  const navigable = [...meetingItems, ...unblockedItems, ...callItems].filter((item) => item.state === "open").map((item) => item.n);
 
   const act = useCallback(
     async (request: ActRequest) => {
@@ -175,6 +178,7 @@ export function BriefPage({ view }: { view: BriefView }) {
           setCreatedTasks((current) => ({ ...current, [created.id]: created }));
         }
         if (request.action === "pick") patch.choice = result.choice ?? request.choice ?? null;
+        if (request.action === "keep") Object.assign(patch, { choice: result.choice ?? "keep", can_undo: true });
         if (request.action === "dismiss") {
           patch.dismissed_reason = request.reason ?? null;
           patch.dismissed_note = request.note ?? null;
@@ -304,6 +308,7 @@ export function BriefPage({ view }: { view: BriefView }) {
 
   const heading = content.heading ?? dateHeading(brief.brief_date);
   const openMeetings = meetingItems.filter((item) => item.state === "open").length;
+  const openUnblocked = unblockedItems.filter((item) => item.state === "open").length;
   const openCalls = callItems.filter((item) => item.state === "open").length;
 
   let sheet: { eyebrow: string; title: string; body: React.ReactNode } | null = null;
@@ -405,6 +410,12 @@ export function BriefPage({ view }: { view: BriefView }) {
         ) : null}
       </div>
 
+      {content.unblock_stuck ? (
+        <p className="ub-stuck" role="status">
+          {stuckUnblocksText(content.unblock_stuck)}
+        </p>
+      ) : null}
+
       {meetingItems.length || filter ? (
         <section className="sec" aria-labelledby="sec-meetings">
           <div className="sec-h">
@@ -446,6 +457,17 @@ export function BriefPage({ view }: { view: BriefView }) {
               <kbd>S</kbd> note lines
             </span>
           </div>
+        </section>
+      ) : null}
+
+      {unblockedItems.length ? (
+        <section className="sec" aria-labelledby="sec-unblocked">
+          <div className="sec-h">
+            <h2 id="sec-unblocked">{BRIEF_SECTIONS.unblocked.title}</h2>
+            <span className="count">{openUnblocked}</span>
+            <span className="hint">{BRIEF_SECTIONS.unblocked.hint}</span>
+          </div>
+          <div className="bento calls">{unblockedItems.map(renderItem)}</div>
         </section>
       ) : null}
 

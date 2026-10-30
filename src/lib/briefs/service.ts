@@ -29,6 +29,14 @@ import { normalizeBriefContent, normalizeStoredWorkDigestRef } from "@/lib/brief
 import { checkWorkDigestBody, parseWorkDigestTitle, workDigestEditionsForMode } from "@/lib/briefing/work-digest";
 import { countBriefItems } from "@/lib/briefs/counts";
 import {
+  isUnblockedRow,
+  KEEP_CHOICE,
+  squareItemsWithPills,
+  unblockedItem,
+  type UnblockPill,
+} from "@/lib/briefs/unblocked";
+import { countStuckUnblockRetries, readOpenUnblockPills } from "@/lib/briefs/unblocked-queries";
+import {
   type BriefAction,
   type BriefActionInput,
   type BriefAgendaLine,
@@ -86,8 +94,10 @@ const ACTION_RULES: Record<BriefItemKind, Partial<Record<BriefAction, { from: Br
     done: { from: ["open"], to: "done" },
     tomorrow: { from: ["open"], to: "deferred" },
     move: { from: ["open"], to: "deferred" },
+    // Recently unblocked rows only: the task stays as it is and the pill clears.
+    keep: { from: ["open"], to: "decided" },
     park: { from: ["open"], to: "parked" },
-    undo: { from: ["deferred"], to: "open" },
+    undo: { from: ["deferred", "decided"], to: "open" },
   },
   carry_group: {
     tomorrow: { from: ["open"], to: "deferred" },
@@ -106,7 +116,7 @@ export function allowedActionsForKind(kind: BriefItemKind): BriefAction[] {
 }
 
 /** Repeating accept/done/tomorrow/park on an item already in that state is a no-op success. */
-const IDEMPOTENT_ACTIONS: ReadonlySet<BriefAction> = new Set(["accept", "done", "tomorrow", "park"]);
+const IDEMPOTENT_ACTIONS: ReadonlySet<BriefAction> = new Set(["accept", "done", "tomorrow", "keep", "park"]);
 
 /** The ET day the saved snapshot says a deferred item's tasks were moved to, or null (moved before 064). */
 function deferredToDate(item: BriefItemRow): string | null {
@@ -159,11 +169,13 @@ function asItemRow(row: Record<string, unknown>): BriefItemRow {
 
 /**
  * What the page and the API show of an item: the saved snapshot stays on the
- * server; callers only learn whether Undo is possible.
+ * server; callers only learn whether Undo is possible (a deferral with a saved
+ * snapshot, or a kept Recently unblocked row).
  */
 function toViewItem(item: BriefItemRow): BriefItemRow {
   const { prior_due: priorDue, ...rest } = item;
-  return { ...rest, can_undo: item.state === "deferred" && Array.isArray(priorDue) && priorDue.length > 0 };
+  const deferred = item.state === "deferred" && Array.isArray(priorDue) && priorDue.length > 0;
+  return { ...rest, can_undo: deferred || (item.state === "decided" && isUnblockedRow(item)) };
 }
 
 /** Throws 400 listing every id that isn't one of the user's tasks. */
@@ -236,6 +248,12 @@ export interface SaveBriefResult {
   appended: Array<{ n: number; kind: BriefItemKind; item_key: string; title: string }>;
   skipped: SaveBriefSkip[];
   counts: BriefCounts;
+  /**
+   * The "Recently unblocked" rows Baseline added itself, and how many retries are
+   * stuck. `read_failed` means the section couldn't be read this time: the brief
+   * still saved, and the next save picks those rows up.
+   */
+  unblocked: { added: number; stuck: number | null; read_failed: boolean };
   /**
    * The ready-notice (Telegram). Only the first save of a brief tries to send;
    * later saves report "already_claimed" (another save owns the single attempt;
@@ -450,18 +468,52 @@ async function resolveWorkDigestCitations(
   return resolved;
 }
 
+/**
+ * What "Recently unblocked" needs on a save. A failed read never fails the save
+ * (the brief matters more than one section, and 067 may be rolled back with the
+ * app still live); it logs a code and the reply says so. `stuck` null = unknown.
+ */
+async function readUnblockedForSave(supabase: AnySupabase, userId: string): Promise<{ pills: UnblockPill[]; stuck: number | null; readFailed: boolean }> {
+  const [pills, stuck] = await Promise.allSettled([readOpenUnblockPills(supabase, userId), countStuckUnblockRetries(supabase, userId)]);
+  for (const result of [pills, stuck]) {
+    if (result.status === "rejected") {
+      console.warn("[briefs] Recently unblocked read failed", { code: (result.reason as { code?: unknown } | null)?.code ?? "unknown" });
+    }
+  }
+  return {
+    pills: pills.status === "fulfilled" ? pills.value : [],
+    stuck: stuck.status === "fulfilled" ? stuck.value : null,
+    readFailed: pills.status === "rejected" || stuck.status === "rejected",
+  };
+}
+
+/** `content` with the server's stuck count: only a number above zero is ever stored, whatever the caller sent. */
+function withStuckCount(content: BriefContent, stuck: number | null): BriefContent {
+  const { unblock_stuck: _sent, ...rest } = content;
+  void _sent;
+  return stuck ? { ...rest, unblock_stuck: stuck } : rest;
+}
+
 export async function saveBrief(
   supabase: AnySupabase,
   userId: string,
   input: SaveBriefInput,
-  options: { appUrl: string; notifier?: BriefNotifier }
+  options: { appUrl: string; notifier?: BriefNotifier; now?: Date }
 ): Promise<SaveBriefResult> {
+  const now = options.now ?? new Date();
   const referencedTaskIds = input.items.flatMap((item) => [
     ...item.task_ids,
     ...(item.payload.maybe_tracked ? [item.payload.maybe_tracked.task_id] : []),
   ]);
   await assertTasksOwned(supabase, userId, referencedTaskIds);
   input = { ...input, items: await resolveWorkDigestCitations(supabase, userId, input) };
+
+  const unblocked = await readUnblockedForSave(supabase, userId);
+  input = {
+    ...input,
+    content: withStuckCount(input.content, unblocked.stuck),
+    items: squareItemsWithPills(input.items, unblocked.pills, now),
+  };
 
   let brief = await loadBriefByDate(supabase, userId, input.edition, input.brief_date);
   let created = false;
@@ -505,12 +557,23 @@ export async function saveBrief(
     candidates.push({ index, key, item });
   });
 
-  if (candidates.length) {
+  // The server's own rows, on every save (the routine can't forget them, and a
+  // pill that appeared after the first save still gets its row). One row per task
+  // per brief: the key is the carry_over key, so a task the routine already listed,
+  // or a task this brief already has, is not added twice.
+  const serverRows = unblocked.pills
+    .map((pill, offset) => {
+      const item = unblockedItem(pill, now);
+      return { index: input.items.length + offset, key: computeBriefItemKey(input.edition, input.brief_date, item), item };
+    })
+    .filter((row) => !keysInRequest.has(row.key));
+
+  if (candidates.length || serverRows.length) {
     const { data: existingKeys, error: keyError } = await supabase
       .from("brief_items")
       .select("item_key")
       .eq("user_id", userId)
-      .in("item_key", candidates.map((candidate) => candidate.key));
+      .in("item_key", [...candidates, ...serverRows].map((candidate) => candidate.key));
     if (keyError) throw keyError;
     const taken = new Set((existingKeys ?? []).map((row) => (row as { item_key: string }).item_key));
     for (let i = candidates.length - 1; i >= 0; i--) {
@@ -519,8 +582,10 @@ export async function saveBrief(
         candidates.splice(i, 1);
       }
     }
+    candidates.push(...serverRows.filter((row) => !taken.has(row.key)));
   }
   skipped.sort((a, b) => a.index - b.index);
+  const added = candidates.filter((candidate) => candidate.index >= input.items.length).length;
 
   const appended: SaveBriefResult["appended"] = [];
   const nByIndex = new Map<number, number>();
@@ -589,6 +654,11 @@ export async function saveBrief(
     const base = (briefUpdates.content as BriefContent | undefined) ?? brief.content;
     briefUpdates.content = { ...base, work_digest_note_ids: nextNotes.slice(0, 4) };
   }
+  // A rerun refreshes the stuck count; an unknown count (a failed read) leaves it as it was.
+  if (!created && unblocked.stuck !== null && (brief.content.unblock_stuck ?? 0) !== unblocked.stuck) {
+    const base = (briefUpdates.content as BriefContent | undefined) ?? brief.content;
+    briefUpdates.content = withStuckCount(base, unblocked.stuck);
+  }
   if (Object.keys(briefUpdates).length) {
     const { error: updateError } = await supabase.from("briefs").update(briefUpdates).eq("id", brief.id).eq("user_id", userId);
     if (updateError) throw updateError;
@@ -615,6 +685,7 @@ export async function saveBrief(
     appended,
     skipped,
     counts,
+    unblocked: { added, stuck: unblocked.stuck, read_failed: unblocked.readFailed },
     notify,
   };
 }
@@ -976,7 +1047,34 @@ async function buildCarryUpdates(
     change.priority_score = recalculateTaskPriority({ ...task, ...change } as Task, highPriorityNames);
     return { id: taskId, ...change, from_status: task.status as TaskStatus };
   });
-  return { dueAt, updates };
+  // A write of the same instant changes nothing, so 067's "any due change" won't clear a pill.
+  const dueUnchanged =
+    dueAt !== undefined &&
+    item.task_ids.every((taskId) => {
+      const current = tasks.get(taskId)!.due_at;
+      return current !== null && Date.parse(current) === Date.parse(dueAt);
+    });
+  return { dueAt, updates, dueUnchanged };
+}
+
+/** SQLSTATEs of a lock wait that ran out: the task is held by another write. */
+const TASK_BUSY_SQLSTATES: ReadonlySet<string> = new Set(["55P03", "57014"]);
+
+/**
+ * Clears the task's pill for an action that writes nothing to the task (Keep, or a
+ * Move or Tomorrow to the date it already has), through 067's clear_task_unblock.
+ * It runs BEFORE the item changes state: a failure leaves the row open to try
+ * again. If the item then turns out to have been acted on elsewhere, every way out
+ * of "open" clears the pill anyway. Clearing a pill that's already gone is a no-op.
+ */
+async function clearUnblockPill(supabase: AnySupabase, userId: string, item: BriefItemRow): Promise<void> {
+  const { error } = await supabase.rpc("clear_task_unblock", { p_user_id: userId, p_task_id: item.task_ids[0], p_reason: "brief" });
+  if (error) {
+    if (TASK_BUSY_SQLSTATES.has(String(error.code))) {
+      throw new BriefServiceError(503, `#${item.n}: the task is busy right now; nothing changed. Try again.`);
+    }
+    throw error;
+  }
 }
 
 /**
@@ -1054,6 +1152,9 @@ export async function actOnBriefItems(
     if (action.action === "move") {
       const problem = pickedDateProblem(action.date, now);
       if (problem) problems.push(`#${action.n}: ${problem}`);
+    }
+    if (action.action === "keep" && !isUnblockedRow(item)) {
+      problems.push(`#${action.n} isn't a Recently unblocked row; "keep" doesn't apply (use ${allowedActionsForKind(item.kind).filter((name) => name !== "keep").join(", ")})`);
     }
     if (action.action === "undo" && item.state === "deferred" && !item.prior_due?.length) {
       problems.push(`#${action.n} can't be undone: it was moved before earlier due dates were saved. Change the task dates in Baseline`);
@@ -1140,10 +1241,23 @@ export async function actOnBriefItems(
           }
           break;
         }
+        case "keep": {
+          await clearUnblockPill(supabase, userId, item);
+          const outcome = await transitionItem(supabase, userId, item, item.state, next, { acted_at: actedAt, choice: KEEP_CHOICE });
+          if (!outcome.ok) {
+            results.push(conflictResult(item, action.action, outcome));
+            continue;
+          }
+          result.choice = KEEP_CHOICE;
+          result.task_ids = item.task_ids;
+          break;
+        }
         case "dismiss":
         case "pick":
         case "undo": {
-          if (action.action === "undo" && (item.kind === "carry_over" || item.kind === "carry_group")) {
+          // Undo of a deferral puts the dates back. Undo of a Keep only reopens the row: the
+          // task never changed, and a cleared pill can't come back (067 has no way to set one).
+          if (action.action === "undo" && item.state === "deferred") {
             // One transaction: each task's due date goes back from the saved snapshot and the card reopens.
             const updates = await buildUndoUpdates(supabase, userId, item);
             const outcome = await transitionItem(supabase, userId, item, item.state, next, { acted_at: null }, null, updates);
@@ -1174,7 +1288,8 @@ export async function actOnBriefItems(
         case "park": {
           // One transaction: the item's new state and every task write commit together or not at all.
           // So "already" below can only ever mean the tasks really were updated.
-          const { dueAt, updates } = await buildCarryUpdates(supabase, userId, brief, item, { action: action.action, date: action.date }, now);
+          const { dueAt, updates, dueUnchanged } = await buildCarryUpdates(supabase, userId, brief, item, { action: action.action, date: action.date }, now);
+          if (dueUnchanged && isUnblockedRow(item)) await clearUnblockPill(supabase, userId, item);
           const outcome = await transitionItem(
             supabase,
             userId,

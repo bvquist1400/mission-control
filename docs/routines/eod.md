@@ -218,6 +218,14 @@ action item to make room.
   and say why in `why`. Link the clash's agenda line to it with `choice_item`
   (the choice's 0-based position in `items`).
 
+- **Recently unblocked is Baseline's, not yours.** On every save the server
+  adds a row for each work task still showing the green "Now unblocked" pill,
+  above "Needs a call", until Brent acts on it. Never add a `carry_over` for
+  such a task (one you send becomes its row) and never use the group name
+  "Recently unblocked". Those rows don't count toward your three calls. The
+  save reply's `unblocked.added` says how many it added; `unblocked.read_failed`
+  true means the section couldn't be read this time (the brief still saved).
+
 Only use task ids you got from Baseline in this run.
 
 **Counts and meeting links.** Never say a task is duplicating, multiplying or
@@ -361,6 +369,10 @@ task yourself. Brent decides on the page.
   is refused, with the reason, if a task's date was changed since or the item
   was moved before Undo existed. To pick a different day for an item already
   moved, undo it first.
+- **"keep 3"** on a Recently unblocked row: `{ n: 3, action: "keep" }`: the task
+  stays exactly as it is and its pill clears. "Today" on such a row is
+  `{ n: 3, action: "move", date: <today> }`. "undo 3" after a keep reopens the
+  row; the pill does not come back.
 
 ## Due dates on proposals
 
