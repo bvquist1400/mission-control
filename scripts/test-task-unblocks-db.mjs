@@ -28,17 +28,28 @@
 // Part 4: reopen: within 7 days everything back (compare-and-set), after a
 //         re-date the date stays, after 7 days only the pill; pill-only rows;
 //         a closed task (Done, Parked, Missed) gets no write and no comment.
-// Part 5: RLS (no direct writes, no cross-user reads), failure isolation (a
-//         held row lock past lock_timeout: the Done still saves), two blockers
-//         finished at once in two sessions (exactly one unblock), and a bulk
-//         Done of both blockers in one statement (one unblock).
+// Part 5: RLS (no direct writes, no cross-user reads), two blockers finished at
+//         once in two sessions (exactly one unblock), and a bulk Done of both
+//         blockers in one statement (one unblock).
+// Part 6 (fix round 2): the priority recalculated from the base and real boosts,
+//         checked against src/lib/priority.ts itself.
+// Part 7 (fix round 2): a link and a reopen at the same moment, both orders, task
+//         and commitment targets, the 061 loop guard and the 062 lock protocol in
+//         the same schedule, a busy target.
+// Part 8 (fix round 2): failures and the retry: a lock timeout on one of two
+//         waiters (both id orders), both locked, statement_timeout, a caught
+//         deadlock, a reopen failure, retry success, retry skipped because the
+//         task or the blocker changed, the cap, RLS on the records, the real cron
+//         route, and the unblocked_at <-> open row invariant over everything.
 // Each test reports and the run continues; throwaway users are deleted at the end.
 
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { NextRequest } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { recalculateTaskPriority } from "../src/lib/priority.ts";
 
 const url = process.env.UNBLOCK_TEST_SUPABASE_URL;
 const serviceKey = process.env.UNBLOCK_TEST_SERVICE_ROLE_KEY;
@@ -85,8 +96,8 @@ const asUserFails = (userId, sql) =>
 
 /** One long-lived session (its own psql process) for the two-session tests; see test-break-into-tasks-db.mjs. */
 class Session {
-  constructor() {
-    this.proc = spawn("docker", ["exec", "-i", dbContainer, "psql", "-U", "postgres", "-d", "postgres", "-q", "-t", "-A", "-v", "ON_ERROR_STOP=0"]);
+  constructor(role = "postgres") {
+    this.proc = spawn("docker", ["exec", "-i", dbContainer, "psql", "-U", role, "-d", "postgres", "-q", "-t", "-A", "-v", "ON_ERROR_STOP=0"]);
     this.out = "";
     this.err = "";
     this.n = 0;
@@ -218,7 +229,9 @@ try {
     assert.equal(psql(`SELECT is_nullable || '|' || COALESCE(column_default, '<none>') FROM information_schema.columns WHERE table_name = 'tasks' AND column_name = 'unblocked_at';`), "YES|<none>");
     assert.equal(psql(`SELECT relrowsecurity FROM pg_class WHERE oid = 'public.task_unblocks'::regclass;`), "t");
     assert.equal(psql(`SELECT string_agg(cmd, ',' ORDER BY cmd) FROM pg_policies WHERE tablename = 'task_unblocks';`), "INSERT,SELECT,UPDATE");
-    // (No DELETE grant in 067; up.sh grants ALL like production's default privileges, so RLS (no DELETE policy) is what denies it: see Part 5.)
+    assert.equal(psql(`SELECT relrowsecurity FROM pg_class WHERE oid = 'public.task_unblock_retries'::regclass;`), "t");
+    assert.equal(psql(`SELECT string_agg(cmd, ',' ORDER BY cmd) FROM pg_policies WHERE tablename = 'task_unblock_retries';`), "INSERT,SELECT");
+    assert.equal(psql(`SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.task_unblock_retries'::regclass AND contype = 'f';`), "0", "no foreign key: a key check would wait on the lock that failed");
     assert.equal(psql(`SELECT has_function_privilege('anon', 'public.clear_task_unblock(uuid, uuid, text)', 'EXECUTE');`), "f");
     assert.equal(psql(`SELECT has_function_privilege('authenticated', 'public.clear_task_unblock(uuid, uuid, text)', 'EXECUTE');`), "t");
     assert.equal(psql(`SELECT count(*) FROM pg_trigger WHERE tgname IN ('trg_tasks_unblock_dependents','trg_commitments_unblock_dependents','trg_tasks_unblock_pill','trg_tasks_unblock_pill_insert','trg_task_dependencies_unblock_reblock');`), "5");
@@ -227,6 +240,9 @@ try {
   await test("067: no backfill (a blocker already Done when 067 is applied changes nothing); rollback and re-apply twice", () => {
     psql(ROLLBACK);
     assert.equal(psql(`SELECT to_regclass('public.task_unblocks') IS NULL;`), "t");
+    assert.equal(psql(`SELECT to_regclass('public.task_unblock_retries') IS NULL;`), "t");
+    assert.equal(psql(`SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND (p.proname LIKE 'task_unblock%' OR p.proname = 'clear_task_unblock');`), "0", "every function is gone");
+    psql(ROLLBACK); // twice is fine
     assert.equal(psql(`SELECT count(*) FROM information_schema.columns WHERE table_name = 'tasks' AND column_name = 'unblocked_at';`), "0");
     // Without 067: the blocker is finished, the waiting task stays Waiting.
     const blocker = makeTask(userA, { tags: P });
@@ -237,6 +253,21 @@ try {
     const commentsBefore = psql(`SELECT count(*) FROM task_comments;`);
     psql(MIGRATION);
     psql(MIGRATION);
+    // (The stack's up.sh grants ALL after the migrations ran, so 067's own grants are only visible after this re-apply.)
+    const can = (role, table, privilege) => psql(`SELECT has_table_privilege('${role}', 'public.${table}', '${privilege}');`);
+    for (const role of ["anon", "authenticated", "service_role"]) {
+      for (const privilege of ["DELETE", "TRUNCATE"]) {
+        assert.equal(can(role, "task_unblocks", privilege), "f", `${role} ${privilege} task_unblocks`);
+        assert.equal(can(role, "task_unblock_retries", privilege), "f", `${role} ${privilege} task_unblock_retries`);
+      }
+    }
+    assert.equal(can("anon", "task_unblocks", "SELECT"), "f");
+    assert.equal(can("anon", "task_unblock_retries", "SELECT"), "f");
+    assert.equal(can("authenticated", "task_unblock_retries", "UPDATE"), "f", "only the retry updates a record");
+    assert.equal(can("service_role", "task_unblock_retries", "UPDATE"), "t");
+    assert.equal(psql(`SELECT has_function_privilege('authenticated', 'public.task_unblock_run_retries(uuid, integer)', 'EXECUTE');`), "f");
+    assert.equal(psql(`SELECT has_function_privilege('anon', 'public.task_unblock_run_retries(uuid, integer)', 'EXECUTE');`), "f");
+    assert.equal(psql(`SELECT has_function_privilege('service_role', 'public.task_unblock_run_retries(uuid, integer)', 'EXECUTE');`), "t");
     assert.equal(task(waiting).status, "Blocked/Waiting", "nothing unblocked on apply");
     assert.equal(task(waiting).unblocked_at, null);
     assert.equal(psql(`SELECT count(*) FROM task_unblocks;`), "0");
@@ -258,7 +289,8 @@ try {
     assert.equal(after.status, "Planned");
     assert.ok(sameInstant(after.due_at, endOfTodayEt()), `${after.due_at} vs ${endOfTodayEt()}`);
     assert.ok(after.unblocked_at);
-    assert.equal(after.priority_score, Math.min(100, before.priority_score + 20 + 25), "+20 leaving Waiting, +25 due today");
+    assert.equal(before.priority_score, 50, "the default score, written with no recalculation");
+    assert.equal(after.priority_score, 75, "base 50 + 25 due today: recalculated, not 50 + 20 + 25");
     const comments = systemComments(waiting);
     assert.equal(comments.length, 1);
     assert.match(comments[0], /^Now unblocked: everything it waited on is done\. Moved from Waiting to Planned\. Due date set to \w{3} \d{1,2}\/\d{1,2}\./);
@@ -625,43 +657,13 @@ try {
     const { waiting } = pilledTask();
     assert.match(asUserFails(userA, `INSERT INTO task_unblocks (user_id, task_id, blocker_type, unblocked_at, landing_date, prior_status, new_status) VALUES (${q(userA)}, ${q(waiting)}, 'task', now(), CURRENT_DATE, 'Planned', 'Planned')`), /row-level security/);
     assert.equal(asUser(userA, `WITH u AS (UPDATE task_unblocks SET cleared_at = now(), cleared_reason = 'manual' WHERE task_id = ${q(waiting)} RETURNING 1) SELECT count(*) FROM u`), "0");
-    // No DELETE policy: denied (permission denied without a grant, 0 rows with one).
-    const deleted = (() => {
-      try {
-        return asUser(userA, `WITH d AS (DELETE FROM task_unblocks WHERE task_id = ${q(waiting)} RETURNING 1) SELECT count(*) FROM d`);
-      } catch (error) {
-        assert.match(String(error.stderr ?? error.message), /permission denied/);
-        return "0";
-      }
-    })();
-    assert.equal(deleted, "0");
+    // No DELETE grant (067 revokes it, whatever a stack's default privileges give) and no DELETE policy.
+    assert.match(asUserFails(userA, `DELETE FROM task_unblocks WHERE task_id = ${q(waiting)}`), /permission denied/);
+    assert.match(psqlFails(`BEGIN; SET LOCAL ROLE service_role; DELETE FROM task_unblocks WHERE task_id = ${q(waiting)}; COMMIT;`), /permission denied/);
+    assert.match(asUserFails(userA, `TRUNCATE task_unblocks`), /permission denied/);
     assert.equal(asUser(userB, `SELECT count(*) FROM task_unblocks WHERE task_id = ${q(waiting)}`), "0");
     assert.equal(asUser(userA, `SELECT count(*) FROM task_unblocks WHERE task_id = ${q(waiting)}`), "1");
     assert.equal(psql(`SELECT current_setting('mission_control.unblock_writer', true) IS DISTINCT FROM 'on';`), "t");
-  });
-
-  await test("failure isolation: a waiting task locked past lock_timeout -> the Done still saves, nothing half-written", async () => {
-    const blocker = makeTask(userA, { tags: P });
-    const waiting = makeTask(userA, { status: "Blocked/Waiting", tags: P });
-    link(userA, waiting, blocker);
-    const holder = new Session();
-    const doer = new Session();
-    try {
-      await holder.signIn(userA);
-      await doer.signIn(userA);
-      await holder.run(`BEGIN; SELECT id FROM tasks WHERE id = ${q(waiting)} FOR UPDATE;`);
-      const done = doer.run(`UPDATE tasks SET status = 'Done' WHERE id = ${q(blocker)};`, 20_000);
-      const result = await done; // lock_timeout 5s inside the trigger, caught
-      assert.match(result.err, /WARNING:\s+task_unblock_on_status_change/);
-      await holder.run(`COMMIT;`);
-      assert.equal(task(blocker).status, "Done", "the Done saved");
-      assert.equal(task(waiting).status, "Blocked/Waiting");
-      assert.equal(unblockRows(waiting).length, 0);
-      assert.equal(systemComments(waiting).length, 0);
-    } finally {
-      holder.close();
-      doer.close();
-    }
   });
 
   await test("two blockers finished at the same moment in two sessions: exactly one unblock", async () => {
@@ -702,9 +704,663 @@ try {
     assert.equal(unblockRows(waiting).length, 1);
     assert.equal(systemComments(waiting).length, 1);
   });
+
+  // ── Part 6: priority ─────────────────────────────────────────────────────
+
+  function scoreRow(taskId) {
+    return json(`SELECT row_to_json(t) FROM (SELECT id, title, status::TEXT AS status, due_at, priority_score, base_priority, stakeholder_mentions FROM tasks WHERE id = ${q(taskId)}) t;`);
+  }
+
+  await test("priority: recalculated from the base, not added to the clamped score (Codex finding 3)", () => {
+    for (const [base, stored, expected] of [[0, 0, 25], [10, 0, 35], [20, 0, 45], [50, 30, 75], [90, 70, 100]]) {
+      const blocker = makeTask(userA, { tags: P });
+      const waiting = makeTask(userA, { status: "Blocked/Waiting", tags: P, base_priority: base, priority_score: stored });
+      link(userA, waiting, blocker);
+      setStatus(userA, blocker, "Done");
+      assert.equal(task(waiting).priority_score, expected, `base ${base}`);
+      const [row] = unblockRows(waiting);
+      assert.deepEqual([row.prior_priority_score, row.new_priority_score], [stored, expected]);
+    }
+  });
+
+  await test("priority: the stakeholder and urgency boosts stay; the SQL matches src/lib/priority.ts over a matrix", () => {
+    asUser(userA, `INSERT INTO stakeholders (user_id, name, is_high_priority) VALUES (${q(userA)}, 'Dana Reyes', true), (${q(userA)}, 'Lee', true), (${q(userA)}, 'Morgan', true), (${q(userA)}, 'Pat Low', false)`);
+    const names = ["Dana Reyes", "Lee", "Morgan"];
+    const dueCases = [null, psql(`SELECT (now() - INTERVAL '2 days')::TEXT;`), psql(`SELECT (now() + INTERVAL '30 hours')::TEXT;`), psql(`SELECT (now() + INTERVAL '10 days')::TEXT;`)];
+    for (const base of [0, 10, 20, 50, 85]) {
+      for (const title of ["Plain thing", "URGENT plan", "Translate the outage note"]) {
+        for (const mentions of [[], ["dana reyes (ops)"], ["DANA REYES", "lee", "morgan"], ["Pat Low"]]) {
+          for (const due of dueCases) {
+            for (const status of ["Blocked/Waiting", "Planned"]) {
+              const blocker = makeTask(userA, { tags: P });
+              const waiting = makeTask(userA, { status, tags: P, title, base_priority: base, ...(due ? { due_at: due } : {}), stakeholder_mentions: mentions });
+              link(userA, waiting, blocker);
+              const before = task(waiting).priority_score;
+              setStatus(userA, blocker, "Done");
+              const row = scoreRow(waiting);
+              const [record] = unblockRows(waiting);
+              const expected = record.status_changed || record.due_changed ? recalculateTaskPriority(row, names) : before;
+              assert.equal(row.priority_score, expected, JSON.stringify({ base, title, mentions, due, status }));
+            }
+          }
+          if (base !== 10) break; // the full mention/due cross on one base, one mention case on the rest
+        }
+      }
+    }
+  });
+
+  await test("priority: the fallback to the stored score when there is no base, as recalculateTaskPriority does", () => {
+    assert.equal(psql(`SELECT task_unblock_priority(${q(userB)}, NULL, 40, 'x', '{}', 'Planned', NULL, now());`), "40");
+    assert.equal(psql(`SELECT task_unblock_priority(${q(userB)}, 0, 40, 'x', '{}', 'Blocked/Waiting', NULL, now());`), "0", "clamped at 0");
+    assert.equal(psql(`SELECT task_unblock_priority(${q(userB)}, 95, 40, 'critical', '{}', 'Planned', now(), now());`), "100", "clamped at 100");
+    // Another user's stakeholder is no boost.
+    assert.equal(psql(`SELECT task_unblock_priority(${q(userB)}, 10, 10, 'x', ARRAY['dana reyes'], 'Planned', NULL, now());`), "10");
+  });
+
+  await test("priority: nothing changed, score untouched; reopen puts the stored one back; a partial reopen recalculates", () => {
+    const later = psql(`SELECT (now() + INTERVAL '6 days')::TEXT;`);
+    // Pill only: neither status nor date moved, the stored (even stale) score stays.
+    const b1 = makeTask(userA, { tags: P });
+    const pillOnly = makeTask(userA, { status: "Planned", tags: P, due_at: later, base_priority: 10, priority_score: 77 });
+    link(userA, pillOnly, b1);
+    setStatus(userA, b1, "Done");
+    assert.equal(task(pillOnly).priority_score, 77);
+    // Everything restored and the score unchanged: the stored prior value, compare-and-set kept.
+    const b2 = makeTask(userA, { tags: P });
+    const full = makeTask(userA, { status: "Blocked/Waiting", tags: P, base_priority: 10, priority_score: 0 });
+    link(userA, full, b2);
+    setStatus(userA, b2, "Done");
+    assert.equal(task(full).priority_score, 35);
+    setStatus(userA, b2, "Planned");
+    assert.equal(task(full).priority_score, 0);
+    // Status back, date stays (re-dated): base 10 - 20 (waiting) + 0 (far off) clamps to 0, not 35 - 20 ...
+    const b3 = makeTask(userA, { tags: P });
+    const partial = makeTask(userA, { status: "Blocked/Waiting", tags: P, base_priority: 50, priority_score: 30 });
+    link(userA, partial, b3);
+    setStatus(userA, b3, "Done");
+    asUser(userA, `UPDATE tasks SET due_at = ${q(later)} WHERE id = ${q(partial)}`);
+    setStatus(userA, b3, "Planned");
+    assert.equal(task(partial).status, "Blocked/Waiting");
+    assert.equal(task(partial).priority_score, 30, "base 50 - 20 waiting, due in 6 days: recalculated");
+    const b4 = makeTask(userA, { tags: P });
+    const clamped = makeTask(userA, { status: "Blocked/Waiting", tags: P, base_priority: 10, priority_score: 0 });
+    link(userA, clamped, b4);
+    setStatus(userA, b4, "Done");
+    asUser(userA, `UPDATE tasks SET due_at = ${q(later)} WHERE id = ${q(clamped)}`);
+    setStatus(userA, b4, "Planned");
+    assert.equal(task(clamped).priority_score, 0, "base 10 - 20 clamps at 0");
+    assert.equal(recalculateTaskPriority(scoreRow(clamped), []), 0);
+  });
+
+  // ── Part 7: a link and a reopen at the same moment ───────────────────────
+
+  function targetFixture(kind) {
+    const earlier = makeTask(userA, { tags: P });
+    const waiting = makeTask(userA, { status: "Blocked/Waiting", tags: P });
+    link(userA, waiting, earlier);
+    setStatus(userA, earlier, "Done");
+    assert.ok(task(waiting).unblocked_at, "W has a pill from an earlier blocker");
+    if (kind === "task") {
+      return { waiting, target: makeTask(userA, { tags: P, status: "Done" }), table: "tasks", column: "depends_on_task_id", reopenTo: "Planned" };
+    }
+    const stakeholder = asUser(userA, `INSERT INTO stakeholders (user_id, name) VALUES (${q(userA)}, 'Pat') RETURNING id`);
+    const target = asUser(userA, `INSERT INTO commitments (user_id, stakeholder_id, title, status) VALUES (${q(userA)}, ${q(stakeholder)}, 'Send contract', 'Done') RETURNING id`);
+    return { waiting, target, table: "commitments", column: "depends_on_commitment_id", reopenTo: "Open" };
+  }
+  const insertLink = (f) => `INSERT INTO task_dependencies (user_id, task_id, ${f.column}) VALUES (${q(userA)}, ${q(f.waiting)}, ${q(f.target)})`;
+  const reopenSql = (f) => `UPDATE ${f.table} SET status = ${q(f.reopenTo)} WHERE id = ${q(f.target)}`;
+  function assertNoFalsePill(f, reason) {
+    const after = task(f.waiting);
+    assert.equal(after.unblocked_at, null, "the waiting task has an open prerequisite: no pill");
+    const rows = unblockRows(f.waiting);
+    assert.equal(rows.filter((row) => row.cleared_at === null).length, 0, "no open record");
+    assert.equal(rows[rows.length - 1].cleared_reason, reason);
+  }
+
+  for (const kind of ["task", "commitment"]) {
+    await test(`link vs reopen (${kind} target), the reopen first: the link waits, reads the reopened status, clears the pill`, async () => {
+      const f = targetFixture(kind);
+      const reopen = new Session();
+      const linker = new Session();
+      try {
+        await reopen.signIn(userA);
+        await linker.signIn(userA);
+        await reopen.run(`BEGIN; ${reopenSql(f)};`);
+        const added = linker.run(`${insertLink(f)};`);
+        await untilWaiting("INSERT INTO task_dependencies%");
+        assert.ok(task(f.waiting).unblocked_at, "not cleared yet: the reopen hasn't committed");
+        await reopen.run(`COMMIT;`);
+        const r = await added;
+        assert.equal(r.err, "", r.err);
+        assertNoFalsePill(f, "reblocked");
+      } finally {
+        reopen.close();
+        linker.close();
+      }
+    });
+
+    await test(`link vs reopen (${kind} target), the link first: the reopen waits and its trigger sees the link`, async () => {
+      const f = targetFixture(kind);
+      const reopen = new Session();
+      const linker = new Session();
+      try {
+        await reopen.signIn(userA);
+        await linker.signIn(userA);
+        await linker.run(`BEGIN; ${insertLink(f)};`);
+        const reopened = reopen.run(`${reopenSql(f)};`);
+        await untilWaiting(`UPDATE ${f.table} SET status%`);
+        await linker.run(`COMMIT;`);
+        const r = await reopened;
+        assert.equal(r.err, "", r.err);
+        assertNoFalsePill(f, "reopened");
+        assert.equal(task(f.waiting).status, "Blocked/Waiting", "the reopen put it back, as in the serial order");
+        assert.equal(psql(`SELECT count(*) FROM task_unblock_retries WHERE task_id = ${q(f.waiting)};`), "0", "nothing failed");
+      } finally {
+        reopen.close();
+        linker.close();
+      }
+    });
+  }
+
+  await test("a link to a Done target that stays Done keeps the pill, and two links to one target don't wait on each other", async () => {
+    // (A commitment target: links to tasks queue on 061's per-user lock whatever this trigger does.)
+    const f = targetFixture("commitment");
+    const other = makeTask(userA, { status: "Blocked/Waiting", tags: P });
+    const a = new Session();
+    const b = new Session();
+    try {
+      await a.signIn(userA);
+      await b.signIn(userA);
+      await a.run(`BEGIN; ${insertLink(f)};`);
+      const r = await b.run(`INSERT INTO task_dependencies (user_id, task_id, depends_on_commitment_id) VALUES (${q(userA)}, ${q(other)}, ${q(f.target)});`);
+      assert.equal(r.err, "", "FOR SHARE doesn't conflict with FOR SHARE");
+      await a.run(`COMMIT;`);
+      assert.ok(task(f.waiting).unblocked_at);
+    } finally {
+      a.close();
+      b.close();
+    }
+  });
+
+  await test("the 061 loop guard and 062's lock protocol in the same schedule: no deadlock, everyone finishes", async () => {
+    const f = targetFixture("task");
+    const reopen = new Session();
+    const linker = new Session();
+    const cascade = new Session();
+    try {
+      await reopen.signIn(userA);
+      await linker.signIn(userA);
+      await cascade.signIn(userA);
+      await reopen.run(`BEGIN; ${reopenSql(f)};`);
+      // The link holds the advisory lock (loop guard) and waits on the target.
+      const added = linker.run(`${insertLink(f)};`);
+      await untilWaiting("INSERT INTO task_dependencies%");
+      // A cascade locking the same tasks queues on the advisory lock, holding nothing.
+      const locked = cascade.run(`BEGIN; SELECT task_date_cascade_lock(${q(userA)}, ARRAY[${q(f.waiting)}, ${q(f.target)}]::UUID[], 'all') IS NOT NULL; COMMIT;`);
+      await untilWaiting("SELECT task_date_cascade_lock%");
+      await reopen.run(`COMMIT;`);
+      const [r1, r2] = await Promise.all([added, locked]);
+      assert.equal(r1.err, "", r1.err);
+      assert.equal(r2.err, "", r2.err);
+      assertNoFalsePill(f, "reblocked");
+    } finally {
+      reopen.close();
+      linker.close();
+      cascade.close();
+    }
+  });
+
+  await test("a target busy past lock_timeout fails the link add out loud (55P03), nothing half-saved, the pill stays", async () => {
+    const f = targetFixture("task");
+    const holder = new Session();
+    const linker = new Session();
+    try {
+      await holder.signIn(userA);
+      await linker.signIn(userA);
+      await holder.run(`BEGIN; SELECT id FROM tasks WHERE id = ${q(f.target)} FOR NO KEY UPDATE;`);
+      const r = await linker.run(`${insertLink(f)};`, 20_000);
+      assert.match(r.err, /lock timeout/);
+      await holder.run(`COMMIT;`);
+      assert.equal(psql(`SELECT count(*) FROM task_dependencies WHERE task_id = ${q(f.waiting)} AND depends_on_task_id = ${q(f.target)};`), "0");
+      assert.ok(task(f.waiting).unblocked_at);
+    } finally {
+      holder.close();
+      linker.close();
+    }
+  });
+
+  // ── Part 8: failures and the retry ───────────────────────────────────────
+
+  const retries = (taskId) => json(`SELECT COALESCE(json_agg(r ORDER BY r.failed_at), '[]') FROM task_unblock_retries r WHERE r.task_id = ${q(taskId)};`);
+  const runRetries = (userId = userA) => json(`SELECT task_unblock_run_retries(${q(userId)});`);
+
+  /** Runs `sql` in a second session while `taskId` is held past the trigger's lock_timeout. Returns that session's output. */
+  async function whileHeld(taskId, sql, { holdSql = null, ms = 25_000 } = {}) {
+    const holder = new Session();
+    const doer = new Session();
+    try {
+      await holder.signIn(userA);
+      await doer.signIn(userA);
+      await holder.run(`BEGIN; ${holdSql ?? `SELECT id FROM tasks WHERE id = ${q(taskId)} FOR UPDATE`};`);
+      const started = Date.now();
+      const result = await doer.run(sql, ms);
+      await holder.run(`COMMIT;`);
+      return { ...result, ms: Date.now() - started };
+    } finally {
+      holder.close();
+      doer.close();
+    }
+  }
+  const done = (id) => `UPDATE tasks SET status = 'Done' WHERE id = ${q(id)};`;
+
+  /** B Done while W is held: the Done saved, W untouched, one open record. */
+  async function strandedUnblock(fields = {}, options = {}) {
+    const blocker = makeTask(userA, { tags: P });
+    const waiting = makeTask(userA, { status: "Blocked/Waiting", tags: P, ...fields });
+    link(userA, waiting, blocker);
+    const r = await whileHeld(waiting, done(blocker), options);
+    assert.equal(task(blocker).status, "Done", "the Done saved");
+    assert.equal(r.err.includes("ERROR"), false, r.err);
+    assert.equal(retries(waiting).length, 1);
+    return { blocker, waiting, r };
+  }
+  /** W pilled, B reopened while W is held: the reopen saved, the pill still there, one open record. */
+  async function strandedReopen() {
+    const { blocker, waiting } = pilledTask();
+    await whileHeld(waiting, `UPDATE tasks SET status = 'Planned' WHERE id = ${q(blocker)};`);
+    assert.equal(task(blocker).status, "Planned", "the reopen saved");
+    assert.equal(retries(waiting).length, 1);
+    return { blocker, waiting };
+  }
+
+  await test("failure: a lock timeout on the only waiter: the Done saves, nothing half-written, one durable record, retry finishes the job", async () => {
+    const { blocker, waiting, r } = await strandedUnblock();
+    assert.match(r.err, /WARNING:\s+task_unblock_on_status_change: 55P03 on task .*queued for retry/);
+    assert.equal(task(waiting).status, "Blocked/Waiting");
+    assert.equal(task(waiting).unblocked_at, null);
+    assert.equal(unblockRows(waiting).length, 0);
+    assert.equal(systemComments(waiting).length, 0);
+    const [record] = retries(waiting);
+    assert.deepEqual(
+      [record.kind, record.blocker_type, record.blocker_id, record.task_status, record.error_code, record.attempts, record.closed_at],
+      ["unblock", "task", blocker, "Blocked/Waiting", "55P03", 0, null]
+    );
+    // Repeating Done still doesn't retry; the retry does.
+    psql(done(blocker));
+    assert.equal(task(waiting).status, "Blocked/Waiting");
+    const run = runRetries();
+    assert.equal(run.ok, true);
+    assert.ok(run.applied >= 1);
+    const after = task(waiting);
+    assert.equal(after.status, "Planned");
+    assert.ok(sameInstant(after.due_at, endOfTodayEt()));
+    assert.ok(after.unblocked_at);
+    assert.equal(after.priority_score, 75);
+    assert.equal(systemComments(waiting).length, 1);
+    assert.deepEqual(transitions(waiting), [["Blocked/Waiting", "Planned"]]);
+    const [row] = unblockRows(waiting);
+    assert.equal(row.blocker_task_id, blocker);
+    const [closed] = retries(waiting);
+    assert.deepEqual([closed.closed_reason, closed.attempts], ["applied", 1]);
+    // Idempotent: a second run touches nothing.
+    const updatedAt = psql(`SELECT updated_at FROM tasks WHERE id = ${q(waiting)};`);
+    runRetries();
+    assert.equal(psql(`SELECT updated_at FROM tasks WHERE id = ${q(waiting)};`), updatedAt);
+    assert.equal(systemComments(waiting).length, 1);
+    assert.equal(unblockRows(waiting).length, 1);
+    assert.equal(retries(waiting)[0].attempts, 1);
+  });
+
+  for (const lockedPosition of ["first", "last"]) {
+    await test(`failure: one of two waiters locked (${lockedPosition} in id order): the other still goes through and stays`, async () => {
+      const blocker = makeTask(userA, { tags: P });
+      const w1 = makeTask(userA, { status: "Blocked/Waiting", tags: P });
+      const w2 = makeTask(userA, { status: "Blocked/Waiting", tags: P });
+      link(userA, w1, blocker);
+      link(userA, w2, blocker);
+      const [low, high] = [w1, w2].sort();
+      const [locked, free] = lockedPosition === "first" ? [low, high] : [high, low];
+      await whileHeld(locked, done(blocker));
+      assert.equal(task(blocker).status, "Done");
+      assert.equal(task(free).status, "Planned", "not undone by the other's failure");
+      assert.ok(task(free).unblocked_at);
+      assert.equal(retries(free).length, 0);
+      assert.equal(task(locked).status, "Blocked/Waiting");
+      assert.equal(retries(locked).length, 1);
+      runRetries();
+      assert.equal(task(locked).status, "Planned");
+      assert.equal(unblockRows(locked).length, 1);
+    });
+  }
+
+  await test("failure: both of two waiters locked: both recorded, and the Done waits 5s once, not twice", async () => {
+    const blocker = makeTask(userA, { tags: P });
+    const w1 = makeTask(userA, { status: "Blocked/Waiting", tags: P });
+    const w2 = makeTask(userA, { status: "Blocked/Waiting", tags: P });
+    link(userA, w1, blocker);
+    link(userA, w2, blocker);
+    const r = await whileHeld(w1, `BEGIN; ${done(blocker)} SHOW lock_timeout; COMMIT;`, { holdSql: `SELECT id FROM tasks WHERE id IN (${q(w1)}, ${q(w2)}) ORDER BY id FOR UPDATE` });
+    assert.equal(r.out, "0", "the shorter wait stays inside the trigger");
+    assert.equal(task(blocker).status, "Done");
+    assert.equal(retries(w1).length + retries(w2).length, 2);
+    assert.ok(r.ms < 7_000, `took ${r.ms} ms`);
+    runRetries();
+    assert.equal(task(w1).status, "Planned");
+    assert.equal(task(w2).status, "Planned");
+  });
+
+  await test("failure: the API role's statement_timeout (QUERY_CANCELED, which OTHERS doesn't catch) can't undo the Done", async () => {
+    const blocker = makeTask(userA, { tags: P });
+    const waiting = makeTask(userA, { status: "Blocked/Waiting", tags: P });
+    link(userA, waiting, blocker);
+    const r = await whileHeld(waiting, `SET statement_timeout = '1s'; ${done(blocker)} RESET statement_timeout;`);
+    assert.equal(r.err.includes("ERROR"), false, r.err);
+    assert.equal(task(blocker).status, "Done", "the Done saved");
+    assert.equal(retries(waiting)[0].error_code, "57014");
+    runRetries();
+    assert.equal(task(waiting).status, "Planned");
+  });
+
+  await test("failure: a caught deadlock against a cascade-style holder: the Done saves, the waiter is recorded, retry works", async () => {
+    const blocker = makeTask(userA, { tags: P });
+    const waiting = makeTask(userA, { status: "Blocked/Waiting", tags: P });
+    link(userA, waiting, blocker);
+    // The holder locks W then wants B; the trigger holds B and wants W. deadlock_timeout makes the trigger the victim.
+    const holder = new Session("supabase_admin");
+    const doer = new Session("supabase_admin");
+    try {
+      await holder.run(`SET deadlock_timeout = '30s'; BEGIN; SELECT id FROM tasks WHERE id = ${q(waiting)} FOR NO KEY UPDATE;`);
+      await doer.run(`SET deadlock_timeout = '2500ms';`);
+      const finished = doer.run(done(blocker), 20_000);
+      await untilWaiting("UPDATE tasks SET status = 'Done'%");
+      const second = holder.run(`UPDATE tasks SET title = title WHERE id = ${q(blocker)};`, 20_000);
+      const r = await finished;
+      assert.match(r.err, /40P01/);
+      assert.equal((await second).err, "");
+      await holder.run(`COMMIT;`);
+    } finally {
+      holder.close();
+      doer.close();
+    }
+    assert.equal(task(blocker).status, "Done", "the Done saved");
+    assert.equal(task(waiting).status, "Blocked/Waiting");
+    assert.equal(retries(waiting)[0].error_code, "40P01");
+    runRetries();
+    assert.equal(task(waiting).status, "Planned");
+  });
+
+  await test("failure: a failed reopen saves, records 'reopen', and the retry clears the false pill and puts things back", async () => {
+    const { blocker, waiting } = await strandedReopen();
+    const held = task(waiting);
+    assert.ok(held.unblocked_at, "still pilled until the retry");
+    assert.equal(retries(waiting)[0].kind, "reopen");
+    runRetries();
+    const after = task(waiting);
+    assert.equal(after.unblocked_at, null);
+    assert.equal(after.status, "Blocked/Waiting");
+    assert.equal(after.due_at, null);
+    const [row] = unblockRows(waiting);
+    assert.deepEqual([row.cleared_reason, row.revert_status_restored, row.revert_due_restored, row.reverted_by_id], ["reopened", true, true, blocker]);
+    assert.equal(retries(waiting)[0].closed_reason, "applied");
+  });
+
+  await test("retry, reopen record: a later re-date is kept (compare-and-set) and the pill still clears", async () => {
+    const { waiting } = await strandedReopen();
+    const later = psql(`SELECT (now() + INTERVAL '6 days')::TEXT;`);
+    asUser(userA, `UPDATE tasks SET due_at = ${q(later)} WHERE id = ${q(waiting)}`);
+    runRetries();
+    const after = task(waiting);
+    assert.ok(sameInstant(after.due_at, later), "Brent's date stays");
+    assert.equal(after.unblocked_at, null);
+    assert.equal(after.status, "Blocked/Waiting");
+  });
+
+  await test("retry skipped, the task changed: a later status edit or re-date is not overwritten and no pill lands", async () => {
+    const edits = [
+      ["status = 'In Progress'", "In Progress"],
+      [`due_at = now() + INTERVAL '6 days'`, "Blocked/Waiting"],
+    ];
+    for (const [set, status] of edits) {
+      const { waiting } = await strandedUnblock({ tags: P });
+      asUser(userA, `UPDATE tasks SET ${set} WHERE id = ${q(waiting)}`);
+      const before = task(waiting);
+      runRetries();
+      assert.deepEqual(task(waiting), before, set);
+      assert.equal(task(waiting).status, status);
+      assert.equal(unblockRows(waiting).length, 0);
+      assert.equal(systemComments(waiting).length, 0);
+      assert.equal(retries(waiting)[0].closed_reason, "task_changed");
+    }
+  });
+
+  await test("retry still applies: an unrelated later edit (title) or the edit that held the lock itself isn't 'changed'", async () => {
+    const first = await strandedUnblock();
+    asUser(userA, `UPDATE tasks SET title = 'Renamed' WHERE id = ${q(first.waiting)}`);
+    runRetries();
+    assert.equal(task(first.waiting).status, "Planned");
+    assert.equal(retries(first.waiting)[0].closed_reason, "applied");
+    // The holder re-dates W and commits after the failure: it began first, so it's what the trigger would have seen.
+    const blocker = makeTask(userA, { tags: P });
+    const waiting = makeTask(userA, { status: "Blocked/Waiting", tags: P });
+    link(userA, waiting, blocker);
+    const later = psql(`SELECT (now() + INTERVAL '6 days')::TEXT;`);
+    await whileHeld(waiting, done(blocker), { holdSql: `UPDATE tasks SET due_at = ${q(later)} WHERE id = ${q(waiting)}` });
+    assert.equal(retries(waiting).length, 1);
+    runRetries();
+    const after = task(waiting);
+    assert.equal(after.status, "Planned");
+    assert.ok(sameInstant(after.due_at, later), "the later date is kept");
+    assert.equal(retries(waiting)[0].closed_reason, "applied");
+  });
+
+  await test("retry skipped, the blocker changed: reopened since (unblock record), finished again (reopen record), deleted", async () => {
+    const reopened = await strandedUnblock();
+    setStatus(userA, reopened.blocker, "Planned");
+    const before = task(reopened.waiting);
+    runRetries();
+    assert.deepEqual(task(reopened.waiting), before);
+    assert.equal(systemComments(reopened.waiting).length, 0);
+    assert.equal(retries(reopened.waiting)[0].closed_reason, "blocker_changed");
+
+    const finishedAgain = await strandedReopen();
+    setStatus(userA, finishedAgain.blocker, "Done");
+    runRetries();
+    assert.ok(task(finishedAgain.waiting).unblocked_at, "the blocker is Done again: the pill is true");
+    assert.equal(unblockRows(finishedAgain.waiting)[0].cleared_at, null);
+    assert.equal(retries(finishedAgain.waiting)[0].closed_reason, "blocker_changed");
+
+    const deleted = await strandedUnblock();
+    asUser(userA, `DELETE FROM tasks WHERE id = ${q(deleted.blocker)}`);
+    runRetries();
+    assert.equal(task(deleted.waiting).unblocked_at, null);
+    assert.equal(retries(deleted.waiting)[0].closed_reason, "blocker_changed");
+  });
+
+  await test("a flip back and forth: the retry acts on where the blocker stands now, exactly once", async () => {
+    const { blocker, waiting } = await strandedUnblock();
+    setStatus(userA, blocker, "Planned");
+    setStatus(userA, blocker, "Done"); // this Done works: W unblocks now
+    assert.equal(task(waiting).status, "Planned");
+    runRetries();
+    assert.equal(unblockRows(waiting).length, 1, "no second unblock");
+    assert.equal(systemComments(waiting).length, 1);
+    assert.equal(retries(waiting)[0].closed_reason, "task_changed", "the second Done already moved it");
+  });
+
+  await test("retry reads the links and the task again: link removed, new open blocker, closed task, deleted task", async () => {
+    const removed = await strandedUnblock();
+    psql(`UPDATE task_dependencies SET is_resolved = true, resolved_at = now() WHERE task_id = ${q(removed.waiting)};`);
+    runRetries();
+    assert.equal(task(removed.waiting).status, "Blocked/Waiting", "removing a link by hand is not a trigger");
+    assert.equal(retries(removed.waiting)[0].closed_reason, "task_changed");
+
+    const reblocked = await strandedUnblock();
+    link(userA, reblocked.waiting, makeTask(userA, { tags: P }));
+    runRetries();
+    assert.equal(task(reblocked.waiting).unblocked_at, null);
+    assert.equal(retries(reblocked.waiting)[0].closed_reason, "nothing_to_do");
+
+    const closed = await strandedUnblock({ status: "Planned" });
+    psql(`UPDATE tasks SET status = 'Parked', updated_at = now() WHERE id = ${q(closed.waiting)};`);
+    psql(`UPDATE task_unblock_retries SET failed_at = now() + INTERVAL '1 minute' WHERE task_id = ${q(closed.waiting)};`); // the parking counts as before the failure
+    const parked = psql(`SELECT updated_at FROM tasks WHERE id = ${q(closed.waiting)};`);
+    runRetries();
+    assert.equal(psql(`SELECT updated_at FROM tasks WHERE id = ${q(closed.waiting)};`), parked, "no write on a closed task");
+    assert.equal(systemComments(closed.waiting).length, 0, "no comment on a closed task");
+    assert.equal(retries(closed.waiting)[0].closed_reason, "nothing_to_do");
+
+    const gone = await strandedUnblock();
+    asUser(userA, `DELETE FROM tasks WHERE id = ${q(gone.waiting)}`);
+    runRetries();
+    assert.equal(retries(gone.waiting)[0].closed_reason, "task_gone");
+  });
+
+  await test("a reopen record on a task closed since: nothing on the task, no comment, the bookkeeping closes", async () => {
+    const { waiting } = await strandedReopen();
+    setStatus(userA, waiting, "Parked");
+    const closed = task(waiting);
+    const comments = systemComments(waiting);
+    runRetries();
+    assert.deepEqual(task(waiting), closed);
+    assert.deepEqual(systemComments(waiting), comments);
+    assert.ok(unblockRows(waiting)[0].reverted_at);
+  });
+
+  await test("the retry takes the blocker lock: a reopen racing it waits and then undoes what it applied", async () => {
+    const { blocker, waiting } = await strandedUnblock();
+    const retry = new Session();
+    const reopen = new Session();
+    try {
+      await reopen.signIn(userA);
+      await retry.run(`BEGIN; SELECT task_unblock_run_retries(${q(userA)});`);
+      const reopened = reopen.run(`UPDATE tasks SET status = 'Planned' WHERE id = ${q(blocker)};`);
+      await untilWaiting("UPDATE tasks SET status = 'Planned'%");
+      await retry.run(`COMMIT;`);
+      assert.equal((await reopened).err, "");
+      const after = task(waiting);
+      assert.equal(after.unblocked_at, null, "no false pill");
+      assert.equal(after.status, "Blocked/Waiting");
+      assert.ok(unblockRows(waiting)[0].reverted_at);
+    } finally {
+      retry.close();
+      reopen.close();
+    }
+  });
+
+  await test("retry cap: a record that keeps failing counts attempts, stops at 8, stays visible as gave_up, and one failure doesn't stop another record", async () => {
+    const owner = await makeUser("unblock-cap");
+    const blocker = makeTask(owner, { tags: P });
+    const stuck = makeTask(owner, { status: "Blocked/Waiting", tags: P });
+    link(owner, stuck, blocker);
+    const free = makeTask(owner, { status: "Blocked/Waiting", tags: P });
+    link(owner, free, blocker);
+    const holder = new Session();
+    try {
+      await holder.run(`BEGIN; SELECT id FROM tasks WHERE id = ${q(stuck)} FOR UPDATE;`);
+      psql(done(blocker)); // 5s, the free task unblocks
+      assert.equal(task(free).status, "Planned");
+      // Make a second record whose waiter is free: it must succeed in the same run.
+      const blocker2 = makeTask(owner, { tags: P, status: "Done" });
+      const other = makeTask(owner, { status: "Blocked/Waiting", tags: P });
+      link(owner, other, blocker2);
+      psql(`INSERT INTO task_unblock_retries (user_id, kind, task_id, blocker_type, blocker_id, task_status, failed_at) VALUES (${q(owner)}, 'unblock', ${q(other)}, 'task', ${q(blocker2)}, 'Blocked/Waiting', now() + INTERVAL '1 minute');`);
+      const first = runRetries(owner);
+      assert.deepEqual([first.applied, first.failed, first.gave_up], [1, 1, 0], JSON.stringify(first));
+      assert.equal(task(other).status, "Planned");
+      assert.deepEqual([retries(stuck)[0].attempts, retries(stuck)[0].error_code, retries(stuck)[0].closed_at], [1, "55P03", null]);
+      psql(`UPDATE task_unblock_retries SET attempts = 7 WHERE task_id = ${q(stuck)};`);
+      const last = runRetries(owner);
+      assert.deepEqual([last.failed, last.gave_up], [1, 1], JSON.stringify(last));
+      assert.equal(retries(stuck)[0].attempts, 8);
+      // Past the cap it isn't tried again, and it stays in the owner's count.
+      const after = runRetries(owner);
+      assert.deepEqual([after.applied, after.skipped, after.failed, after.gave_up], [0, 0, 0, 1]);
+      assert.equal(retries(stuck)[0].attempts, 8);
+      assert.equal(asUser(owner, `SELECT count(*) FROM task_unblock_retries WHERE closed_at IS NULL AND attempts >= 8`), "1");
+      assert.equal(asUser(userB, `SELECT count(*) FROM task_unblock_retries WHERE task_id = ${q(stuck)}`), "0");
+    } finally {
+      await holder.run(`ROLLBACK;`);
+      holder.close();
+    }
+    runRetries(owner);
+    assert.equal(task(stuck).status, "Blocked/Waiting", "gave up: left as it is");
+  });
+
+  await test("two retry runs at once take different records (SKIP LOCKED); a run for another user sees none", async () => {
+    const { waiting } = await strandedUnblock();
+    const other = new Session();
+    try {
+      await other.run(`BEGIN; SELECT id FROM task_unblock_retries WHERE task_id = ${q(waiting)} FOR UPDATE;`);
+      const run = runRetries();
+      assert.equal(retries(waiting)[0].closed_at, null, `skipped while another run holds it: ${JSON.stringify(run)}`);
+      await other.run(`COMMIT;`);
+      assert.deepEqual(runRetries(userB), { ok: true, applied: 0, skipped: 0, failed: 0, gave_up: 0 });
+      assert.equal(retries(waiting)[0].closed_at, null);
+      runRetries();
+      assert.equal(task(waiting).status, "Planned");
+    } finally {
+      other.close();
+    }
+  });
+
+  await test("RLS and calls: the records are the owner's; no direct writes; the waiter function and the retry can't be called through the API", async () => {
+    const { waiting } = await strandedUnblock();
+    assert.equal(asUser(userA, `SELECT count(*) FROM task_unblock_retries WHERE task_id = ${q(waiting)}`), "1");
+    assert.equal(asUser(userB, `SELECT count(*) FROM task_unblock_retries WHERE task_id = ${q(waiting)}`), "0");
+    assert.match(asUserFails(userA, `INSERT INTO task_unblock_retries (user_id, kind, task_id, blocker_type, blocker_id, task_status) VALUES (${q(userA)}, 'unblock', ${q(waiting)}, 'task', ${q(waiting)}, 'Planned')`), /row-level security/);
+    assert.match(asUserFails(userA, `UPDATE task_unblock_retries SET closed_at = now(), closed_reason = 'applied' WHERE task_id = ${q(waiting)}`), /permission denied/);
+    assert.match(asUserFails(userA, `DELETE FROM task_unblock_retries WHERE task_id = ${q(waiting)}`), /permission denied/);
+    assert.match(asUserFails(userA, `SELECT task_unblock_run_retries(${q(userA)})`), /permission denied/);
+    assert.match(asUserFails(userA, `SELECT task_unblock_process_waiter('task', ${q(waiting)}, ${q(userA)}, ${q(waiting)}, true, now())`), /only the unblock trigger and retry/);
+    assert.match(psqlFails(`SELECT task_unblock_process_waiter('task', ${q(waiting)}, ${q(userA)}, ${q(waiting)}, true, now());`), /only the unblock trigger and retry/);
+    assert.equal(task(waiting).unblocked_at, null);
+    assert.equal(psql(`SELECT current_setting('mission_control.unblock_writer', true) IS DISTINCT FROM 'on';`), "t");
+    runRetries();
+  });
+
+  await test("the real cron route: GET /api/calendar/sync with the cron secret runs the retry as service_role; a bad retry never fails the sync", async () => {
+    const { waiting } = await strandedUnblock();
+    const reopened = await strandedReopen();
+    Object.assign(process.env, {
+      CRON_SECRET: "unblock-test-cron",
+      MISSION_CONTROL_USER_ID: userA,
+      CALENDAR_SOURCE: "none",
+      NEXT_PUBLIC_SUPABASE_URL: url,
+      SUPABASE_SERVICE_ROLE_KEY: serviceKey,
+    });
+    const { GET } = await import("../src/app/api/calendar/sync/route.ts");
+    const call = () => GET(new NextRequest("http://localhost/api/calendar/sync", { headers: { authorization: "Bearer unblock-test-cron" } }));
+    const response = await call();
+    assert.equal(response.status, 200);
+    assert.equal(task(waiting).status, "Planned");
+    assert.equal(retries(waiting)[0].closed_reason, "applied");
+    assert.equal(task(reopened.waiting).unblocked_at, null);
+    assert.equal(retries(reopened.waiting)[0].closed_reason, "applied");
+    // Without the secret no retry runs.
+    const second = await strandedUnblock();
+    const refused = await GET(new NextRequest("http://localhost/api/calendar/sync"));
+    assert.notEqual(refused.status, 200);
+    assert.equal(retries(second.waiting)[0].closed_at, null);
+    // The retry function missing (or anything else) leaves the sync's reply alone.
+    psql(`ALTER FUNCTION task_unblock_run_retries(UUID, INT) RENAME TO task_unblock_run_retries_x; NOTIFY pgrst, 'reload schema';`);
+    try {
+      await sleep(600);
+      assert.equal((await call()).status, 200);
+    } finally {
+      psql(`ALTER FUNCTION task_unblock_run_retries_x(UUID, INT) RENAME TO task_unblock_run_retries; NOTIFY pgrst, 'reload schema';`);
+    }
+    await sleep(600);
+    runRetries();
+    assert.equal(task(second.waiting).status, "Planned");
+  });
+
+  await test("the invariant: unblocked_at is set iff an open task_unblocks row exists, on every task this run touched", () => {
+    const owners = users.map(q).join(", ");
+    assert.equal(psql(`SELECT count(*) FROM tasks t WHERE t.user_id IN (${owners}) AND (t.unblocked_at IS NOT NULL) <> EXISTS (SELECT 1 FROM task_unblocks u WHERE u.task_id = t.id AND u.cleared_at IS NULL);`), "0");
+  });
 } finally {
   for (const id of users) {
-    psql(`DELETE FROM task_dependencies WHERE user_id = '${id}'; DELETE FROM tasks WHERE user_id = '${id}'; DELETE FROM commitments WHERE user_id = '${id}'; DELETE FROM stakeholders WHERE user_id = '${id}';`);
+    psql(`DELETE FROM task_unblock_retries WHERE user_id = '${id}'; DELETE FROM task_dependencies WHERE user_id = '${id}'; DELETE FROM tasks WHERE user_id = '${id}'; DELETE FROM commitments WHERE user_id = '${id}'; DELETE FROM stakeholders WHERE user_id = '${id}';`);
     await admin.auth.admin.deleteUser(id).catch(() => null);
   }
 }

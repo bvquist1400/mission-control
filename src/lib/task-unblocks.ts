@@ -232,6 +232,47 @@ export async function fetchRecentUnblockDependencySummaries(
   return byTaskId;
 }
 
+// ── Retry ─────────────────────────────────────────────────────────────────
+
+/** task_unblock_run_retries' reply (067). `gave_up` is S3's "stuck" count. */
+export type UnblockRetryRun = {
+  ok: boolean;
+  applied: number;
+  skipped: number;
+  failed: number;
+  gave_up: number;
+};
+
+/**
+ * Works through the waiting tasks the Done and reopen triggers could not process
+ * (067, task_unblock_retries). The 15-minute calendar sync cron calls this with
+ * its service-role client. Never throws: the sync's own result stands whatever
+ * happens here, and an unfinished record simply stays for the next run. Logs
+ * counts and a code only.
+ */
+export async function runUnblockRetries(supabase: SupabaseClient, userId: string): Promise<UnblockRetryRun | null> {
+  try {
+    const { data, error } = await supabase.rpc('task_unblock_run_retries', { p_user_id: userId });
+    if (error) {
+      console.warn('Now unblocked retry failed', { code: error.code });
+      return null;
+    }
+    const run = data as UnblockRetryRun;
+    if (run.applied + run.skipped + run.failed + run.gave_up > 0) {
+      console.info('Now unblocked retry', {
+        applied: run.applied,
+        skipped: run.skipped,
+        failed: run.failed,
+        gaveUp: run.gave_up,
+      });
+    }
+    return run;
+  } catch {
+    console.warn('Now unblocked retry failed');
+    return null;
+  }
+}
+
 /** Merges two per-task lists of resolved-dependency summaries, newest first. */
 export function mergeResolvedDependencyMaps(
   a: Map<string, RecentlyResolvedTaskDependencySummary[]>,

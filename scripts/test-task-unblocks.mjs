@@ -11,7 +11,9 @@
 //     the column has no default), no titles in any comment text, no 3-day
 //     timeout, the 7-day undo window, SECURITY INVOKER + search_path on every
 //     function, the clear reasons and the priority/boost numbers mirrored from
-//     the TypeScript, and a rollback that drops everything 067 creates.
+//     the TypeScript, the link's lock on its target, the retry's lock order, cap
+//     and grants, its one call site (the calendar sync cron; a failure there
+//     never fails the sync), and a rollback that drops everything 067 creates.
 // The SQL itself runs in test:task-unblocks-db (local stack).
 //
 //   npm run test:task-unblocks
@@ -193,7 +195,14 @@ await test("067 writes the same end of day and the same weekend rule", () => {
 
 await test("067's priority adjustment uses priority.ts's numbers", () => {
   assert.equal(priority.calculateWaitingPenalty("Blocked/Waiting"), -20);
-  assert.match(MIGRATION, /CASE WHEN v_status_changed THEN 20 ELSE 0 END/);
+  // Fix round 2: recalculated from the base, the same rules as src/lib/priority.ts; never a delta on the stored score.
+  assert.doesNotMatch(MIGRATION.replace(/--[^\n]*/g, ""), /priority_score\s*[+-]\s*(CASE|task_unblock_due_boost|\d)/);
+  assert.match(MIGRATION, /COALESCE\(p_base, p_score\)/);
+  assert.match(MIGRATION, /CASE WHEN p_status = 'Blocked\/Waiting' THEN -20 ELSE 0 END/);
+  assert.match(MIGRATION, /LEAST\(30, 20 \* \(/);
+  assert.equal(priority.calculateUrgencyBoost("an URGENT thing"), 25);
+  const keywords = /const URGENCY_KEYWORDS = \[(.*?)\];/.exec(readFileSync(path.join(ROOT, "src/lib/priority.ts"), "utf8"))[1];
+  assert.ok(MIGRATION.includes(`ARRAY[${keywords}]`), "the urgency words are priority.ts's, in its order");
   const now = Date.now();
   assert.equal(priority.calculateDueProximityBoost(new Date(now + 23 * 3600e3).toISOString()), 25);
   assert.equal(priority.calculateDueProximityBoost(new Date(now - 5 * 3600e3).toISOString()), 25, "overdue counts as today");
@@ -214,7 +223,11 @@ await test("hover text: the time only, never a title", () => {
 
 await test("067's comments name no titles (FamCal-safe) and match the plan's note", () => {
   const body = MIGRATION.replace(/--[^\n]*/g, "");
-  assert.doesNotMatch(body, /\btitle\b/i, "no title column is read anywhere in 067");
+  // A title is only ever an input to the score (the urgency words), never comment or log text.
+  const scored = body
+    .replace(/CREATE OR REPLACE FUNCTION task_unblock_priority\([\s\S]*?\n\$\$;/, "")
+    .replace(/task_unblock_priority\([\s\S]*?\);/g, "");
+  assert.doesNotMatch(scored, /\btitle\b/i, "no other title read anywhere in 067");
   assert.match(body, /'Now unblocked: everything it waited on is done\.'/);
   const texts = [...body.matchAll(/v_comment(?: \|\|)? ?:?= ?[^;]*;/g)].map((m) => m[0]);
   assert.ok(texts.length >= 6, "comment pieces found");
@@ -245,7 +258,7 @@ await test("no backfill: 067 has no top-level INSERT/UPDATE/DELETE and adds the 
 await test("no timeout: the pill has no time limit; reopen undo is 7 days", () => {
   const body = MIGRATION.replace(/--[^\n]*/g, "");
   assert.doesNotMatch(body, /INTERVAL '(3|72) (days|hours)'/i);
-  assert.match(body, /v_now - INTERVAL '7 days'/);
+  assert.match(body, /p_now - INTERVAL '7 days'/);
   assert.equal(UNBLOCK_UNDO_DAYS, 7);
 });
 
@@ -269,22 +282,74 @@ await test("every plpgsql function is SECURITY INVOKER with search_path = public
 });
 
 await test("the unblock locks each waiting task before re-reading its links, and a failure never blocks the Done", () => {
-  const fn = /CREATE OR REPLACE FUNCTION task_unblock_on_status_change\(\)[\s\S]*?\n\$\$;/.exec(MIGRATION)[0];
+  const fn = /CREATE OR REPLACE FUNCTION task_unblock_process_waiter\([\s\S]*?\n\$\$;/.exec(MIGRATION)[0];
+  const trigger = /CREATE OR REPLACE FUNCTION task_unblock_on_status_change\(\)[\s\S]*?\n\$\$;/.exec(MIGRATION)[0];
   const lock = fn.indexOf("FOR NO KEY UPDATE");
   const recount = fn.indexOf("SELECT count(*) INTO v_open_blockers");
   assert.ok(lock > 0 && recount > lock, "lock, then count the other links");
-  assert.match(fn, /EXCEPTION WHEN OTHERS THEN\s+--[^\n]*\n[^\n]*\n\s+RAISE WARNING/);
-  assert.match(fn, /SET lock_timeout = '5s'/);
+  // One sub-transaction per waiting task, the failure recorded; QUERY_CANCELED named (OTHERS doesn't include it).
+  assert.match(trigger, /LOOP[\s\S]*BEGIN\s+PERFORM task_unblock_process_waiter\([\s\S]*?EXCEPTION WHEN query_canceled OR others THEN[\s\S]*INSERT INTO public\.task_unblock_retries[\s\S]*END LOOP/);
+  assert.match(trigger, /SET lock_timeout = '5s'/);
+  assert.match(fn, /IS DISTINCT FROM 'on' THEN\s+RAISE EXCEPTION/, "no direct call");
   // Status rule (Brent: "Pill, but stay Waiting"): only an empty waiting_on or 'prerequisite' moves it.
   assert.match(fn, /NULLIF\(btrim\(COALESCE\(v_task\.waiting_on, ''\)\), ''\) IS NULL\s+OR v_task\.blocked_reason::TEXT IS NOT DISTINCT FROM 'prerequisite'/);
   // Recurring: pill only.
   assert.match(fn, /IF NOT v_recurring THEN/);
   // Reopen: a closed task is guarded before any compare-and-set write.
-  const guard = fn.indexOf("v_task.status::TEXT NOT IN ('Backlog', 'Planned', 'In Progress', 'Blocked/Waiting') THEN\n          UPDATE public.task_unblocks");
+  const guard = fn.indexOf("v_task.status::TEXT NOT IN ('Backlog', 'Planned', 'In Progress', 'Blocked/Waiting') THEN\n      UPDATE public.task_unblocks");
   const compare = fn.indexOf("v_status_back := v_row.status_changed");
   assert.ok(guard > 0 && compare > guard, "closed-task guard before the compare-and-set");
   // Resolved = Done, exactly as isDependencyResolved.
   assert.match(fn, /COALESCE\(bt\.status::TEXT, bc\.status::TEXT, ''\) <> 'Done'/);
+});
+
+await test("a link reads its target's status under a lock that conflicts with a status UPDATE, target before waiting task", () => {
+  const fn = /CREATE OR REPLACE FUNCTION task_unblock_on_link\(\)[\s\S]*?\n\$\$;/.exec(MIGRATION)[0];
+  const target = fn.search(/WHERE t\.id = NEW\.depends_on_task_id FOR SHARE/);
+  assert.ok(target > 0);
+  assert.match(fn, /WHERE c\.id = NEW\.depends_on_commitment_id FOR SHARE/);
+  assert.ok(fn.indexOf("FOR NO KEY UPDATE") > target, "target, then waiting task");
+});
+
+await test("the retry: blocker before waiting task, an unblock refused on a later edit, capped, service_role only, no foreign key", () => {
+  const fn = /CREATE OR REPLACE FUNCTION task_unblock_run_retries\([\s\S]*?\n\$\$;/.exec(MIGRATION)[0];
+  const blocker = fn.indexOf("FOR SHARE");
+  const waiting = fn.indexOf("FOR NO KEY UPDATE");
+  assert.ok(blocker > 0 && waiting > blocker);
+  assert.match(fn, /v_rec\.kind = 'unblock'\s+AND v_task\.updated_at > v_rec\.failed_at/);
+  assert.match(fn, /r\.attempts < c_max_attempts/);
+  assert.match(fn, /FOR UPDATE SKIP LOCKED/);
+  assert.match(MIGRATION, /REVOKE ALL ON FUNCTION task_unblock_run_retries\(UUID, INT\) FROM PUBLIC, anon, authenticated/);
+  assert.match(MIGRATION, /GRANT EXECUTE ON FUNCTION task_unblock_run_retries\(UUID, INT\) TO service_role/);
+  const table = /CREATE TABLE IF NOT EXISTS task_unblock_retries \([\s\S]*?\n\);/.exec(MIGRATION)[0];
+  assert.doesNotMatch(table, /REFERENCES/, "a key check would wait on the lock that failed");
+});
+
+await test("the retry's one call site: the calendar sync cron, after the sync, and a failure there never fails the sync", async () => {
+  const route = readFileSync(path.join(ROOT, "src/app/api/calendar/sync/route.ts"), "utf8");
+  assert.equal(route.match(/runUnblockRetries\(/g).length, 1);
+  assert.match(route, /try \{\s+return await runSync\('cron', supabase, userId, range\);\s+\} finally \{[\s\S]*?await runUnblockRetries\(supabase, userId\);/);
+  const vercel = JSON.parse(readFileSync(path.join(ROOT, "vercel.json"), "utf8"));
+  assert.ok(vercel.crons.some((cron) => cron.path === "/api/calendar/sync" && cron.schedule === "*/15 * * * *"));
+  const logs = [];
+  const { warn, info } = console;
+  console.warn = (...args) => logs.push(JSON.stringify(args));
+  console.info = (...args) => logs.push(JSON.stringify(args));
+  try {
+    const client = (reply) => ({ rpc: async (name, args) => { assert.equal(name, "task_unblock_run_retries"); assert.deepEqual(args, { p_user_id: "user-1" }); return reply(); } });
+    const quiet = { ok: true, applied: 0, skipped: 0, failed: 0, gave_up: 0 };
+    assert.deepEqual(await unblocks.runUnblockRetries(client(() => ({ data: quiet, error: null })), "user-1"), quiet);
+    assert.equal(logs.length, 0, "nothing to report, nothing logged");
+    const busy = { ok: true, applied: 1, skipped: 2, failed: 0, gave_up: 1 };
+    assert.deepEqual(await unblocks.runUnblockRetries(client(() => ({ data: busy, error: null })), "user-1"), busy);
+    assert.equal(await unblocks.runUnblockRetries(client(() => ({ data: null, error: { code: "42883", message: "text" } })), "user-1"), null);
+    assert.equal(await unblocks.runUnblockRetries(client(() => { throw new Error("network"); }), "user-1"), null);
+    assert.equal(logs.length, 3);
+    assert.doesNotMatch(logs.join(" "), /user-1|network|text/, "counts and a code only");
+  } finally {
+    console.warn = warn;
+    console.info = info;
+  }
 });
 
 await test("rollback drops every function, trigger, table and column 067 creates", () => {
@@ -292,6 +357,7 @@ await test("rollback drops every function, trigger, table and column 067 creates
     ...[...MIGRATION.matchAll(/CREATE OR REPLACE FUNCTION (\w+)/g)].map((m) => `FUNCTION IF EXISTS ${m[1]}(`),
     ...[...MIGRATION.matchAll(/CREATE TRIGGER (\w+)/g)].map((m) => `TRIGGER IF EXISTS ${m[1]} `),
     "TABLE IF EXISTS task_unblocks",
+    "TABLE IF EXISTS task_unblock_retries",
     "DROP COLUMN IF EXISTS unblocked_at",
   ];
   for (const item of created) assert.ok(ROLLBACK.includes(item), `rollback lacks ${item}`);

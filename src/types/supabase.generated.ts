@@ -2643,6 +2643,60 @@ export type Database = {
           },
         ]
       }
+      task_unblock_retries: {
+        Row: {
+          attempts: number
+          blocker_id: string
+          blocker_type: string
+          closed_at: string | null
+          closed_reason: string | null
+          error_code: string | null
+          failed_at: string
+          id: string
+          kind: string
+          last_attempt_at: string | null
+          task_due_at: string | null
+          task_due_change_id: string | null
+          task_id: string
+          task_status: string
+          user_id: string
+        }
+        Insert: {
+          attempts?: number
+          blocker_id: string
+          blocker_type: string
+          closed_at?: string | null
+          closed_reason?: string | null
+          error_code?: string | null
+          failed_at?: string
+          id?: string
+          kind: string
+          last_attempt_at?: string | null
+          task_due_at?: string | null
+          task_due_change_id?: string | null
+          task_id: string
+          task_status: string
+          user_id: string
+        }
+        Update: {
+          attempts?: number
+          blocker_id?: string
+          blocker_type?: string
+          closed_at?: string | null
+          closed_reason?: string | null
+          error_code?: string | null
+          failed_at?: string
+          id?: string
+          kind?: string
+          last_attempt_at?: string | null
+          task_due_at?: string | null
+          task_due_change_id?: string | null
+          task_id?: string
+          task_status?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       task_unblocks: {
         Row: {
           blocker_commitment_id: string | null
@@ -3399,6 +3453,34 @@ export type Database = {
       task_unblock_landing_date: {
         Args: { p_is_personal: boolean; p_now: string }
         Returns: string
+      }
+      task_unblock_priority: {
+        Args: {
+          p_base: number
+          p_due_at: string
+          p_mentions: string[]
+          p_now: string
+          p_score: number
+          p_status: string
+          p_title: string
+          p_user_id: string
+        }
+        Returns: number
+      }
+      task_unblock_process_waiter: {
+        Args: {
+          p_entered_done: boolean
+          p_now: string
+          p_target_id: string
+          p_type: string
+          p_user_id: string
+          p_waiting_id: string
+        }
+        Returns: string
+      }
+      task_unblock_run_retries: {
+        Args: { p_limit?: number; p_user_id: string }
+        Returns: Json
       }
       undo_break_task_into_tasks: {
         Args: { p_request: Json; p_task_id: string; p_user_id: string }

@@ -54,7 +54,7 @@
 --       finished at the same moment can't both miss the last-one check (the
 --       second waits for the first's commit, then its fresh READ COMMITTED read
 --       sees it), and a link added or a blocker reopened concurrently (both also
---       lock W first) is either seen or sees this. Then W is unblocked only if
+--       lock W before acting) is either seen or sees this. Then W is unblocked only if
 --       ALL its active links point at Done items, W is Backlog, Planned, In
 --       Progress or Blocked/Waiting (Parked, Missed, Done untouched), and W has
 --       no open unblock already (a bulk Done of two blockers in one statement
@@ -76,12 +76,12 @@
 --         kept;
 --       - recurring tasks (template or instance, rule 2): pill and comment only,
 --         status and date never change (like the cascade);
---       - priority_score: the app recomputes it in TypeScript on every status or
---         date save; here only the two inputs this write changes are adjusted
---         (+20 for leaving Blocked/Waiting, src/lib/priority.ts
---         calculateWaitingPenalty; the due-proximity boost of the old vs new
---         date, calculateDueProximityBoost), clamped 0-100. The next app save
---         recomputes it fully;
+--       - priority_score: when the status or date changes it is recalculated the
+--         way src/lib/priority.ts recalculateTaskPriority does it (fix round 2):
+--         base_priority (else the stored score) plus the real boosts on the new
+--         status and date, clamped 0-100 (task_unblock_priority). Never by adding
+--         to the stored score: that is already clamped. Nothing changed, not
+--         touched;
 --       - cascade (rule 5): this due-date write does NOT run the date cascade
 --         (the cascade is planned by the task API, which isn't involved). Tasks
 --         that wait on W keep waiting on it and get this rule when W is done;
@@ -97,8 +97,8 @@
 --         the change token (due_change_id) AND the date the unblock wrote (a
 --         later save of the same date is another change and is kept); the
 --         priority goes back to the stored one when everything was restored and
---         it is unchanged, else the same two-input adjustment is reversed. One
---         transition row if the status went back, one system comment (no
+--         it is unchanged, else it is recalculated on the resulting status and
+--         date. One transition row if the status went back, one system comment (no
 --         titles). The row is marked reverted (and cleared, reason 'reopened');
 --         the pill clears. What was left alone shows "Blocked by dependency"
 --         again (the app computes that from the reopened link);
@@ -108,10 +108,14 @@
 --         change and no comment; only the row closes (and a leftover pill);
 --       - the pill already cleared and the unblock changed nothing (pill-only):
 --         the row is marked reverted, the task is not written, no comment.
---    Failure isolation: the work runs in a sub-transaction (BEGIN ... EXCEPTION).
---    If it fails (lock_timeout 5s, a deadlock, anything), its writes are rolled
---    back, a WARNING is logged and the Done itself still saves: finishing a task
---    never fails because of an unblock side effect.
+--    c. Failure isolation (fix round 2): each waiting task is one sub-transaction
+--       (task_unblock_process_waiter inside BEGIN ... EXCEPTION). If it fails
+--       (lock_timeout 5s, a deadlock, the API role's statement_timeout, anything)
+--       only that task's writes roll back; the Done or reopen still saves, the
+--       other waiting tasks still go through, a WARNING is logged (SQLSTATE and
+--       ids only) and a task_unblock_retries row records the work (see 7). After
+--       one failure the rest of the run waits 100ms per task, not 5s, so one bad
+--       run stays inside the 8s statement_timeout.
 --
 -- 4. task_unblock_pill() (trg_tasks_unblock_pill, BEFORE INSERT/UPDATE on
 --    tasks): the pill clears "until I act" (Brent 10/30), on any write that is
@@ -126,7 +130,16 @@
 -- 5. task_unblock_on_link() (trg_task_dependencies_unblock_reblock, AFTER INSERT
 --    or UPDATE of the link columns on task_dependencies): a new ACTIVE link from
 --    a task showing the pill to an item that is not Done clears the pill
---    ('reblocked'). It locks the waiting task first (same protocol as 3).
+--    ('reblocked'). Fix round 2: it first takes FOR SHARE on the TARGET and reads
+--    its status from that lock. The foreign key's FOR KEY SHARE doesn't conflict
+--    with a status UPDATE, so before this a link and a reopen could each miss the
+--    other and leave a false pill: the reopen enumerated its waiters without the
+--    uncommitted link, the link read the old Done. Now whichever comes second
+--    waits: a link behind a reopen reads the new status and clears the pill; a
+--    reopen behind a link (held to commit even when the target is Done) sees the
+--    link when its trigger enumerates. Then the waiting task (same protocol as 3).
+--    A busy target past lock_timeout fails the link add (55P03: the add route's
+--    503), never silently.
 --
 -- 6. clear_task_unblock(p_user_id, p_task_id, p_reason 'brief' | 'manual'):
 --    clears a task's pill without touching anything else, for S3's brief row
@@ -134,13 +147,42 @@
 --    Returns { ok, cleared }. SECURITY INVOKER, a signed-in user may pass only
 --    their own id, lock_timeout 5s, EXECUTE for authenticated and service_role.
 --
--- Lock order: the blocker row (held by the UPDATE that set Done), then each
--- waiting task in id order. No advisory lock and no project lock is taken (a
--- task UPDATE that changes neither project_id nor user_id locks no project), so
--- 062's protocol (advisory, projects, tasks) can't wait on this, except a
--- cascade that holds both the blocker and the waiting task while the blocker is
--- being finished; Postgres then aborts one of them (40P01), which for this side
--- is caught by the failure isolation above.
+-- 7. task_unblock_retries + task_unblock_run_retries(p_user_id, p_limit 10) (fix
+--    round 2): the durable record of a waiting task 3c couldn't process, and the
+--    idempotent retry. One small table, one function, one call site: the Vercel
+--    cron /api/calendar/sync (every 15 minutes, service_role, after the sync,
+--    src/lib/task-unblocks.ts runUnblockRetries); no new cron or env var. Each
+--    record is one sub-transaction: blocker FOR SHARE, then the waiting task FOR
+--    NO KEY UPDATE (the trigger's order), then a fresh read of the current state:
+--    - the blocker gone or no longer in the state the event left it in (Done for
+--      'unblock', not Done for 'reopen'): closed 'blocker_changed', nothing done;
+--    - the task gone: closed 'task_gone';
+--    - the link no longer active: closed 'task_changed';
+--    - 'unblock' only: an edit that began after the failure changed the task's
+--      status or due date: closed 'task_changed', nothing done. updated_at is
+--      compared with failed_at because the edit that held the lock began before
+--      the failure and must not count; the trigger would have seen it had its
+--      wait been shorter. A 'reopen' has no such gate: field-by-field
+--      compare-and-set already keeps later edits, and the pill must clear;
+--    - else the same task_unblock_process_waiter as the trigger: closed 'applied',
+--      or 'nothing_to_do' when the rules say so today (a closed task, a pill
+--      already showing, another open blocker).
+--    A retry that fails counts an attempt and stays open. At 8 attempts (about two
+--    hours) it gives up: closed_at stays NULL, so it stays visible. S3's count of
+--    stuck work is `closed_at IS NULL AND attempts >= 8` (the owner can SELECT;
+--    the function also returns it as gave_up). The landing day and unblocked_at
+--    are the retry's. Records have no foreign keys (see the table), so a deleted
+--    task's record closes on its next run.
+--
+-- Lock order: the blocker row (held by the UPDATE that set Done, or FOR SHARE from
+-- a link or a retry), then each waiting task in id order. 061's loop guard takes
+-- its advisory lock in a BEFORE trigger, before any of these, and takes no row
+-- lock itself, so a link waits on the advisory lock holding nothing and a cascade
+-- can't wait on it. No project lock is taken (a task UPDATE that changes neither
+-- project_id nor user_id locks no project), so 062's protocol (advisory, projects,
+-- tasks) can't wait on this, except a cascade that holds both the blocker and the
+-- waiting task while the blocker is being finished; Postgres then aborts one of
+-- them (40P01), which for this side is caught by 3c and retried.
 --
 -- The functions: SECURITY INVOKER (RLS applies; the machine keys' service-role
 -- client bypasses it, every statement here is scoped by the row's user_id),
@@ -221,8 +263,10 @@ CREATE INDEX IF NOT EXISTS idx_task_unblocks_blocker_commitment
 COMMENT ON TABLE task_unblocks IS
   'Now unblocked (067): one row per unblock (the last item a task waited on became Done): before/after status, due date and priority, the pill (cleared_at/cleared_reason) and the reopen Undo (reverted_*). Written only by 067''s functions.';
 
--- Rows are never deleted by callers (no DELETE grant or policy: RLS denies it);
--- they go with their task (ON DELETE CASCADE).
+-- Rows are never deleted by callers; they go with their task (ON DELETE CASCADE).
+-- REVOKE ALL first: default privileges differ between stacks (a fresh local table
+-- gets TRUNCATE, which ignores RLS, for the API roles).
+REVOKE ALL ON task_unblocks FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE ON task_unblocks TO authenticated, service_role;
 ALTER TABLE task_unblocks ENABLE ROW LEVEL SECURITY;
 
@@ -237,6 +281,54 @@ DROP POLICY IF EXISTS "Unblock functions update own task_unblocks" ON task_unblo
 CREATE POLICY "Unblock functions update own task_unblocks"
   ON task_unblocks FOR UPDATE
   USING (auth.uid() = user_id AND current_setting('mission_control.unblock_writer', true) = 'on')
+  WITH CHECK (auth.uid() = user_id AND current_setting('mission_control.unblock_writer', true) = 'on');
+
+-- ── 2b. Failed waiters, for the retry ─────────────────────────────────────
+
+-- task_id and blocker_id have NO foreign keys on purpose: the failure is usually a
+-- lock on the waiting task, and a key check would wait on that same lock.
+CREATE TABLE IF NOT EXISTS task_unblock_retries (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('unblock', 'reopen')),
+  task_id UUID NOT NULL,
+  blocker_type TEXT NOT NULL CHECK (blocker_type IN ('task', 'commitment')),
+  blocker_id UUID NOT NULL,
+  task_status TEXT NOT NULL,
+  task_due_at TIMESTAMPTZ,
+  task_due_change_id UUID,
+  failed_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  error_code TEXT,
+  attempts INT NOT NULL DEFAULT 0,
+  last_attempt_at TIMESTAMPTZ,
+  closed_at TIMESTAMPTZ,
+  closed_reason TEXT CHECK (
+    closed_reason IS NULL
+    OR closed_reason IN ('applied', 'nothing_to_do', 'task_changed', 'blocker_changed', 'task_gone')
+  ),
+  CONSTRAINT task_unblock_retries_closed_has_reason CHECK ((closed_at IS NULL) = (closed_reason IS NULL))
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_unblock_retries_open
+  ON task_unblock_retries(user_id, failed_at)
+  WHERE closed_at IS NULL;
+
+COMMENT ON TABLE task_unblock_retries IS
+  'Now unblocked (067): a waiting task the Done or reopen trigger could not process. task_unblock_run_retries works through open rows; a row with closed_at NULL and attempts at the cap gave up and stays as a count.';
+
+-- The trigger runs as the caller, so it inserts as the caller; only the retry
+-- (service_role) updates. Nobody deletes.
+REVOKE ALL ON task_unblock_retries FROM PUBLIC, anon, authenticated, service_role;
+GRANT SELECT, INSERT ON task_unblock_retries TO authenticated;
+GRANT SELECT, INSERT, UPDATE ON task_unblock_retries TO service_role;
+ALTER TABLE task_unblock_retries ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can view own task_unblock_retries" ON task_unblock_retries;
+CREATE POLICY "Users can view own task_unblock_retries"
+  ON task_unblock_retries FOR SELECT USING (auth.uid() = user_id);
+DROP POLICY IF EXISTS "Unblock trigger records own task_unblock_retries" ON task_unblock_retries;
+CREATE POLICY "Unblock trigger records own task_unblock_retries"
+  ON task_unblock_retries FOR INSERT
   WITH CHECK (auth.uid() = user_id AND current_setting('mission_control.unblock_writer', true) = 'on');
 
 -- ── Helpers (pure) ────────────────────────────────────────────────────────
@@ -255,6 +347,48 @@ AS $$
     WHEN p_due_at - p_now <= INTERVAL '48 hours' THEN 15
     ELSE 0
   END;
+$$;
+
+-- The score of src/lib/priority.ts recalculateTaskPriority: clamp(base + boosts),
+-- 0-100. Base: base_priority, else the stored score (the same fallback). Boosts: a
+-- high-priority stakeholder mentioned +20 each, capped at 30; an urgency word in
+-- the title +25; Blocked/Waiting -20; the due-proximity boost above. STABLE, not
+-- pure: it reads the user's stakeholders, like the app does.
+CREATE OR REPLACE FUNCTION task_unblock_priority(
+  p_user_id UUID,
+  p_base INT,
+  p_score INT,
+  p_title TEXT,
+  p_mentions TEXT[],
+  p_status TEXT,
+  p_due_at TIMESTAMPTZ,
+  p_now TIMESTAMPTZ
+)
+RETURNS INT
+LANGUAGE sql
+STABLE
+SET search_path = public
+AS $$
+  SELECT GREATEST(0, LEAST(100,
+    COALESCE(p_base, p_score)
+    + LEAST(30, 20 * (
+        SELECT count(*)::INT
+          FROM public.stakeholders s
+         WHERE s.user_id = p_user_id
+           AND s.is_high_priority
+           AND EXISTS (
+             SELECT 1 FROM unnest(COALESCE(p_mentions, '{}')) m
+              WHERE position(lower(s.name) IN lower(m)) > 0
+           )
+      ))
+    + CASE WHEN EXISTS (
+        SELECT 1
+          FROM unnest(ARRAY['sla', 'urgent', 'asap', 'outage', 'production issue', 'critical', 'emergency']) k
+         WHERE position(k IN lower(COALESCE(p_title, ''))) > 0
+      ) THEN 25 ELSE 0 END
+    + CASE WHEN p_status = 'Blocked/Waiting' THEN -20 ELSE 0 END
+    + task_unblock_due_boost(p_due_at, p_now)
+  ));
 $$;
 
 -- "Fri 10/30" (the comments' date format).
@@ -295,22 +429,25 @@ $$;
 
 -- ── 3. Done in / Done out ─────────────────────────────────────────────────
 
-CREATE OR REPLACE FUNCTION task_unblock_on_status_change()
-RETURNS TRIGGER
+-- One waiting task, in the caller's sub-transaction. Called by the trigger and by
+-- the retry, so both follow the same rules on the same fresh read. The caller
+-- holds the blocker's row and has set the writer setting, which no API request
+-- can do, so a direct call through PostgREST is refused. The lock wait is the
+-- caller's (5s in the trigger, 1s in the retry). Returns 'changed' or 'none'.
+CREATE OR REPLACE FUNCTION task_unblock_process_waiter(
+  p_type TEXT,
+  p_target_id UUID,
+  p_user_id UUID,
+  p_waiting_id UUID,
+  p_entered_done BOOLEAN,
+  p_now TIMESTAMPTZ
+)
+RETURNS TEXT
 LANGUAGE plpgsql
 SECURITY INVOKER
 SET search_path = public
-SET lock_timeout = '5s'
 AS $$
 DECLARE
-  v_type TEXT := CASE WHEN TG_TABLE_NAME = 'commitments' THEN 'commitment' ELSE 'task' END;
-  v_user_id UUID := NEW.user_id;
-  v_target_id UUID := NEW.id;
-  v_entered_done BOOLEAN := NEW.status::TEXT = 'Done' AND OLD.status::TEXT IS DISTINCT FROM 'Done';
-  v_left_done BOOLEAN := OLD.status::TEXT = 'Done' AND NEW.status::TEXT IS DISTINCT FROM 'Done';
-  v_now TIMESTAMPTZ := now();
-  v_prev_writer TEXT;
-  v_waiting_id UUID;
   v_task tasks%ROWTYPE;
   v_row task_unblocks%ROWTYPE;
   v_open_blockers INT;
@@ -331,6 +468,272 @@ DECLARE
   v_due_back BOOLEAN;
   v_restore_priority INT;
 BEGIN
+  IF current_setting('mission_control.unblock_writer', true) IS DISTINCT FROM 'on' THEN
+    RAISE EXCEPTION 'only the unblock trigger and retry call this' USING ERRCODE = '42501';
+  END IF;
+
+  -- Lock the waiting task BEFORE reading its links again (see the header, 3a).
+  SELECT * INTO v_task
+    FROM public.tasks t
+   WHERE t.id = p_waiting_id AND t.user_id = p_user_id
+   FOR NO KEY UPDATE;
+  IF NOT FOUND THEN
+    RETURN 'none';
+  END IF;
+
+  IF p_entered_done THEN
+    -- ── a. Unblock ──
+    IF v_task.status::TEXT NOT IN ('Backlog', 'Planned', 'In Progress', 'Blocked/Waiting') THEN
+      RETURN 'none';
+    END IF;
+    IF v_task.unblocked_at IS NOT NULL THEN
+      RETURN 'none';
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM public.task_unblocks u WHERE u.task_id = v_task.id AND u.cleared_at IS NULL
+    ) THEN
+      RETURN 'none';
+    END IF;
+
+    -- Every active link must point at a Done item (a fresh read after the lock).
+    SELECT count(*) INTO v_open_blockers
+      FROM public.task_dependencies d
+      LEFT JOIN public.tasks bt ON bt.id = d.depends_on_task_id
+      LEFT JOIN public.commitments bc ON bc.id = d.depends_on_commitment_id
+     WHERE d.task_id = v_task.id
+       AND d.user_id = p_user_id
+       AND d.is_resolved = false
+       AND COALESCE(bt.status::TEXT, bc.status::TEXT, '') <> 'Done';
+    IF v_open_blockers > 0 THEN
+      RETURN 'none';
+    END IF;
+
+    SELECT COALESCE(array_agg(DISTINCT d.depends_on_task_id) FILTER (WHERE d.depends_on_task_id IS NOT NULL), '{}'),
+           COALESCE(array_agg(DISTINCT d.depends_on_commitment_id) FILTER (WHERE d.depends_on_commitment_id IS NOT NULL), '{}')
+      INTO v_waited_tasks, v_waited_commitments
+      FROM public.task_dependencies d
+     WHERE d.task_id = v_task.id AND d.user_id = p_user_id AND d.is_resolved = false;
+
+    v_recurring := COALESCE(v_task.is_recurring_template, false) OR v_task.recurring_template_id IS NOT NULL;
+    v_personal := 'personal' = ANY (COALESCE(v_task.tags, '{}'))
+      OR EXISTS (
+        SELECT 1 FROM public.projects p
+         WHERE p.id = v_task.project_id AND p.user_id = p_user_id AND 'personal' = ANY (COALESCE(p.tags, '{}'))
+      );
+    v_landing := task_unblock_landing_date(p_now, v_personal);
+
+    v_new_status := v_task.status::TEXT;
+    v_new_due := v_task.due_at;
+    IF NOT v_recurring THEN
+      IF v_task.status::TEXT = 'Blocked/Waiting'
+         AND (NULLIF(btrim(COALESCE(v_task.waiting_on, '')), '') IS NULL
+              OR v_task.blocked_reason::TEXT IS NOT DISTINCT FROM 'prerequisite') THEN
+        v_new_status := 'Planned';
+      END IF;
+      IF v_task.due_at IS NULL
+         OR (v_task.due_at AT TIME ZONE 'America/New_York')::DATE < v_landing THEN
+        v_new_due := task_unblock_end_of_day(v_landing);
+      END IF;
+    END IF;
+    v_status_changed := v_new_status IS DISTINCT FROM v_task.status::TEXT;
+    v_due_changed := v_new_due IS DISTINCT FROM v_task.due_at;
+
+    -- Recalculated from the base and the real boosts, never by adding to the
+    -- stored (clamped) score. Nothing changed: the score isn't touched.
+    v_new_priority := v_task.priority_score;
+    IF v_status_changed OR v_due_changed THEN
+      v_new_priority := task_unblock_priority(
+        p_user_id, v_task.base_priority, v_task.priority_score, v_task.title,
+        v_task.stakeholder_mentions, v_new_status, v_new_due, p_now
+      );
+    END IF;
+
+    UPDATE public.tasks
+       SET status = v_new_status::task_status,
+           due_at = v_new_due,
+           priority_score = v_new_priority,
+           unblocked_at = p_now
+     WHERE id = v_task.id
+    RETURNING due_change_id INTO v_new_token;
+
+    IF v_status_changed THEN
+      INSERT INTO public.task_status_transitions (user_id, task_id, from_status, to_status, transitioned_at)
+      VALUES (p_user_id, v_task.id, v_task.status::TEXT, v_new_status, p_now);
+    END IF;
+
+    -- No titles, ever (FamCal-safe): only this task's own status and dates.
+    v_comment := 'Now unblocked: everything it waited on is done.';
+    IF v_status_changed THEN
+      v_comment := v_comment || ' Moved from Waiting to Planned.';
+    ELSIF v_task.status::TEXT = 'Blocked/Waiting' AND NOT v_recurring THEN
+      v_comment := v_comment || ' Still marked Waiting, since it also waits on something else.';
+    END IF;
+    IF v_due_changed THEN
+      IF v_task.due_at IS NULL THEN
+        v_comment := v_comment || ' Due date set to ' || task_unblock_day_label(v_landing) || '.';
+      ELSE
+        v_comment := v_comment || ' Due date moved from '
+          || task_unblock_day_label((v_task.due_at AT TIME ZONE 'America/New_York')::DATE)
+          || ' to ' || task_unblock_day_label(v_landing) || '.';
+      END IF;
+    END IF;
+    IF v_status_changed OR v_due_changed THEN
+      v_comment := v_comment || ' Reopening what it waited on within 7 days puts this back.';
+    END IF;
+
+    INSERT INTO public.task_comments (user_id, task_id, content, source)
+    VALUES (p_user_id, v_task.id, v_comment, 'system')
+    RETURNING id INTO v_comment_id;
+
+    INSERT INTO public.task_unblocks (
+      user_id, task_id, blocker_type, blocker_task_id, blocker_commitment_id,
+      waited_on_task_ids, waited_on_commitment_ids, unblocked_at, landing_date, is_recurring,
+      prior_status, new_status, status_changed, prior_due_at, new_due_at, due_changed,
+      new_due_change_id, prior_priority_score, new_priority_score, comment_id
+    ) VALUES (
+      p_user_id, v_task.id, p_type,
+      CASE WHEN p_type = 'task' THEN p_target_id END,
+      CASE WHEN p_type = 'commitment' THEN p_target_id END,
+      v_waited_tasks, v_waited_commitments, p_now, v_landing, v_recurring,
+      v_task.status::TEXT, v_new_status, v_status_changed, v_task.due_at, v_new_due, v_due_changed,
+      CASE WHEN v_due_changed THEN v_new_token END, v_task.priority_score, v_new_priority, v_comment_id
+    );
+
+  ELSE
+    -- ── b. Reopen ──
+    -- (Every writer of a task's unblock rows holds the task's row lock, taken above.)
+    SELECT * INTO v_row
+      FROM public.task_unblocks u
+     WHERE u.task_id = v_task.id AND u.user_id = p_user_id AND u.reverted_at IS NULL
+     ORDER BY u.unblocked_at DESC, u.created_at DESC
+     LIMIT 1;
+    IF NOT FOUND THEN
+      RETURN 'none';
+    END IF;
+
+    IF v_row.unblocked_at <= p_now - INTERVAL '7 days' THEN
+      -- Too old to undo: only the pill goes (it would contradict "Blocked by dependency").
+      IF v_row.cleared_at IS NULL THEN
+        UPDATE public.task_unblocks SET cleared_at = p_now, cleared_reason = 'reopened' WHERE id = v_row.id;
+        UPDATE public.tasks SET unblocked_at = NULL WHERE id = v_task.id AND unblocked_at IS NOT NULL;
+        RETURN 'changed';
+      END IF;
+      RETURN 'none';
+    END IF;
+
+    -- A closed task (Done, Parked, Missed) is Brent's: nothing on it changes and
+    -- no comment lands on it. Only the bookkeeping closes (the row, and a pill
+    -- if one is somehow left, so unblocked_at and the open row stay in step).
+    IF v_task.status::TEXT NOT IN ('Backlog', 'Planned', 'In Progress', 'Blocked/Waiting') THEN
+      UPDATE public.task_unblocks
+         SET reverted_at = p_now, reverted_by_type = p_type, reverted_by_id = p_target_id,
+             revert_status_restored = false, revert_due_restored = false,
+             cleared_at = COALESCE(cleared_at, p_now),
+             cleared_reason = COALESCE(cleared_reason, 'reopened')
+       WHERE id = v_row.id;
+      UPDATE public.tasks SET unblocked_at = NULL WHERE id = v_task.id AND unblocked_at IS NOT NULL;
+      RETURN 'changed';
+    END IF;
+
+    -- Pill already gone (Brent acted) and the unblock changed nothing: just
+    -- record the revert, no task write and no comment.
+    IF v_row.cleared_at IS NOT NULL AND NOT v_row.status_changed AND NOT v_row.due_changed THEN
+      UPDATE public.task_unblocks
+         SET reverted_at = p_now, reverted_by_type = p_type, reverted_by_id = p_target_id,
+             revert_status_restored = false, revert_due_restored = false
+       WHERE id = v_row.id;
+      RETURN 'changed';
+    END IF;
+
+    -- Compare-and-set, field by field (like the cascade's Undo).
+    v_status_back := v_row.status_changed AND v_task.status::TEXT = v_row.new_status;
+    v_due_back := v_row.due_changed
+      AND v_task.due_change_id IS NOT DISTINCT FROM v_row.new_due_change_id
+      AND v_task.due_at IS NOT DISTINCT FROM v_row.new_due_at;
+
+    v_restore_priority := v_task.priority_score;
+    IF (v_status_back OR v_due_back) THEN
+      IF v_status_back = v_row.status_changed AND v_due_back = v_row.due_changed
+         AND v_task.priority_score IS NOT DISTINCT FROM v_row.new_priority_score THEN
+        v_restore_priority := COALESCE(v_row.prior_priority_score, v_task.priority_score);
+      ELSE
+        v_restore_priority := task_unblock_priority(
+          p_user_id, v_task.base_priority, v_task.priority_score, v_task.title, v_task.stakeholder_mentions,
+          CASE WHEN v_status_back THEN v_row.prior_status ELSE v_task.status::TEXT END,
+          CASE WHEN v_due_back THEN v_row.prior_due_at ELSE v_task.due_at END,
+          p_now
+        );
+      END IF;
+    END IF;
+
+    UPDATE public.tasks
+       SET status = CASE WHEN v_status_back THEN v_row.prior_status::task_status ELSE status END,
+           due_at = CASE WHEN v_due_back THEN v_row.prior_due_at ELSE due_at END,
+           priority_score = v_restore_priority,
+           unblocked_at = NULL
+     WHERE id = v_task.id;
+
+    IF v_status_back THEN
+      INSERT INTO public.task_status_transitions (user_id, task_id, from_status, to_status, transitioned_at)
+      VALUES (p_user_id, v_task.id, v_row.new_status, v_row.prior_status, p_now);
+    END IF;
+
+    v_comment := CASE WHEN v_row.cleared_at IS NULL
+      THEN 'Something it waited on was reopened, so it is no longer marked Now unblocked.'
+      ELSE 'Something it waited on was reopened.' END;
+    IF v_status_back THEN
+      v_comment := v_comment || ' Back to Waiting.';
+    END IF;
+    IF v_due_back THEN
+      IF v_row.prior_due_at IS NULL THEN
+        v_comment := v_comment || ' Due date cleared again.';
+      ELSE
+        v_comment := v_comment || ' Due date back to '
+          || task_unblock_day_label((v_row.prior_due_at AT TIME ZONE 'America/New_York')::DATE) || '.';
+      END IF;
+    END IF;
+    IF (v_row.status_changed AND NOT v_status_back) OR (v_row.due_changed AND NOT v_due_back) THEN
+      v_comment := v_comment || ' Its status or due date changed since, so that was left as it is.';
+    END IF;
+
+    INSERT INTO public.task_comments (user_id, task_id, content, source)
+    VALUES (p_user_id, v_task.id, v_comment, 'system')
+    RETURNING id INTO v_comment_id;
+
+    UPDATE public.task_unblocks
+       SET reverted_at = p_now,
+           reverted_by_type = p_type,
+           reverted_by_id = p_target_id,
+           revert_status_restored = v_status_back,
+           revert_due_restored = v_due_back,
+           revert_comment_id = v_comment_id,
+           cleared_at = COALESCE(cleared_at, p_now),
+           cleared_reason = COALESCE(cleared_reason, 'reopened')
+     WHERE id = v_row.id;
+  END IF;
+
+  RETURN 'changed';
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION task_unblock_on_status_change()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public
+SET lock_timeout = '5s'
+AS $$
+DECLARE
+  v_type TEXT := CASE WHEN TG_TABLE_NAME = 'commitments' THEN 'commitment' ELSE 'task' END;
+  v_user_id UUID := NEW.user_id;
+  v_target_id UUID := NEW.id;
+  v_entered_done BOOLEAN := NEW.status::TEXT = 'Done' AND OLD.status::TEXT IS DISTINCT FROM 'Done';
+  v_left_done BOOLEAN := OLD.status::TEXT = 'Done' AND NEW.status::TEXT IS DISTINCT FROM 'Done';
+  v_now TIMESTAMPTZ := now();
+  v_prev_writer TEXT;
+  v_waiting_id UUID;
+  v_code TEXT;
+BEGIN
   IF NOT v_entered_done AND NOT v_left_done THEN
     RETURN NULL;
   END IF;
@@ -350,241 +753,37 @@ BEGIN
          )
        ORDER BY d.task_id
     LOOP
-      -- Lock the waiting task BEFORE reading its links again (see the header, 3a).
-      SELECT * INTO v_task
-        FROM public.tasks t
-       WHERE t.id = v_waiting_id AND t.user_id = v_user_id
-       FOR NO KEY UPDATE;
-      CONTINUE WHEN NOT FOUND;
-
-      IF v_entered_done THEN
-        -- ── a. Unblock ──
-        CONTINUE WHEN v_task.status::TEXT NOT IN ('Backlog', 'Planned', 'In Progress', 'Blocked/Waiting');
-        CONTINUE WHEN v_task.unblocked_at IS NOT NULL;
-        CONTINUE WHEN EXISTS (
-          SELECT 1 FROM public.task_unblocks u WHERE u.task_id = v_task.id AND u.cleared_at IS NULL
-        );
-
-        -- Every active link must point at a Done item (a fresh read after the lock).
-        SELECT count(*) INTO v_open_blockers
-          FROM public.task_dependencies d
-          LEFT JOIN public.tasks bt ON bt.id = d.depends_on_task_id
-          LEFT JOIN public.commitments bc ON bc.id = d.depends_on_commitment_id
-         WHERE d.task_id = v_task.id
-           AND d.user_id = v_user_id
-           AND d.is_resolved = false
-           AND COALESCE(bt.status::TEXT, bc.status::TEXT, '') <> 'Done';
-        CONTINUE WHEN v_open_blockers > 0;
-
-        SELECT COALESCE(array_agg(DISTINCT d.depends_on_task_id) FILTER (WHERE d.depends_on_task_id IS NOT NULL), '{}'),
-               COALESCE(array_agg(DISTINCT d.depends_on_commitment_id) FILTER (WHERE d.depends_on_commitment_id IS NOT NULL), '{}')
-          INTO v_waited_tasks, v_waited_commitments
-          FROM public.task_dependencies d
-         WHERE d.task_id = v_task.id AND d.user_id = v_user_id AND d.is_resolved = false;
-
-        v_recurring := COALESCE(v_task.is_recurring_template, false) OR v_task.recurring_template_id IS NOT NULL;
-        v_personal := 'personal' = ANY (COALESCE(v_task.tags, '{}'))
-          OR EXISTS (
-            SELECT 1 FROM public.projects p
-             WHERE p.id = v_task.project_id AND p.user_id = v_user_id AND 'personal' = ANY (COALESCE(p.tags, '{}'))
-          );
-        v_landing := task_unblock_landing_date(v_now, v_personal);
-
-        v_new_status := v_task.status::TEXT;
-        v_new_due := v_task.due_at;
-        IF NOT v_recurring THEN
-          IF v_task.status::TEXT = 'Blocked/Waiting'
-             AND (NULLIF(btrim(COALESCE(v_task.waiting_on, '')), '') IS NULL
-                  OR v_task.blocked_reason::TEXT IS NOT DISTINCT FROM 'prerequisite') THEN
-            v_new_status := 'Planned';
-          END IF;
-          IF v_task.due_at IS NULL
-             OR (v_task.due_at AT TIME ZONE 'America/New_York')::DATE < v_landing THEN
-            v_new_due := task_unblock_end_of_day(v_landing);
-          END IF;
-        END IF;
-        v_status_changed := v_new_status IS DISTINCT FROM v_task.status::TEXT;
-        v_due_changed := v_new_due IS DISTINCT FROM v_task.due_at;
-
-        v_new_priority := v_task.priority_score;
-        IF v_status_changed OR v_due_changed THEN
-          v_new_priority := GREATEST(0, LEAST(100,
-            v_task.priority_score
-            + CASE WHEN v_status_changed THEN 20 ELSE 0 END
-            + CASE WHEN v_due_changed
-                THEN task_unblock_due_boost(v_new_due, v_now) - task_unblock_due_boost(v_task.due_at, v_now)
-                ELSE 0 END
-          ));
-        END IF;
-
-        UPDATE public.tasks
-           SET status = v_new_status::task_status,
-               due_at = v_new_due,
-               priority_score = v_new_priority,
-               unblocked_at = v_now
-         WHERE id = v_task.id
-        RETURNING due_change_id INTO v_new_token;
-
-        IF v_status_changed THEN
-          INSERT INTO public.task_status_transitions (user_id, task_id, from_status, to_status, transitioned_at)
-          VALUES (v_user_id, v_task.id, v_task.status::TEXT, v_new_status, v_now);
-        END IF;
-
-        -- No titles, ever (FamCal-safe): only this task's own status and dates.
-        v_comment := 'Now unblocked: everything it waited on is done.';
-        IF v_status_changed THEN
-          v_comment := v_comment || ' Moved from Waiting to Planned.';
-        ELSIF v_task.status::TEXT = 'Blocked/Waiting' AND NOT v_recurring THEN
-          v_comment := v_comment || ' Still marked Waiting, since it also waits on something else.';
-        END IF;
-        IF v_due_changed THEN
-          IF v_task.due_at IS NULL THEN
-            v_comment := v_comment || ' Due date set to ' || task_unblock_day_label(v_landing) || '.';
-          ELSE
-            v_comment := v_comment || ' Due date moved from '
-              || task_unblock_day_label((v_task.due_at AT TIME ZONE 'America/New_York')::DATE)
-              || ' to ' || task_unblock_day_label(v_landing) || '.';
-          END IF;
-        END IF;
-        IF v_status_changed OR v_due_changed THEN
-          v_comment := v_comment || ' Reopening what it waited on within 7 days puts this back.';
-        END IF;
-
-        INSERT INTO public.task_comments (user_id, task_id, content, source)
-        VALUES (v_user_id, v_task.id, v_comment, 'system')
-        RETURNING id INTO v_comment_id;
-
-        INSERT INTO public.task_unblocks (
-          user_id, task_id, blocker_type, blocker_task_id, blocker_commitment_id,
-          waited_on_task_ids, waited_on_commitment_ids, unblocked_at, landing_date, is_recurring,
-          prior_status, new_status, status_changed, prior_due_at, new_due_at, due_changed,
-          new_due_change_id, prior_priority_score, new_priority_score, comment_id
-        ) VALUES (
-          v_user_id, v_task.id, v_type,
-          CASE WHEN v_type = 'task' THEN v_target_id END,
-          CASE WHEN v_type = 'commitment' THEN v_target_id END,
-          v_waited_tasks, v_waited_commitments, v_now, v_landing, v_recurring,
-          v_task.status::TEXT, v_new_status, v_status_changed, v_task.due_at, v_new_due, v_due_changed,
-          CASE WHEN v_due_changed THEN v_new_token END, v_task.priority_score, v_new_priority, v_comment_id
-        );
-
-      ELSE
-        -- ── b. Reopen ──
-        -- (Every writer of a task's unblock rows holds the task's row lock, taken above.)
-        SELECT * INTO v_row
-          FROM public.task_unblocks u
-         WHERE u.task_id = v_task.id AND u.user_id = v_user_id AND u.reverted_at IS NULL
-         ORDER BY u.unblocked_at DESC, u.created_at DESC
-         LIMIT 1;
-        CONTINUE WHEN NOT FOUND;
-
-        IF v_row.unblocked_at <= v_now - INTERVAL '7 days' THEN
-          -- Too old to undo: only the pill goes (it would contradict "Blocked by dependency").
-          IF v_row.cleared_at IS NULL THEN
-            UPDATE public.task_unblocks SET cleared_at = v_now, cleared_reason = 'reopened' WHERE id = v_row.id;
-            UPDATE public.tasks SET unblocked_at = NULL WHERE id = v_task.id AND unblocked_at IS NOT NULL;
-          END IF;
-          CONTINUE;
-        END IF;
-
-        -- A closed task (Done, Parked, Missed) is Brent's: nothing on it changes and
-        -- no comment lands on it. Only the bookkeeping closes (the row, and a pill
-        -- if one is somehow left, so unblocked_at and the open row stay in step).
-        IF v_task.status::TEXT NOT IN ('Backlog', 'Planned', 'In Progress', 'Blocked/Waiting') THEN
-          UPDATE public.task_unblocks
-             SET reverted_at = v_now, reverted_by_type = v_type, reverted_by_id = v_target_id,
-                 revert_status_restored = false, revert_due_restored = false,
-                 cleared_at = COALESCE(cleared_at, v_now),
-                 cleared_reason = COALESCE(cleared_reason, 'reopened')
-           WHERE id = v_row.id;
-          UPDATE public.tasks SET unblocked_at = NULL WHERE id = v_task.id AND unblocked_at IS NOT NULL;
-          CONTINUE;
-        END IF;
-
-        -- Pill already gone (Brent acted) and the unblock changed nothing: just
-        -- record the revert, no task write and no comment.
-        IF v_row.cleared_at IS NOT NULL AND NOT v_row.status_changed AND NOT v_row.due_changed THEN
-          UPDATE public.task_unblocks
-             SET reverted_at = v_now, reverted_by_type = v_type, reverted_by_id = v_target_id,
-                 revert_status_restored = false, revert_due_restored = false
-           WHERE id = v_row.id;
-          CONTINUE;
-        END IF;
-
-        -- Compare-and-set, field by field (like the cascade's Undo).
-        v_status_back := v_row.status_changed AND v_task.status::TEXT = v_row.new_status;
-        v_due_back := v_row.due_changed
-          AND v_task.due_change_id IS NOT DISTINCT FROM v_row.new_due_change_id
-          AND v_task.due_at IS NOT DISTINCT FROM v_row.new_due_at;
-
-        v_restore_priority := v_task.priority_score;
-        IF (v_status_back OR v_due_back) THEN
-          IF v_status_back = v_row.status_changed AND v_due_back = v_row.due_changed
-             AND v_task.priority_score IS NOT DISTINCT FROM v_row.new_priority_score THEN
-            v_restore_priority := COALESCE(v_row.prior_priority_score, v_task.priority_score);
-          ELSE
-            v_restore_priority := GREATEST(0, LEAST(100,
-              v_task.priority_score
-              - CASE WHEN v_status_back THEN 20 ELSE 0 END
-              + CASE WHEN v_due_back
-                  THEN task_unblock_due_boost(v_row.prior_due_at, v_now) - task_unblock_due_boost(v_task.due_at, v_now)
-                  ELSE 0 END
-            ));
-          END IF;
-        END IF;
-
-        UPDATE public.tasks
-           SET status = CASE WHEN v_status_back THEN v_row.prior_status::task_status ELSE status END,
-               due_at = CASE WHEN v_due_back THEN v_row.prior_due_at ELSE due_at END,
-               priority_score = v_restore_priority,
-               unblocked_at = NULL
-         WHERE id = v_task.id;
-
-        IF v_status_back THEN
-          INSERT INTO public.task_status_transitions (user_id, task_id, from_status, to_status, transitioned_at)
-          VALUES (v_user_id, v_task.id, v_row.new_status, v_row.prior_status, v_now);
-        END IF;
-
-        v_comment := CASE WHEN v_row.cleared_at IS NULL
-          THEN 'Something it waited on was reopened, so it is no longer marked Now unblocked.'
-          ELSE 'Something it waited on was reopened.' END;
-        IF v_status_back THEN
-          v_comment := v_comment || ' Back to Waiting.';
-        END IF;
-        IF v_due_back THEN
-          IF v_row.prior_due_at IS NULL THEN
-            v_comment := v_comment || ' Due date cleared again.';
-          ELSE
-            v_comment := v_comment || ' Due date back to '
-              || task_unblock_day_label((v_row.prior_due_at AT TIME ZONE 'America/New_York')::DATE) || '.';
-          END IF;
-        END IF;
-        IF (v_row.status_changed AND NOT v_status_back) OR (v_row.due_changed AND NOT v_due_back) THEN
-          v_comment := v_comment || ' Its status or due date changed since, so that was left as it is.';
-        END IF;
-
-        INSERT INTO public.task_comments (user_id, task_id, content, source)
-        VALUES (v_user_id, v_task.id, v_comment, 'system')
-        RETURNING id INTO v_comment_id;
-
-        UPDATE public.task_unblocks
-           SET reverted_at = v_now,
-               reverted_by_type = v_type,
-               reverted_by_id = v_target_id,
-               revert_status_restored = v_status_back,
-               revert_due_restored = v_due_back,
-               revert_comment_id = v_comment_id,
-               cleared_at = COALESCE(cleared_at, v_now),
-               cleared_reason = COALESCE(cleared_reason, 'reopened')
-         WHERE id = v_row.id;
-      END IF;
+      -- Each waiting task in its own sub-transaction (header, 3c). QUERY_CANCELED
+      -- is named because OTHERS doesn't include it: the API role's 8s
+      -- statement_timeout must not undo the Done either.
+      BEGIN
+        PERFORM task_unblock_process_waiter(v_type, v_target_id, v_user_id, v_waiting_id, v_entered_done, v_now);
+      EXCEPTION WHEN query_canceled OR others THEN
+        v_code := SQLSTATE;
+        RAISE WARNING 'task_unblock_on_status_change: % on % %, waiting task % queued for retry', v_code, v_type, v_target_id, v_waiting_id;
+        -- The rest of this run doesn't wait: the Done has already spent its wait.
+        PERFORM set_config('lock_timeout', '100ms', true);
+        BEGIN
+          -- A plain read (it never waits) of what the task looked like; no foreign
+          -- key, because a key check would wait on the very lock that failed.
+          INSERT INTO public.task_unblock_retries (
+            user_id, kind, task_id, blocker_type, blocker_id,
+            task_status, task_due_at, task_due_change_id, error_code
+          )
+          SELECT v_user_id, CASE WHEN v_entered_done THEN 'unblock' ELSE 'reopen' END, t.id, v_type, v_target_id,
+                 t.status::TEXT, t.due_at, t.due_change_id, v_code
+            FROM public.tasks t
+           WHERE t.id = v_waiting_id AND t.user_id = v_user_id;
+        EXCEPTION WHEN query_canceled OR others THEN
+          RAISE WARNING 'task_unblock_on_status_change: % recording the retry for waiting task %', SQLSTATE, v_waiting_id;
+        END;
+      END;
     END LOOP;
 
     PERFORM set_config('mission_control.unblock_writer', COALESCE(v_prev_writer, ''), true);
-  EXCEPTION WHEN OTHERS THEN
-    -- The sub-transaction rolled back every write above (and the setting). The
-    -- Done itself still saves.
-    RAISE WARNING 'task_unblock_on_status_change: % (%) on % %, skipped', SQLERRM, SQLSTATE, v_type, v_target_id;
+  EXCEPTION WHEN query_canceled OR others THEN
+    -- Only reading the links can land here; the Done itself still saves.
+    RAISE WARNING 'task_unblock_on_status_change: % on % %, skipped', SQLSTATE, v_type, v_target_id;
   END;
 
   RETURN NULL;
@@ -702,16 +901,19 @@ BEGIN
     RETURN NULL;
   END IF;
 
+  -- FOR SHARE, kept to commit, conflicts with a status UPDATE of the target (the
+  -- foreign key's FOR KEY SHARE doesn't), so a link and a reopen can't miss each
+  -- other. The locking read returns the newest committed status (header, 5).
   IF NEW.depends_on_task_id IS NOT NULL THEN
-    SELECT t.status::TEXT = 'Done' INTO v_target_done FROM public.tasks t WHERE t.id = NEW.depends_on_task_id;
+    SELECT t.status::TEXT = 'Done' INTO v_target_done FROM public.tasks t WHERE t.id = NEW.depends_on_task_id FOR SHARE;
   ELSE
-    SELECT c.status::TEXT = 'Done' INTO v_target_done FROM public.commitments c WHERE c.id = NEW.depends_on_commitment_id;
+    SELECT c.status::TEXT = 'Done' INTO v_target_done FROM public.commitments c WHERE c.id = NEW.depends_on_commitment_id FOR SHARE;
   END IF;
   IF COALESCE(v_target_done, false) THEN
     RETURN NULL;
   END IF;
 
-  -- Lock the waiting task first (header, 3a), then look at its pill.
+  -- Then the waiting task (header, 3a), then its pill.
   PERFORM 1 FROM public.tasks t WHERE t.id = NEW.task_id AND t.user_id = NEW.user_id FOR NO KEY UPDATE;
   IF NOT FOUND THEN
     RETURN NULL;
@@ -780,10 +982,140 @@ BEGIN
 END;
 $$;
 
+-- ── 7. The retry ──────────────────────────────────────────────────────────
+
+-- Works through the oldest open records (header, 7). Each record is one
+-- sub-transaction: a failure counts an attempt and moves on. The cron must not
+-- hang on a busy task, so the lock wait is 1s and a run takes at most p_limit
+-- records. SKIP LOCKED: two runs at once take different records.
+CREATE OR REPLACE FUNCTION task_unblock_run_retries(
+  p_user_id UUID,
+  p_limit INT DEFAULT 10
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public
+SET lock_timeout = '1s'
+AS $$
+DECLARE
+  c_max_attempts CONSTANT INT := 8;
+  v_ids UUID[];
+  v_id UUID;
+  v_rec task_unblock_retries%ROWTYPE;
+  v_task tasks%ROWTYPE;
+  v_blocker TEXT;
+  v_reason TEXT;
+  v_prev_writer TEXT;
+  v_now TIMESTAMPTZ := now();
+  v_applied INT := 0;
+  v_skipped INT := 0;
+  v_failed INT := 0;
+  v_gave_up INT;
+BEGIN
+  IF p_user_id IS NULL THEN
+    RAISE EXCEPTION 'user id is required' USING ERRCODE = '22023';
+  END IF;
+
+  SELECT COALESCE(array_agg(s.id ORDER BY s.failed_at, s.id), '{}') INTO v_ids
+    FROM (
+      SELECT r.id, r.failed_at
+        FROM public.task_unblock_retries r
+       WHERE r.user_id = p_user_id AND r.closed_at IS NULL AND r.attempts < c_max_attempts
+       ORDER BY r.failed_at, r.id
+       LIMIT GREATEST(1, LEAST(COALESCE(p_limit, 10), 50))
+         FOR UPDATE SKIP LOCKED
+    ) s;
+
+  v_prev_writer := current_setting('mission_control.unblock_writer', true);
+  PERFORM set_config('mission_control.unblock_writer', 'on', true);
+
+  FOREACH v_id IN ARRAY v_ids LOOP
+    SELECT * INTO v_rec FROM public.task_unblock_retries r WHERE r.id = v_id;
+    BEGIN
+      -- The same order as the trigger: the blocker, then the waiting task. FOR
+      -- SHARE holds off a status change of the blocker until this commits.
+      IF v_rec.blocker_type = 'task' THEN
+        SELECT b.status::TEXT INTO v_blocker
+          FROM public.tasks b WHERE b.id = v_rec.blocker_id AND b.user_id = p_user_id FOR SHARE;
+      ELSE
+        SELECT b.status::TEXT INTO v_blocker
+          FROM public.commitments b WHERE b.id = v_rec.blocker_id AND b.user_id = p_user_id FOR SHARE;
+      END IF;
+
+      IF v_blocker IS NULL OR (v_rec.kind = 'unblock') <> (v_blocker = 'Done') THEN
+        v_reason := 'blocker_changed';
+      ELSE
+        SELECT * INTO v_task
+          FROM public.tasks t WHERE t.id = v_rec.task_id AND t.user_id = p_user_id FOR NO KEY UPDATE;
+        IF NOT FOUND THEN
+          v_reason := 'task_gone';
+        ELSIF NOT EXISTS (
+          SELECT 1 FROM public.task_dependencies d
+           WHERE d.task_id = v_rec.task_id
+             AND d.user_id = p_user_id
+             AND d.is_resolved = false
+             AND ((v_rec.blocker_type = 'task' AND d.depends_on_task_id = v_rec.blocker_id)
+               OR (v_rec.blocker_type = 'commitment' AND d.depends_on_commitment_id = v_rec.blocker_id))
+        ) THEN
+          v_reason := 'task_changed';
+        -- A reopen is compare-and-set field by field and must always clear the
+        -- pill, so only an unblock is refused on a later edit. "Later" = an edit
+        -- that began after the failure: the one that held the lock began before
+        -- it, and the trigger would have seen that edit had the wait been shorter.
+        ELSIF v_rec.kind = 'unblock'
+          AND v_task.updated_at > v_rec.failed_at
+          AND (v_task.status::TEXT IS DISTINCT FROM v_rec.task_status
+            OR v_task.due_at IS DISTINCT FROM v_rec.task_due_at
+            OR v_task.due_change_id IS DISTINCT FROM v_rec.task_due_change_id) THEN
+          v_reason := 'task_changed';
+        ELSIF task_unblock_process_waiter(
+          v_rec.blocker_type, v_rec.blocker_id, p_user_id, v_rec.task_id, v_rec.kind = 'unblock', v_now
+        ) = 'changed' THEN
+          v_reason := 'applied';
+        ELSE
+          v_reason := 'nothing_to_do';
+        END IF;
+      END IF;
+
+      UPDATE public.task_unblock_retries
+         SET attempts = attempts + 1, last_attempt_at = clock_timestamp(),
+             closed_at = clock_timestamp(), closed_reason = v_reason
+       WHERE id = v_id;
+      IF v_reason = 'applied' THEN
+        v_applied := v_applied + 1;
+      ELSE
+        v_skipped := v_skipped + 1;
+      END IF;
+    EXCEPTION WHEN query_canceled OR others THEN
+      UPDATE public.task_unblock_retries
+         SET attempts = attempts + 1, last_attempt_at = clock_timestamp(), error_code = SQLSTATE
+       WHERE id = v_id;
+      v_failed := v_failed + 1;
+    END;
+  END LOOP;
+
+  PERFORM set_config('mission_control.unblock_writer', COALESCE(v_prev_writer, ''), true);
+
+  SELECT count(*) INTO v_gave_up
+    FROM public.task_unblock_retries r
+   WHERE r.user_id = p_user_id AND r.closed_at IS NULL AND r.attempts >= c_max_attempts;
+
+  RETURN jsonb_build_object(
+    'ok', true, 'applied', v_applied, 'skipped', v_skipped, 'failed', v_failed, 'gave_up', v_gave_up
+  );
+END;
+$$;
+
 -- Trigger functions run for whoever writes the row; the helpers they call must
--- stay executable by those roles (they are pure). Only the RPC is restricted.
+-- stay executable by those roles. The waiter function refuses a call without the
+-- writer setting. The RPCs are restricted.
+REVOKE ALL ON FUNCTION task_unblock_process_waiter(TEXT, UUID, UUID, UUID, BOOLEAN, TIMESTAMPTZ) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION task_unblock_process_waiter(TEXT, UUID, UUID, UUID, BOOLEAN, TIMESTAMPTZ) TO authenticated, service_role;
 REVOKE ALL ON FUNCTION clear_task_unblock(UUID, UUID, TEXT) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION clear_task_unblock(UUID, UUID, TEXT) TO authenticated, service_role;
+REVOKE ALL ON FUNCTION task_unblock_run_retries(UUID, INT) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION task_unblock_run_retries(UUID, INT) TO service_role;
 
 COMMIT;
 
