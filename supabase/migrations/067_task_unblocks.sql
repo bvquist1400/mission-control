@@ -215,8 +215,19 @@
 -- `*` and reads task_unblocks for the intelligence layer). Rollback:
 -- supabase/rollbacks/067_task_unblocks.down.sql (app first).
 -- Idempotent (IF NOT EXISTS / CREATE OR REPLACE / DROP ... IF EXISTS).
+--
+-- Busy tables (ship script review, 10/30): supabase db push sets no lock timeout,
+-- so a session holding a tasks write left this migration waiting as long as that
+-- session lived, with every read of tasks queued behind it. So the transaction
+-- starts with SET LOCAL lock_timeout = '10s': a table that stays busy makes it fail
+-- cleanly (55P03), the whole transaction rolls back, nothing changes, and it can
+-- simply be re-run. The setting ends at COMMIT and has no effect on the functions'
+-- own SET lock_timeout clauses (5s, 1s), which they apply each time they run.
 
 BEGIN;
+
+-- Fail cleanly on a busy table instead of waiting (see the end of the header).
+SET LOCAL lock_timeout = '10s';
 
 -- ── 1. The pill marker ────────────────────────────────────────────────────
 

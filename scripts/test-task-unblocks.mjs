@@ -255,6 +255,16 @@ await test("no backfill: 067 has no top-level INSERT/UPDATE/DELETE and adds the 
   assert.match(MIGRATION, /NO BACKFILL/);
 });
 
+await test("busy tables: 067 and its rollback set a 10s lock timeout as the first thing in their transaction", () => {
+  for (const [name, sql] of [["067", MIGRATION], ["its rollback", ROLLBACK]]) {
+    const statements = topLevelStatements(sql);
+    const begin = statements.indexOf("BEGIN");
+    assert.ok(begin >= 0, `${name} runs in its own transaction`);
+    assert.equal(statements[begin + 1], "SET LOCAL lock_timeout = '10s'", `${name}: the first statement after BEGIN`);
+  }
+  assert.equal(MIGRATION.match(/SET lock_timeout = '5s'/g).length, 3, "the functions' own 5s settings are unchanged");
+});
+
 await test("no timeout: the pill has no time limit; reopen undo is 7 days", () => {
   const body = MIGRATION.replace(/--[^\n]*/g, "");
   assert.doesNotMatch(body, /INTERVAL '(3|72) (days|hours)'/i);

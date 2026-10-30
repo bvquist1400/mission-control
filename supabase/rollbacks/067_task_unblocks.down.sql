@@ -18,8 +18,14 @@
 -- reopened after the rollback no longer puts anything back. Waiting tasks still
 -- queued for a retry stay as they are. Without the policy, Remove from a browser
 -- session answers 404 again (as before 067). Re-running is safe.
+--
+-- Busy tables: same protection as 067. A table that stays busy past 10s makes this
+-- fail cleanly (55P03), nothing changes, and it can simply be re-run.
 
 BEGIN;
+
+-- Fail cleanly on a busy table instead of waiting.
+SET LOCAL lock_timeout = '10s';
 
 DROP POLICY IF EXISTS "Users can update own task_dependencies" ON task_dependencies;
 DROP FUNCTION IF EXISTS task_unblock_run_retries(UUID, INT);

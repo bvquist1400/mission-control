@@ -15,6 +15,8 @@
 // Part 1: 067 itself: column (nullable, no default), table, policies, grants;
 //         no backfill (a link whose blocker is ALREADY Done when 067 is applied
 //         changes nothing); rollback and re-apply (twice).
+//         A busy table stops 067 and its rollback at their 10s lock timeout, nothing
+//         changed, and the same file then runs.
 // Part 2: the rules: one blocker; three blockers (the first two change
 //         nothing); later date kept, past/none moved to the end of today ET,
 //         same day kept; Waiting with another hold stays Waiting; prerequisite
@@ -296,6 +298,58 @@ try {
   });
 
   // ── Part 2: the rules ────────────────────────────────────────────────────
+
+  // The ship script review: `supabase db push` sets no lock timeout, so a session holding a tasks write
+  // left the apply waiting with every read of tasks queued behind it. Bounded wait here (15s), so without
+  // the timeout this fails instead of hanging; the holder's ROLLBACK then lets the file finish.
+  const ATTEMPT_MS = 15_000;
+  const unblockedAtColumns = `SELECT count(*) FROM information_schema.columns WHERE table_name = 'tasks' AND column_name = 'unblocked_at';`;
+  async function attemptWhileHolderWrites(holderSql, sql) {
+    const holder = new Session();
+    const attempt = new Session();
+    try {
+      assert.equal((await holder.run(`BEGIN; ${holderSql}`)).err, "");
+      const started = Date.now();
+      const result = await attempt.run(sql, ATTEMPT_MS);
+      const seconds = (Date.now() - started) / 1000;
+      assert.match(result.err, /canceling statement due to lock timeout/, result.err.slice(0, 200));
+      assert.ok(seconds > 9 && seconds < 13, `stopped at about 10s, not ${seconds}s`);
+      // The holder is still there: a read of tasks doesn't queue behind a failed attempt.
+      assert.notEqual(psql(`SET statement_timeout = '2s'; SELECT count(*) FROM tasks;`), "");
+      await holder.run(`ROLLBACK;`);
+      return seconds;
+    } finally {
+      await holder.run(`ROLLBACK;`, 2_000);
+      holder.close();
+      await attempt.run(`SELECT 1;`, 40_000); // an attempt that was still waiting has finished by now
+      attempt.close();
+    }
+  }
+
+  await test("busy tables: 067 stops at its lock timeout (55P03), nothing applied, reads not stalled, and the same file then applies", async () => {
+    psql(ROLLBACK);
+    try {
+      await attemptWhileHolderWrites(`UPDATE tasks SET title = title WHERE false;`, MIGRATION);
+      assert.equal(psql(unblockedAtColumns), "0", "nothing of 067 was applied");
+      assert.equal(psql(`SELECT to_regclass('public.task_unblocks') IS NULL AND to_regclass('public.task_unblock_retries') IS NULL;`), "t");
+    } finally {
+      psql(MIGRATION);
+    }
+    assert.equal(psql(unblockedAtColumns), "1", "the re-run applied");
+    assert.equal(psql(`SELECT count(*) FROM pg_proc WHERE proname = 'task_unblock_on_status_change' AND 'lock_timeout=5s' = ANY(proconfig);`), "1", "the functions keep their own 5s");
+  });
+
+  await test("busy tables: the rollback stops at its lock timeout too, whichever table is busy, and 067 stays whole", async () => {
+    try {
+      for (const table of ["tasks", "commitments", "task_dependencies"]) {
+        await attemptWhileHolderWrites(`LOCK TABLE ${table} IN ROW EXCLUSIVE MODE;`, ROLLBACK);
+        assert.equal(psql(unblockedAtColumns), "1", `${table}: the column is still there`);
+        assert.equal(psql(`SELECT count(*) FROM pg_trigger WHERE tgname IN ('trg_tasks_unblock_dependents','trg_commitments_unblock_dependents','trg_tasks_unblock_pill','trg_tasks_unblock_pill_insert','trg_task_dependencies_unblock_reblock');`), "5", `${table}: every trigger is still there`);
+      }
+    } finally {
+      psql(MIGRATION); // the rest of the run needs 067, also when a waiting rollback finished after the 15s
+    }
+  });
 
   await test("one blocker: Waiting -> Planned, no due -> end of today ET, pill, one comment, one transition, a record", () => {
     const blocker = makeTask(userA, { tags: P, title: "Secret blocker title" });
