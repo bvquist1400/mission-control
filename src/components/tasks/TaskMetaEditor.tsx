@@ -6,16 +6,14 @@ import {
   dateOnlyToInputValue,
   formatDateOnly,
   localDateString,
-  resolveDueDateInput,
-  resolveStartDateInput,
   timestampToLocalDateInputValue,
 } from "@/components/utils/dates";
+import { landsOnLabel, resolveTaskDateDrafts } from "@/components/utils/date-field";
 import { useSprints } from "@/hooks/useSprints";
 import { RECURRENCE_FREQUENCIES } from "@/lib/recurrence";
 import { mergeTaskTags } from "@/lib/task-tags";
 import { hasPersonalTag, setPersonalTag } from "@/lib/personal-exclusion";
 import { followHint } from "@/lib/date-cascade-view";
-import { SAVED_START_AFTER_DUE_HINT, START_AFTER_DUE_ERROR } from "@/lib/task-range";
 import type { TaskBlocksLink } from "@/lib/task-detail";
 import type {
   TaskRecurrenceFrequency,
@@ -27,6 +25,7 @@ import type {
 } from "@/types/database";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Textarea } from "@/components/ui/Field";
+import { DateField } from "@/components/ui/DateField";
 
 interface ProjectOption {
   id: string;
@@ -298,28 +297,29 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
   const nextProjectId = projectIdDraft || null;
   const nextSectionId = sectionIdDraft || null;
   const nextSprintId = sprintIdDraft || null;
-  const currentDueDate = timestampToLocalDateInputValue(task.due_at);
-  const dueDateResolution = resolveDueDateInput(dueDateDraft);
-  // An empty draft resolves to null; the saved "no due date" reads as "". Both mean none.
-  const hasDueDateChange = dueDateResolution.error === null && (dueDateResolution.dateOnly ?? "") !== currentDueDate;
+  // Start and Due (typed, picked on the calendar or set by a chip) resolve through
+  // one pure rule set (src/components/utils/date-field.ts), tested on its own.
+  const {
+    start: startDateResolution,
+    due: dueDateResolution,
+    currentStartDate,
+    currentDueDate,
+    hasStartDateChange,
+    hasDueDateChange,
+    rangeError,
+    savedRangeHint,
+  } = resolveTaskDateDrafts({
+    startDraft: startDateDraft,
+    dueDraft: dueDateDraft,
+    savedStartAt: task.start_at,
+    savedDueAt: task.due_at,
+  });
   // Before saving (Brent 10/20): say how many waiting tasks a later date moves.
   const followLine = hasDueDateChange
     ? followHint({ currentDueAt: task.due_at, nextDateOnly: dueDateResolution.dateOnly, blocks })
     : null;
-  // Multi-day tasks (063): an optional start date; the due date is the end.
-  const currentStartDate = timestampToLocalDateInputValue(task.start_at);
-  const startDateResolution = resolveStartDateInput(startDateDraft);
-  const hasStartDateChange = startDateResolution.error === null && (startDateResolution.dateOnly ?? "") !== currentStartDate;
-  // The start and due dates as they would be saved (a draft that doesn't parse keeps the saved one).
-  const nextStartDate = startDateResolution.error === null ? startDateResolution.dateOnly : currentStartDate || null;
-  const nextDueDate = dueDateResolution.error === null ? dueDateResolution.dateOnly : currentDueDate || null;
-  const rangeReversed = Boolean(nextStartDate && nextDueDate && nextStartDate > nextDueDate);
-  // A start left after the due by an Undo or a FamCal due move is allowed as
-  // saved (it reads as a one-day task): it blocks Save only when this edit
-  // changes a date, so a title, tag or project edit still saves.
-  const editsADate = hasStartDateChange || hasDueDateChange;
-  const rangeError = rangeReversed && editsADate ? START_AFTER_DUE_ERROR : null;
-  const savedRangeHint = rangeReversed && !editsADate ? SAVED_START_AFTER_DUE_HINT : null;
+  const startLandsOn = landsOnLabel(startDateResolution.dateOnly);
+  const dueLandsOn = landsOnLabel(dueDateResolution.dateOnly);
   const nextTags = mergeTaskTags(tagsDraft, tagInput);
   const hasTagChanges = nextTags.length !== currentTags.length || nextTags.some((tag, index) => tag !== currentTags[index]);
   const isMutating = isSaving || isUpdatingRecurrence;
@@ -553,11 +553,14 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
           </Select>
         </label>
 
-        <label className="space-y-1">
-          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Start</span>
-          <input
+        <div className="space-y-1">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground" aria-hidden="true">Start</span>
+          <DateField
+            label="Start"
+            allowTyping
+            readBack={false}
             value={startDateDraft}
-            onChange={(event) => setStartDateDraft(event.target.value)}
+            onChange={setStartDateDraft}
             onBlur={normalizeStartDateDraft}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
@@ -575,28 +578,25 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
             }}
             disabled={isMutating}
             placeholder="Optional, e.g. t or 10/26"
-            aria-invalid={startDateResolution.error || rangeError ? "true" : "false"}
-            className={`w-full rounded border bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition disabled:cursor-not-allowed disabled:opacity-60 ${
-              startDateResolution.error || rangeError
-                ? "border-danger-border focus:border-red-400"
-                : "border-stroke focus:border-accent"
-            }`}
-          />
-          <p className={`text-xs ${startDateResolution.error || rangeError ? "text-danger" : savedRangeHint ? "text-warning" : "text-muted-foreground"}`}>
-            {startDateResolution.error
+            invalid={Boolean(startDateResolution.error || rangeError)}
+            hintTone={startDateResolution.error || rangeError ? "danger" : savedRangeHint ? "warning" : "muted"}
+            hint={startDateResolution.error
               ?? rangeError
               ?? savedRangeHint
-              ?? (startDateResolution.dateOnly
-                ? `Starts ${formatDateOnly(startDateResolution.dateOnly)}. Not late until after the due date.`
+              ?? (startLandsOn
+                ? <>Starts <b className="font-semibold text-foreground">{startLandsOn}</b>. Not late until after the due date.</>
                 : "For a task that takes more than a day. Leave blank for none.")}
-          </p>
-        </label>
+          />
+        </div>
 
-        <label className="space-y-1">
-          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Due</span>
-          <input
+        <div className="space-y-1">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground" aria-hidden="true">Due</span>
+          <DateField
+            label="Due"
+            allowTyping
+            readBack={false}
             value={dueDateDraft}
-            onChange={(event) => setDueDateDraft(event.target.value)}
+            onChange={setDueDateDraft}
             onBlur={normalizeDueDateDraft}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
@@ -612,21 +612,17 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
             }}
             disabled={isMutating}
             placeholder="YYYY-MM-DD or t+7"
-            aria-invalid={dueDateResolution.error ? "true" : "false"}
-            className={`w-full rounded border bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition disabled:cursor-not-allowed disabled:opacity-60 ${
-              dueDateResolution.error
-                ? "border-danger-border focus:border-red-400"
-                : "border-stroke focus:border-accent"
-            }`}
+            invalid={Boolean(dueDateResolution.error)}
+            hintTone={dueDateResolution.error ? "danger" : "muted"}
+            hint={<>
+              {dueDateResolution.error
+                ?? (dueLandsOn
+                  ? <>Lands on <b className="font-semibold text-foreground">{dueLandsOn}</b>.</>
+                  : "Leave blank to clear. Shortcuts: t+30, w+1, m+1, y+1.")}
+              {followLine ? <> <b className="font-semibold text-foreground">{followLine}</b>; you can change that after.</> : null}
+            </>}
           />
-          <p className={`text-xs ${dueDateResolution.error ? "text-danger" : "text-muted-foreground"}`}>
-            {dueDateResolution.error
-              ?? (dueDateResolution.dateOnly
-                ? `Resolves to ${formatDateOnly(dueDateResolution.dateOnly)}.`
-                : "Leave blank to clear. Shortcuts: t+30, w+1, m+1, y+1.")}
-            {followLine ? <> <b className="font-semibold text-foreground">{followLine}</b>; you can change that after.</> : null}
-          </p>
-        </label>
+        </div>
 
         <label className="space-y-1">
           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Waiting On</span>
@@ -840,24 +836,21 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
                   </Select>
                 </label>
 
-                <label className="space-y-1">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Next Due</span>
-                  <input
-                    type="date"
+                <div className="space-y-1">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground" aria-hidden="true">Next Due</span>
+                  <DateField
+                    label="Next due"
+                    readBack={false}
                     value={recurrenceNextDueDraft}
-                    onChange={(event) => setRecurrenceNextDueDraft(event.target.value)}
+                    onChange={setRecurrenceNextDueDraft}
                     disabled={isMutating}
-                    aria-invalid={!recurrenceNextDueValid ? "true" : "false"}
-                    className={`w-full rounded border bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none transition disabled:cursor-not-allowed disabled:opacity-60 ${
-                      recurrenceNextDueValid ? "border-stroke focus:border-accent" : "border-danger-border focus:border-red-400"
-                    }`}
-                  />
-                  <p className={`text-xs ${recurrenceNextDueValid ? "text-muted-foreground" : "text-danger"}`}>
-                    {normalizedRecurrenceNextDue.length > 0 && recurrenceNextDueValid
+                    invalid={!recurrenceNextDueValid}
+                    hintTone={recurrenceNextDueValid ? "muted" : "danger"}
+                    hint={normalizedRecurrenceNextDue.length > 0 && recurrenceNextDueValid
                       ? `Template schedules from ${formatDateOnly(normalizedRecurrenceNextDue)}.`
                       : "Leave blank to infer from the task due date or today."}
-                  </p>
-                </label>
+                  />
+                </div>
 
                 {recurrenceNeedsDayOfWeek ? (
                   <label className="space-y-1">

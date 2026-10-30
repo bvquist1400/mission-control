@@ -6,8 +6,8 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { ErrorBanner } from "@/components/ui/ErrorBanner";
 import { formatDateOnly, formatRelativeDate, localDateString } from "@/components/utils/dates";
 import type { ImplementationHealthScore, TaskWithImplementation } from "@/types/database";
-import { Input } from "@/components/ui/Field";
 import { cardClasses } from "@/components/ui/Card";
+import { DateField } from "@/components/ui/DateField";
 
 interface WeeklyReviewData {
   week: {
@@ -116,10 +116,18 @@ export default function WeeklyReviewPage() {
         title="Weekly Review"
         description="See what shipped, what stalled, where decisions are blocking flow, and what needs explicit attention next week."
         actions={
-          <label className="space-y-1">
-            <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">Anchor Date</span>
-            <Input type="date" value={anchorDate} onChange={(event) => setAnchorDate(event.target.value)} />
-          </label>
+          <div className="space-y-1">
+            <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground" aria-hidden="true">Anchor Date</span>
+            <DateField
+              label="Anchor date"
+              size="md"
+              chips={false}
+              clearable={false}
+              readBack={false}
+              value={anchorDate}
+              onChange={setAnchorDate}
+            />
+          </div>
         }
       />
 

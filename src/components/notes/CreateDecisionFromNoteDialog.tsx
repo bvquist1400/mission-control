@@ -12,6 +12,7 @@ import {
 } from "@/components/notes/note-panel-utils";
 import type { CreateNoteDecisionPayload, NoteDecisionStatus, NoteWithDetails } from "@/types/database";
 import { Button } from "@/components/ui/Button";
+import { DateField } from "@/components/ui/DateField";
 
 interface CreateDecisionFromNoteDialogProps {
   open: boolean;
@@ -122,16 +123,18 @@ export function CreateDecisionFromNoteDialog({
             </select>
           </label>
 
-          <label className="space-y-1">
-            <span className={noteLabelClass}>Decided At</span>
-            <input
-              type="date"
+          <div className="space-y-1">
+            <span className={noteLabelClass} aria-hidden="true">Decided At</span>
+            <DateField
+              label="Decided at"
+              size="md"
+              chips={false}
+              placeholder="Not set"
               value={decidedAt}
-              onChange={(event) => setDecidedAt(event.target.value)}
+              onChange={setDecidedAt}
               disabled={isSaving}
-              className={noteInputClass}
             />
-          </label>
+          </div>
         </div>
 
         {error && (

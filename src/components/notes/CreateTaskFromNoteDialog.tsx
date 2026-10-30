@@ -12,6 +12,7 @@ import {
 } from "@/components/notes/note-panel-utils";
 import type { CreateTaskFromNotePayload, NoteWithDetails, TaskType } from "@/types/database";
 import { Button } from "@/components/ui/Button";
+import { DateField } from "@/components/ui/DateField";
 
 interface CreateTaskFromNoteDialogProps {
   open: boolean;
@@ -131,16 +132,17 @@ export function CreateTaskFromNoteDialog({
             </select>
           </label>
 
-          <label className="space-y-1">
-            <span className={noteLabelClass}>Due Date</span>
-            <input
-              type="date"
+          <div className="space-y-1">
+            <span className={noteLabelClass} aria-hidden="true">Due Date</span>
+            <DateField
+              label="Due date"
+              size="md"
+              placeholder="No due date"
               value={dueDate}
-              onChange={(event) => setDueDate(event.target.value)}
+              onChange={setDueDate}
               disabled={isSaving}
-              className={noteInputClass}
             />
-          </label>
+          </div>
 
           <label className="space-y-1">
             <span className={noteLabelClass}>Priority</span>

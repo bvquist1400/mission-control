@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/Button";
 import { Input, Select } from "@/components/ui/Field";
 import { cardClasses } from "@/components/ui/Card";
 import { badgeClasses } from "@/components/ui/Badge";
+import { DateField } from "@/components/ui/DateField";
 
 interface SprintDetailProps {
   id: string;
@@ -265,24 +266,28 @@ export function SprintDetail({ id }: SprintDetailProps) {
                   className="w-full rounded-lg border border-stroke bg-panel px-3 py-2 text-base font-semibold text-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
                 />
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="space-y-1">
-                    <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">Start</span>
-                    <Input
-                      type="date"
+                  <div className="space-y-1">
+                    <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground" aria-hidden="true">Start</span>
+                    <DateField
+                      label="Sprint start"
+                      size="md"
+                      clearable={false}
                       value={draft.startDate}
-                      onChange={(event) => setDraft((current) => ({ ...current, startDate: event.target.value }))}
+                      onChange={(startDate) => setDraft((current) => ({ ...current, startDate }))}
                       disabled={isSaving}
                     />
-                  </label>
-                  <label className="space-y-1">
-                    <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">End</span>
-                    <Input
-                      type="date"
+                  </div>
+                  <div className="space-y-1">
+                    <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground" aria-hidden="true">End</span>
+                    <DateField
+                      label="Sprint end"
+                      size="md"
+                      clearable={false}
                       value={draft.endDate}
-                      onChange={(event) => setDraft((current) => ({ ...current, endDate: event.target.value }))}
+                      onChange={(endDate) => setDraft((current) => ({ ...current, endDate }))}
                       disabled={isSaving}
                     />
-                  </label>
+                  </div>
                 </div>
                 <p className="text-xs text-muted-foreground">End date must be after the start date.</p>
               </div>

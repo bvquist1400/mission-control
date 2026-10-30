@@ -12,6 +12,7 @@ import type { ImplPhase, ProjectStage, RagStatus } from "@/types/database";
 import { hasPersonalTag, PERSONAL_TAG } from "@/lib/personal-exclusion";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Textarea } from "@/components/ui/Field";
+import { DateField } from "@/components/ui/DateField";
 
 // ─── API response shape ───────────────────────────────────────────────────────
 
@@ -282,12 +283,14 @@ export function ProjectsList({
               </div>
 
               <div>
-                <label className="mb-1 block text-xs font-medium text-muted-foreground">Target Date</label>
-                <Input
+                <span className="mb-1 block text-xs font-medium text-muted-foreground" aria-hidden="true">Target Date</span>
+                <DateField
+                  label="Target date"
                   tone="muted"
-                  type="date"
+                  size="md"
+                  placeholder="No target date"
                   value={draft.targetDate}
-                  onChange={(e) => setDraft((d) => ({ ...d, targetDate: e.target.value }))}
+                  onChange={(targetDate) => setDraft((d) => ({ ...d, targetDate }))}
                 />
               </div>
 

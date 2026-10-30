@@ -660,6 +660,7 @@ const { TaskMetaEditor } = loadWithHarness("src/components/tasks/TaskMetaEditor.
   "@/components/ui/Button": { Button: "Button" },
   "@/components/ui/Field": { Input: "Input", Select: "Select", Textarea: "Textarea" },
   "@/components/tasks/TaskTagChips": { TaskTagChips: "TaskTagChips" },
+  "@/components/ui/DateField": { DateField: "DateField" },
 });
 // Saved instants from local dates, the way the task window saves them (start of the
 // local day, due at the end of it), so the test holds in any timezone.
@@ -671,10 +672,11 @@ function mountEditor(task) {
   const input = (predicate) => findNodes(tree(), (node) => (node.type === "Input" || node.type === "input") && predicate(node.props))[0];
   return {
     title: () => input((p) => p.value === task.title || p.value === "Renamed"),
-    start: () => input((p) => p.placeholder === "Optional, e.g. t or 10/26"),
-    due: () => input((p) => p.placeholder === "YYYY-MM-DD or t+7"),
+    // Start and Due are the shared DateField (task afe37a69): its onChange takes the value, its hint line is a prop.
+    start: () => findNodes(tree(), (node) => node.type === "DateField" && node.props.placeholder === "Optional, e.g. t or 10/26")[0],
+    due: () => findNodes(tree(), (node) => node.type === "DateField" && node.props.placeholder === "YYYY-MM-DD or t+7")[0],
     save: () => findNodes(tree(), (node) => node.type === "Button" && nodeText(node).includes("Save edits"))[0],
-    text: () => nodeText(tree()),
+    text: () => [nodeText(tree()), ...findNodes(tree(), (node) => node.type === "DateField").map((node) => nodeText(node.props.hint))].join(" "),
   };
 }
 const editorTask = (start_at, due_at) => ({
@@ -689,24 +691,24 @@ await test("F4 task window: with a start saved after the due (Undo/FamCal), a ti
   assert.equal(editor.save().props.disabled, false, "Save edits is enabled (Codex: it stayed disabled)");
   assert.match(editor.text(), /The start date is after the due date, so this reads as a one-day task\. Change either date to fix it\./);
   assert.doesNotMatch(editor.text(), /The start date can't be after the due date\./);
-  assert.notEqual(editor.start().props["aria-invalid"], "true");
+  assert.notEqual(editor.start().props.invalid, true);
 });
 
 await test("F4 task window: editing a date while the range would stay reversed is still blocked; fixing it saves; a valid range with a title edit saves", () => {
   const reversed = mountEditor(editorTask(localStart(2026, 10, 29), localEnd(2026, 10, 28)));
-  reversed.start().props.onChange({ target: { value: "2026-10-30" } });
+  reversed.start().props.onChange("2026-10-30");
   assert.equal(reversed.save().props.disabled, true, "a start edit that stays after the due");
   assert.match(reversed.text(), /The start date can't be after the due date\./);
-  assert.equal(reversed.start().props["aria-invalid"], "true");
-  reversed.start().props.onChange({ target: { value: "2026-10-27" } });
+  assert.equal(reversed.start().props.invalid, true);
+  reversed.start().props.onChange("2026-10-27");
   assert.equal(reversed.save().props.disabled, false, "a start edit that fixes it");
 
   const dueEdit = mountEditor(editorTask(localStart(2026, 10, 29), localEnd(2026, 10, 28)));
-  dueEdit.due().props.onChange({ target: { value: "2026-10-27" } });
+  dueEdit.due().props.onChange("2026-10-27");
   assert.equal(dueEdit.save().props.disabled, true, "a due edit that keeps it reversed");
 
   const valid = mountEditor(editorTask(localStart(2026, 10, 26), localEnd(2026, 10, 30)));
-  valid.due().props.onChange({ target: { value: "2026-10-23" } });
+  valid.due().props.onChange("2026-10-23");
   assert.equal(valid.save().props.disabled, true, "a due edit before a valid start");
   const validTitle = mountEditor(editorTask(localStart(2026, 10, 26), localEnd(2026, 10, 30)));
   validTitle.title().props.onChange({ target: { value: "Renamed" } });
