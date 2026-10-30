@@ -11,9 +11,14 @@
  * skipped it (a light run for Search Console and Apple), Apple with no keys
  * (`not_connected`) and sources with no keys set (`not_configured`, shown on
  * the page instead) don't count either way.
+ *
+ * Apple answering with nothing new (`apple_no_new_data`) is neither a failure
+ * nor a recovery: it never raises an alert, never closes one, and sits between
+ * two failures as a run that wasn't a failure. The data has to move to close it.
  */
 
 import { etDate } from './dates';
+import { reachedSource } from './stale';
 import type { AlertTask, LaunchStore, RunRecord } from './store';
 
 export const ALERTED_SOURCES = ['app_db', 'web', 'search_console', 'apple'] as const;
@@ -55,6 +60,12 @@ export function plainReason(code: string): string {
   }
   if (code === 'apple_timeout') {
     return 'the App Store reports took too long to read, so the run stopped before saving any';
+  }
+  if (code === 'apple_paging') {
+    return "Apple's list came back incomplete or with repeats, so nothing from it was saved";
+  }
+  if (code === 'apple_no_new_data') {
+    return 'Apple answered, but its reports had nothing newer';
   }
   if (code === 'apple_reports_missing') {
     return "Apple's report list did not include the expected App Store reports";
@@ -108,9 +119,12 @@ export function decideAlert(attempts: string[]): AlertDecision {
   if (attempts[0] === 'ok') {
     return { action: 'recover' };
   }
-  if (attempts.length >= 2 && attempts[1] !== 'ok') {
+  if (reachedSource(attempts[0])) {
+    return { action: 'none' };
+  }
+  if (attempts.length >= 2 && !reachedSource(attempts[1])) {
     let streak = 0;
-    while (streak < attempts.length && attempts[streak] !== 'ok') {
+    while (streak < attempts.length && !reachedSource(attempts[streak])) {
       streak += 1;
     }
     return { action: 'raise', code: attempts[0], streak };

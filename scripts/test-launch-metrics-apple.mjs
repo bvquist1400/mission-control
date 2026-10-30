@@ -245,8 +245,18 @@ function memoryStore() {
     async recordAppleInstance(record) {
       state.instances.set(record.instance_id, record);
     },
+    async appleDataThrough() {
+      const newest = (metrics) => [...state.daily.values()]
+        .filter((row) => row.source === "apple" && row.dimension === "" && metrics.includes(row.metric))
+        .map((row) => row.metric_date)
+        .sort()
+        .at(-1) ?? null;
+      return { engagement: newest(["impressions", "product_page_views"]), downloads: newest(["first_downloads", "redownloads"]) };
+    },
   };
 }
+
+const counts = ({ instancesRead, instancesWaiting, instancesLeft, rowsWritten }) => ({ instancesRead, instancesWaiting, instancesLeft, rowsWritten });
 
 let clock = Date.parse("2026-10-30T11:30:00Z");
 const nowFn = () => new Date(clock);
@@ -544,7 +554,7 @@ await test("syncApple: idempotent; a second run reads no segment and writes noth
   const writes = store.state.upserts.length;
   const again = fakeApple(standardModel());
   const result = await apple.syncApple(CONFIG, again, store, nowFn);
-  assert.deepEqual(result, { instancesRead: 0, instancesWaiting: 0, instancesLeft: 0, rowsWritten: 0 });
+  assert.deepEqual(counts(result), { instancesRead: 0, instancesWaiting: 0, instancesLeft: 0, rowsWritten: 0 });
   assert.ok(!again.calls.some((c) => c.url.includes("/segments") || c.url.startsWith(SEGMENT_HOST)));
   assert.equal(store.state.upserts.length, writes);
   assert.equal(JSON.stringify([...store.state.daily.entries()]), before);
@@ -630,7 +640,7 @@ await test("syncApple: report names Apple no longer uses → apple_reports_missi
   await rejectsWithCode(apple.syncApple(CONFIG, fakeApple(renamed), memoryStore(), nowFn), "apple_reports_missing");
   const empty = standardModel();
   empty.reports["req-ongoing"] = [];
-  assert.deepEqual(await apple.syncApple(CONFIG, fakeApple(empty), memoryStore(), nowFn), { instancesRead: 0, instancesWaiting: 0, instancesLeft: 0, rowsWritten: 0 });
+  assert.deepEqual(counts(await apple.syncApple(CONFIG, fakeApple(empty), memoryStore(), nowFn)), { instancesRead: 0, instancesWaiting: 0, instancesLeft: 0, rowsWritten: 0 });
 });
 
 await test("syncApple: a run reads at most 40 instances and stops starting new ones after its time budget", async () => {
@@ -750,14 +760,15 @@ await test("alerts: not_connected and skipped never alert; every Apple code has 
     await sync.runLaunchSync(deps(store, fakeApple(standardModel()), appleEnv({ apple: null })), { trigger: "cron", kind: "full" });
   }
   assert.equal(store.state.tasks.length, 0);
-  for (const code of ["apple_request_stopped", "apple_no_request", "apple_bad_key", "apple_bad_config", "apple_checksum", "apple_segment_size", "apple_segment_host", "apple_segment_too_large", "apple_tsv_header", "apple_tsv_shape", "apple_tsv_date", "apple_tsv_number", "apple_tsv_encoding", "apple_gzip", "apple_shape", "apple_reports_missing", "apple_too_many_rows", "apple_too_many_pages", "apple_tsv_app", "apple_timeout"]) {
+  for (const code of ["apple_request_stopped", "apple_no_request", "apple_bad_key", "apple_bad_config", "apple_checksum", "apple_segment_size", "apple_segment_host", "apple_segment_too_large", "apple_tsv_header", "apple_tsv_shape", "apple_tsv_date", "apple_tsv_number", "apple_tsv_encoding", "apple_gzip", "apple_shape", "apple_reports_missing", "apple_too_many_rows", "apple_too_many_pages", "apple_tsv_app", "apple_timeout", "apple_paging", "apple_no_new_data"]) {
     assert.ok(!alerts.plainReason(code).startsWith("error code"), code);
   }
 });
 
-await test("stale: Apple is fresh for 72 hours after a good full run, failing after a failed one, not connected without keys", () => {
+await test("stale: Apple goes stale 72 hours after its last contact, failing after a failed run, not connected without keys", () => {
   const run = (startedAt, apple) => ({ id: startedAt, trigger: "cron", kind: "full", started_at: startedAt, finished_at: startedAt, status: "ok", sources: { apple } });
-  const at = (runs, iso) => stale.sourceHealth(runs, new Date(iso)).find((h) => h.source === "apple");
+  const through = { engagement: "2026-10-28", downloads: "2026-10-28" };
+  const at = (runs, iso) => stale.sourceHealth(runs, new Date(iso), through).find((h) => h.source === "apple");
   const runs = [run("2026-10-29T12:00:00Z", "skipped"), run("2026-10-28T11:30:00Z", "ok")];
   assert.equal(at(runs, "2026-10-31T11:29:00Z").state, "fresh");
   assert.equal(at(runs, "2026-10-31T11:31:00Z").state, "stale");
@@ -774,7 +785,8 @@ await test("page: App Store days, 30-day window to data-through, conversion on u
   const view = pageData.buildAppStoreView(daily);
   assert.equal(view.hasData, true);
   assert.equal(view.dataThrough, "2026-10-26");
-  assert.deepEqual(view.window, { since: "2026-10-21", until: "2026-10-26" });
+  assert.deepEqual(view.downloadsWindow, { since: "2026-10-25", until: "2026-10-26", days: 2, spanDays: 2 });
+  assert.deepEqual(view.engagementWindow, { since: "2026-10-25", until: "2026-10-26", days: 2, spanDays: 2 });
   assert.equal(view.days[0].date, "2026-10-21");
   assert.deepEqual(view.days.at(-1), { date: "2026-10-26", impressions: 35, pageViews: 10, firstDownloads: 3, redownloads: 1 });
   assert.deepEqual([view.impressions, view.pageViews, view.pageViewsUnique, view.firstDownloads, view.redownloads], [47, 13, 12, 4, 1]);
@@ -783,10 +795,11 @@ await test("page: App Store days, 30-day window to data-through, conversion on u
     ["App Store search", 42, 9, 3, 1],
     ["Web referrer", 5, 4, 1, 0],
   ]);
-  assert.deepEqual(view.sourceInfo, [{ label: "menuandmarket.com", value: 1, secondary: 5 }]);
-  assert.deepEqual(view.campaigns, [{ label: "site-hero", value: 1, secondary: 5 }]);
+  assert.deepEqual(view.sourceInfo, [{ label: "menuandmarket.com", firstDownloads: 1, pageViews: 5 }]);
+  assert.deepEqual(view.campaigns, [{ label: "site-hero", firstDownloads: 1, pageViews: 5 }]);
   const empty = pageData.buildAppStoreView([]);
-  assert.deepEqual([empty.hasData, empty.days.length, empty.conversion, empty.window], [false, 0, null, null]);
+  assert.deepEqual([empty.hasData, empty.days.length, empty.conversion, empty.downloadsWindow, empty.engagementWindow, empty.conversionWindow], [false, 0, null, null, null, null]);
+  assert.deepEqual([empty.firstDownloads, empty.impressions, empty.pageViews], [null, null, null]);
 });
 
 await test("page: the Launch page shows the App Store section with Apple's time zone, explains empty Detailed lists and keeps the hand reads", () => {
@@ -817,7 +830,7 @@ await test("P2-1: an instance listed before its file exists is not recorded; the
   model.segments["i-dl"] = [];
   const store = memoryStore();
   const first = await apple.syncApple(CONFIG, fakeApple(model), store, nowFn);
-  assert.deepEqual(first, { instancesRead: 0, instancesWaiting: 1, instancesLeft: 0, rowsWritten: 0 });
+  assert.deepEqual(counts(first), { instancesRead: 0, instancesWaiting: 1, instancesLeft: 0, rowsWritten: 0 });
   assert.equal(store.state.instances.has("i-dl"), false);
   model.segments["i-dl"] = [segmentFor(`${DL_HEAD}\n2026-10-26\t${APP_ID}\tFirst-time download\tApp Store search\t9\n`)];
   const later = fakeApple(model);
@@ -971,9 +984,11 @@ await test("P3-3: days a report hasn't covered yet are 'no data yet' (null), not
   assert.deepEqual(v.days.find((d) => d.date === "2026-10-28"), { date: "2026-10-28", impressions: 50, pageViews: 12, firstDownloads: null, redownloads: null });
   assert.deepEqual(v.days.find((d) => d.date === "2026-10-21"), { date: "2026-10-21", impressions: null, pageViews: null, firstDownloads: null, redownloads: null });
   assert.deepEqual(v.days.find((d) => d.date === "2026-10-27"), { date: "2026-10-27", impressions: 40, pageViews: 10, firstDownloads: 3, redownloads: 0 });
-  assert.deepEqual(v.window, { since: "2026-10-21", until: "2026-10-27" });
-  assert.deepEqual([v.firstDownloads, v.pageViews, v.pageViewsUnique, v.impressions], [3, 10, 8, 40]);
-  assert.ok(Math.abs(v.conversion - 3 / 8) < 1e-9);
+  assert.deepEqual(v.downloadsWindow, { since: "2026-10-27", until: "2026-10-27", days: 1, spanDays: 1 });
+  assert.deepEqual(v.engagementWindow, { since: "2026-10-27", until: "2026-10-28", days: 2, spanDays: 2 });
+  assert.deepEqual(v.conversionWindow, { since: "2026-10-27", until: "2026-10-27", days: 1, spanDays: 1 });
+  assert.deepEqual([v.firstDownloads, v.pageViews, v.pageViewsUnique, v.impressions], [3, 22, 17, 90]);
+  assert.ok(Math.abs(v.conversion - 3 / 8) < 1e-9, "only the day both cover");
   // Only one report so far: its own window, and no conversion.
   const onlyEngagement = pageData.buildAppStoreView(daily.filter((r) => !["first_downloads", "redownloads"].includes(r.metric)));
   assert.equal(onlyEngagement.conversion, null);
@@ -1004,13 +1019,411 @@ await test("page: the Launch page renders the App Store section from stored rows
   assert.match(html, /App Store search/);
   assert.match(html, /site-hero/);
   assert.match(html, /Read by hand from App Store Connect \(history\)/);
-  assert.match(html, /App Store: updated Oct 30/);
+  assert.match(html, /App Store: data through Oct 26; last reached Apple Oct 30/);
   const emptyInput = { ...input, daily: [], runs: [{ ...runs[0], sources: { apple: "not_connected" } }] };
   const empty = render({ view: pageData.buildLaunchView(emptyInput, now), input: emptyInput, now });
   assert.match(empty, /Not connected yet\. Daily App Store numbers start once the App Store keys are added/);
   assert.match(empty, /App Store: not connected yet/);
   assert.match(empty, /Nothing Apple can show yet \(groups under 5 people are hidden\)/);
   assert.ok(!/claude|anthropic/i.test(html + empty));
+});
+
+// ─── fix round 2 (Codex review of e04ede9) ────────────────────────────────
+
+const PROBE_SPEC = apple.APPLE_REPORTS.find((s) => s.family === "downloads" && s.variant === "standard");
+const probeRow = (count = "3", date = "2026-10-26") => [date, APP_ID, "First-time download", "App Store search", count].join("\t");
+const probeText = (count, date) => `${PROBE_SPEC.required.join("\t")}\n${probeRow(count, date)}\n`;
+
+/** One instance whose segment list is the test's own: `segments` is the list reply. */
+function probeModel({ bodies = [probeText()], reply, processingDate = "2026-10-27" } = {}) {
+  const parts = bodies.map((text) => segmentFor(text, { gzip: false }));
+  const item = (i, id = `seg-${i}`) => ({
+    type: "analyticsReportSegments",
+    id,
+    attributes: { url: `${SEGMENT_HOST}/p/${i}`, checksum: parts[i].checksum, sizeInBytes: parts[i].size },
+  });
+  const model = {
+    requests: [{ id: "req-ongoing", accessType: "ONGOING" }],
+    reports: { "req-ongoing": [{ id: "r-dl", name: "App Downloads Standard" }] },
+    instances: { "r-dl": [{ id: "i-probe", processingDate }] },
+    override(url) {
+      if (url.pathname.endsWith("/segments")) return Response.json(reply(item, url));
+      if (url.origin === SEGMENT_HOST) return new Response(parts[Number(url.pathname.split("/").at(-1))].bytes);
+      return null;
+    },
+  };
+  return model;
+}
+const whole = (item, n) => ({ data: Array.from({ length: n }, (_, i) => item(i)), links: {}, meta: { paging: { total: n, limit: 200 } } });
+
+await test("completeness: a chain shorter than meta.paging.total stops as apple_paging; nothing written, instance not recorded", async () => {
+  const store = memoryStore();
+  const model = probeModel({ reply: (item) => ({ data: [item(0)], links: { next: null }, meta: { paging: { total: 2 } } }) });
+  await rejectsWithCode(apple.syncApple(CONFIG, fakeApple(model), store, nowFn), "apple_paging");
+  assert.equal(store.state.daily.size, 0);
+  assert.equal(store.state.instances.size, 0);
+  // The next run, with the whole list, reads it (nothing was skipped forever).
+  const full = probeModel({ bodies: [probeText(), probeText()], reply: (item) => whole(item, 2) });
+  await apple.syncApple(CONFIG, fakeApple(full), store, nowFn);
+  assert.equal(store.get("2026-10-26", "first_downloads"), 6);
+  assert.equal(store.state.instances.size, 1);
+});
+
+await test("completeness: a repeated segment id stops as apple_paging, in one page or across pages; never doubled", async () => {
+  for (const reply of [
+    (item) => ({ data: [item(0), item(0)], links: { next: null }, meta: { paging: { total: 2 } } }),
+    (item) => ({ data: [item(0), item(0)], links: {} }),
+    (item, url) =>
+      url.searchParams.get("cursor")
+        ? { data: [item(0)], meta: { paging: { total: 2 } } }
+        : { data: [item(0)], links: { next: `${url.origin}${url.pathname}?cursor=1` }, meta: { paging: { total: 2 } } },
+  ]) {
+    const store = memoryStore();
+    await rejectsWithCode(apple.syncApple(CONFIG, fakeApple(probeModel({ reply })), store, nowFn), "apple_paging");
+    assert.equal(store.state.daily.size, 0);
+    assert.equal(store.state.instances.size, 0);
+  }
+});
+
+await test("completeness: two segment ids for one file stop as apple_paging (never added up twice)", () => {
+  const seg = (id) => ({ type: "analyticsReportSegments", id, attributes: { url: `${SEGMENT_HOST}/same`, checksum: "a".repeat(32), sizeInBytes: 1 } });
+  assert.throws(() => apple.parseSegments([seg("a"), seg("b")]), (error) => error.code === "apple_paging");
+});
+
+await test("completeness: every paged list is checked, totals across the whole chain, and a wrong total fails closed", async () => {
+  const items = (ids) => ids.map((id) => ({ type: "x", id, attributes: {} }));
+  const list = (pages) => {
+    const fetchImpl = fakeApple({
+      override: (url) => Response.json(pages[Number(url.searchParams.get("p") ?? 0)](`${url.origin}${url.pathname}?p=${Number(url.searchParams.get("p") ?? 0) + 1}`)),
+    });
+    return apple.listAllPages(fetchImpl, "tkn", `${API}/v1/x`);
+  };
+  // Total on the first page only is still enforced at the end of the chain.
+  await rejectsWithCode(list([(next) => ({ data: items(["a"]), links: { next }, meta: { paging: { total: 3 } } }), () => ({ data: items(["b"]) })]), "apple_paging");
+  // Too many.
+  await rejectsWithCode(list([() => ({ data: items(["a", "b"]), meta: { paging: { total: 1 } } })]), "apple_paging");
+  // Pages that disagree about the total, even if the last one matches.
+  await rejectsWithCode(list([(next) => ({ data: items(["a"]), links: { next }, meta: { paging: { total: 3 } } }), () => ({ data: items(["b"]), meta: { paging: { total: 2 } } })]), "apple_paging");
+  // A total that isn't a count proves nothing.
+  for (const total of ["2", -1, 1.5]) {
+    await rejectsWithCode(list([() => ({ data: items(["a"]), meta: { paging: { total } } })]), "apple_paging");
+  }
+  for (const meta of ["x", { paging: "x" }]) {
+    await rejectsWithCode(list([() => ({ data: items(["a"]), meta })]), "apple_paging");
+  }
+  // An item with no id can't be counted.
+  await rejectsWithCode(list([() => ({ data: [{ type: "x" }] })]), "apple_shape");
+  // Every list goes through it: a repeat in the instance list stops the source before any file.
+  const model = standardModel();
+  const fetchImpl = fakeApple({
+    ...model,
+    instances: { ...model.instances, "r-dl-std": [{ id: "i-dup", processingDate: "2026-10-27" }, { id: "i-dup", processingDate: "2026-10-27" }] },
+  });
+  await rejectsWithCode(apple.syncApple(CONFIG, fetchImpl, memoryStore(), nowFn), "apple_paging");
+  assert.ok(!fetchImpl.calls.some((call) => call.url.startsWith(SEGMENT_HOST)), "no file is read from an unproven list");
+});
+
+await test("completeness controls: two distinct segments save 6; missing meta, paging or total stays acceptable", async () => {
+  const store = memoryStore();
+  await apple.syncApple(CONFIG, fakeApple(probeModel({ bodies: [probeText(), probeText()], reply: (item) => whole(item, 2) })), store, nowFn);
+  assert.equal(store.get("2026-10-26", "first_downloads"), 6);
+  assert.equal(store.state.instances.get("i-probe").segment_count, 2);
+  for (const shape of [{}, { meta: {} }, { meta: null }, { meta: { paging: { limit: 200 } } }, { meta: { paging: null } }, { meta: { paging: { total: null } } }]) {
+    const other = memoryStore();
+    await apple.syncApple(CONFIG, fakeApple(probeModel({ reply: (item) => ({ data: [item(0)], ...shape }) })), other, nowFn);
+    assert.equal(other.get("2026-10-26", "first_downloads"), 3);
+    assert.equal(other.state.instances.size, 1);
+  }
+});
+
+const appleRow = (metric_date, metric, value, dimension = "") => ({ metric_date, source: "apple", metric, dimension, value });
+const engagementRows = (date, views = 10) => [appleRow(date, "impressions", 20), appleRow(date, "product_page_views", views), appleRow(date, "product_page_views_unique", views)];
+const downloadRows = (date, first = 5) => [appleRow(date, "first_downloads", first), appleRow(date, "redownloads", 0)];
+
+async function renderLaunch(daily, runs = [], at = "2026-10-30T15:00:00Z") {
+  const { createElement: h } = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
+  const { LaunchPageBody } = await import("../src/components/launch/LaunchPage.tsx");
+  const { ToastProvider } = await import("../src/components/ui/Toast.tsx");
+  const router = { refresh() {}, push() {}, replace() {}, back() {}, forward() {}, prefetch() {} };
+  const now = new Date(at);
+  const input = { daily, searchTop: null, runs, reddit: [], milestones: [], manualReads: [], tokenExpires: null };
+  const view = pageData.buildLaunchView(input, now);
+  const html = renderToStaticMarkup(h(AppRouterContext.Provider, { value: router }, h(ToastProvider, null, h(LaunchPageBody, { view, input, now }))));
+  const tile = html.slice(html.indexOf("App downloads"), html.indexOf("Website visitors"));
+  const section = html.slice(html.indexOf('id="appstore-title"'), html.indexOf('id="website-title"'));
+  return { html, tile, section, view };
+}
+const appleRun = (iso, code = "ok") => ({ id: iso, trigger: "cron", kind: "full", started_at: iso, finished_at: iso, status: "ok", sources: { apple: code } });
+
+await test("missing data: engagement only renders a dash for downloads, never 0 (server HTML)", async () => {
+  const { tile, section, view } = await renderLaunch(engagementRows("2026-10-26"), [appleRun("2026-10-30T11:30:00Z")]);
+  assert.equal(view.appStore.firstDownloads, null);
+  assert.equal(view.appStore.redownloads, null);
+  assert.match(tile, />–<\/p>/);
+  assert.ok(!/>0<\/p>/.test(tile), "no 0 tile");
+  assert.match(tile, /Waiting for Apple(&#x27;|')s downloads report/);
+  assert.match(tile, /no day both reports cover yet/);
+  assert.match(tile, /20 impressions · 10 page views/);
+  assert.match(section, /Waiting for Apple(&#x27;|')s downloads report/);
+  assert.ok(!/0 first-time downloads/.test(section), "the chart summary claims no 0 either");
+});
+
+await test("missing data: downloads only renders dashes for impressions, page views and conversion", async () => {
+  const { tile, section, view } = await renderLaunch(downloadRows("2026-10-26"), [appleRun("2026-10-30T11:30:00Z")]);
+  assert.equal(view.appStore.firstDownloads, 5);
+  assert.deepEqual([view.appStore.impressions, view.appStore.pageViews, view.appStore.pageViewsUnique, view.appStore.conversion], [null, null, null, null]);
+  assert.match(tile, />5<\/p>/);
+  assert.match(tile, /– impressions · – page views/);
+  assert.match(section, /Waiting for Apple(&#x27;|')s impressions and page views report/);
+});
+
+await test("missing data: conversion is never computed across days the two reports don't share", async () => {
+  const disjoint = pageData.buildAppStoreView([...engagementRows("2026-10-25"), ...downloadRows("2026-10-26")]);
+  assert.equal(disjoint.conversion, null);
+  assert.equal(disjoint.conversionWindow, null);
+  assert.deepEqual([disjoint.firstDownloads, disjoint.pageViewsUnique], [5, 10], "each headline still shows its own real number");
+  assert.equal(disjoint.downloadsWindow.until, "2026-10-26");
+  assert.equal(disjoint.engagementWindow.until, "2026-10-25");
+
+  // Only the 26th is shared: the 24th's downloads and the 25th's views stay out.
+  const overlap = pageData.buildAppStoreView([...downloadRows("2026-10-24", 100), ...engagementRows("2026-10-25", 100), ...downloadRows("2026-10-26", 2), ...engagementRows("2026-10-26", 8)]);
+  assert.ok(Math.abs(overlap.conversion - 2 / 8) < 1e-9);
+  assert.deepEqual(overlap.conversionWindow, { since: "2026-10-26", until: "2026-10-26", days: 1, spanDays: 1 });
+
+  // A gap in the shared days is counted and named, not smoothed over.
+  const gap = pageData.buildAppStoreView([...downloadRows("2026-10-24", 1), ...engagementRows("2026-10-24", 4), ...downloadRows("2026-10-26", 1), ...engagementRows("2026-10-26", 4)]);
+  assert.deepEqual(gap.conversionWindow, { since: "2026-10-24", until: "2026-10-26", days: 2, spanDays: 3 });
+  assert.match(format.appStoreTileLine(gap), /25% page view → download, 2 days both reports cover \(Oct 24–Oct 26\)/);
+  assert.match(format.appStoreTileLine(gap), /Oct 24–Oct 26, 2 of 3 days \(Apple days\)/);
+  assert.match(format.appStoreTileLine(disjoint), /– page view → download \(no day both reports cover yet\)/);
+  assert.match(format.appStoreTileLine(disjoint), /20 impressions · 10 page views, Oct 25/);
+});
+
+await test("missing data: a real zero on a covered day stays a 0", async () => {
+  const rows = [...downloadRows("2026-10-26", 0), ...engagementRows("2026-10-26", 0)];
+  const view = pageData.buildAppStoreView(rows);
+  assert.equal(view.firstDownloads, 0);
+  assert.equal(view.pageViews, 0);
+  assert.equal(view.conversion, null, "nothing to divide by");
+  assert.match(format.appStoreTileLine(view), /no page views on the 1 day both reports cover/);
+  const zeroDownloads = pageData.buildAppStoreView([...downloadRows("2026-10-26", 0), ...engagementRows("2026-10-26", 8)]);
+  assert.equal(zeroDownloads.conversion, 0);
+  assert.match(format.appStoreTileLine(zeroDownloads), /0\.0% page view → download/);
+  const { tile } = await renderLaunch(rows, [appleRun("2026-10-30T11:30:00Z")]);
+  assert.match(tile, />0<\/p>/);
+  assert.ok(!/>–<\/p>/.test(tile));
+});
+
+await test("missing data: source table cells show a dash for a metric no day covers, a 0 where the report covered it", async () => {
+  const source = (date, metric, value, label = "App Store search") => appleRow(date, metric, value, `source_type:${label}`);
+  const onlyDownloads = pageData.buildAppStoreView([...downloadRows("2026-10-26"), source("2026-10-26", "first_downloads", 5)]);
+  assert.deepEqual(onlyDownloads.sourceTypes, [{ label: "App Store search", impressions: null, pageViews: null, firstDownloads: 5, redownloads: 0 }]);
+  const both = pageData.buildAppStoreView([...downloadRows("2026-10-26"), ...engagementRows("2026-10-26"), source("2026-10-26", "first_downloads", 5), source("2026-10-26", "impressions", 20, "Web referrer")]);
+  assert.deepEqual(both.sourceTypes.map((r) => [r.label, r.impressions, r.pageViews, r.firstDownloads, r.redownloads]), [
+    ["App Store search", 0, 0, 5, 0],
+    ["Web referrer", 20, 0, 0, 0],
+  ]);
+  const { section } = await renderLaunch([...downloadRows("2026-10-26"), source("2026-10-26", "first_downloads", 5)], [appleRun("2026-10-30T11:30:00Z")]);
+  const row = section.slice(section.indexOf("App Store search"), section.indexOf("</tr>", section.indexOf("App Store search")));
+  assert.equal((row.match(/>–</g) ?? []).length, 2, "impressions and page views");
+  assert.match(row, />5</);
+});
+
+await test("missing data: a Detailed group's missing number is a dash (Apple hides small groups), a stored number stays", async () => {
+  const detail = (metric, value, label = "site-hero") => appleRow("2026-10-26", metric, value, `campaign:${label}`);
+  const view = pageData.buildAppStoreView([...engagementRows("2026-10-26"), detail("product_page_views", 7), detail("first_downloads", 2, "site-footer"), detail("product_page_views", 0, "site-footer")]);
+  assert.deepEqual(view.campaigns, [
+    { label: "site-footer", firstDownloads: 2, pageViews: 0 },
+    { label: "site-hero", firstDownloads: null, pageViews: 7 },
+  ]);
+  const { section } = await renderLaunch([...engagementRows("2026-10-26"), detail("product_page_views", 7)], [appleRun("2026-10-30T11:30:00Z")]);
+  const row = section.slice(section.indexOf("site-hero</"), section.indexOf("</tr>", section.indexOf("site-hero</")));
+  assert.match(row, />–</);
+  assert.match(row, />7</);
+});
+
+const noKeys = { apple: CONFIG, appDb: null, web: null, searchConsole: null, alertProjectId: null };
+function seedDownloads(store, date) {
+  store.state.daily.set(`${date}|apple|first_downloads|`, { metric_date: date, source: "apple", metric: "first_downloads", dimension: "", value: 3, variant: "standard", apple_processing_date: date });
+}
+const freshRun = (store, fetchImpl, at) => sync.runLaunchSync({ store, env: noKeys, fetchImpl, now: () => new Date(at) }, { trigger: "cron", kind: "full" });
+
+await test("freshness rule: 72 hours past Apple's 3-day delay, by data day; a normal late report isn't stale, a re-issue can't reset it", () => {
+  assert.equal(stale.APPLE_REPORT_LAG_DAYS, 3);
+  // The newest day ends Oct 27 00:00 UTC: 3 days due + 72 hours = Nov 2 00:00.
+  assert.equal(stale.appleDataIsStale("2026-10-26", new Date("2026-11-01T23:59:00Z")), false);
+  assert.equal(stale.appleDataIsStale("2026-10-26", new Date("2026-11-02T00:01:00Z")), true);
+  assert.equal(stale.appleDataIsStale("2026-10-27", new Date("2026-10-30T11:30:00Z")), false, "three days late is normal");
+  const code = (before, after, now) => stale.appleRunCode(before, after, new Date(now));
+  const at = "2026-10-30T11:30:00Z";
+  const same = { engagement: "2026-10-27", downloads: "2026-10-27" };
+  assert.equal(code(same, same, at), "apple_no_new_data", "nothing moved");
+  assert.equal(code(same, { ...same, downloads: "2026-10-28" }, at), "ok", "either family moving forward is news");
+  assert.equal(code({ engagement: null, downloads: null }, { engagement: null, downloads: "2026-10-28" }, at), "ok", "the first report");
+  assert.equal(code({ engagement: null, downloads: null }, { engagement: null, downloads: null }, at), "apple_no_new_data", "still waiting");
+  assert.equal(code({ engagement: "2026-10-21", downloads: "2026-10-27" }, { engagement: "2026-10-21", downloads: "2026-10-28" }, at), "apple_no_new_data", "one family still out of date");
+  assert.equal(code({ engagement: "2026-10-10", downloads: "2026-10-10" }, { engagement: "2026-10-12", downloads: "2026-10-12" }, at), "apple_no_new_data", "catching up, not caught up");
+});
+
+await test("freshness: a successful poll with nothing new doesn't reset the clock: Oct 21 data shows out of date on Oct 30", async () => {
+  const store = memoryStore();
+  seedDownloads(store, "2026-10-21");
+  store.state.instances.set("i-probe", { instance_id: "i-probe" });
+  const at = "2026-10-30T12:00:00Z";
+  const result = await freshRun(store, fakeApple(probeModel({ reply: (item) => whole(item, 1) })), at);
+  assert.equal(result.sources.apple, "apple_no_new_data");
+  const through = { engagement: null, downloads: "2026-10-21" };
+  const health = stale.sourceHealth(store.state.runs, new Date(at), through).find((h) => h.source === "apple");
+  assert.equal(health.state, "stale");
+  assert.equal(Date.parse(health.lastOkAt), Date.parse(at), "Apple was reached");
+  assert.deepEqual(health.appleData.downloads, { through: "2026-10-21", stale: true });
+  const line = format.healthLine(health);
+  assert.equal(line.tone, "warning");
+  assert.match(line.text, /downloads through Oct 21 \(out of date\)/);
+  assert.match(line.text, /last reached Apple Oct 30/);
+});
+
+await test("freshness: instances with no segment yet are not ok and not fresh; Apple shows as waiting", async () => {
+  const store = memoryStore();
+  const at = "2026-10-30T12:00:00Z";
+  const result = await freshRun(store, fakeApple(probeModel({ bodies: [], reply: () => ({ data: [], links: {}, meta: { paging: { total: 0 } } }) })), at);
+  assert.equal(result.sources.apple, "apple_no_new_data");
+  assert.equal(store.state.instances.size, 0);
+  const health = stale.sourceHealth(store.state.runs, new Date(at)).find((h) => h.source === "apple");
+  assert.equal(health.state, "waiting");
+  assert.notEqual(format.healthLine(health).tone, "success");
+  assert.match(format.healthLine(health).text, /waiting for Apple's first report/);
+  assert.equal(format.sourceBadge(health, false).label, "No data yet");
+});
+
+await test("freshness: new days count as new; a re-issue of old days does not", async () => {
+  const store = memoryStore();
+  const fresh = probeModel({ reply: (item) => whole(item, 1) });
+  const first = await freshRun(store, fakeApple(fresh), "2026-10-30T12:00:00Z");
+  assert.equal(first.sources.apple, "ok");
+  // A newer instance re-issuing the same day: rows change, the data doesn't move forward.
+  store.state.instances.clear();
+  const reissue = probeModel({ bodies: [probeText("9")], reply: (item) => whole(item, 1), processingDate: "2026-10-29" });
+  const second = await freshRun(store, fakeApple(reissue), "2026-10-31T12:00:00Z");
+  assert.equal(second.sources.apple, "apple_no_new_data");
+  assert.equal(store.get("2026-10-26", "first_downloads"), 9, "the re-issue is still saved");
+});
+
+await test("freshness: each family stands alone; a family out of date makes the source out of date, the other still reads", () => {
+  const at = new Date("2026-10-30T12:00:00Z");
+  const run = appleRun("2026-10-30T11:30:00Z");
+  const apple1 = stale.sourceHealth([run], at, { engagement: "2026-10-27", downloads: "2026-10-21" }).find((h) => h.source === "apple");
+  assert.equal(apple1.state, "stale");
+  assert.deepEqual(apple1.appleData, { engagement: { through: "2026-10-27", stale: false }, downloads: { through: "2026-10-21", stale: true } });
+  assert.match(format.healthLine(apple1).text, /downloads through Oct 21 \(out of date\), impressions and page views through Oct 27/);
+  const apple2 = stale.sourceHealth([run], at, { engagement: "2026-10-27", downloads: null }).find((h) => h.source === "apple");
+  assert.equal(apple2.state, "fresh");
+  assert.match(format.healthLine(apple2).text, /no downloads report yet, impressions and page views through Oct 27/);
+});
+
+await test("freshness: other sources keep their rule; only Apple's code changes (no Apple data read, no new code)", () => {
+  const now = new Date("2026-10-30T12:00:00Z");
+  const run = { id: "r", trigger: "cron", kind: "full", started_at: "2026-10-30T11:30:00Z", finished_at: "2026-10-30T11:31:00Z", status: "ok", sources: { app_db: "ok", web: "ok", search_console: "ok", apple: "not_connected" } };
+  const health = stale.sourceHealth([run], now);
+  assert.deepEqual(health.map((h) => h.state), ["fresh", "fresh", "fresh", "not_connected"]);
+  assert.ok(health.filter((h) => h.source !== "apple").every((h) => !("appleData" in h)));
+  assert.equal(sync.runStatus({ app_db: "ok", apple: "apple_no_new_data" }), "ok");
+  assert.equal(sync.runStatus({ app_db: "http_500", apple: "apple_no_new_data" }), "partial");
+  assert.equal(sync.runStatus({ app_db: "http_500", apple: "http_500" }), "failed");
+  assert.deepEqual(alerts.decideAlert(["ok", "http_500", "http_500"]), { action: "recover" });
+  assert.deepEqual(alerts.decideAlert(["http_500", "http_500"]), { action: "raise", code: "http_500", streak: 2 });
+});
+
+await test("alerts: a poll with nothing new never closes the two-failure alert; data moving does", async () => {
+  const store = memoryStore();
+  const stopped = standardModel({ requests: [{ id: "req-old", accessType: "ONGOING", stopped: true }] });
+  let at = Date.parse("2026-10-28T11:30:00Z");
+  const run = (model) => {
+    at += 3_600_000;
+    return freshRun(store, fakeApple(model), new Date(at).toISOString());
+  };
+  await run(stopped);
+  await run(stopped);
+  assert.equal(store.state.tasks.length, 1);
+  assert.equal(store.state.tasks[0].status, "Planned");
+
+  seedDownloads(store, "2026-10-21");
+  store.state.instances.set("i-probe", { instance_id: "i-probe" });
+  for (let i = 0; i < 3; i += 1) {
+    const idle = await run(probeModel({ reply: (item) => whole(item, 1) }));
+    assert.equal(idle.sources.apple, "apple_no_new_data");
+    assert.equal(idle.alerts.find((a) => a.source === "apple").action, "none");
+    assert.equal(store.state.tasks[0].status, "Planned", "still open: no number moved");
+  }
+
+  store.state.instances.clear();
+  const moved = await run(probeModel({ reply: (item) => whole(item, 1) }));
+  assert.equal(moved.sources.apple, "ok");
+  assert.equal(moved.alerts.find((a) => a.source === "apple").action, "resolved");
+  assert.equal(store.state.tasks[0].status, "Done");
+});
+
+await test("alerts: a poll with nothing new is not a failure: it raises nothing, and it breaks a failure streak", () => {
+  const code = "apple_no_new_data";
+  assert.deepEqual(alerts.decideAlert([code]), { action: "none" });
+  assert.deepEqual(alerts.decideAlert([code, code, code]), { action: "none" });
+  assert.deepEqual(alerts.decideAlert([code, "http_500", "http_500"]), { action: "none" }, "neither raised again nor closed");
+  assert.deepEqual(alerts.decideAlert(["http_500", code, "http_500"]), { action: "none" }, "not two in a row");
+  assert.deepEqual(alerts.decideAlert(["http_500", "http_500", code]), { action: "raise", code: "http_500", streak: 2 });
+});
+
+await test("page: data through and last reached Apple are shown apart; fresh, stale and failing all say both", async () => {
+  const daily = [...engagementRows("2026-10-25"), ...downloadRows("2026-10-26")];
+  const fresh = await renderLaunch(daily, [appleRun("2026-10-30T11:30:00Z")]);
+  assert.match(fresh.html, /Downloads through Oct 26, impressions and page views through Oct 25\./);
+  assert.match(fresh.html, /Last reached Apple Oct 30/);
+  assert.match(fresh.html, /App Store: downloads through Oct 26, impressions and page views through Oct 25; last reached Apple Oct 30/);
+  assert.match(fresh.html, /A day Apple hasn(&#x27;|')t sent yet is left blank, not 0\./);
+
+  const old = await renderLaunch([...engagementRows("2026-10-21"), ...downloadRows("2026-10-21")], [appleRun("2026-10-30T11:30:00Z", "apple_no_new_data")]);
+  assert.match(old.html, /Data through Oct 21 \(out of date\)\./);
+  assert.match(old.html, /App Store: data through Oct 21 \(out of date\); last reached Apple Oct 30/);
+  assert.match(old.html, /Out of date/);
+
+  const failing = await renderLaunch(downloadRows("2026-10-26"), [appleRun("2026-10-30T11:30:00Z", "http_500"), appleRun("2026-10-29T11:30:00Z")]);
+  assert.match(failing.html, /App Store: last try failed \(http_500\); last reached Apple Oct 29/);
+  assert.ok(!/claude|anthropic/i.test(fresh.html + old.html + failing.html));
+});
+
+await test("store: appleDataThrough asks for each family's newest day total, for this user, since release", async () => {
+  const { createSupabaseLaunchStore } = await import("../src/lib/launch-metrics/store.ts");
+  const queries = [];
+  const client = {
+    from(table) {
+      const query = { table, filters: {} };
+      queries.push(query);
+      const chain = {
+        select: () => chain,
+        eq(column, value) { query.filters[column] = value; return chain; },
+        in(column, value) { query.filters[column] = value; return chain; },
+        gte(column, value) { query.since = [column, value]; return chain; },
+        order(column, options) { query.order = [column, options.ascending]; return chain; },
+        limit(n) {
+          query.limit = n;
+          return Promise.resolve({ data: query.filters.metric.includes("first_downloads") ? [{ metric_date: "2026-10-26" }] : [], error: null });
+        },
+      };
+      return chain;
+    },
+  };
+  const store = createSupabaseLaunchStore(client, "user-1");
+  assert.deepEqual(await store.appleDataThrough(), { engagement: null, downloads: "2026-10-26" });
+  assert.equal(queries.length, 2);
+  for (const query of queries) {
+    assert.equal(query.table, "launch_metric_daily");
+    assert.deepEqual([query.filters.user_id, query.filters.source, query.filters.dimension], ["user-1", "apple", ""]);
+    assert.deepEqual(query.since, ["metric_date", "2026-10-21"]);
+    assert.deepEqual([query.order, query.limit], [["metric_date", false], 1]);
+  }
+  const failing = createSupabaseLaunchStore({ from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ eq: () => ({ in: () => ({ gte: () => ({ order: () => ({ limit: async () => ({ data: null, error: { code: "x" } }) }) }) }) }) }) }) }) }) }, "user-1");
+  await rejectsWithCode(failing.appleDataThrough(), "db_read");
 });
 
 console.log(`\n${passed} passed, ${failures.length} failed`);

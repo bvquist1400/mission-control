@@ -28,7 +28,7 @@ browser. Nobody (PM or agent) asks you to paste a key into chat.
 Every run writes one row to the run log with a short code per source. The
 bottom of the page shows each source's last good update:
 
-- **Out of date**: app sign-ups or website not updated for 2 hours, Google search for 36 hours, App Store for 72 hours.
+- **Out of date**: app sign-ups or website not updated for 2 hours, Google search for 36 hours. The App Store goes by its data, per report: out of date 72 hours after a report is due (end of the newest data day + Apple's normal 3 days + 72 hours, so 6 days after that day ends), or if Apple hasn't been reached for 72 hours. A daily "last reached Apple" with no new numbers does not count as fresh.
 - **Update failing**: the last try failed (the code is shown, e.g. `http_401`).
 - **Not set up yet**: that source's keys aren't in Baseline's environment.
 
@@ -59,6 +59,8 @@ update again, and the same task reopens if the source breaks again later.
 | `apple_tsv_header` | Apple's report file has a column Baseline doesn't know, or lacks one it needs. Nothing from it was saved. | Tell the PM: the column list in `apple.ts` needs a look. |
 | `apple_checksum`, `apple_segment_size` | A downloaded report file didn't match Apple's checksum or size. Nothing from it was saved; it is tried again next run. | Usually clears by itself; tell the PM if it repeats. |
 | `apple_segment_host` | Apple's file link was on a host other than `*.apple.com`, so Baseline didn't download it. | Tell the PM (one allowlist line in `apple.ts`). |
+| `apple_paging` | Apple's list came back short of its own count, with a repeated item, or with a count that can't be read. Nothing from it was saved or marked as read; it is tried again next run. | Usually clears by itself; tell the PM if it repeats. |
+| `apple_no_new_data` | Not a failure. Apple answered, but the run didn't move its data forward, or a report is still out of date. No alert, and an open alert stays open until the numbers move. | Nothing, unless the page shows the App Store out of date; then check App Store Connect and tell the PM. |
 | `apple_shape`, `apple_tsv_*`, `apple_gzip` | Apple's reply or file wasn't in the expected shape. Nothing from it was saved. | Tell the PM. |
 
 ## Setup at go-live (one step at a time with the PM)

@@ -25,6 +25,11 @@
  *      written as 0, so two instances are never merged (065's trigger backs
  *      it). The instance is then recorded, so it is never read twice.
  *
+ * A list that can't be shown to be whole stops the source (`apple_paging`:
+ * a repeated id, or a count that doesn't match `meta.paging.total`), so nothing
+ * of a short or doubled instance is written or recorded. `syncApple` reports
+ * how far the data went, because reaching Apple doesn't mean the data moved.
+ *
  * Never stored, logged or returned: the key, the JWT, a response body, a
  * segment or its URL. Failures are a `LaunchSourceError` with a short code.
  * Only api.appstoreconnect.apple.com gets the token. Segment files are fetched
@@ -35,6 +40,7 @@ import { createHash, createPrivateKey, sign, type KeyObject } from 'node:crypto'
 import { gunzipSync } from 'node:zlib';
 import { addDays, isIsoDate, LAUNCH_RELEASE_DATE } from './dates';
 import { assertAllowedUrl, fetchBytes, fetchJson, isPlainObject, LaunchSourceError, type FetchLike } from './http';
+import type { AppleDataThrough } from './stale';
 import type { AppleStoredKey, LaunchStore } from './store';
 import type { DailyMetricInput } from './types';
 
@@ -197,19 +203,81 @@ async function appleGet(fetchImpl: FetchLike, token: string, url: string, budget
   return raw;
 }
 
-/** Every item of a paged list. `links.next` must stay on Apple's API host. */
+/**
+ * Apple's count of the whole list from one page's `meta.paging.total`, or null
+ * when the page doesn't give one (`meta` and `paging` are optional in Apple's
+ * documented responses, and so is `total`). A value that is there but isn't a
+ * count proves nothing, so it fails closed.
+ */
+function pagingTotal(meta: unknown): number | null {
+  if (meta === undefined || meta === null) {
+    return null;
+  }
+  if (!isPlainObject(meta)) {
+    throw new LaunchSourceError('apple_paging');
+  }
+  const paging = meta.paging;
+  if (paging === undefined || paging === null) {
+    return null;
+  }
+  if (!isPlainObject(paging)) {
+    throw new LaunchSourceError('apple_paging');
+  }
+  const total = paging.total;
+  if (total === undefined || total === null) {
+    return null;
+  }
+  if (!Number.isSafeInteger(total) || (total as number) < 0) {
+    throw new LaunchSourceError('apple_paging');
+  }
+  return total as number;
+}
+
+/**
+ * Every item of a paged list, or a failure: a list that can't be shown to be
+ * whole never reaches a caller, because a short list would be written and
+ * recorded as if it were all of it, and a repeated item counted twice.
+ *
+ * - `links.next` must stay on Apple's API host and never repeat (`apple_shape`).
+ * - Every item needs an id, and no id may appear twice in the chain
+ *   (`apple_shape`, `apple_paging`).
+ * - Where a page gives `meta.paging.total`, every page that gives it must agree
+ *   and the chain must end with exactly that many items (`apple_paging`). A
+ *   chain with no total at all is accepted: Apple's responses may omit it.
+ */
 export async function listAllPages(fetchImpl: FetchLike, token: string, firstUrl: string, budget?: AppleBudget): Promise<unknown[]> {
   const items: unknown[] = [];
-  const seen = new Set<string>();
+  const seenLinks = new Set<string>();
+  const seenIds = new Set<string>();
+  let expectedTotal: number | null = null;
   let url = firstUrl;
   for (let page = 0; page < APPLE_MAX_PAGES; page += 1) {
     const json = await appleGet(fetchImpl, token, url, budget);
-    items.push(...(json.data as unknown[]));
+    const total = pagingTotal(json.meta);
+    if (total !== null) {
+      if (expectedTotal !== null && expectedTotal !== total) {
+        throw new LaunchSourceError('apple_paging');
+      }
+      expectedTotal = total;
+    }
+    for (const item of json.data as unknown[]) {
+      if (!isPlainObject(item) || typeof item.id !== 'string') {
+        throw new LaunchSourceError('apple_shape');
+      }
+      if (seenIds.has(item.id)) {
+        throw new LaunchSourceError('apple_paging');
+      }
+      seenIds.add(item.id);
+      items.push(item);
+    }
     if (json.links !== undefined && !isPlainObject(json.links)) {
       throw new LaunchSourceError('apple_shape');
     }
     const next = (json.links as Record<string, unknown> | undefined)?.next;
     if (next === undefined || next === null) {
+      if (expectedTotal !== null && items.length !== expectedTotal) {
+        throw new LaunchSourceError('apple_paging');
+      }
       return items;
     }
     if (typeof next !== 'string') {
@@ -220,10 +288,10 @@ export async function listAllPages(fetchImpl: FetchLike, token: string, firstUrl
     } catch {
       throw new LaunchSourceError('apple_shape');
     }
-    if (seen.has(next)) {
+    if (seenLinks.has(next)) {
       throw new LaunchSourceError('apple_shape');
     }
-    seen.add(next);
+    seenLinks.add(next);
     url = next;
   }
   throw new LaunchSourceError('apple_too_many_pages');
@@ -401,12 +469,18 @@ export interface AppleSegment {
 }
 
 export function parseSegments(items: unknown[]): AppleSegment[] {
+  const urls = new Set<string>();
   return items.map((item) => {
     const { attributes } = resource(item, 'analyticsReportSegments');
     const { url, checksum, sizeInBytes } = attributes;
     if (typeof url !== 'string' || typeof checksum !== 'string' || !Number.isSafeInteger(sizeInBytes) || (sizeInBytes as number) < 0) {
       throw new LaunchSourceError('apple_shape');
     }
+    // Two ids for one file would add its rows up twice, just like a repeated id.
+    if (urls.has(url)) {
+      throw new LaunchSourceError('apple_paging');
+    }
+    urls.add(url);
     return { url, checksum, sizeInBytes: sizeInBytes as number };
   });
 }
@@ -735,6 +809,9 @@ export interface AppleSyncResult {
   /** Instances not reached this run (cap or time budget): read next run. */
   instancesLeft: number;
   rowsWritten: number;
+  /** Each report family's newest stored day, before and after this run. */
+  dataThroughBefore: AppleDataThrough;
+  dataThroughAfter: AppleDataThrough;
 }
 
 interface PendingInstance {
@@ -761,6 +838,7 @@ export async function syncApple(
     now,
   };
   const token = signAppleJwt(config, Math.floor(started / 1000));
+  const dataThroughBefore = await store.appleDataThrough();
   // Running out of time while listing leaves nothing safe to read: a code.
   const listing = async (url: string) => {
     try {
@@ -896,5 +974,12 @@ export async function syncApple(
     throw new LaunchSourceError('apple_timeout');
   }
 
-  return { instancesRead, instancesWaiting, instancesLeft: todo.length - attempted, rowsWritten };
+  return {
+    instancesRead,
+    instancesWaiting,
+    instancesLeft: todo.length - attempted,
+    rowsWritten,
+    dataThroughBefore,
+    dataThroughAfter: await store.appleDataThrough(),
+  };
 }

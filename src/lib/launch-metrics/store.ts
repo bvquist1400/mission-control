@@ -6,7 +6,9 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database, Json } from '@/types/supabase.generated';
+import { LAUNCH_RELEASE_DATE } from './dates';
 import { LaunchSourceError } from './http';
+import { APPLE_FAMILY_TOTALS, type AppleDataThrough } from './stale';
 import type { DailyMetricInput, LaunchRunKind, LaunchRunStatus, LaunchRunTrigger, LaunchSnapshotSource } from './types';
 
 export interface RunRecord {
@@ -74,6 +76,8 @@ export interface LaunchStore {
   /** Stored Apple rows on these days (any metric, dimension and variant). */
   appleRowsFor(dates: string[]): Promise<AppleStoredKey[]>;
   recordAppleInstance(record: AppleInstanceRecord): Promise<void>;
+  /** The newest day each Apple report family has a day total for, since release. */
+  appleDataThrough(): Promise<AppleDataThrough>;
 }
 
 export const ALERT_SOURCE_SYSTEM = 'launch_metrics';
@@ -292,6 +296,27 @@ export function createSupabaseLaunchStore(supabase: SupabaseClient<Database>, us
       if (error) {
         throw new LaunchSourceError('db_write');
       }
+    },
+
+    async appleDataThrough() {
+      const newest = async (metrics: readonly string[]) => {
+        const { data, error } = await supabase
+          .from('launch_metric_daily')
+          .select('metric_date')
+          .eq('user_id', userId)
+          .eq('source', 'apple')
+          .eq('dimension', '')
+          .in('metric', [...metrics])
+          .gte('metric_date', LAUNCH_RELEASE_DATE)
+          .order('metric_date', { ascending: false })
+          .limit(1);
+        if (error) {
+          throw new LaunchSourceError('db_read');
+        }
+        return data?.[0]?.metric_date ?? null;
+      };
+      const [engagement, downloads] = await Promise.all([newest(APPLE_FAMILY_TOTALS.engagement), newest(APPLE_FAMILY_TOTALS.downloads)]);
+      return { engagement, downloads };
     },
   };
 }

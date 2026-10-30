@@ -9,7 +9,7 @@ import type { Database } from '@/types/supabase.generated';
 import { appDbHasRows, latestTotals, type AppDbTotalsView } from './page-totals';
 import { addDays, dateRange, etDate, LAUNCH_RELEASE_DATE, WEBSITE_TRACKING_START_DATE } from './dates';
 import { readRunSources, type RunRecord } from './store';
-import { isRunUnfinished, sourceHealth, tokenDaysLeft, type SourceHealth } from './stale';
+import { APPLE_FAMILY_TOTALS, isRunUnfinished, sourceHealth, tokenDaysLeft, type SourceHealth } from './stale';
 import type {
   LaunchAppStoreManualRead,
   LaunchMetricSource,
@@ -190,12 +190,31 @@ export interface AppStoreDay {
   redownloads: number | null;
 }
 
+/** null = that report has covered no day yet (a dash); a 0 is a real 0. */
 export interface AppStoreSourceRow {
   label: string;
-  impressions: number;
-  pageViews: number;
-  firstDownloads: number;
-  redownloads: number;
+  impressions: number | null;
+  pageViews: number | null;
+  firstDownloads: number | null;
+  redownloads: number | null;
+}
+
+/**
+ * A Detailed-report group. null = no row for that number: Apple hides groups
+ * under 5 people, so a missing row is "not shown", never 0.
+ */
+export interface AppStoreDetailedRow {
+  label: string;
+  firstDownloads: number | null;
+  pageViews: number | null;
+}
+
+/** The report days a headline adds up: first to last covered day, and how many of them are covered. */
+export interface HeadlineWindow {
+  since: string;
+  until: string;
+  days: number;
+  spanDays: number;
 }
 
 export interface AppStoreView {
@@ -208,23 +227,26 @@ export interface AppStoreView {
   engagementThrough: string | null;
   downloadsThrough: string | null;
   /**
-   * The headline window: the 30 report days ending at the newest day BOTH
-   * reports cover (or the one that exists), not before release, so the
-   * conversion never divides one report's days by another's.
+   * Each family's headline covers its own newest 30 report days, so one report
+   * running behind never holds the other's numbers back or blanks them. Null
+   * = that family has covered no day, and its headlines are null (a dash).
    */
-  window: { since: string; until: string } | null;
-  impressions: number;
-  pageViews: number;
-  pageViewsUnique: number;
-  firstDownloads: number;
-  redownloads: number;
-  /** First-time downloads ÷ unique product page views over the window; null without unique views. */
+  downloadsWindow: HeadlineWindow | null;
+  engagementWindow: HeadlineWindow | null;
+  /** The newest 30 report days covered by BOTH families; null when they share none. */
+  conversionWindow: HeadlineWindow | null;
+  impressions: number | null;
+  pageViews: number | null;
+  pageViewsUnique: number | null;
+  firstDownloads: number | null;
+  redownloads: number | null;
+  /** First-time downloads ÷ unique product page views over `conversionWindow`; null without one or without unique views. */
   conversion: number | null;
   /** Since release, Standard reports. */
   sourceTypes: AppStoreSourceRow[];
   /** Since release, Detailed reports (Apple drops groups under 5 people, so often empty). */
-  sourceInfo: NamedCount[];
-  campaigns: NamedCount[];
+  sourceInfo: AppStoreDetailedRow[];
+  campaigns: AppStoreDetailedRow[];
 }
 
 /** Days in the App Store headline window. */
@@ -307,91 +329,133 @@ function topDimensions(daily: DailyValue[], source: LaunchMetricSource, metric: 
   return [...totals.values()].filter((entry) => entry.value > 0).sort((a, b) => b.value - a.value || a.label.localeCompare(b.label)).slice(0, 10);
 }
 
-function appStoreSourceRows(daily: DailyValue[]): AppStoreSourceRow[] {
-  const rows = new Map<string, AppStoreSourceRow>();
+function appStoreSourceRows(daily: DailyValue[], totals: DailyValue[]): AppStoreSourceRow[] {
   const prefix = 'source_type:';
+  const metrics = { impressions: 'impressions', pageViews: 'product_page_views', firstDownloads: 'first_downloads', redownloads: 'redownloads' } as const;
+  const fields = Object.keys(metrics) as Array<keyof typeof metrics>;
+  // A Standard report's day totals are the sum of its source rows, so on a
+  // covered day a source with no row really had none: 0. A metric no day
+  // covers isn't known for any source: null.
+  const known = (metric: string) => totals.some((row) => row.metric === metric);
+  const blank = () => Object.fromEntries(fields.map((field) => [field, known(metrics[field]) ? 0 : null])) as Omit<AppStoreSourceRow, 'label'>;
+  const rows = new Map<string, AppStoreSourceRow>();
   for (const row of daily) {
     if (row.source !== 'apple' || !row.dimension.startsWith(prefix) || row.metric_date < LAUNCH_RELEASE_DATE) {
       continue;
     }
+    const field = fields.find((candidate) => metrics[candidate] === row.metric);
+    if (!field) {
+      continue;
+    }
     const label = row.dimension.slice(prefix.length);
-    const entry = rows.get(label) ?? { label, impressions: 0, pageViews: 0, firstDownloads: 0, redownloads: 0 };
-    if (row.metric === 'impressions') entry.impressions += row.value;
-    else if (row.metric === 'product_page_views') entry.pageViews += row.value;
-    else if (row.metric === 'first_downloads') entry.firstDownloads += row.value;
-    else if (row.metric === 'redownloads') entry.redownloads += row.value;
-    else continue;
+    const entry = rows.get(label) ?? { label, ...blank() };
+    entry[field] = (entry[field] ?? 0) + row.value;
     rows.set(label, entry);
   }
+  const n = (value: number | null) => value ?? 0;
   return [...rows.values()]
-    .filter((entry) => entry.impressions + entry.pageViews + entry.firstDownloads + entry.redownloads > 0)
-    .sort((a, b) => b.firstDownloads - a.firstDownloads || b.pageViews - a.pageViews || b.impressions - a.impressions || a.label.localeCompare(b.label));
+    .filter((entry) => n(entry.impressions) + n(entry.pageViews) + n(entry.firstDownloads) + n(entry.redownloads) > 0)
+    .sort(
+      (a, b) =>
+        n(b.firstDownloads) - n(a.firstDownloads) || n(b.pageViews) - n(a.pageViews) || n(b.impressions) - n(a.impressions) || a.label.localeCompare(b.label)
+    );
 }
 
-const ENGAGEMENT_TOTALS = ['impressions', 'product_page_views'];
-const DOWNLOAD_TOTALS = ['first_downloads', 'redownloads'];
+function appStoreDetailedRows(daily: DailyValue[], prefix: string, until: string): AppStoreDetailedRow[] {
+  const rows = new Map<string, AppStoreDetailedRow>();
+  for (const row of daily) {
+    if (row.source !== 'apple' || !row.dimension.startsWith(prefix) || row.metric_date < LAUNCH_RELEASE_DATE || row.metric_date > until) {
+      continue;
+    }
+    const field = row.metric === 'first_downloads' ? 'firstDownloads' : row.metric === 'product_page_views' ? 'pageViews' : null;
+    if (!field) {
+      continue;
+    }
+    const label = row.dimension.slice(prefix.length);
+    const entry = rows.get(label) ?? { label, firstDownloads: null, pageViews: null };
+    entry[field] = (entry[field] ?? 0) + row.value;
+    rows.set(label, entry);
+  }
+  const n = (value: number | null) => value ?? 0;
+  return [...rows.values()]
+    .filter((entry) => n(entry.firstDownloads) + n(entry.pageViews) > 0)
+    .sort((a, b) => n(b.firstDownloads) - n(a.firstDownloads) || n(b.pageViews) - n(a.pageViews) || a.label.localeCompare(b.label))
+    .slice(0, 10);
+}
+
+/** The covered days inside the 30 report days ending at the newest of them; null when there are none. */
+function headlineWindow(covered: Set<string>): { dates: string[]; window: HeadlineWindow } | null {
+  const sorted = [...covered].sort();
+  const until = sorted[sorted.length - 1];
+  if (!until) {
+    return null;
+  }
+  const start = addDays(until, -(APP_STORE_WINDOW_DAYS - 1));
+  const dates = sorted.filter((date) => date >= start);
+  const since = dates[0];
+  return { dates, window: { since, until, days: dates.length, spanDays: dateRange(since, until).length } };
+}
 
 export function buildAppStoreView(daily: DailyValue[]): AppStoreView {
   const totals = daily.filter((row) => row.source === 'apple' && row.dimension === '' && row.metric_date >= LAUNCH_RELEASE_DATE);
-  // A Standard report writes every total for every day its file covers, so a
-  // stored total marks the day as covered by that report.
-  const covered = (metrics: string[]) => new Set(totals.filter((row) => metrics.includes(row.metric)).map((row) => row.metric_date));
-  const engagementDays = covered(ENGAGEMENT_TOTALS);
-  const downloadDays = covered(DOWNLOAD_TOTALS);
+  // A number is known only if its row is stored. A Standard report writes
+  // every total for every day its file covers, zero included, so a stored 0 is
+  // a real 0 and a missing row means Apple hasn't covered that day.
+  const stored = new Map(totals.map((row) => [`${row.metric_date}|${row.metric}`, row.value]));
+  const cell = (date: string, metric: string) => stored.get(`${date}|${metric}`) ?? null;
+  const covered = (metrics: readonly string[]) => new Set(totals.filter((row) => metrics.includes(row.metric)).map((row) => row.metric_date));
+  const engagementDays = covered(APPLE_FAMILY_TOTALS.engagement);
+  const downloadDays = covered(APPLE_FAMILY_TOTALS.downloads);
   const latest = (days: Set<string>) => (days.size ? [...days].sort()[days.size - 1] : null);
   const engagementThrough = latest(engagementDays);
   const downloadsThrough = latest(downloadDays);
   const throughs = [engagementThrough, downloadsThrough].filter((date): date is string => date !== null).sort();
   const dataThrough = throughs.length ? throughs[throughs.length - 1] : null;
-  const windowUntil = throughs.length ? throughs[0] : null;
 
-  const get = byKey(daily, 'apple');
-  const value = (days: Set<string>, date: string, metric: string) => (days.has(date) ? get(date, metric) : null);
   const days: AppStoreDay[] = dataThrough
     ? dateRange(LAUNCH_RELEASE_DATE, dataThrough).map((date) => ({
         date,
-        impressions: value(engagementDays, date, 'impressions'),
-        pageViews: value(engagementDays, date, 'product_page_views'),
-        firstDownloads: value(downloadDays, date, 'first_downloads'),
-        redownloads: value(downloadDays, date, 'redownloads'),
+        impressions: cell(date, 'impressions'),
+        pageViews: cell(date, 'product_page_views'),
+        firstDownloads: cell(date, 'first_downloads'),
+        redownloads: cell(date, 'redownloads'),
       }))
     : [];
-  const windowStart = windowUntil ? addDays(windowUntil, -(APP_STORE_WINDOW_DAYS - 1)) : null;
-  const since = windowStart && windowStart < LAUNCH_RELEASE_DATE ? LAUNCH_RELEASE_DATE : windowStart;
-  const inWindow = since && windowUntil ? dateRange(since, windowUntil) : [];
-  const windowSum = (metric: string) => {
-    const days = DOWNLOAD_TOTALS.includes(metric) ? downloadDays : engagementDays;
-    return inWindow.reduce((total, date) => total + (value(days, date, metric) ?? 0), 0);
+
+  // Every total of a headline: the rows it has in the window, null with none.
+  const sum = (dates: string[] | undefined, metric: string) => {
+    const values = (dates ?? []).map((date) => cell(date, metric)).filter((value): value is number => value !== null);
+    return values.length ? values.reduce((total, value) => total + value, 0) : null;
   };
-  const pageViewsUnique = windowSum('product_page_views_unique');
-  const firstDownloads = windowSum('first_downloads');
-  const detailed = (prefix: string) =>
-    topDimensions(daily, 'apple', 'first_downloads', prefix, LAUNCH_RELEASE_DATE, dataThrough ?? LAUNCH_RELEASE_DATE, 'product_page_views')
-      .concat(
-        // A referrer with page views but no downloads still belongs in the list.
-        topDimensions(daily, 'apple', 'product_page_views', prefix, LAUNCH_RELEASE_DATE, dataThrough ?? LAUNCH_RELEASE_DATE)
-          .map((entry) => ({ label: entry.label, value: 0, secondary: entry.value }))
-      )
-      .filter((entry, index, all) => all.findIndex((other) => other.label === entry.label) === index)
-      .slice(0, 10);
+  const downloads = headlineWindow(downloadDays);
+  const engagement = headlineWindow(engagementDays);
+  // Conversion needs both numbers on the same day, or one report's downloads
+  // would be divided by another day's page views.
+  const shared = headlineWindow(
+    new Set(totals.filter((row) => row.metric === 'first_downloads' && cell(row.metric_date, 'product_page_views_unique') !== null).map((row) => row.metric_date))
+  );
+  const sharedDownloads = sum(shared?.dates, 'first_downloads');
+  const sharedUnique = sum(shared?.dates, 'product_page_views_unique');
+  const detailedUntil = dataThrough ?? LAUNCH_RELEASE_DATE;
+
   return {
     hasData: totals.length > 0,
     days,
     dataThrough,
     engagementThrough,
     downloadsThrough,
-    window: since && windowUntil ? { since, until: windowUntil } : null,
-    impressions: windowSum('impressions'),
-    pageViews: windowSum('product_page_views'),
-    pageViewsUnique,
-    firstDownloads,
-    redownloads: windowSum('redownloads'),
-    // Both reports must cover the window, or downloads would be divided by
-    // page views of other days.
-    conversion: engagementThrough && downloadsThrough && pageViewsUnique > 0 ? firstDownloads / pageViewsUnique : null,
-    sourceTypes: appStoreSourceRows(daily),
-    sourceInfo: detailed('source_info:'),
-    campaigns: detailed('campaign:'),
+    downloadsWindow: downloads?.window ?? null,
+    engagementWindow: engagement?.window ?? null,
+    conversionWindow: shared?.window ?? null,
+    impressions: sum(engagement?.dates, 'impressions'),
+    pageViews: sum(engagement?.dates, 'product_page_views'),
+    pageViewsUnique: sum(engagement?.dates, 'product_page_views_unique'),
+    firstDownloads: sum(downloads?.dates, 'first_downloads'),
+    redownloads: sum(downloads?.dates, 'redownloads'),
+    conversion: sharedDownloads !== null && sharedUnique ? sharedDownloads / sharedUnique : null,
+    sourceTypes: appStoreSourceRows(daily, totals),
+    sourceInfo: appStoreDetailedRows(daily, 'source_info:', detailedUntil),
+    campaigns: appStoreDetailedRows(daily, 'campaign:', detailedUntil),
   };
 }
 
@@ -446,6 +510,7 @@ export function buildLaunchView(input: LaunchPageInput, now: Date): LaunchView {
   const weightedPosition = sumBy(searchDays, (day) => (day.position ?? 0) * day.impressions);
 
   const lastRunRecord = input.runs[0] ?? null;
+  const appStore = buildAppStoreView(input.daily);
 
   return {
     today,
@@ -474,14 +539,14 @@ export function buildLaunchView(input: LaunchPageInput, now: Date): LaunchView {
       topPages: input.searchTop?.top_pages ?? [],
       topWindow: input.searchTop && input.searchTop.since ? { since: input.searchTop.since, until: input.searchTop.until } : null,
     },
-    appStore: buildAppStoreView(input.daily),
+    appStore,
     markers: input.milestones.map((milestone) => ({
       date: etDate(new Date(milestone.happened_at)),
       label: milestone.label,
       kind: milestone.kind,
       happenedAt: milestone.happened_at,
     })),
-    health: sourceHealth(input.runs, now),
+    health: sourceHealth(input.runs, now, { engagement: appStore.engagementThrough, downloads: appStore.downloadsThrough }),
     lastRun: lastRunRecord
       ? {
           started_at: lastRunRecord.started_at,

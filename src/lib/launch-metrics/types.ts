@@ -20,6 +20,13 @@ export type LaunchMilestoneKind = 'Release' | 'Tracking' | 'Users' | 'Marketing'
 export const LAUNCH_SYNC_SOURCES = ['app_db', 'web', 'search_console', 'apple'] as const;
 export type LaunchSyncSource = (typeof LAUNCH_SYNC_SOURCES)[number];
 
+/**
+ * Run-log code: Apple answered and nothing went wrong, but this run didn't
+ * bring Apple's data up to date. Not a failure (no alert, the run isn't marked
+ * partial) and not a recovery (it never closes an alert): see `appleRunCode`.
+ */
+export const APPLE_NO_NEW_DATA = 'apple_no_new_data';
+
 export interface LaunchMetricDaily {
   user_id: string;
   metric_date: string;

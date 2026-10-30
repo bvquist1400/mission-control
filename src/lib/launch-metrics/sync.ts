@@ -3,7 +3,8 @@
  *
  * - full (07:30 ET cron, "Refresh now"): app database + website + Search Console + Apple.
  * - light (hourly cron): app database + website only (Search Console and Apple `skipped`).
- * - Apple without any ASC_* value is `not_connected` (never a crash).
+ * - Apple without any ASC_* value is `not_connected` (never a crash). Apple
+ *   answering with nothing new is `apple_no_new_data`, not `ok`.
  * Each source runs on its own; one failure never stops the others. The run log
  * always gets a row, with one short code per source and nothing else. Decision
  * 6 alerts are evaluated after the run is recorded.
@@ -15,6 +16,7 @@ import { evaluateAlerts, type AlertOutcome } from './alerts';
 import { readAppleConfig, syncApple, type AppleConfig } from './apple';
 import { etDate } from './dates';
 import { errorCode, type FetchLike } from './http';
+import { appleRunCode, reachedSource } from './stale';
 import { fetchSearchConsoleMetrics, readSearchConsoleConfig, type SearchConsoleConfig } from './search-console';
 import type { LaunchStore } from './store';
 import type { LaunchRunKind, LaunchRunStatus, LaunchRunTrigger, LaunchSyncSource } from './types';
@@ -63,16 +65,15 @@ export const MANUAL_COOLDOWN_MS = 60_000;
 
 export function runStatus(sources: Record<string, string>): LaunchRunStatus {
   const counted = Object.values(sources).filter((code) => code !== 'skipped' && code !== 'not_connected');
-  if (counted.length === 0 || counted.every((code) => code === 'ok')) {
+  if (counted.length === 0 || counted.every((code) => reachedSource(code))) {
     return 'ok';
   }
-  return counted.some((code) => code === 'ok') ? 'partial' : 'failed';
+  return counted.some((code) => reachedSource(code)) ? 'partial' : 'failed';
 }
 
-async function attempt(fn: () => Promise<void>): Promise<string> {
+async function attempt(fn: () => Promise<string | void>): Promise<string> {
   try {
-    await fn();
-    return 'ok';
+    return (await fn()) ?? 'ok';
   } catch (error) {
     return errorCode(error);
   }
@@ -133,7 +134,8 @@ export async function runLaunchSync(
     // its own time budget, so the route finishes inside its 120 seconds.
     sources.apple = env.apple
       ? await attempt(async () => {
-          await syncApple(env.apple as AppleConfig, fetchImpl, store, deps.now, { runStartedAt: startedAt.getTime() });
+          const result = await syncApple(env.apple as AppleConfig, fetchImpl, store, deps.now, { runStartedAt: startedAt.getTime() });
+          return appleRunCode(result.dataThroughBefore, result.dataThroughAfter, deps.now());
         })
       : 'not_connected';
   }

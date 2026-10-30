@@ -4,7 +4,7 @@ import { cardClasses } from "@/components/ui/Card";
 import { ChartLegend, ColumnChart, EventKey, TotalChart } from "@/components/launch/DailyChart";
 import { MilestonesPanel, RedditPanel } from "@/components/launch/LaunchManualPanels";
 import { markerDays, notTrackedSpan } from "@/lib/launch-metrics/chart-model";
-import { formatCount, formatDay, formatEtClock, formatEtTime, formatPercent, formatPosition, healthLine, plural, sourceBadge as sourceBadgeState } from "@/lib/launch-metrics/format";
+import { appleDataText, appStoreTileLine, formatCount, formatCountOrDash, formatDay, formatEtClock, formatEtTime, formatPercent, formatPosition, healthLine, plural, sourceBadge as sourceBadgeState } from "@/lib/launch-metrics/format";
 import type { LaunchPageInput, LaunchView } from "@/lib/launch-metrics/page-data";
 import { isoToEtLocal } from "@/lib/launch-metrics/dates";
 
@@ -179,19 +179,19 @@ export function LaunchPageBody({ view, input, now }: { view: LaunchView; input: 
   const searchDates = view.search.days.map((day) => day.date);
   const appStore = view.appStore;
   const appDates = appStore.days.map((day) => day.date);
-  const appWindowText = appStore.window ? `${formatDay(appStore.window.since)}–${formatDay(appStore.window.until)}` : "";
   const appDownloadsSum = appStore.days.reduce((sum, day) => sum + (day.firstDownloads ?? 0), 0);
   const appRedownloadsSum = appStore.days.reduce((sum, day) => sum + (day.redownloads ?? 0), 0);
   const appPageViewsSum = appStore.days.reduce((sum, day) => sum + (day.pageViews ?? 0), 0);
   const appImpressionsSum = appStore.days.reduce((sum, day) => sum + (day.impressions ?? 0), 0);
-  const appThroughText =
-    appStore.engagementThrough && appStore.downloadsThrough && appStore.engagementThrough !== appStore.downloadsThrough
-      ? `. Downloads through ${formatDay(appStore.downloadsThrough)}; impressions and page views through ${formatDay(appStore.engagementThrough)}. A day Apple hasn't sent yet is left blank, not 0.`
-      : appStore.dataThrough
-        ? `. Data through ${formatDay(appStore.dataThrough)}.`
-        : ".";
   const appleHealth = view.health.find((entry) => entry.source === "apple");
   const appleConnected = appleHealth ? appleHealth.state !== "not_connected" && appleHealth.state !== "never" : false;
+  // What Apple's data covers and when Apple was last reached are two different things.
+  const appleData = appleDataText(appleHealth);
+  const appThroughText = [
+    appleData ? ` ${appleData.charAt(0).toUpperCase()}${appleData.slice(1)}.` : "",
+    appStore.engagementThrough !== appStore.downloadsThrough ? " A day Apple hasn't sent yet is left blank, not 0." : "",
+    appleConnected && appleHealth?.lastOkAt ? ` Last reached Apple ${formatEtTime(appleHealth.lastOkAt)}.` : "",
+  ].join("");
 
   return (
     <div className="space-y-6">
@@ -232,11 +232,11 @@ export function LaunchPageBody({ view, input, now }: { view: LaunchView; input: 
         />
         <Tile
           label="App downloads"
-          value={appStore.hasData ? formatCount(appStore.firstDownloads) : "–"}
+          value={formatCountOrDash(appStore.firstDownloads)}
           badge={sourceBadge(view, "apple")}
           sub={
             appStore.hasData
-              ? `First-time, App Store, ${appWindowText} (Apple days) · ${formatPercent(appStore.conversion)} page view → download · ${formatCount(appStore.impressions)} impressions · ${formatCount(appStore.pageViews)} page views`
+              ? appStoreTileLine(appStore)
               : appleConnected
                 ? "Waiting for Apple's first daily report"
                 : "Not connected yet"
@@ -318,50 +318,64 @@ export function LaunchPageBody({ view, input, now }: { view: LaunchView; input: 
       <Section
         id="appstore"
         title="App Store"
-        note={`Apple's report days (Apple's own dates, not New York time); Apple's numbers arrive 2–3 days late${appThroughText}`}
+        note={`Apple's report days (Apple's own dates, not New York time); Apple's numbers arrive 2–3 days late.${appThroughText}`}
         badge={sourceBadge(view, "apple")}
       >
         {appStore.hasData ? (
           <>
             <ChartTitle title="Downloads per day" note="First-time downloads and redownloads (someone getting the app again on a device)." />
-            <ColumnChart
-              title="App Store downloads per day"
-              summary={`App Store downloads per Apple report day, ${rangeText(appDates)}: ${plural(appDownloadsSum, "first-time download", "first-time downloads")} and ${plural(appRedownloadsSum, "redownload", "redownloads")}.`}
-              dates={appDates}
-              height={180}
-              series={[
-                { label: "First-time downloads", color: "var(--chart-1)", values: appStore.days.map((day) => day.firstDownloads) },
-                { label: "Redownloads", color: "var(--chart-3)", values: appStore.days.map((day) => day.redownloads) },
-              ]}
-              emptyNote="No downloads on these days yet"
-            />
-            <ChartLegend
-              items={[
-                { label: "First-time downloads", color: "var(--chart-1)", kind: "box" },
-                { label: "Redownloads", color: "var(--chart-3)", kind: "box" },
-              ]}
-            />
+            {appStore.downloadsThrough ? (
+              <>
+                <ColumnChart
+                  title="App Store downloads per day"
+                  summary={`App Store downloads per Apple report day, ${rangeText(appDates)}: ${plural(appDownloadsSum, "first-time download", "first-time downloads")} and ${plural(appRedownloadsSum, "redownload", "redownloads")}.`}
+                  dates={appDates}
+                  height={180}
+                  series={[
+                    { label: "First-time downloads", color: "var(--chart-1)", values: appStore.days.map((day) => day.firstDownloads) },
+                    { label: "Redownloads", color: "var(--chart-3)", values: appStore.days.map((day) => day.redownloads) },
+                  ]}
+                  emptyNote="No downloads on these days yet"
+                />
+                <ChartLegend
+                  items={[
+                    { label: "First-time downloads", color: "var(--chart-1)", kind: "box" },
+                    { label: "Redownloads", color: "var(--chart-3)", kind: "box" },
+                  ]}
+                />
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">Waiting for Apple&apos;s downloads report.</p>
+            )}
             <div className="mt-6">
               <ChartTitle title="Product page views per day" />
-              <ColumnChart
-                title="App Store product page views per day"
-                summary={`App Store product page views per Apple report day, ${rangeText(appDates)}: ${plural(appPageViewsSum, "page view", "page views")} in all.`}
-                dates={appDates}
-                height={150}
-                series={[{ label: "Page views", color: "var(--chart-1)", values: appStore.days.map((day) => day.pageViews) }]}
-                emptyNote="No page views on these days yet"
-              />
+              {appStore.engagementThrough ? (
+                <ColumnChart
+                  title="App Store product page views per day"
+                  summary={`App Store product page views per Apple report day, ${rangeText(appDates)}: ${plural(appPageViewsSum, "page view", "page views")} in all.`}
+                  dates={appDates}
+                  height={150}
+                  series={[{ label: "Page views", color: "var(--chart-1)", values: appStore.days.map((day) => day.pageViews) }]}
+                  emptyNote="No page views on these days yet"
+                />
+              ) : (
+                <p className="text-sm text-muted-foreground">Waiting for Apple&apos;s impressions and page views report.</p>
+              )}
             </div>
             <div className="mt-6">
               <ChartTitle title="Impressions per day" note="How often the app was seen anywhere in the App Store. Its own chart, because impressions run far higher than page views." />
-              <ColumnChart
-                title="App Store impressions per day"
-                summary={`App Store impressions per Apple report day, ${rangeText(appDates)}: ${plural(appImpressionsSum, "impression", "impressions")} in all.`}
-                dates={appDates}
-                height={150}
-                series={[{ label: "Impressions", color: "var(--chart-1)", values: appStore.days.map((day) => day.impressions) }]}
-                emptyNote="No impressions on these days yet"
-              />
+              {appStore.engagementThrough ? (
+                <ColumnChart
+                  title="App Store impressions per day"
+                  summary={`App Store impressions per Apple report day, ${rangeText(appDates)}: ${plural(appImpressionsSum, "impression", "impressions")} in all.`}
+                  dates={appDates}
+                  height={150}
+                  series={[{ label: "Impressions", color: "var(--chart-1)", values: appStore.days.map((day) => day.impressions) }]}
+                  emptyNote="No impressions on these days yet"
+                />
+              ) : (
+                <p className="text-sm text-muted-foreground">Waiting for Apple&apos;s impressions and page views report.</p>
+              )}
             </div>
           </>
         ) : (
@@ -377,15 +391,15 @@ export function LaunchPageBody({ view, input, now }: { view: LaunchView; input: 
           head={["Source", "Impressions", "Page views", "First downloads", "Redownloads"]}
           rows={appStore.sourceTypes.map((entry) => [
             entry.label,
-            formatCount(entry.impressions),
-            formatCount(entry.pageViews),
-            formatCount(entry.firstDownloads),
-            formatCount(entry.redownloads),
+            formatCountOrDash(entry.impressions),
+            formatCountOrDash(entry.pageViews),
+            formatCountOrDash(entry.firstDownloads),
+            formatCountOrDash(entry.redownloads),
           ])}
           empty={appStore.hasData ? "Apple hasn't reported any source types yet." : "Shown once Apple's daily reports arrive."}
         />
         <p className="mt-4 text-xs text-muted-foreground">
-          Referring sites, apps and campaign links come from Apple&apos;s Detailed reports. Apple leaves out any group of fewer than 5 people and adds small noise, so at launch volume these lists are mostly empty: an empty list means too few people to show, not zero.
+          Referring sites, apps and campaign links come from Apple&apos;s Detailed reports. Apple leaves out any group of fewer than 5 people and adds small noise, so at launch volume these lists are mostly empty: an empty list means too few people to show, not zero, and a dash means the same for that one number.
         </p>
         <div className="mt-3 grid grid-cols-1 gap-6 lg:grid-cols-2">
           <div className="min-w-0">
@@ -393,7 +407,7 @@ export function LaunchPageBody({ view, input, now }: { view: LaunchView; input: 
             <Table
               caption="App Store referrers"
               head={["Site or app", "First downloads", "Page views"]}
-              rows={appStore.sourceInfo.map((entry) => [entry.label, formatCount(entry.value), formatCount(entry.secondary ?? 0)])}
+              rows={appStore.sourceInfo.map((entry) => [entry.label, formatCountOrDash(entry.firstDownloads), formatCountOrDash(entry.pageViews)])}
               empty="Nothing Apple can show yet (groups under 5 people are hidden)."
             />
           </div>
@@ -402,7 +416,7 @@ export function LaunchPageBody({ view, input, now }: { view: LaunchView; input: 
             <Table
               caption="App Store campaign links"
               head={["Campaign", "First downloads", "Page views"]}
-              rows={appStore.campaigns.map((entry) => [entry.label, formatCount(entry.value), formatCount(entry.secondary ?? 0)])}
+              rows={appStore.campaigns.map((entry) => [entry.label, formatCountOrDash(entry.firstDownloads), formatCountOrDash(entry.pageViews)])}
               empty="Nothing Apple can show yet (groups under 5 people are hidden)."
             />
           </div>
@@ -581,7 +595,7 @@ export function LaunchPageBody({ view, input, now }: { view: LaunchView; input: 
           {view.lastRun
             ? `Last run ${formatEtTime(view.lastRun.started_at)} (${view.lastRun.trigger === "manual" ? "Refresh now" : "scheduled"}, ${view.lastRun.unfinished ? "did not finish" : view.lastRun.status}). `
             : "No runs yet. "}
-          Updates run every hour (sign-ups and website) and early every morning (everything, including the App Store). App sign-ups and the website are out of date after 2 hours, Google search after 36, the App Store after 72.
+          Updates run every hour (sign-ups and website) and early every morning (everything, including the App Store). App sign-ups and the website are out of date after 2 hours, Google search after 36. The App Store goes by its data, not by the last time Apple answered: it is out of date 72 hours after a report is due, allowing for Apple&apos;s 3-day delay.
         </p>
       </footer>
     </div>
