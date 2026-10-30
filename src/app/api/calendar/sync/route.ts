@@ -4,6 +4,7 @@ import { enforceCalendarRetention, ingestCalendarEvents, normalizeRequestedRange
 import { readInternalAuthContext } from '@/lib/supabase/internal-auth';
 import { requireAuthenticatedRoute, type AuthenticatedRouteContext } from '@/lib/supabase/route-auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
+import { runUnblockRetries } from '@/lib/task-unblocks';
 import { DEFAULT_WORKDAY_CONFIG } from '@/lib/workday';
 import { secureCompare } from '@/lib/secure-compare';
 
@@ -128,7 +129,12 @@ async function handle(request: NextRequest) {
       }
 
       const supabase = createSupabaseAdminClient();
-      return runSync('cron', supabase, userId, range);
+      try {
+        return await runSync('cron', supabase, userId, range);
+      } finally {
+        // The cron is the retry's one home (067): it runs even if the calendar sync fails.
+        await runUnblockRetries(supabase, userId);
+      }
     }
 
     const auth = await requireAuthenticatedRoute(request);

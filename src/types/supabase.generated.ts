@@ -2643,6 +2643,195 @@ export type Database = {
           },
         ]
       }
+      task_unblock_retries: {
+        Row: {
+          attempts: number
+          blocker_id: string
+          blocker_type: string
+          closed_at: string | null
+          closed_reason: string | null
+          error_code: string | null
+          failed_at: string
+          id: string
+          kind: string
+          last_attempt_at: string | null
+          task_due_at: string | null
+          task_due_change_id: string | null
+          task_id: string
+          task_status: string
+          user_id: string
+        }
+        Insert: {
+          attempts?: number
+          blocker_id: string
+          blocker_type: string
+          closed_at?: string | null
+          closed_reason?: string | null
+          error_code?: string | null
+          failed_at?: string
+          id?: string
+          kind: string
+          last_attempt_at?: string | null
+          task_due_at?: string | null
+          task_due_change_id?: string | null
+          task_id: string
+          task_status: string
+          user_id: string
+        }
+        Update: {
+          attempts?: number
+          blocker_id?: string
+          blocker_type?: string
+          closed_at?: string | null
+          closed_reason?: string | null
+          error_code?: string | null
+          failed_at?: string
+          id?: string
+          kind?: string
+          last_attempt_at?: string | null
+          task_due_at?: string | null
+          task_due_change_id?: string | null
+          task_id?: string
+          task_status?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      task_unblocks: {
+        Row: {
+          blocker_commitment_id: string | null
+          blocker_task_id: string | null
+          blocker_type: string
+          cleared_at: string | null
+          cleared_reason: string | null
+          comment_id: string | null
+          created_at: string
+          due_changed: boolean
+          id: string
+          is_recurring: boolean
+          landing_date: string
+          new_due_at: string | null
+          new_due_change_id: string | null
+          new_priority_score: number | null
+          new_status: string
+          prior_due_at: string | null
+          prior_priority_score: number | null
+          prior_status: string
+          revert_comment_id: string | null
+          revert_due_restored: boolean | null
+          revert_status_restored: boolean | null
+          reverted_at: string | null
+          reverted_by_id: string | null
+          reverted_by_type: string | null
+          status_changed: boolean
+          task_id: string
+          unblocked_at: string
+          user_id: string
+          waited_on_commitment_ids: string[]
+          waited_on_task_ids: string[]
+        }
+        Insert: {
+          blocker_commitment_id?: string | null
+          blocker_task_id?: string | null
+          blocker_type: string
+          cleared_at?: string | null
+          cleared_reason?: string | null
+          comment_id?: string | null
+          created_at?: string
+          due_changed?: boolean
+          id?: string
+          is_recurring?: boolean
+          landing_date: string
+          new_due_at?: string | null
+          new_due_change_id?: string | null
+          new_priority_score?: number | null
+          new_status: string
+          prior_due_at?: string | null
+          prior_priority_score?: number | null
+          prior_status: string
+          revert_comment_id?: string | null
+          revert_due_restored?: boolean | null
+          revert_status_restored?: boolean | null
+          reverted_at?: string | null
+          reverted_by_id?: string | null
+          reverted_by_type?: string | null
+          status_changed?: boolean
+          task_id: string
+          unblocked_at: string
+          user_id: string
+          waited_on_commitment_ids?: string[]
+          waited_on_task_ids?: string[]
+        }
+        Update: {
+          blocker_commitment_id?: string | null
+          blocker_task_id?: string | null
+          blocker_type?: string
+          cleared_at?: string | null
+          cleared_reason?: string | null
+          comment_id?: string | null
+          created_at?: string
+          due_changed?: boolean
+          id?: string
+          is_recurring?: boolean
+          landing_date?: string
+          new_due_at?: string | null
+          new_due_change_id?: string | null
+          new_priority_score?: number | null
+          new_status?: string
+          prior_due_at?: string | null
+          prior_priority_score?: number | null
+          prior_status?: string
+          revert_comment_id?: string | null
+          revert_due_restored?: boolean | null
+          revert_status_restored?: boolean | null
+          reverted_at?: string | null
+          reverted_by_id?: string | null
+          reverted_by_type?: string | null
+          status_changed?: boolean
+          task_id?: string
+          unblocked_at?: string
+          user_id?: string
+          waited_on_commitment_ids?: string[]
+          waited_on_task_ids?: string[]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "task_unblocks_blocker_commitment_id_fkey"
+            columns: ["blocker_commitment_id"]
+            isOneToOne: false
+            referencedRelation: "commitments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "task_unblocks_blocker_task_id_fkey"
+            columns: ["blocker_task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "task_unblocks_comment_id_fkey"
+            columns: ["comment_id"]
+            isOneToOne: false
+            referencedRelation: "task_comments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "task_unblocks_revert_comment_id_fkey"
+            columns: ["revert_comment_id"]
+            isOneToOne: false
+            referencedRelation: "task_comments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "task_unblocks_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       tasks: {
         Row: {
           actual_minutes: number | null
@@ -2687,6 +2876,7 @@ export type Database = {
           tags: string[]
           task_type: Database["public"]["Enums"]["task_type"]
           title: string
+          unblocked_at: string | null
           unit_count: number | null
           updated_at: string
           user_id: string
@@ -2736,6 +2926,7 @@ export type Database = {
           tags?: string[]
           task_type?: Database["public"]["Enums"]["task_type"]
           title: string
+          unblocked_at?: string | null
           unit_count?: number | null
           updated_at?: string
           user_id: string
@@ -2785,6 +2976,7 @@ export type Database = {
           tags?: string[]
           task_type?: Database["public"]["Enums"]["task_type"]
           title?: string
+          unblocked_at?: string | null
           unit_count?: number | null
           updated_at?: string
           user_id?: string
@@ -3039,6 +3231,10 @@ export type Database = {
         }
         Returns: Json
       }
+      clear_task_unblock: {
+        Args: { p_reason?: string; p_task_id: string; p_user_id: string }
+        Returns: Json
+      }
       famcal_add_personal_task_comment: {
         Args: {
           p_content: string
@@ -3248,6 +3444,44 @@ export type Database = {
         Returns: Json
       }
       task_graph_lock_key: { Args: { p_user_id: string }; Returns: number }
+      task_unblock_day_label: { Args: { p_day: string }; Returns: string }
+      task_unblock_due_boost: {
+        Args: { p_due_at: string; p_now: string }
+        Returns: number
+      }
+      task_unblock_end_of_day: { Args: { p_day: string }; Returns: string }
+      task_unblock_landing_date: {
+        Args: { p_is_personal: boolean; p_now: string }
+        Returns: string
+      }
+      task_unblock_priority: {
+        Args: {
+          p_base: number
+          p_due_at: string
+          p_mentions: string[]
+          p_now: string
+          p_score: number
+          p_status: string
+          p_title: string
+          p_user_id: string
+        }
+        Returns: number
+      }
+      task_unblock_process_waiter: {
+        Args: {
+          p_entered_done: boolean
+          p_now: string
+          p_target_id: string
+          p_type: string
+          p_user_id: string
+          p_waiting_id: string
+        }
+        Returns: string
+      }
+      task_unblock_run_retries: {
+        Args: { p_limit?: number; p_user_id: string }
+        Returns: Json
+      }
       undo_break_task_into_tasks: {
         Args: { p_request: Json; p_task_id: string; p_user_id: string }
         Returns: Json

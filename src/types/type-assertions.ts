@@ -29,6 +29,7 @@ import type {
   TaskChecklistItem,
   TaskComment,
   TaskStatusTransition,
+  TaskUnblock,
   WorkSession,
   WorkSessionItem,
 } from './database';
@@ -73,6 +74,8 @@ type Assert<T extends true> = T;
 /* eslint-disable @typescript-eslint/no-unused-vars */
 type _TaskKeys = Assert<KeysMatch<Task, Row<'tasks'>>>;
 type _TaskNulls = Assert<NullabilityMatches<Task, Row<'tasks'>>>;
+type _TaskUnblockKeys = Assert<KeysMatch<TaskUnblock, Row<'task_unblocks'>>>;
+type _TaskUnblockNulls = Assert<NullabilityMatches<TaskUnblock, Row<'task_unblocks'>>>;
 type _ImplementationKeys = Assert<KeysMatch<Implementation, Row<'implementations'>>>;
 type _ImplementationNulls = Assert<NullabilityMatches<Implementation, Row<'implementations'>>>;
 type _ProjectKeys = Assert<KeysMatch<Project, Row<'projects'>>>;

@@ -1,3 +1,5 @@
+import { badgeClasses } from "@/components/ui/Badge";
+import { isNowUnblocked, NOW_UNBLOCKED_LABEL, nowUnblockedTitle } from "@/lib/task-unblocks";
 import type { TaskStatus } from "@/types/database";
 
 /**
@@ -99,6 +101,36 @@ export function TaskStateBadge({ state, className = "" }: { state: TaskVisualSta
       className={`inline-flex rounded px-1.5 py-0.5 text-xs font-semibold ${state.badgeClass} ${className}`}
     >
       {state.label}
+    </span>
+  );
+}
+
+/**
+ * The green "Now unblocked" pill (migration 067), beside the state badge on the
+ * Now card, week board, task lists and the task page. Renders nothing unless the
+ * database has the task marked (`unblocked_at`) and it is still open.
+ */
+export function NowUnblockedPill({
+  task,
+  className = "",
+}: {
+  task: { status: TaskStatus; unblocked_at?: string | null };
+  className?: string;
+}) {
+  if (!isNowUnblocked(task)) return null;
+  return (
+    <span
+      className={badgeClasses({ tone: "success", size: "sm", className })}
+      title={nowUnblockedTitle(task.unblocked_at)}
+      data-now-unblocked=""
+    >
+      <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <path
+          fill="currentColor"
+          d="M11 1a4 4 0 0 0-4 4v2H3.5A1.5 1.5 0 0 0 2 8.5v5A1.5 1.5 0 0 0 3.5 15h7a1.5 1.5 0 0 0 1.5-1.5v-5A1.5 1.5 0 0 0 10.5 7H8.5V5a2.5 2.5 0 0 1 5 0v1h1.5V5a4 4 0 0 0-4-4z"
+        />
+      </svg>
+      {NOW_UNBLOCKED_LABEL}
     </span>
   );
 }

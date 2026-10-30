@@ -1,4 +1,5 @@
 import { isDecisionTask } from "@/lib/task-handoff";
+import { isNowUnblocked, nowUnblockedTitle } from "@/lib/task-unblocks";
 import type { TaskOwner, TaskStatus } from "@/types/database";
 
 /**
@@ -143,6 +144,8 @@ export interface TaskPageTaskRow {
   app: string | null;
   project: string | null;
   section: string | null;
+  /** Now unblocked (migration 067): set while the task shows the green pill. */
+  unblocked_at?: string | null;
 }
 
 export interface TaskPageChecklistRow {
@@ -179,6 +182,9 @@ export interface TaskPageView {
   due: string | null;
   overdue: boolean;
   blocked: boolean;
+  /** The green "Now unblocked" pill (067), and its hover text. */
+  nowUnblocked: boolean;
+  nowUnblockedTitle: string | null;
   /** A decision task: an empty hand-back answer gets a warning. */
   decision: boolean;
   /** What it waits on: waiting_on text and unfinished dependencies. */
@@ -302,6 +308,8 @@ export function buildTaskPageView(input: {
     due,
     overdue: Boolean(due && today && due < today && task.status !== "Done"),
     blocked,
+    nowUnblocked: isNowUnblocked(task),
+    nowUnblockedTitle: isNowUnblocked(task) ? nowUnblockedTitle(task.unblocked_at, now) : null,
     decision: isDecisionTask(task),
     waits,
     stand,

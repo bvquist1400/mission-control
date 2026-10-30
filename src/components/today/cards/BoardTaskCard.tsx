@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { TaskCardData } from "@/components/tasks/TaskCard";
-import { getTaskVisualState, TaskStateBadge } from "@/components/tasks/task-state";
+import { getTaskVisualState, NowUnblockedPill, TaskStateBadge } from "@/components/tasks/task-state";
 import { PersonalBadge } from "@/components/ui/PersonalBadge";
 import { Button } from "@/components/ui/Button";
 import {
@@ -114,6 +114,7 @@ export function WeeklyTaskCard({
           <h3 className="text-sm font-semibold leading-snug text-foreground">{task.title}</h3>
           {task.isPersonal ? <PersonalBadge className="mt-1" /> : null}
           {state ? <TaskStateBadge state={state} className="mt-1" /> : null}
+          <NowUnblockedPill task={{ status: task.status, unblocked_at: task.unblockedAt }} className="ml-1 mt-1" />
         </button>
 
         <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
@@ -175,6 +176,7 @@ export function WeeklyTaskCard({
           {task.isPersonal ? <PersonalBadge /> : null}
           <RangeChip view={range} />
           {state ? <TaskStateBadge state={state} /> : null}
+          <NowUnblockedPill task={{ status: task.status, unblocked_at: task.unblockedAt }} />
           {onToggleSteps ? (
             <StepsPill
               view={range}

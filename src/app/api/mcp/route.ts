@@ -672,7 +672,7 @@ function createMcpServer(): McpServer {
   // ── GET TASK ──────────────────────────────────────────────────────────
   mcp.tool(
     'get_task',
-    'Get a single task by ID, including implementation details and explicit recurring template/instance linkage fields. Also returns its dependencies: blocked_by (what this task waits on: dependency_id, type task/commitment, id, title, status, due_at, unresolved) and blocks (the tasks waiting on it: dependency_id, id, title, status, due_at). Change them with add_task_dependency / remove_task_dependency.',
+    'Get a single task by ID, including implementation details and explicit recurring template/instance linkage fields. Also returns its dependencies: blocked_by (what this task waits on: dependency_id, type task/commitment, id, title, status, due_at, unresolved) and blocks (the tasks waiting on it: dependency_id, id, title, status, due_at). Change them with add_task_dependency / remove_task_dependency. unblocked_at is set while the task shows "Now unblocked" (the last item it waited on became Done; cleared when it is started, finished, parked, re-dated or blocked again).',
     {
       task_id: z.string().describe('Task UUID'),
     },

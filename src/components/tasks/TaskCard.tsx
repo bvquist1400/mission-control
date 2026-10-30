@@ -1,5 +1,5 @@
 import type { MouseEvent } from "react";
-import { getTaskVisualState, TaskStateBadge } from "@/components/tasks/task-state";
+import { getTaskVisualState, NowUnblockedPill, TaskStateBadge } from "@/components/tasks/task-state";
 import { TaskTagChips } from "@/components/tasks/TaskTagChips";
 import type { TaskStatus } from "@/types/database";
 
@@ -19,6 +19,8 @@ export interface TaskCardData {
   tags: string[];
   dependencyBlocked?: boolean;
   updatedAt?: string | null;
+  /** Now unblocked (067): set while the task shows the green pill. */
+  unblockedAt?: string | null;
 }
 
 interface TaskCardProps {
@@ -89,6 +91,7 @@ export function TaskCard({ task, pinning = false, onTogglePinned }: TaskCardProp
         <div className="min-w-0 flex-1">
           <h3 className="text-sm font-semibold leading-relaxed text-foreground">{task.title}</h3>
           {visualState ? <TaskStateBadge state={visualState} className="mt-1" /> : null}
+          <NowUnblockedPill task={{ status: task.status, unblocked_at: task.unblockedAt }} className="ml-1 mt-1" />
           {task.tags.length > 0 ? (
             <TaskTagChips tags={task.tags} className="mt-2" />
           ) : null}

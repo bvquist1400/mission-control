@@ -81,6 +81,11 @@ export function TaskRecordPage({ view, details }: { view: TaskPageView; details:
           <Chip who={view.owner} label={mine ? "Owner: You" : `Owner: ${view.ownerLabel}`} initial={view.ownerLabel} />
           <span className={`pf-pill ${STATUS_TONE[view.status] ?? "tone-quiet"}`}>{view.status}</span>
           {view.blocked && view.status !== "Blocked/Waiting" ? <span className="pf-pill tone-wait">Blocked</span> : null}
+          {view.nowUnblocked ? (
+            <span className="pf-pill tone-done" title={view.nowUnblockedTitle ?? undefined} data-now-unblocked="">
+              Now unblocked
+            </span>
+          ) : null}
           {view.due ? (
             <span className={`pf-pill ${view.overdue ? "tone-late" : "tone-quiet"}`}>
               {view.overdue ? "Was due" : "Due"} {formatShortDate(view.due)}

@@ -38,6 +38,12 @@ class MemoryQueryBuilder {
     return this;
   }
 
+  // task_unblocks reads (067) filter on reverted_at IS NULL.
+  is(field, value) {
+    this.filters.push((row) => (row[field] ?? null) === value);
+    return this;
+  }
+
   in(field, values) {
     const allowed = new Set(values);
     this.filters.push((row) => allowed.has(row[field]));
@@ -133,6 +139,7 @@ class MemorySupabase {
       note_decisions: [],
       task_dependencies: [],
       task_status_transitions: [],
+      task_unblocks: [],
       ...seed,
     };
   }
