@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/Button";
-import { Input, Select } from "@/components/ui/Field";
+import { Select } from "@/components/ui/Field";
 import { cardClasses } from "@/components/ui/Card";
+import { DateField } from "@/components/ui/DateField";
 
 type PlannerMode = "today" | "now";
 
@@ -752,15 +753,18 @@ export function PlannerCard({ autoReplanKey = null, onAutoReplanHandled, onTaskC
         </div>
 
         <div className="flex flex-wrap items-end gap-2">
-          <label className="space-y-1">
-            <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">Date</span>
-            <Input
-              type="date"
+          <div className="space-y-1">
+            <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground" aria-hidden="true">Date</span>
+            <DateField
+              label="Plan date"
+              size="md"
+              clearable={false}
+              readBack={false}
               value={selectedDate}
-              onChange={(event) => setSelectedDate(event.target.value)}
+              onChange={setSelectedDate}
               disabled={loading || refreshing || replanning}
             />
-          </label>
+          </div>
 
           <label className="space-y-1">
             <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">Mode</span>

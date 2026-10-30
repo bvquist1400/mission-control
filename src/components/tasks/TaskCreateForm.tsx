@@ -13,6 +13,7 @@ import type {
 } from "@/types/database";
 import { Button } from "@/components/ui/Button";
 import { fieldClasses } from "@/components/ui/Field";
+import { DateField } from "@/components/ui/DateField";
 
 interface TaskCreateFormProps {
   implementations: ImplementationSummary[];
@@ -590,19 +591,16 @@ export function TaskCreateForm({
                   </select>
                 </label>
 
-                <label className="space-y-1">
-                  <span className={labelClass}>Due Date</span>
-                  <input
-                    type={draft.dueDate ? "date" : "text"}
+                <div className="space-y-1">
+                  <span className={labelClass} aria-hidden="true">Due Date</span>
+                  <DateField
+                    label="Due date"
+                    placeholder="No due date"
                     value={draft.dueDate}
-                    placeholder="mm/dd/yyyy"
-                    onFocus={(e) => { e.currentTarget.type = "date"; }}
-                    onBlur={(e) => { if (!e.currentTarget.value) e.currentTarget.type = "text"; }}
-                    onChange={(event) => setDraft((current) => ({ ...current, dueDate: event.target.value }))}
+                    onChange={(dueDate) => setDraft((current) => ({ ...current, dueDate }))}
                     disabled={isCreating}
-                    className={selectClass}
                   />
-                </label>
+                </div>
 
                 <label className="space-y-1">
                   <span className={labelClass}>Status</span>
@@ -901,19 +899,16 @@ export function TaskCreateForm({
                       </select>
                     </label>
 
-                    <label className="space-y-1">
-                      <span className={labelClass}>Due Date</span>
-                      <input
-                        type={qcDraft.dueDate ? "date" : "text"}
+                    <div className="space-y-1">
+                      <span className={labelClass} aria-hidden="true">Due Date</span>
+                      <DateField
+                        label="Due date"
+                        placeholder="No due date"
                         value={qcDraft.dueDate}
-                        placeholder="mm/dd/yyyy"
-                        onFocus={(e) => { e.currentTarget.type = "date"; }}
-                        onBlur={(e) => { if (!e.currentTarget.value) e.currentTarget.type = "text"; }}
-                        onChange={(e) => setQcDraft((c) => ({ ...c, dueDate: e.target.value }))}
+                        onChange={(dueDate) => setQcDraft((c) => ({ ...c, dueDate }))}
                         disabled={isCreating}
-                        className={selectClass}
                       />
-                    </label>
+                    </div>
 
                     <label className="space-y-1">
                       <span className={labelClass}>Status</span>

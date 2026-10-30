@@ -11,6 +11,7 @@ import type { ImplPhase, ImplementationHealthScore, RagStatus } from "@/types/da
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Field";
 import { cardClasses } from "@/components/ui/Card";
+import { DateField } from "@/components/ui/DateField";
 
 interface ImplementationDraft {
   name: string;
@@ -566,16 +567,16 @@ export default function ImplementationsPage() {
                 />
               </label>
 
-              <label className="space-y-1">
-                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Target Date</span>
-                <Input
-                  size="sm"
-                  type="date"
+              <div className="space-y-1">
+                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground" aria-hidden="true">Target Date</span>
+                <DateField
+                  label="Target date"
+                  placeholder="No target date"
                   value={draft.targetDate}
-                  onChange={(e) => setDraft((d) => ({ ...d, targetDate: e.target.value }))}
+                  onChange={(targetDate) => setDraft((d) => ({ ...d, targetDate }))}
                   disabled={isCreating}
                 />
-              </label>
+              </div>
 
               <label className="space-y-1">
                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Next Milestone</span>

@@ -85,6 +85,7 @@ External task identities are stored as the nullable pair `external_source_system
 | Icon-only button | `<Button variant="ghost" size="icon" aria-label="…">` |
 | Button-styled `<Link>`/anchor | `buttonClasses({ variant, size })` |
 | Text field / textarea / select | `<Input>` / `<Textarea>` / `<Select>` with `tone="default\|muted"`, `size="xs\|sm\|md"` (`@/components/ui/Field`) |
+| Date box | `<DateField value onChange label>` (`@/components/ui/DateField`): the phone's own calendar (invisible native `type="date"` over the field), Today / Tomorrow / Next week chips, Clear (`clearable={false}` for a required date), "Lands on Fri, Oct 30". Value is always `YYYY-MM-DD` or ""; the screen keeps its own save rule. `allowTyping` (task editor Start/Due) keeps the t+7 / 10/26 shortcuts beside a calendar button. Rules in `src/components/utils/date-field.ts`; `npm run test:date-field`. Brief "Pick a date…" (`PickRow`) and the dense grid/step cells stay native. |
 | Card surface | `className={cardClasses({ padding: "sm\|md\|lg" })}`, or `<Card as="section">` (`@/components/ui/Card`) |
 | Pill / badge | `className={badgeClasses({ tone, size })}`, or `<Badge>` (`@/components/ui/Badge`) |
 | Transient feedback | `useToast()` (`@/components/ui/Toast`) — never `window.confirm`/`alert` |

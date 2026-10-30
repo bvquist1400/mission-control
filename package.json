@@ -19,6 +19,7 @@
     "test:task-range": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-task-range.mjs",
     "test:task-range-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-task-range-db.mjs",
     "test:multiday-cards": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-multiday-cards.mjs",
+    "test:date-field": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-date-field.mjs",
     "test:break-into-tasks": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-break-into-tasks.mjs",
     "test:dependency-picker": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-dependency-picker.mjs",
     "test:break-into-tasks-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-break-into-tasks-db.mjs",

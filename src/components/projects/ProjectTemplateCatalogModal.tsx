@@ -15,6 +15,7 @@ import type { ProjectStage, RagStatus, TaskStatus, TaskType } from "@/types/data
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Textarea } from "@/components/ui/Field";
 import { badgeClasses } from "@/components/ui/Badge";
+import { DateField } from "@/components/ui/DateField";
 
 interface TemplateSummary {
   id: string;
@@ -1270,14 +1271,16 @@ export function ProjectTemplateCatalogModal({
                     </div>
 
                     <div className="grid gap-3 rounded-md border border-stroke bg-panel-muted/20 p-3 md:grid-cols-2">
-                      <label className="space-y-1">
-                        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Kickoff date</span>
-                        <Input
-                          type="date"
+                      <div className="space-y-1">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground" aria-hidden="true">Kickoff date</span>
+                        <DateField
+                          label="Kickoff date"
+                          size="md"
+                          clearable={false}
                           value={kickoffDate}
-                          onChange={(event) => handleKickoffDateChange(event.target.value)}
+                          onChange={handleKickoffDateChange}
                         />
-                      </label>
+                      </div>
 
                       <label className="space-y-1">
                         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Application</span>

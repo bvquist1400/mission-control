@@ -10,6 +10,7 @@ import type { CommitmentStatus, CommitmentDirection } from "@/types/database";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Textarea } from "@/components/ui/Field";
 import { cardClasses } from "@/components/ui/Card";
+import { DateField } from "@/components/ui/DateField";
 
 interface StakeholderDetail {
   id: string;
@@ -374,15 +375,17 @@ export default function StakeholderDetailPage() {
                 </Select>
               </label>
 
-              <label className="block space-y-1">
-                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Due Date</span>
-                <Input
-                  type="date"
+              <div className="block space-y-1">
+                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground" aria-hidden="true">Due Date</span>
+                <DateField
+                  label="Due date"
+                  size="md"
+                  placeholder="No due date"
                   value={commitmentDraft.due_at}
-                  onChange={(e) => setCommitmentDraft((d) => ({ ...d, due_at: e.target.value }))}
+                  onChange={(due_at) => setCommitmentDraft((d) => ({ ...d, due_at }))}
                   disabled={isCreatingCommitment}
                 />
-              </label>
+              </div>
 
               <label className="block space-y-1">
                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Notes</span>
