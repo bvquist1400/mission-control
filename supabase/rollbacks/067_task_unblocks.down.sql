@@ -7,7 +7,7 @@
 -- task_unblock_priority, task_unblock_due_boost, task_unblock_day_label,
 -- task_unblock_landing_date and task_unblock_end_of_day, the task_unblock_retries
 -- table (failed waiters still to retry), the task_unblocks table (unblock
--- records) and tasks.unblocked_at.
+-- records), tasks.unblocked_at and the task_dependencies UPDATE policy.
 --
 -- ORDER: roll the app back to a build without "Now unblocked" FIRST (an app that
 -- reads task_unblocks fails against a database without it), then run this.
@@ -16,10 +16,12 @@
 -- unblock or a reopen wrote STAYS as it is (they are ordinary task data); only
 -- the pill and the record of what each unblock changed are lost, so a blocker
 -- reopened after the rollback no longer puts anything back. Waiting tasks still
--- queued for a retry stay as they are. Re-running is safe.
+-- queued for a retry stay as they are. Without the policy, Remove from a browser
+-- session answers 404 again (as before 067). Re-running is safe.
 
 BEGIN;
 
+DROP POLICY IF EXISTS "Users can update own task_dependencies" ON task_dependencies;
 DROP FUNCTION IF EXISTS task_unblock_run_retries(UUID, INT);
 DROP FUNCTION IF EXISTS clear_task_unblock(UUID, UUID, TEXT);
 DROP TRIGGER IF EXISTS trg_task_dependencies_unblock_reblock ON task_dependencies;

@@ -352,13 +352,19 @@ await test("the retry's one call site: the calendar sync cron, after the sync, a
   }
 });
 
-await test("rollback drops every function, trigger, table and column 067 creates", () => {
+await test("Remove: 067 gives task_dependencies an owner-only UPDATE policy, safe to re-apply", () => {
+  assert.ok(MIGRATION.includes('DROP POLICY IF EXISTS "Users can update own task_dependencies" ON task_dependencies;'));
+  assert.match(MIGRATION, /CREATE POLICY "Users can update own task_dependencies"\s+ON task_dependencies FOR UPDATE\s+USING \(auth\.uid\(\) = user_id\)\s+WITH CHECK \(auth\.uid\(\) = user_id\)/);
+});
+
+await test("rollback drops every function, trigger, table, column and policy 067 creates", () => {
   const created = [
     ...[...MIGRATION.matchAll(/CREATE OR REPLACE FUNCTION (\w+)/g)].map((m) => `FUNCTION IF EXISTS ${m[1]}(`),
     ...[...MIGRATION.matchAll(/CREATE TRIGGER (\w+)/g)].map((m) => `TRIGGER IF EXISTS ${m[1]} `),
     "TABLE IF EXISTS task_unblocks",
     "TABLE IF EXISTS task_unblock_retries",
     "DROP COLUMN IF EXISTS unblocked_at",
+    'POLICY IF EXISTS "Users can update own task_dependencies" ON task_dependencies',
   ];
   for (const item of created) assert.ok(ROLLBACK.includes(item), `rollback lacks ${item}`);
   for (const statement of topLevelStatements(ROLLBACK)) {

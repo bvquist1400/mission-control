@@ -3,7 +3,8 @@
 // migration 067), against a LOCAL Supabase stack with every migration applied
 // (scripts/test-stack/up.sh):
 //
-//   UNBLOCK_TEST_SUPABASE_URL=$STACK_API_URL UNBLOCK_TEST_SERVICE_ROLE_KEY=$STACK_SERVICE_ROLE_KEY \
+//   UNBLOCK_TEST_SUPABASE_URL=$STACK_API_URL UNBLOCK_TEST_ANON_KEY=$STACK_ANON_KEY \
+//   UNBLOCK_TEST_SERVICE_ROLE_KEY=$STACK_SERVICE_ROLE_KEY \
 //   UNBLOCK_TEST_DB_CONTAINER=$STACK_DB_CONTAINER npm run test:task-unblocks-db
 //
 // Writes run in psql signed in as a throwaway user (SET ROLE authenticated +
@@ -41,6 +42,11 @@
 //         deadlock, a reopen failure, retry success, retry skipped because the
 //         task or the blocker changed, the cap, RLS on the records, the real cron
 //         route, and the unblocked_at <-> open row invariant over everything.
+// Part 9 (fix round 3): the retry never brings back a pill that was cleared after
+//         the failure, or redoes a normal unblock, and still applies when its
+//         failure is the newest event; Remove from a signed-in session (the real
+//         routes on a real PostgREST): owner only, the 061 loop guard and 067's
+//         link trigger, a hand-removed last link still doesn't unblock.
 // Each test reports and the run continues; throwaway users are deleted at the end.
 
 import assert from "node:assert/strict";
@@ -52,11 +58,12 @@ import { createClient } from "@supabase/supabase-js";
 import { recalculateTaskPriority } from "../src/lib/priority.ts";
 
 const url = process.env.UNBLOCK_TEST_SUPABASE_URL;
+const anonKey = process.env.UNBLOCK_TEST_ANON_KEY;
 const serviceKey = process.env.UNBLOCK_TEST_SERVICE_ROLE_KEY;
 const dbContainer = process.env.UNBLOCK_TEST_DB_CONTAINER;
 
-if (!url || !serviceKey || !dbContainer) {
-  console.error("Set UNBLOCK_TEST_SUPABASE_URL, UNBLOCK_TEST_SERVICE_ROLE_KEY and UNBLOCK_TEST_DB_CONTAINER (local stack only).");
+if (!url || !anonKey || !serviceKey || !dbContainer) {
+  console.error("Set UNBLOCK_TEST_SUPABASE_URL, UNBLOCK_TEST_ANON_KEY, UNBLOCK_TEST_SERVICE_ROLE_KEY and UNBLOCK_TEST_DB_CONTAINER (local stack only).");
   process.exit(2);
 }
 if (!["127.0.0.1", "localhost", "[::1]"].includes(new URL(url).hostname)) {
@@ -161,15 +168,25 @@ async function untilWaiting(like, ms = 10_000) {
 
 const admin = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
 const users = [];
+const logins = new Map();
 async function makeUser(prefix) {
+  const password = randomUUID();
   const { data, error } = await admin.auth.admin.createUser({
     email: `${prefix}-${randomUUID().slice(0, 8)}@example.test`,
-    password: randomUUID(),
+    password,
     email_confirm: true,
   });
   if (error) throw error;
   users.push(data.user.id);
+  logins.set(data.user.id, { email: data.user.email, password });
   return data.user.id;
+}
+/** A real signed-in session on PostgREST (the browser's client: anon key + the user's JWT). */
+async function userClient(id) {
+  const client = createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } });
+  const { error } = await client.auth.signInWithPassword(logins.get(id));
+  if (error) throw error;
+  return client;
 }
 
 let passed = 0;
@@ -242,6 +259,7 @@ try {
     assert.equal(psql(`SELECT to_regclass('public.task_unblocks') IS NULL;`), "t");
     assert.equal(psql(`SELECT to_regclass('public.task_unblock_retries') IS NULL;`), "t");
     assert.equal(psql(`SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND (p.proname LIKE 'task_unblock%' OR p.proname = 'clear_task_unblock');`), "0", "every function is gone");
+    assert.equal(psql(`SELECT count(*) FROM pg_policies WHERE tablename = 'task_dependencies' AND cmd = 'UPDATE';`), "0", "the UPDATE policy goes with 067");
     psql(ROLLBACK); // twice is fine
     assert.equal(psql(`SELECT count(*) FROM information_schema.columns WHERE table_name = 'tasks' AND column_name = 'unblocked_at';`), "0");
     // Without 067: the blocker is finished, the waiting task stays Waiting.
@@ -1352,6 +1370,240 @@ try {
     await sleep(600);
     runRetries();
     assert.equal(task(second.waiting).status, "Planned");
+  });
+
+  // ── Part 9: the retry and cleared pills; Remove from a signed-in session ──
+
+  const inSixDays = () => psql(`SELECT (now() + INTERVAL '6 days')::TEXT;`);
+
+  /** W (Planned, a later date: nothing but the pill changes) waits on B1 and B2. B1 finishes while W is held: an open record. B2 finishes normally: pill on. */
+  async function failedThenUnblocked() {
+    const b1 = makeTask(userA, { tags: P });
+    const b2 = makeTask(userA, { tags: P });
+    const waiting = makeTask(userA, { tags: P, due_at: inSixDays() });
+    link(userA, waiting, b1);
+    link(userA, waiting, b2);
+    await whileHeld(waiting, done(b1));
+    assert.equal(retries(waiting).length, 1);
+    assert.equal(retries(waiting)[0].closed_at, null);
+    setStatus(userA, b2, "Done");
+    assert.ok(task(waiting).unblocked_at, "the normal unblock put the pill on");
+    assert.equal(unblockRows(waiting).length, 1);
+    return { b1, b2, waiting };
+  }
+  /** The pill was cleared after the failure: the retry closes the record and touches nothing. */
+  function retryLeavesItAlone(waiting) {
+    const before = task(waiting);
+    assert.equal(before.unblocked_at, null, "the schedule cleared the pill");
+    const rows = unblockRows(waiting).length;
+    const comments = systemComments(waiting).length;
+    const moves = transitions(waiting);
+    runRetries();
+    assert.deepEqual(task(waiting), before, "no pill, nothing written");
+    assert.equal(unblockRows(waiting).length, rows, "no second row");
+    assert.equal(systemComments(waiting).length, comments, "no second comment");
+    assert.deepEqual(transitions(waiting), moves);
+    assert.deepEqual(retries(waiting).map((r) => r.closed_reason), ["task_changed"]);
+  }
+
+  await test("retry, cleared pill (a): two blockers, the first failed, the second unblocked, clear_task_unblock: stays cleared", async () => {
+    const { waiting } = await failedThenUnblocked();
+    assert.deepEqual(json(`SELECT clear_task_unblock(${q(userA)}, ${q(waiting)}, 'brief');`), { ok: true, cleared: true });
+    retryLeavesItAlone(waiting);
+    assert.equal(unblockRows(waiting)[0].cleared_reason, "brief");
+  });
+
+  await test("retry, cleared pill (b): Done while held, reopen, Done, In Progress and back to Planned: stays cleared", async () => {
+    const blocker = makeTask(userA, { tags: P });
+    const waiting = makeTask(userA, { tags: P, due_at: inSixDays() });
+    link(userA, waiting, blocker);
+    await whileHeld(waiting, done(blocker));
+    assert.equal(retries(waiting).length, 1);
+    setStatus(userA, blocker, "Planned");
+    setStatus(userA, blocker, "Done");
+    assert.ok(task(waiting).unblocked_at);
+    setStatus(userA, waiting, "In Progress");
+    setStatus(userA, waiting, "Planned");
+    retryLeavesItAlone(waiting);
+    assert.equal(unblockRows(waiting)[0].cleared_reason, "started");
+  });
+
+  await test("retry, cleared pill (c): cleared by a new blocker whose link is then removed: stays cleared", async () => {
+    const { waiting } = await failedThenUnblocked();
+    const third = makeTask(userA, { tags: P });
+    const thirdLink = link(userA, waiting, third);
+    assert.equal(task(waiting).unblocked_at, null, "the new blocker cleared it");
+    // As the machine keys do it, so this schedule doesn't depend on the session policy below.
+    psql(`UPDATE task_dependencies SET is_resolved = true, resolved_at = now() WHERE id = ${q(thirdLink)};`);
+    retryLeavesItAlone(waiting);
+    assert.equal(unblockRows(waiting)[0].cleared_reason, "reblocked");
+  });
+
+  await test("retry, control (d): a plain failed waiter with nothing after it still unblocks, once", async () => {
+    const { waiting } = await strandedUnblock({ status: "Planned", due_at: inSixDays() });
+    assert.equal(unblockRows(waiting).length, 0);
+    runRetries();
+    assert.ok(task(waiting).unblocked_at);
+    assert.equal(unblockRows(waiting).length, 1);
+    assert.equal(systemComments(waiting).length, 1);
+    assert.deepEqual(retries(waiting).map((r) => r.closed_reason), ["applied"]);
+  });
+
+  await test("retry, own failure is the newest event: an unblock cleared BEFORE the failure doesn't stop it", async () => {
+    const { blocker, waiting } = pilledTask();
+    setStatus(userA, waiting, "In Progress");
+    setStatus(userA, waiting, "Planned");
+    setStatus(userA, blocker, "Planned");
+    const earlier = unblockRows(waiting);
+    assert.equal(earlier.length, 1);
+    assert.ok(earlier[0].cleared_at && earlier[0].reverted_at);
+    await whileHeld(waiting, done(blocker));
+    const [record] = retries(waiting);
+    assert.ok(Date.parse(earlier[0].cleared_at) <= Date.parse(record.failed_at));
+    runRetries();
+    assert.ok(task(waiting).unblocked_at, "this Done is newer than the old clear");
+    assert.equal(unblockRows(waiting).length, 2);
+    assert.deepEqual(retries(waiting).map((r) => r.closed_reason), ["applied"]);
+  });
+
+  await test("retry, own failure is the newest event: a clear that held the lock began before the failure, so the new Done still lands", async () => {
+    const { blocker, waiting } = await strandedReopen();
+    await whileHeld(waiting, done(blocker), { holdSql: `SELECT clear_task_unblock(${q(userA)}, ${q(waiting)}, 'manual')` });
+    assert.equal(task(waiting).unblocked_at, null);
+    assert.deepEqual(retries(waiting).map((r) => r.kind), ["reopen", "unblock"]);
+    runRetries();
+    assert.ok(task(waiting).unblocked_at, "the trigger would have seen that clear had its wait been shorter");
+    assert.deepEqual(retries(waiting).map((r) => r.closed_reason), ["blocker_changed", "applied"]);
+  });
+
+  await test("retry, two records for one task: the first applies, the second adds nothing", async () => {
+    const b1 = makeTask(userA, { tags: P });
+    const b2 = makeTask(userA, { tags: P });
+    const waiting = makeTask(userA, { tags: P, due_at: inSixDays() });
+    link(userA, waiting, b1);
+    link(userA, waiting, b2);
+    await whileHeld(waiting, `${done(b1)} ${done(b2)}`, { ms: 40_000 });
+    assert.equal(retries(waiting).length, 2);
+    runRetries();
+    assert.ok(task(waiting).unblocked_at);
+    assert.equal(unblockRows(waiting).length, 1);
+    assert.equal(systemComments(waiting).length, 1);
+    assert.deepEqual(retries(waiting).map((r) => r.closed_reason), ["applied", "task_changed"]);
+  });
+
+  process.env.DEPLOYMENT_ROLE ??= "main";
+  const { writeInternalAuthContext } = await import("../src/lib/supabase/internal-auth.ts");
+  const removeRoute = await import("../src/app/api/tasks/[id]/dependencies/[dep_id]/route.ts");
+  const linksRoute = await import("../src/app/api/tasks/[id]/dependencies/route.ts");
+  const clientA = await userClient(userA);
+  const clientB = await userClient(userB);
+  const anonClient = createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } });
+  const reply = async (response) => ({ status: response.status, body: await response.json() });
+  const deleteRequest = (path, client, userId) =>
+    writeInternalAuthContext(new NextRequest(`http://localhost${path}`, { method: "DELETE" }), { supabase: client, user: { id: userId }, userId, authSource: "session" });
+  /** The Remove button: DELETE /api/tasks/{id}/dependencies/{dep_id} on the browser's own session. */
+  const removeLink = async (taskId, linkId, client = clientA, userId = userA) =>
+    reply(await removeRoute.DELETE(deleteRequest(`/api/tasks/${taskId}/dependencies/${linkId}`, client, userId), { params: Promise.resolve({ id: taskId, dep_id: linkId }) }));
+  const linkRow = (id) => json(`SELECT row_to_json(d) FROM (SELECT user_id, is_resolved, resolved_at FROM task_dependencies WHERE id = ${q(id)}) d;`);
+  const UPDATE_POLICY = `pg_policies WHERE tablename = 'task_dependencies' AND cmd = 'UPDATE'`;
+
+  await test("Remove: the UPDATE policy is owner-only, USING and WITH CHECK, and authenticated has the table grant", () => {
+    assert.equal(psql(`SELECT string_agg(cmd, ',' ORDER BY cmd) FROM pg_policies WHERE tablename = 'task_dependencies';`), "DELETE,INSERT,SELECT,UPDATE");
+    assert.equal(psql(`SELECT policyname || '|' || permissive || '|' || qual || '|' || with_check FROM ${UPDATE_POLICY};`), "Users can update own task_dependencies|PERMISSIVE|(auth.uid() = user_id)|(auth.uid() = user_id)");
+    assert.equal(psql(`SELECT has_table_privilege('authenticated', 'public.task_dependencies', 'UPDATE');`), "t");
+  });
+
+  await test("Remove: a signed-in session succeeds through the real route (200, link resolved); the legacy route too; a second Remove is 404", async () => {
+    const waiting = makeTask(userA, { tags: P });
+    const blocker = makeTask(userA, { tags: P });
+    const linkId = link(userA, waiting, blocker);
+    assert.deepEqual(await removeLink(waiting, linkId), { status: 200, body: { success: true } });
+    const row = linkRow(linkId);
+    assert.equal(row.is_resolved, true);
+    assert.ok(row.resolved_at);
+    assert.equal((await removeLink(waiting, linkId)).status, 404);
+
+    const legacyId = link(userA, waiting, blocker);
+    const legacy = await reply(await linksRoute.DELETE(deleteRequest(`/api/tasks/${waiting}/dependencies?dependencyId=${legacyId}`, clientA, userA), { params: Promise.resolve({ id: waiting }) }));
+    assert.deepEqual(legacy, { status: 200, body: { success: true } });
+    assert.equal(linkRow(legacyId).is_resolved, true);
+  });
+
+  await test("Remove: another user's session or no session can't touch the row, and the owner can't hand it to someone else", async () => {
+    const waiting = makeTask(userA, { tags: P });
+    const blocker = makeTask(userA, { tags: P });
+    const linkId = link(userA, waiting, blocker);
+    assert.equal((await removeLink(waiting, linkId, clientB, userB)).status, 404);
+    const direct = await clientB.from("task_dependencies").update({ is_resolved: true }).eq("id", linkId).select("id");
+    assert.equal(direct.error, null);
+    assert.deepEqual(direct.data, []);
+    assert.equal(asUser(userB, `WITH u AS (UPDATE task_dependencies SET is_resolved = true WHERE id = ${q(linkId)} RETURNING 1) SELECT count(*) FROM u`), "0");
+    const anon = await anonClient.from("task_dependencies").update({ is_resolved: true }).eq("id", linkId).select("id");
+    assert.ok(anon.error || anon.data.length === 0, "no session, no row");
+    const moved = await clientA.from("task_dependencies").update({ user_id: userB }).eq("id", linkId).select("id");
+    assert.equal(moved.error?.code, "42501", "WITH CHECK refuses another owner");
+    assert.deepEqual([linkRow(linkId).user_id, linkRow(linkId).is_resolved], [userA, false]);
+  });
+
+  await test("Remove: the 061 loop guard still refuses a session turning a link back on when that makes a loop", async () => {
+    const t1 = makeTask(userA, { tags: P });
+    const t2 = makeTask(userA, { tags: P });
+    const forward = link(userA, t1, t2);
+    assert.equal((await removeLink(t1, forward)).status, 200);
+    link(userA, t2, t1);
+    const back = await clientA.from("task_dependencies").update({ is_resolved: false, resolved_at: null }).eq("id", forward).select("id");
+    assert.equal(back.error?.code, "MC061", JSON.stringify(back.error));
+    assert.equal(linkRow(forward).is_resolved, true, "nothing saved");
+  });
+
+  await test("Remove: 067's link trigger: removing keeps a pill, a session turning a link to an open item back on clears it", async () => {
+    const b1 = makeTask(userA, { tags: P });
+    const b2 = makeTask(userA, { tags: P });
+    const waiting = makeTask(userA, { status: "Blocked/Waiting", tags: P });
+    link(userA, waiting, b1);
+    const openLink = link(userA, waiting, b2);
+    assert.equal((await removeLink(waiting, openLink)).status, 200);
+    setStatus(userA, b1, "Done");
+    const pill = task(waiting).unblocked_at;
+    assert.ok(pill, "the removed link no longer holds it");
+    const doneLink = psql(`SELECT id FROM task_dependencies WHERE task_id = ${q(waiting)} AND depends_on_task_id = ${q(b1)};`);
+    assert.equal((await removeLink(waiting, doneLink)).status, 200);
+    assert.ok(sameInstant(task(waiting).unblocked_at, pill), "a Remove never touches the pill");
+    const back = await clientA.from("task_dependencies").update({ is_resolved: false, resolved_at: null }).eq("id", openLink).select("id");
+    assert.equal(back.error, null, JSON.stringify(back.error));
+    assert.equal(task(waiting).unblocked_at, null);
+    assert.equal(unblockRows(waiting)[0].cleared_reason, "reblocked");
+  });
+
+  await test("Remove: a hand-removed last link still does NOT unblock (one blocker; the last of two with the other Done)", async () => {
+    const one = makeTask(userA, { tags: P });
+    const onlyWaiter = makeTask(userA, { status: "Blocked/Waiting", tags: P });
+    const onlyLink = link(userA, onlyWaiter, one);
+    const b1 = makeTask(userA, { tags: P });
+    const b2 = makeTask(userA, { tags: P });
+    const lastWaiter = makeTask(userA, { status: "Blocked/Waiting", tags: P });
+    link(userA, lastWaiter, b1);
+    const lastLink = link(userA, lastWaiter, b2);
+    setStatus(userA, b1, "Done");
+    for (const [waiting, linkId] of [[onlyWaiter, onlyLink], [lastWaiter, lastLink]]) {
+      const before = task(waiting);
+      assert.equal((await removeLink(waiting, linkId)).status, 200);
+      assert.deepEqual(task(waiting), before, "Waiting, no pill, nothing moved");
+      assert.equal(unblockRows(waiting).length, 0);
+      assert.equal(systemComments(waiting).length, 0);
+      assert.deepEqual(transitions(waiting), []);
+    }
+  });
+
+  await test("Remove: re-applying 067 replaces a same-named policy production may already have", () => {
+    const stored = psql(`SELECT count(*) FROM ${UPDATE_POLICY};`);
+    psql(`DROP POLICY IF EXISTS "Users can update own task_dependencies" ON task_dependencies; CREATE POLICY "Users can update own task_dependencies" ON task_dependencies FOR UPDATE USING (true);`);
+    try {
+      psql(MIGRATION);
+      assert.equal(psql(`SELECT qual || '|' || with_check FROM ${UPDATE_POLICY};`), "(auth.uid() = user_id)|(auth.uid() = user_id)");
+    } finally {
+      if (stored === "0") psql(`DROP POLICY IF EXISTS "Users can update own task_dependencies" ON task_dependencies;`);
+    }
   });
 
   await test("the invariant: unblocked_at is set iff an open task_unblocks row exists, on every task this run touched", () => {

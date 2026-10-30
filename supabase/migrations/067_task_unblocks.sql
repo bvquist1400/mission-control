@@ -164,6 +164,16 @@
 --      the failure and must not count; the trigger would have seen it had its
 --      wait been shorter. A 'reopen' has no such gate: field-by-field
 --      compare-and-set already keeps later edits, and the pill must clear;
+--    - 'unblock' only (fix round 3): a task_unblocks row of this task was opened
+--      or cleared at or after the failure (COALESCE(cleared_at, unblocked_at) >=
+--      failed_at): closed 'task_changed', nothing done. A normal unblock already
+--      did this work, and a pill cleared since stays cleared, even when the task's
+--      status and date are back where they were (clear_task_unblock, In Progress
+--      and back, a new blocker whose link was then removed). The waiter's guards
+--      only see OPEN rows, so they can't tell. A row closed before the failure
+--      doesn't count: that Done is newer and still lands. Same "after" as the gate
+--      above: the stamps are the writer's now(), so a clear that held the lock
+--      began before the failure and doesn't count either;
 --    - else the same task_unblock_process_waiter as the trigger: closed 'applied',
 --      or 'nothing_to_do' when the rules say so today (a closed task, a pill
 --      already showing, another open blocker).
@@ -173,6 +183,19 @@
 --    the function also returns it as gave_up). The landing day and unblocked_at
 --    are the retry's. Records have no foreign keys (see the table), so a deleted
 --    task's record closes on its next run.
+--
+-- 8. Remove from a signed-in session (fix round 3): 003 gave task_dependencies
+--    SELECT, INSERT and DELETE policies but no UPDATE policy, and Remove (both
+--    routes) is an UPDATE of is_resolved, so a browser session updated 0 rows and
+--    answered 404 while the machine keys' service-role client worked. An owner-only
+--    UPDATE policy ("Users can update own task_dependencies", USING and WITH CHECK
+--    on auth.uid() = user_id, 003's style) fixes that. DROP POLICY IF EXISTS first,
+--    so a same-named policy already on production is replaced, not an error.
+--    authenticated already has UPDATE on the table (Supabase's default grants; 067
+--    grants nothing here). The 061 loop guard and task_unblock_on_link run on these
+--    updates as on any other: a Remove is neither a loop nor a new blocker, and it
+--    is not an unblock trigger (see the top): a task whose last open link is
+--    removed by hand stays as it is, pill or no pill.
 --
 -- Lock order: the blocker row (held by the UPDATE that set Done, or FOR SHARE from
 -- a link or a retry), then each waiting task in id order. 061's loop guard takes
@@ -1069,6 +1092,15 @@ BEGIN
             OR v_task.due_at IS DISTINCT FROM v_rec.task_due_at
             OR v_task.due_change_id IS DISTINCT FROM v_rec.task_due_change_id) THEN
           v_reason := 'task_changed';
+        -- A pill put on or cleared since the failure: a normal unblock did this
+        -- work, and a clear stands (header, 7). The waiter only sees open rows.
+        ELSIF v_rec.kind = 'unblock' AND EXISTS (
+          SELECT 1 FROM public.task_unblocks u
+           WHERE u.task_id = v_rec.task_id
+             AND u.user_id = p_user_id
+             AND COALESCE(u.cleared_at, u.unblocked_at) >= v_rec.failed_at
+        ) THEN
+          v_reason := 'task_changed';
         ELSIF task_unblock_process_waiter(
           v_rec.blocker_type, v_rec.blocker_id, p_user_id, v_rec.task_id, v_rec.kind = 'unblock', v_now
         ) = 'changed' THEN
@@ -1106,6 +1138,14 @@ BEGIN
   );
 END;
 $$;
+
+-- ── 8. Remove from a signed-in session ─────────────────────────────────────
+
+DROP POLICY IF EXISTS "Users can update own task_dependencies" ON task_dependencies;
+CREATE POLICY "Users can update own task_dependencies"
+  ON task_dependencies FOR UPDATE
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
 
 -- Trigger functions run for whoever writes the row; the helpers they call must
 -- stay executable by those roles. The waiter function refuses a call without the
