@@ -33,7 +33,8 @@
  * Never stored, logged or returned: the key, the JWT, a response body, a
  * segment or its URL. Failures are a `LaunchSourceError` with a short code.
  * Only api.appstoreconnect.apple.com gets the token. Segment files are fetched
- * from Apple's own hosts (`*.apple.com`) without any credential.
+ * without any credential, from `*.apple.com` or the one exact S3 host Apple's
+ * signed links use (`APPLE_SEGMENT_HOSTS`).
  */
 
 import { createHash, createPrivateKey, sign, type KeyObject } from 'node:crypto';
@@ -48,9 +49,12 @@ export const APPLE_API_HOST = 'api.appstoreconnect.apple.com';
 const API = `https://${APPLE_API_HOST}`;
 /**
  * Where segment files may be downloaded from. Apple's docs don't name the
- * host of a segment's signed URL; it is assumed to be an apple.com host. Any
- * other host is refused (`apple_segment_host`) and nothing is downloaded.
+ * host of a segment's signed URL; the real account's links are served from
+ * this one S3 host. It is an exact match on purpose: anyone can own another
+ * bucket on S3, so no amazonaws.com suffix is ever allowed here. Any other host
+ * is refused (`apple_segment_host`) and nothing is downloaded.
  */
+export const APPLE_SEGMENT_HOSTS = ['asp-us-west-2.s3.us-west-2.amazonaws.com'] as const;
 export const APPLE_SEGMENT_HOST_SUFFIXES = ['.apple.com'] as const;
 export const APPLE_JWT_LIFETIME_SECONDS = 15 * 60;
 export const APPLE_JWT_AUDIENCE = 'appstoreconnect-v1';
@@ -368,9 +372,10 @@ const DETAILED_COLUMNS = ['Source Info', 'Campaign'];
 
 /**
  * Built from Apple's documented report fields (developer.apple.com, Analytics
- * Reports: "App Store Discovery and Engagement", "App Downloads"). Not yet
- * checked against a real file: the first live run proves them, and a column
- * Apple adds or renames stops the source with `apple_tsv_header`.
+ * Reports: "App Store Discovery and Engagement", "App Downloads"). Checked
+ * against the real files' headers for Engagement Standard, Engagement Detailed
+ * and Downloads Standard; a column Apple adds or renames stops the source with
+ * `apple_tsv_header`.
  */
 export const APPLE_REPORTS: readonly AppleReportSpec[] = [
   {
@@ -520,7 +525,7 @@ export function decodeSegment(bytes: Uint8Array): string {
 
 export async function downloadSegment(fetchImpl: FetchLike, segment: AppleSegment, budget?: AppleBudget): Promise<string> {
   try {
-    assertAllowedUrl(segment.url, [], APPLE_SEGMENT_HOST_SUFFIXES);
+    assertAllowedUrl(segment.url, APPLE_SEGMENT_HOSTS, APPLE_SEGMENT_HOST_SUFFIXES);
   } catch {
     throw new LaunchSourceError('apple_segment_host');
   }
@@ -531,7 +536,7 @@ export async function downloadSegment(fetchImpl: FetchLike, segment: AppleSegmen
   const bytes = await fetchBytes(fetchImpl, {
     url: segment.url,
     headers: { Accept: '*/*' },
-    allowedHosts: [],
+    allowedHosts: APPLE_SEGMENT_HOSTS,
     allowedHostSuffixes: APPLE_SEGMENT_HOST_SUFFIXES,
     timeoutMs: callTimeout(budget, 30_000),
     maxBytes: segment.sizeInBytes,

@@ -72,6 +72,8 @@ const APP_ID = "6740000001";
 const CONFIG = { privateKeyPem: PEM, keyId: "ABCDE12345", issuerId: "6a1e8f0c-1b2c-4d3e-8f90-123456789abc", appId: APP_ID };
 const API = "https://api.appstoreconnect.apple.com";
 const SEGMENT_HOST = "https://iosanalytics-reports.apple.com";
+// The one host a read-only check of the real account showed Apple's signed file links use.
+const REAL_SEGMENT_HOST = "asp-us-west-2.s3.us-west-2.amazonaws.com";
 
 const md5 = (bytes) => createHash("md5").update(bytes).digest("hex");
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -368,7 +370,7 @@ await test("segments: gzip and plain text both decode; the size and the checksum
   assert.throws(() => apple.decodeSegment(Buffer.from([0xff, 0xfe, 0xfd])), (e) => e.code === "apple_tsv_encoding");
 });
 
-await test("segments: downloaded without the token, only from apple.com hosts; size or checksum mismatch stops the source", async () => {
+await test("segments: downloaded without the token, only from allowed hosts; size or checksum mismatch stops the source", async () => {
   const ok = segmentFor("x");
   const url = `${SEGMENT_HOST}/a.gz?sig=1`;
   const serve = (bytes) => async (input, init) => {
@@ -390,6 +392,63 @@ await test("segments: downloaded without the token, only from apple.com hosts; s
   await rejectsWithCode(apple.downloadSegment(serve(ok.bytes), { url, checksum: ok.checksum, sizeInBytes: 25_000_000 }), "apple_segment_too_large");
   const redirect = async () => new Response(null, { status: 302, headers: { location: "https://evil.example/" } });
   await rejectsWithCode(apple.downloadSegment(redirect, { url, checksum: ok.checksum, sizeInBytes: ok.size }), "redirect_refused");
+});
+
+await test("segments: Apple's real file host downloads with no token, and a redirect from it is refused", async () => {
+  const ok = segmentFor("real host file");
+  const url = `https://${REAL_SEGMENT_HOST}/report/a.gz?X-Amz-Signature=madeup`;
+  const calls = [];
+  const serve = async (input, init) => {
+    calls.push({ input, init });
+    return new Response(ok.bytes, { status: 200 });
+  };
+  assert.equal(await apple.downloadSegment(serve, { url, checksum: ok.checksum, sizeInBytes: ok.size }), "real host file");
+  assert.equal(calls.length, 1);
+  assert.equal(new URL(String(calls[0].input)).hostname, REAL_SEGMENT_HOST);
+  assert.deepEqual(Object.keys(calls[0].init.headers), ["Accept"], "no Authorization or any other credential header");
+  assert.equal(calls[0].init.redirect, "error");
+  const redirect = async () => new Response(null, { status: 302, headers: { location: `https://${REAL_SEGMENT_HOST}/other` } });
+  await rejectsWithCode(apple.downloadSegment(redirect, { url, checksum: ok.checksum, sizeInBytes: ok.size }), "redirect_refused");
+});
+
+await test("segments: the S3 allowance is one exact host; other buckets, S3 itself, look-alikes, http and ports are apple_segment_host", async () => {
+  assert.deepEqual([...apple.APPLE_SEGMENT_HOSTS], [REAL_SEGMENT_HOST]);
+  assert.deepEqual([...apple.APPLE_SEGMENT_HOST_SUFFIXES], [".apple.com"], "no amazonaws suffix, and apple.com stays");
+  const ok = segmentFor("x");
+  const never = async () => assert.fail("must not fetch");
+  for (const bad of [
+    "https://evil.s3.us-west-2.amazonaws.com/a.gz",
+    "https://s3.us-west-2.amazonaws.com/a.gz",
+    `https://${REAL_SEGMENT_HOST}.evil.example/a.gz`,
+    `https://evil.${REAL_SEGMENT_HOST}/a.gz`,
+    `https://${REAL_SEGMENT_HOST}./a.gz`,
+    `http://${REAL_SEGMENT_HOST}/a.gz`,
+    `https://${REAL_SEGMENT_HOST}:444/a.gz`,
+    `https://user:pw@${REAL_SEGMENT_HOST}/a.gz`,
+  ]) {
+    await rejectsWithCode(apple.downloadSegment(never, { url: bad, checksum: ok.checksum, sizeInBytes: ok.size }), "apple_segment_host");
+  }
+});
+
+await test("syncApple: a whole run with every file on the real host saves the data; the token only ever goes to Apple's API host", async () => {
+  const model = standardModel();
+  for (const [instance, segments] of Object.entries(model.segments)) {
+    segments.forEach((segment, index) => {
+      segment.url = `https://${REAL_SEGMENT_HOST}/${instance}-${index}.gz?X-Amz-Signature=madeup`;
+    });
+  }
+  const store = memoryStore();
+  const fetchImpl = fakeApple(model);
+  const result = await apple.syncApple(CONFIG, fetchImpl, store, nowFn);
+  assert.equal(result.instancesRead, 4);
+  assert.equal(store.get("2026-10-26", "impressions"), 35);
+  assert.equal(store.get("2026-10-26", "first_downloads"), 3);
+  const fileCalls = fetchImpl.calls.filter((c) => new URL(c.url).hostname === REAL_SEGMENT_HOST);
+  assert.equal(fileCalls.length, 4);
+  for (const call of fileCalls) assert.equal(call.init.headers.Authorization, undefined);
+  for (const call of fetchImpl.calls) {
+    if (call.init.headers?.Authorization) assert.equal(new URL(call.url).hostname, "api.appstoreconnect.apple.com");
+  }
 });
 
 await test("sync: a checksum mismatch stores nothing from that instance and leaves it unrecorded (retried next run)", async () => {
@@ -508,6 +567,51 @@ await test("aggregate: Detailed reports add only source_info: and campaign: rows
   const dl = apple.aggregateInstance(apple.parseTsv(tsv("downloads-detailed.tsv"), DL_DET), DL_DET, APP_ID, "2026-10-27");
   assert.deepEqual(rowsOf(dl), { "2026-10-26|first_downloads|source_info:menuandmarket.com": 1, "2026-10-26|first_downloads|campaign:site-hero": 1 });
   for (const row of [...eng.rows, ...dl.rows]) assert.equal(row.variant, "detailed");
+});
+
+await test("tsv: Apple's real headers parse; Tap, Auto-update and Restore rows add nothing to the totals", () => {
+  const ENG_DET = apple.APPLE_REPORTS.find((r) => r.name === "App Store Discovery and Engagement Detailed");
+  const line = (cells) => cells.join("\t");
+  const app = ["2026-10-26", "Sample App", APP_ID];
+
+  const engStd = [
+    line(["Date", "App Name", "App Apple Identifier", "Event", "Page Type", "Source Type", "Engagement Type", "Device", "Platform Version", "Territory", "Counts", "Unique Counts"]),
+    line([...app, "Impression", "Product page", "App Store search", "", "iPhone", "iOS 26.0", "US", "10", "8"]),
+    line([...app, "Page view", "Product page", "App Store search", "", "iPhone", "iOS 26.0", "US", "4", "3"]),
+    line([...app, "Tap", "Product page", "App Store search", "Get", "iPhone", "iOS 26.0", "US", "901", "902"]),
+  ].join("\n");
+  assert.deepEqual(rowsOf(apple.aggregateInstance(apple.parseTsv(engStd, ENG_STD), ENG_STD, APP_ID, "2026-10-27")), {
+    "2026-10-26|impressions|": 10,
+    "2026-10-26|impressions_unique|": 8,
+    "2026-10-26|product_page_views|": 4,
+    "2026-10-26|product_page_views_unique|": 3,
+    "2026-10-26|impressions|source_type:App Store search": 10,
+    "2026-10-26|product_page_views|source_type:App Store search": 4,
+  });
+
+  const engDet = [
+    line(["Date", "App Name", "App Apple Identifier", "Event", "Page Type", "Page Title", "Source Type", "Source Info", "Campaign", "Engagement Type", "Device", "Platform Version", "Territory", "Counts", "Unique Counts"]),
+    line([...app, "Page view", "Product page", "Default", "Web referrer", "example.org", "sample-campaign", "", "iPhone", "iOS 26.0", "US", "5", "4"]),
+    line([...app, "Tap", "Product page", "Default", "Web referrer", "tap.example.org", "tap-campaign", "Get", "iPhone", "iOS 26.0", "US", "903", "904"]),
+  ].join("\n");
+  assert.deepEqual(rowsOf(apple.aggregateInstance(apple.parseTsv(engDet, ENG_DET), ENG_DET, APP_ID, "2026-10-27")), {
+    "2026-10-26|product_page_views|source_info:example.org": 5,
+    "2026-10-26|product_page_views|campaign:sample-campaign": 5,
+  });
+
+  const dlStd = [
+    line(["Date", "App Name", "App Apple Identifier", "Download Type", "App Version", "Device", "Platform Version", "Source Type", "Page Type", "Pre-Order", "Territory", "Counts"]),
+    line([...app, "First-time download", "1.0", "iPhone", "iOS 26.0", "App Store search", "Product page", "No", "US", "2"]),
+    line([...app, "Redownload", "1.0", "iPhone", "iOS 26.0", "App Store search", "Product page", "No", "US", "1"]),
+    line([...app, "Auto-update", "1.0", "iPhone", "iOS 26.0", "App Store search", "Product page", "No", "US", "905"]),
+    line([...app, "Restore", "1.0", "iPhone", "iOS 26.0", "App Store search", "Product page", "No", "US", "906"]),
+  ].join("\n");
+  assert.deepEqual(rowsOf(apple.aggregateInstance(apple.parseTsv(dlStd, DL_STD), DL_STD, APP_ID, "2026-10-27")), {
+    "2026-10-26|first_downloads|": 2,
+    "2026-10-26|redownloads|": 1,
+    "2026-10-26|first_downloads|source_type:App Store search": 2,
+    "2026-10-26|redownloads|source_type:App Store search": 1,
+  });
 });
 
 await test("aggregate: labels are cleaned (control characters, long values) and fit the dimension column", () => {
