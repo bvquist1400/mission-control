@@ -11,7 +11,25 @@
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync, verify } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { registerHooks } from "node:module";
+import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
+import ts from "typescript";
+
+// TSX → JS for the page render check (TypeScript's own transpiler; types are dropped).
+registerHooks({
+  load(url, context, nextLoad) {
+    if (url.startsWith("file:") && url.endsWith(".tsx")) {
+      const source = readFileSync(fileURLToPath(url), "utf8");
+      const output = ts.transpileModule(source, {
+        compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, verbatimModuleSyntax: false },
+        fileName: fileURLToPath(url),
+      });
+      return { format: "module", source: output.outputText, shortCircuit: true };
+    }
+    return nextLoad(url, context);
+  },
+});
 
 const apple = await import("../src/lib/launch-metrics/apple.ts");
 const sync = await import("../src/lib/launch-metrics/sync.ts");
@@ -772,6 +790,37 @@ await test("page: the Launch page shows the App Store section with Apple's time 
   assert.match(page, /sourceBadge\(view, "apple"\)/);
   assert.ok(!/Not connected yet<\/StateBadge>/.test(page), "the badge follows the run log now");
   assert.ok(!/claude|anthropic/i.test(page));
+});
+
+await test("page: the Launch page renders the App Store section from stored rows, and says why when there are none", async () => {
+  const { createElement: h } = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { LaunchPageBody } = await import("../src/components/launch/LaunchPage.tsx");
+  // The page's Reddit and timeline islands call useRouter() and useToast(); give them a stand-in router and the app's toast provider.
+  const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
+  const router = { refresh() {}, push() {}, replace() {}, back() {}, forward() {}, prefetch() {} };
+  const { ToastProvider } = await import("../src/components/ui/Toast.tsx");
+  const render = (props) => renderToStaticMarkup(h(AppRouterContext.Provider, { value: router }, h(ToastProvider, null, h(LaunchPageBody, props))));
+  const store = memoryStore();
+  await apple.syncApple(CONFIG, fakeApple(standardModel()), store, nowFn);
+  const daily = [...store.state.daily.values()].map(({ metric_date, source, metric, dimension, value }) => ({ metric_date, source, metric, dimension, value }));
+  const now = new Date("2026-10-30T15:00:00Z");
+  const runs = [{ id: "r1", trigger: "cron", kind: "full", started_at: "2026-10-30T11:30:00Z", finished_at: "2026-10-30T11:31:00Z", status: "ok", sources: { app_db: "not_configured", web: "not_configured", search_console: "not_configured", apple: "ok" } }];
+  const manualReads = [{ id: "m", user_id: "u", read_on: "2026-10-27", data_through: "2026-10-25", window_label: "Since release", impressions: 41, product_page_views: 16, first_downloads: 4, created_at: "", updated_at: "" }];
+  const input = { daily, searchTop: null, runs, reddit: [], milestones: [], manualReads, tokenExpires: null };
+  const html = render({ view: pageData.buildLaunchView(input, now), input, now });
+  assert.match(html, /App downloads/);
+  assert.match(html, /Data through Oct 26/);
+  assert.match(html, /App Store search/);
+  assert.match(html, /site-hero/);
+  assert.match(html, /Read by hand from App Store Connect \(history\)/);
+  assert.match(html, /App Store: updated Oct 30/);
+  const emptyInput = { ...input, daily: [], runs: [{ ...runs[0], sources: { apple: "not_connected" } }] };
+  const empty = render({ view: pageData.buildLaunchView(emptyInput, now), input: emptyInput, now });
+  assert.match(empty, /Not connected yet\. Daily App Store numbers start once the App Store keys are added/);
+  assert.match(empty, /App Store: not connected yet/);
+  assert.match(empty, /Nothing Apple can show yet \(groups under 5 people are hidden\)/);
+  assert.ok(!/claude|anthropic/i.test(html + empty));
 });
 
 console.log(`\n${passed} passed, ${failures.length} failed`);
