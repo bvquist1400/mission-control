@@ -50,6 +50,12 @@ export function plainReason(code: string): string {
   if (code === 'apple_segment_host') {
     return 'a report file was on an unexpected address, so it was not downloaded';
   }
+  if (code === 'apple_tsv_app') {
+    return "Apple's report file had no rows for the app id in ASC_APP_ID, so nothing was saved";
+  }
+  if (code === 'apple_timeout') {
+    return 'the App Store reports took too long to read, so the run stopped before saving any';
+  }
   if (code === 'apple_reports_missing') {
     return "Apple's report list did not include the expected App Store reports";
   }

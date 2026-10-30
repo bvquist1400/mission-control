@@ -8,15 +8,22 @@
  *      stopped one is `apple_request_stopped`) plus any ONE_TIME_SNAPSHOT
  *      (launch-week history).
  *   3. Each request's reports, keeping only the four we use (names below).
- *   4. Each report's DAILY instances that are not yet in launch_apple_instances.
+ *   4. Each report's DAILY instances that are not yet in launch_apple_instances
+ *      (at most 40 a run; every call is checked against a deadline: 50 s from
+ *      Apple's start and 95 s from the run's, each timeout cut to the time
+ *      left; leftover work, cut mid-instance or not, is read next run). An
+ *      instance listed before its file exists is not recorded (retried; after
+ *      7 days it is recorded as empty).
  *   5. Each instance's segments: download (no credentials sent), check the size
  *      and checksum, gunzip when the bytes say gzip (plain text is fine too),
  *      parse the tab-separated file BY HEADER NAME (an unknown or missing
  *      column stops the source: fail closed), keep only rows for ASC_APP_ID,
- *      aggregate to daily metrics and upsert. The newest processing date wins
- *      (migration 065's trigger; older stored keys a newer instance no longer
- *      has are written as 0, so two instances are never merged). The instance
- *      is then recorded, so it is never read twice.
+ *      (none for it while the file has rows = `apple_tsv_app`), aggregate to
+ *      daily metrics and upsert. The newest processing date wins for the whole
+ *      day of a report: a day already holding a newer instance's rows gets
+ *      nothing from an older one, and keys a newer instance no longer has are
+ *      written as 0, so two instances are never merged (065's trigger backs
+ *      it). The instance is then recorded, so it is never read twice.
  *
  * Never stored, logged or returned: the key, the JWT, a response body, a
  * segment or its URL. Failures are a `LaunchSourceError` with a short code.
@@ -46,8 +53,22 @@ export const APPLE_JWT_AUDIENCE = 'appstoreconnect-v1';
 export const APPLE_HISTORY_START = addDays(LAUNCH_RELEASE_DATE, -7);
 /** A run reads at most this many new instances; the rest wait for the next run. */
 export const APPLE_MAX_INSTANCES_PER_RUN = 40;
-/** No new instance is started after this long (the route has 120 s in all). */
+/** No Apple call is started after this long from Apple's own start. */
 export const APPLE_TIME_BUDGET_MS = 50_000;
+/**
+ * Nor after this long from the start of the whole sync run (the route has
+ * 120 s in all; the rest is for the run log and alerts). Each call's timeout
+ * is also cut to the time left, so no single slow call can overrun it.
+ */
+export const APPLE_RUN_DEADLINE_MS = 95_000;
+/** Below this much time left, no new call is started. */
+export const APPLE_MIN_CALL_MS = 2_000;
+/**
+ * An instance Apple lists with no segment yet is retried on later runs; once
+ * its processing date is this many days old it is recorded as empty, so a
+ * never-ready instance can't be retried forever.
+ */
+export const APPLE_EMPTY_GIVE_UP_DAYS = 7;
 export const APPLE_MAX_PAGES = 20;
 export const APPLE_MAX_SEGMENT_BYTES = 20_000_000;
 export const APPLE_MAX_UNZIPPED_BYTES = 100_000_000;
@@ -132,14 +153,42 @@ export function signAppleJwt(config: AppleConfig, nowSeconds: number): string {
   return `${signingInput}.${signature.toString('base64url')}`;
 }
 
+// ─── time budget ──────────────────────────────────────────────────────────
+
+/** A deadline every Apple call is checked against (and its timeout cut to). */
+export interface AppleBudget {
+  deadline: number;
+  now: () => Date;
+}
+
+/** Thrown (internally) when the budget has run out; never stored as a code by itself. */
+export class AppleBudgetExhausted extends Error {
+  constructor() {
+    super('apple_budget');
+    this.name = 'AppleBudgetExhausted';
+  }
+}
+
+/** The timeout for the next call: at most `max`, at most the time left. Throws when too little is left. */
+export function callTimeout(budget: AppleBudget | undefined, max: number): number {
+  if (!budget) {
+    return max;
+  }
+  const left = budget.deadline - budget.now().getTime();
+  if (left < APPLE_MIN_CALL_MS) {
+    throw new AppleBudgetExhausted();
+  }
+  return Math.min(max, left);
+}
+
 // ─── API reads (JSON:API, paged) ───────────────────────────────────────────
 
-async function appleGet(fetchImpl: FetchLike, token: string, url: string): Promise<Record<string, unknown>> {
+async function appleGet(fetchImpl: FetchLike, token: string, url: string, budget?: AppleBudget): Promise<Record<string, unknown>> {
   const raw = await fetchJson(fetchImpl, {
     url,
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
     allowedHosts: [APPLE_API_HOST],
-    timeoutMs: 20_000,
+    timeoutMs: callTimeout(budget, 20_000),
     maxBytes: 2_000_000,
   });
   if (!isPlainObject(raw) || !Array.isArray(raw.data)) {
@@ -149,12 +198,12 @@ async function appleGet(fetchImpl: FetchLike, token: string, url: string): Promi
 }
 
 /** Every item of a paged list. `links.next` must stay on Apple's API host. */
-export async function listAllPages(fetchImpl: FetchLike, token: string, firstUrl: string): Promise<unknown[]> {
+export async function listAllPages(fetchImpl: FetchLike, token: string, firstUrl: string, budget?: AppleBudget): Promise<unknown[]> {
   const items: unknown[] = [];
   const seen = new Set<string>();
   let url = firstUrl;
   for (let page = 0; page < APPLE_MAX_PAGES; page += 1) {
-    const json = await appleGet(fetchImpl, token, url);
+    const json = await appleGet(fetchImpl, token, url, budget);
     items.push(...(json.data as unknown[]));
     if (json.links !== undefined && !isPlainObject(json.links)) {
       throw new LaunchSourceError('apple_shape');
@@ -395,7 +444,7 @@ export function decodeSegment(bytes: Uint8Array): string {
   }
 }
 
-export async function downloadSegment(fetchImpl: FetchLike, segment: AppleSegment): Promise<string> {
+export async function downloadSegment(fetchImpl: FetchLike, segment: AppleSegment, budget?: AppleBudget): Promise<string> {
   try {
     assertAllowedUrl(segment.url, [], APPLE_SEGMENT_HOST_SUFFIXES);
   } catch {
@@ -410,7 +459,7 @@ export async function downloadSegment(fetchImpl: FetchLike, segment: AppleSegmen
     headers: { Accept: '*/*' },
     allowedHosts: [],
     allowedHostSuffixes: APPLE_SEGMENT_HOST_SUFFIXES,
-    timeoutMs: 30_000,
+    timeoutMs: callTimeout(budget, 30_000),
     maxBytes: segment.sizeInBytes,
   }).catch((error: unknown) => {
     if (error instanceof LaunchSourceError && error.code === 'too_large') {
@@ -583,6 +632,12 @@ export function aggregateInstance(
     }
   }
 
+  // Rows in the file but none for our app: the id is wrong or Apple spells it
+  // differently. Fail closed so the instance is retried, never "read as empty".
+  if (rows.length > 0 && rowsParsed === 0) {
+    throw new LaunchSourceError('apple_tsv_app');
+  }
+
   const out: DailyMetricInput[] = [];
   for (const [key, value] of totals) {
     const [metricDate, metric, dimension] = key.split('\u0000');
@@ -638,10 +693,46 @@ export function zeroMissing(
   return zeros;
 }
 
+/**
+ * What one instance writes. "Latest instance wins" applies to the whole day of
+ * this report: on a day where a row this report owns already carries a NEWER
+ * processing date, nothing from this instance is written for that day (no
+ * update, no new key, no zero), so totals and breakdowns of a day always come
+ * from one instance. Other days get the instance's rows plus zeros for keys
+ * an older-or-same instance stored that this one no longer has.
+ */
+export function planInstanceWrites(
+  aggregate: InstanceAggregate,
+  stored: AppleStoredKey[],
+  spec: AppleReportSpec,
+  processingDate: string
+): { rows: DailyMetricInput[]; skippedDays: string[] } {
+  const metrics = new Set(specMetrics(spec));
+  const newerDays = new Set<string>();
+  for (const row of stored) {
+    if (
+      row.variant === spec.variant
+      && metrics.has(row.metric)
+      && ownsDimension(spec, row.dimension)
+      && row.apple_processing_date !== null
+      && row.apple_processing_date > processingDate
+    ) {
+      newerDays.add(row.metric_date);
+    }
+  }
+  const rows = [...aggregate.rows, ...zeroMissing(aggregate, stored, spec, processingDate)].filter(
+    (row) => !newerDays.has(row.metric_date)
+  );
+  return { rows, skippedDays: aggregate.dates.filter((date) => newerDays.has(date)) };
+}
+
 // ─── the run ───────────────────────────────────────────────────────────────
 
 export interface AppleSyncResult {
   instancesRead: number;
+  /** Instances Apple listed with no segment yet: retried next run. */
+  instancesWaiting: number;
+  /** Instances not reached this run (cap or time budget): read next run. */
   instancesLeft: number;
   rowsWritten: number;
 }
@@ -652,27 +743,48 @@ interface PendingInstance {
   order: number;
 }
 
+export interface AppleSyncOptions {
+  /** The sync run's start (ms); Apple stops starting calls APPLE_RUN_DEADLINE_MS after it. */
+  runStartedAt?: number;
+}
+
 export async function syncApple(
   config: AppleConfig,
   fetchImpl: FetchLike,
   store: LaunchStore,
-  now: () => Date
+  now: () => Date,
+  options: AppleSyncOptions = {}
 ): Promise<AppleSyncResult> {
   const started = now().getTime();
+  const budget: AppleBudget = {
+    deadline: Math.min(started + APPLE_TIME_BUDGET_MS, (options.runStartedAt ?? started) + APPLE_RUN_DEADLINE_MS),
+    now,
+  };
   const token = signAppleJwt(config, Math.floor(started / 1000));
+  // Running out of time while listing leaves nothing safe to read: a code.
+  const listing = async (url: string) => {
+    try {
+      return await listAllPages(fetchImpl, token, url, budget);
+    } catch (error) {
+      if (error instanceof AppleBudgetExhausted) {
+        throw new LaunchSourceError('apple_timeout');
+      }
+      throw error;
+    }
+  };
 
   const requestsUrl = `${API}/v1/apps/${encodeURIComponent(config.appId)}/analyticsReportRequests?${new URLSearchParams({
     'fields[analyticsReportRequests]': 'accessType,stoppedDueToInactivity',
     limit: '200',
   })}`;
-  const requests = pickRequests(parseReportRequests(await listAllPages(fetchImpl, token, requestsUrl)));
+  const requests = pickRequests(parseReportRequests(await listing(requestsUrl)));
 
   const pending: PendingInstance[] = [];
   let reportsListed = 0;
   let reportsMatched = 0;
   for (const [order, request] of requests.entries()) {
     const reportsUrl = `${API}/v1/analyticsReportRequests/${encodeURIComponent(request.id)}/reports?limit=200`;
-    const { matched, total } = parseReports(await listAllPages(fetchImpl, token, reportsUrl));
+    const { matched, total } = parseReports(await listing(reportsUrl));
     reportsListed += total;
     reportsMatched += matched.length;
     for (const report of matched) {
@@ -680,7 +792,7 @@ export async function syncApple(
         'filter[granularity]': 'DAILY',
         limit: '200',
       })}`;
-      for (const instance of parseInstances(await listAllPages(fetchImpl, token, instancesUrl))) {
+      for (const instance of parseInstances(await listing(instancesUrl))) {
         pending.push({ report, instance, order });
       }
     }
@@ -709,43 +821,80 @@ export async function syncApple(
         || a.instance.id.localeCompare(b.instance.id)
     );
 
+  const giveUpBefore = addDays(new Date(started).toISOString().slice(0, 10), -APPLE_EMPTY_GIVE_UP_DAYS);
+  let attempted = 0;
   let instancesRead = 0;
+  let instancesWaiting = 0;
   let rowsWritten = 0;
+  let cutShort = false;
   for (const entry of todo) {
-    if (instancesRead >= APPLE_MAX_INSTANCES_PER_RUN || now().getTime() - started > APPLE_TIME_BUDGET_MS) {
+    if (attempted >= APPLE_MAX_INSTANCES_PER_RUN) {
       break;
     }
+    attempted += 1;
     const { report, instance } = entry;
-    const segmentsUrl = `${API}/v1/analyticsReportInstances/${encodeURIComponent(instance.id)}/segments?limit=200`;
-    const segments = parseSegments(await listAllPages(fetchImpl, token, segmentsUrl));
-    const rows: Array<Record<string, string>> = [];
-    for (const segment of segments) {
-      const parsed = parseTsv(await downloadSegment(fetchImpl, segment), report.spec);
-      for (const row of parsed) {
-        rows.push(row);
+    const record = (segmentCount: number, rowsParsed: number) =>
+      store.recordAppleInstance({
+        instance_id: instance.id,
+        report_name: report.spec.name,
+        granularity: 'DAILY',
+        processing_date: instance.processingDate,
+        segment_count: segmentCount,
+        rows_parsed: rowsParsed,
+        fetched_at: now().toISOString(),
+      });
+    let rows: Array<Record<string, string>>;
+    let segmentCount: number;
+    try {
+      const segmentsUrl = `${API}/v1/analyticsReportInstances/${encodeURIComponent(instance.id)}/segments?limit=200`;
+      const segments = parseSegments(await listAllPages(fetchImpl, token, segmentsUrl, budget));
+      segmentCount = segments.length;
+      if (segments.length === 0) {
+        // Listed before its file exists: not read yet. Retried next run, until
+        // it is old enough that Apple clearly has nothing for it.
+        if (instance.processingDate < giveUpBefore) {
+          await record(0, 0);
+        } else {
+          instancesWaiting += 1;
+        }
+        continue;
       }
-      if (rows.length > APPLE_MAX_ROWS_PER_INSTANCE) {
-        throw new LaunchSourceError('apple_too_many_rows');
+      rows = [];
+      for (const segment of segments) {
+        const parsed = parseTsv(await downloadSegment(fetchImpl, segment, budget), report.spec);
+        for (const row of parsed) {
+          rows.push(row);
+        }
+        if (rows.length > APPLE_MAX_ROWS_PER_INSTANCE) {
+          throw new LaunchSourceError('apple_too_many_rows');
+        }
       }
+    } catch (error) {
+      if (error instanceof AppleBudgetExhausted) {
+        // Out of time mid-instance: nothing of it is written or recorded; the
+        // next run starts it again.
+        attempted -= 1;
+        cutShort = true;
+        break;
+      }
+      throw error;
     }
     const aggregate = aggregateInstance(rows, report.spec, config.appId, instance.processingDate);
     const stored = aggregate.dates.length > 0 ? await store.appleRowsFor(aggregate.dates) : [];
-    const writes = [...aggregate.rows, ...zeroMissing(aggregate, stored, report.spec, instance.processingDate)];
+    const { rows: writes } = planInstanceWrites(aggregate, stored, report.spec, instance.processingDate);
     if (writes.length > 0) {
       await store.upsertDaily(writes);
     }
-    await store.recordAppleInstance({
-      instance_id: instance.id,
-      report_name: report.spec.name,
-      granularity: 'DAILY',
-      processing_date: instance.processingDate,
-      segment_count: segments.length,
-      rows_parsed: aggregate.rowsParsed,
-      fetched_at: now().toISOString(),
-    });
+    await record(segmentCount, aggregate.rowsParsed);
     instancesRead += 1;
     rowsWritten += writes.length;
   }
 
-  return { instancesRead, instancesLeft: todo.length - instancesRead, rowsWritten };
+  // The time ran out before a single instance could be read: say so, or a
+  // too-slow instance would look "updated" every morning while nothing moves.
+  if (cutShort && instancesRead === 0) {
+    throw new LaunchSourceError('apple_timeout');
+  }
+
+  return { instancesRead, instancesWaiting, instancesLeft: todo.length - attempted, rowsWritten };
 }

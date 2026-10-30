@@ -133,7 +133,7 @@ export async function runLaunchSync(
     // its own time budget, so the route finishes inside its 120 seconds.
     sources.apple = env.apple
       ? await attempt(async () => {
-          await syncApple(env.apple as AppleConfig, fetchImpl, store, deps.now);
+          await syncApple(env.apple as AppleConfig, fetchImpl, store, deps.now, { runStartedAt: startedAt.getTime() });
         })
       : 'not_connected';
   }

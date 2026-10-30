@@ -432,8 +432,11 @@ await test("tsv: a bad date, a date after the processing day or a non-number cou
   assert.throws(() => parse("2026-10-30\t6740000001\tFirst-time download\tApp Store search\t1"), (e) => e.code === "apple_tsv_date");
   assert.throws(() => parse("2026-10-26\t6740000001\tFirst-time download\tApp Store search\tmany"), (e) => e.code === "apple_tsv_number");
   assert.throws(() => parse("2026-10-26\t6740000001\tFirst-time download\tApp Store search\t-1"), (e) => e.code === "apple_tsv_number");
-  // Another app's row is dropped before any check of its values.
-  assert.deepEqual(parse("garbage\t6749999999\tFirst-time download\tApp Store search\tmany").rows, []);
+  // Another app's row is dropped before any check of its values (next to one of ours) ...
+  const mixed = parse("garbage\t6749999999\tFirst-time download\tApp Store search\tmany\n2026-10-26\t6740000001\tFirst-time download\tApp Store search\t1");
+  assert.equal(mixed.rowsParsed, 1);
+  // ... and a file with only other apps' rows is apple_tsv_app (fix round 1, P3-1).
+  assert.throws(() => parse("garbage\t6749999999\tFirst-time download\tApp Store search\tmany"), (e) => e.code === "apple_tsv_app");
   // Pre-launch days are counted as parsed but not stored.
   const early = parse("2026-09-01\t6740000001\tFirst-time download\tApp Store search\t4");
   assert.deepEqual([early.rows.length, early.rowsParsed], [0, 1]);
@@ -541,7 +544,7 @@ await test("syncApple: idempotent; a second run reads no segment and writes noth
   const writes = store.state.upserts.length;
   const again = fakeApple(standardModel());
   const result = await apple.syncApple(CONFIG, again, store, nowFn);
-  assert.deepEqual(result, { instancesRead: 0, instancesLeft: 0, rowsWritten: 0 });
+  assert.deepEqual(result, { instancesRead: 0, instancesWaiting: 0, instancesLeft: 0, rowsWritten: 0 });
   assert.ok(!again.calls.some((c) => c.url.includes("/segments") || c.url.startsWith(SEGMENT_HOST)));
   assert.equal(store.state.upserts.length, writes);
   assert.equal(JSON.stringify([...store.state.daily.entries()]), before);
@@ -627,7 +630,7 @@ await test("syncApple: report names Apple no longer uses → apple_reports_missi
   await rejectsWithCode(apple.syncApple(CONFIG, fakeApple(renamed), memoryStore(), nowFn), "apple_reports_missing");
   const empty = standardModel();
   empty.reports["req-ongoing"] = [];
-  assert.deepEqual(await apple.syncApple(CONFIG, fakeApple(empty), memoryStore(), nowFn), { instancesRead: 0, instancesLeft: 0, rowsWritten: 0 });
+  assert.deepEqual(await apple.syncApple(CONFIG, fakeApple(empty), memoryStore(), nowFn), { instancesRead: 0, instancesWaiting: 0, instancesLeft: 0, rowsWritten: 0 });
 });
 
 await test("syncApple: a run reads at most 40 instances and stops starting new ones after its time budget", async () => {
@@ -648,11 +651,16 @@ await test("syncApple: a run reads at most 40 instances and stops starting new o
   const second = await apple.syncApple(CONFIG, fakeApple(model), store, nowFn);
   assert.deepEqual([second.instancesRead, second.instancesLeft], [5, 0]);
 
+  // Each Apple call takes 4 simulated seconds: the 50 s budget stops the run
+  // part-way; what was read is kept and the rest is read on the next run.
   let t = clock;
-  const slowNow = () => new Date((t += 20_000));
-  const slow = await apple.syncApple(CONFIG, fakeApple({ ...model }), memoryStore(), slowNow);
-  assert.ok(slow.instancesRead < 5, `stopped early (${slow.instancesRead})`);
-  assert.ok(slow.instancesLeft > 0);
+  const base = fakeApple({ ...model });
+  const slowFetch = async (url, init) => { t += 4_000; return base(url, init); };
+  const slowStore = memoryStore();
+  const slow = await apple.syncApple(CONFIG, slowFetch, slowStore, () => new Date(t));
+  assert.ok(slow.instancesRead > 0 && slow.instancesRead < 40, `stopped early (${slow.instancesRead})`);
+  assert.equal(slow.instancesLeft, 45 - slow.instancesRead);
+  assert.equal(slowStore.state.instances.size, slow.instancesRead);
 });
 
 await test("syncApple: HTTP errors are codes only; Apple's error body and the token never appear", async () => {
@@ -742,7 +750,7 @@ await test("alerts: not_connected and skipped never alert; every Apple code has 
     await sync.runLaunchSync(deps(store, fakeApple(standardModel()), appleEnv({ apple: null })), { trigger: "cron", kind: "full" });
   }
   assert.equal(store.state.tasks.length, 0);
-  for (const code of ["apple_request_stopped", "apple_no_request", "apple_bad_key", "apple_bad_config", "apple_checksum", "apple_segment_size", "apple_segment_host", "apple_segment_too_large", "apple_tsv_header", "apple_tsv_shape", "apple_tsv_date", "apple_tsv_number", "apple_tsv_encoding", "apple_gzip", "apple_shape", "apple_reports_missing", "apple_too_many_rows", "apple_too_many_pages"]) {
+  for (const code of ["apple_request_stopped", "apple_no_request", "apple_bad_key", "apple_bad_config", "apple_checksum", "apple_segment_size", "apple_segment_host", "apple_segment_too_large", "apple_tsv_header", "apple_tsv_shape", "apple_tsv_date", "apple_tsv_number", "apple_tsv_encoding", "apple_gzip", "apple_shape", "apple_reports_missing", "apple_too_many_rows", "apple_too_many_pages", "apple_tsv_app", "apple_timeout"]) {
     assert.ok(!alerts.plainReason(code).startsWith("error code"), code);
   }
 });
@@ -790,6 +798,188 @@ await test("page: the Launch page shows the App Store section with Apple's time 
   assert.match(page, /sourceBadge\(view, "apple"\)/);
   assert.ok(!/Not connected yet<\/StateBadge>/.test(page), "the badge follows the run log now");
   assert.ok(!/claude|anthropic/i.test(page));
+});
+
+// ─── fix round 1 (review da85762f) ────────────────────────────────────────
+
+const DL_HEAD = "Date\tApp Apple Identifier\tDownload Type\tSource Type\tCounts";
+function downloadsModel() {
+  return {
+    requests: [{ id: "req-ongoing", accessType: "ONGOING" }],
+    reports: { "req-ongoing": [{ id: "r-dl", name: "App Downloads Standard" }] },
+    instances: { "r-dl": [{ id: "i-dl", processingDate: "2026-10-27" }] },
+    segments: { "i-dl": [segmentFor(`${DL_HEAD}\n2026-10-26\t${APP_ID}\tFirst-time download\tApp Store search\t1\n`)] },
+  };
+}
+
+await test("P2-1: an instance listed before its file exists is not recorded; the next run reads it", async () => {
+  const model = downloadsModel();
+  model.segments["i-dl"] = [];
+  const store = memoryStore();
+  const first = await apple.syncApple(CONFIG, fakeApple(model), store, nowFn);
+  assert.deepEqual(first, { instancesRead: 0, instancesWaiting: 1, instancesLeft: 0, rowsWritten: 0 });
+  assert.equal(store.state.instances.has("i-dl"), false);
+  model.segments["i-dl"] = [segmentFor(`${DL_HEAD}\n2026-10-26\t${APP_ID}\tFirst-time download\tApp Store search\t9\n`)];
+  const later = fakeApple(model);
+  const second = await apple.syncApple(CONFIG, later, store, () => new Date(clock + 86_400_000));
+  assert.equal(second.instancesRead, 1);
+  assert.equal(later.calls.filter((c) => c.url.startsWith(SEGMENT_HOST)).length, 1);
+  assert.equal(store.get("2026-10-26", "first_downloads"), 9);
+  assert.equal(store.state.instances.get("i-dl").segment_count, 1);
+});
+
+await test("P2-1: a still-empty instance doesn't block the others; one empty for over 7 days is recorded as empty and never retried", async () => {
+  const model = downloadsModel();
+  model.instances["r-dl"] = [
+    { id: "i-old-empty", processingDate: "2026-10-21" },
+    { id: "i-new-empty", processingDate: "2026-10-29" },
+    { id: "i-dl", processingDate: "2026-10-27" },
+  ];
+  model.segments["i-old-empty"] = [];
+  model.segments["i-new-empty"] = [];
+  const store = memoryStore();
+  const result = await apple.syncApple(CONFIG, fakeApple(model), store, () => new Date("2026-10-30T11:30:00Z"));
+  assert.deepEqual([result.instancesRead, result.instancesWaiting], [1, 1]);
+  assert.equal(store.get("2026-10-26", "first_downloads"), 1);
+  assert.deepEqual({ ...store.state.instances.get("i-old-empty"), fetched_at: "x" }, { instance_id: "i-old-empty", report_name: "App Downloads Standard", granularity: "DAILY", processing_date: "2026-10-21", segment_count: 0, rows_parsed: 0, fetched_at: "x" });
+  assert.equal(store.state.instances.has("i-new-empty"), false);
+  const again = fakeApple(model);
+  await apple.syncApple(CONFIG, again, store, () => new Date("2026-10-31T11:30:00Z"));
+  assert.ok(!again.calls.some((c) => c.url.includes("i-old-empty")), "the given-up instance is not asked for again");
+  assert.ok(again.calls.some((c) => c.url.includes("i-new-empty/segments")), "the young one is retried");
+});
+
+await test("P2-2: an older instance listed after a newer one adds nothing to that day (no new key, totals and breakdowns stay consistent)", async () => {
+  const model = downloadsModel();
+  model.instances["r-dl"] = [{ id: "i-1028", processingDate: "2026-10-28" }];
+  model.segments = { "i-1028": [segmentFor(`${DL_HEAD}\n2026-10-26\t${APP_ID}\tFirst-time download\tApp Store search\t2\n`)] };
+  const store = memoryStore();
+  await apple.syncApple(CONFIG, fakeApple(model), store, nowFn);
+  model.instances["r-dl"].push({ id: "i-1025", processingDate: "2026-10-25" });
+  // The older one has Oct 26 (a key the newer one lacks) and Oct 24 (a day the newer one doesn't cover).
+  model.segments["i-1025"] = [segmentFor(`${DL_HEAD}\n2026-10-26\t${APP_ID}\tFirst-time download\tWeb referrer\t7\n2026-10-24\t${APP_ID}\tFirst-time download\tWeb referrer\t3\n`)];
+  await apple.syncApple(CONFIG, fakeApple(model), store, () => new Date(clock + 86_400_000));
+  assert.equal(store.get("2026-10-26", "first_downloads"), 2);
+  assert.equal(store.get("2026-10-26", "first_downloads", "source_type:App Store search"), 2);
+  assert.equal(store.get("2026-10-26", "first_downloads", "source_type:Web referrer"), undefined, "never inserted into the newer day");
+  assert.equal(store.get("2026-10-26", "redownloads"), 0);
+  const typesSum = [...store.state.daily.values()]
+    .filter((r) => r.metric_date === "2026-10-26" && r.metric === "first_downloads" && r.dimension.startsWith("source_type:"))
+    .reduce((sum, r) => sum + r.value, 0);
+  assert.equal(typesSum, store.get("2026-10-26", "first_downloads"));
+  // The day only the older instance covers is still written, and the instance is recorded.
+  assert.equal(store.get("2026-10-24", "first_downloads"), 3);
+  assert.ok(store.state.instances.has("i-1025"));
+});
+
+await test("P2-2: planInstanceWrites skips a whole day another instance of the same report owns with a newer date, only that report's rows count", () => {
+  const head = DL_HEAD;
+  const agg = apple.aggregateInstance(apple.parseTsv(`${head}\n2026-10-26\t${APP_ID}\tFirst-time download\tWeb referrer\t7\n2026-10-25\t${APP_ID}\tRedownload\tWeb referrer\t1\n`, DL_STD), DL_STD, APP_ID, "2026-10-25");
+  const stored = [
+    { metric_date: "2026-10-26", metric: "first_downloads", dimension: "", variant: "standard", apple_processing_date: "2026-10-28" },
+    // A newer Detailed row or an engagement row on Oct 25 belongs to another report: it doesn't block.
+    { metric_date: "2026-10-25", metric: "first_downloads", dimension: "campaign:site-hero", variant: "detailed", apple_processing_date: "2026-10-28" },
+    { metric_date: "2026-10-25", metric: "impressions", dimension: "", variant: "standard", apple_processing_date: "2026-10-28" },
+  ];
+  const plan = apple.planInstanceWrites(agg, stored, DL_STD, "2026-10-25");
+  assert.deepEqual(plan.skippedDays, ["2026-10-26"]);
+  assert.ok(plan.rows.every((r) => r.metric_date === "2026-10-25"));
+  assert.ok(plan.rows.some((r) => r.metric === "redownloads" && r.dimension === "" && r.value === 1));
+});
+
+await test("P3-1: a file with rows but none for ASC_APP_ID fails as apple_tsv_app and the instance is not recorded", async () => {
+  const model = downloadsModel();
+  model.segments["i-dl"] = [segmentFor(`${DL_HEAD}\n2026-10-26\t${APP_ID}.0\tFirst-time download\tApp Store search\t9\n2026-10-27\t ${APP_ID}.0\tFirst-time download\tApp Store search\t4\n`)];
+  const store = memoryStore();
+  await rejectsWithCode(apple.syncApple(CONFIG, fakeApple(model), store, nowFn), "apple_tsv_app");
+  assert.equal(store.state.instances.has("i-dl"), false);
+  assert.equal(store.state.daily.size, 0);
+  // A header-only file (a quiet day) is still fine; another app's rows next to ours too.
+  assert.deepEqual(apple.aggregateInstance([], DL_STD, APP_ID, "2026-10-27").rows, []);
+  assert.match(alerts.plainReason("apple_tsv_app"), /ASC_APP_ID/);
+});
+
+await test("P3-2: a slow instance can't run past the deadline; no call starts after it, each timeout is cut to the time left", async () => {
+  const model = downloadsModel();
+  model.segments["i-dl"] = Array.from({ length: 6 }, (_, i) => segmentFor(`${DL_HEAD}\n2026-10-26\t${APP_ID}\tFirst-time download\tApp Store search\t${i + 1}\n`));
+  let t = Date.parse("2026-10-30T11:30:00Z");
+  const start = t;
+  const base = fakeApple(model);
+  const starts = [];
+  const slow = async (url, init) => {
+    starts.push(t - start);
+    t += String(url).startsWith(API) ? 2_000 : 25_000;
+    return base(url, init);
+  };
+  const store = memoryStore();
+  await rejectsWithCode(apple.syncApple(CONFIG, slow, store, () => new Date(t)), "apple_timeout");
+  assert.ok(Math.max(...starts) <= apple.APPLE_TIME_BUDGET_MS - apple.APPLE_MIN_CALL_MS, `last call started at ${Math.max(...starts)} ms`);
+  assert.ok(t - start < 120_000, `simulated ${(t - start) / 1000} s`);
+  assert.equal(store.state.instances.has("i-dl"), false, "a cut-short instance is not recorded");
+  assert.equal(store.state.daily.size, 0, "nothing partial is written");
+
+  const budget = { deadline: 10_000, now: () => new Date(0) };
+  assert.equal(apple.callTimeout(budget, 30_000), 10_000);
+  assert.equal(apple.callTimeout({ deadline: 100_000, now: () => new Date(0) }, 30_000), 30_000);
+  assert.throws(() => apple.callTimeout({ deadline: 1_000, now: () => new Date(0) }, 30_000), (e) => e.name === "AppleBudgetExhausted");
+});
+
+await test("P3-2: the deadline counts from the run's start, and a slow listing stops as apple_timeout", async () => {
+  const fetchImpl = fakeApple(downloadsModel());
+  await rejectsWithCode(apple.syncApple(CONFIG, fetchImpl, memoryStore(), nowFn, { runStartedAt: clock - 94_000 }), "apple_timeout");
+  assert.equal(fetchImpl.calls.length, 0, "no call starts with under 2 s left");
+  let t = clock;
+  const base = fakeApple(standardModel());
+  const starts = [];
+  const slowList = async (url, init) => { starts.push(t - clock); t += 19_000; return base(url, init); };
+  await rejectsWithCode(apple.syncApple(CONFIG, slowList, memoryStore(), () => new Date(t)), "apple_timeout");
+  assert.ok(Math.max(...starts) < apple.APPLE_TIME_BUDGET_MS);
+});
+
+await test("P3-2: work left when time runs out continues next run (status ok, nothing lost)", async () => {
+  const model = downloadsModel();
+  model.instances["r-dl"] = [{ id: "i-a", processingDate: "2026-10-26" }, { id: "i-b", processingDate: "2026-10-27" }];
+  model.segments = {
+    "i-a": [segmentFor(`${DL_HEAD}\n2026-10-25\t${APP_ID}\tFirst-time download\tApp Store search\t1\n`)],
+    "i-b": [segmentFor(`${DL_HEAD}\n2026-10-26\t${APP_ID}\tFirst-time download\tApp Store search\t2\n`)],
+  };
+  let t = clock;
+  const base = fakeApple(model);
+  const slow = async (url, init) => { t += String(url).startsWith(API) ? 5_000 : 24_000; return base(url, init); };
+  const store = memoryStore();
+  const first = await apple.syncApple(CONFIG, slow, store, () => new Date(t));
+  assert.deepEqual([first.instancesRead, first.instancesLeft], [1, 1]);
+  const second = await apple.syncApple(CONFIG, fakeApple(model), store, nowFn);
+  assert.deepEqual([second.instancesRead, second.instancesLeft], [1, 0]);
+  assert.deepEqual([store.get("2026-10-25", "first_downloads"), store.get("2026-10-26", "first_downloads")], [1, 2]);
+});
+
+await test("P3-3: days a report hasn't covered yet are 'no data yet' (null), not 0; the window and conversion use days both cover", () => {
+  const daily = [
+    { metric_date: "2026-10-27", source: "apple", metric: "first_downloads", dimension: "", value: 3 },
+    { metric_date: "2026-10-27", source: "apple", metric: "redownloads", dimension: "", value: 0 },
+    { metric_date: "2026-10-27", source: "apple", metric: "impressions", dimension: "", value: 40 },
+    { metric_date: "2026-10-27", source: "apple", metric: "product_page_views", dimension: "", value: 10 },
+    { metric_date: "2026-10-27", source: "apple", metric: "product_page_views_unique", dimension: "", value: 8 },
+    { metric_date: "2026-10-28", source: "apple", metric: "impressions", dimension: "", value: 50 },
+    { metric_date: "2026-10-28", source: "apple", metric: "product_page_views", dimension: "", value: 12 },
+    { metric_date: "2026-10-28", source: "apple", metric: "product_page_views_unique", dimension: "", value: 9 },
+  ];
+  const v = pageData.buildAppStoreView(daily);
+  assert.equal(v.dataThrough, "2026-10-28");
+  assert.deepEqual([v.engagementThrough, v.downloadsThrough], ["2026-10-28", "2026-10-27"]);
+  assert.deepEqual(v.days.find((d) => d.date === "2026-10-28"), { date: "2026-10-28", impressions: 50, pageViews: 12, firstDownloads: null, redownloads: null });
+  assert.deepEqual(v.days.find((d) => d.date === "2026-10-21"), { date: "2026-10-21", impressions: null, pageViews: null, firstDownloads: null, redownloads: null });
+  assert.deepEqual(v.days.find((d) => d.date === "2026-10-27"), { date: "2026-10-27", impressions: 40, pageViews: 10, firstDownloads: 3, redownloads: 0 });
+  assert.deepEqual(v.window, { since: "2026-10-21", until: "2026-10-27" });
+  assert.deepEqual([v.firstDownloads, v.pageViews, v.pageViewsUnique, v.impressions], [3, 10, 8, 40]);
+  assert.ok(Math.abs(v.conversion - 3 / 8) < 1e-9);
+  // Only one report so far: its own window, and no conversion.
+  const onlyEngagement = pageData.buildAppStoreView(daily.filter((r) => !["first_downloads", "redownloads"].includes(r.metric)));
+  assert.equal(onlyEngagement.conversion, null);
+  assert.ok(onlyEngagement.days.every((d) => d.firstDownloads === null));
+  const page = readFileSync(new URL("../src/components/launch/LaunchPage.tsx", import.meta.url), "utf8");
+  assert.match(page, /A day Apple hasn't sent yet is left blank, not 0\./);
 });
 
 await test("page: the Launch page renders the App Store section from stored rows, and says why when there are none", async () => {

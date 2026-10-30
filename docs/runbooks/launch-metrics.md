@@ -53,6 +53,8 @@ update again, and the same task reopens if the source breaks again later.
 | `apple_bad_config`, `apple_bad_key` | One of the four `ASC_*` values is missing or wrong, or the key text isn't an App Store Connect .p8 key. | Compare the four values with the steps below; paste the .p8 again. |
 | `apple_request_stopped` | Apple stopped the daily report request because nobody read it for a while. | See "Apple request stopped" below. |
 | `apple_no_request` | There is no daily report request for the app. | Run the one-time Apple setup again (`docs/runbooks/launch-metrics-apple-setup.md`). |
+| `apple_tsv_app` | Apple's report file had rows, but none for the app id in `ASC_APP_ID`. Nothing was saved; it is tried again next run. | Check `ASC_APP_ID` is the app's Apple ID (a number); tell the PM if it is. |
+| `apple_timeout` | Apple was too slow to read even one report file before the run's time ran out. Nothing partial was saved. | Usually clears on the next run; tell the PM if it repeats. |
 | `apple_reports_missing` | Apple listed reports, but none with the four names Baseline reads. | Tell the PM (Apple renamed a report). |
 | `apple_tsv_header` | Apple's report file has a column Baseline doesn't know, or lacks one it needs. Nothing from it was saved. | Tell the PM: the column list in `apple.ts` needs a look. |
 | `apple_checksum`, `apple_segment_size` | A downloaded report file didn't match Apple's checksum or size. Nothing from it was saved; it is tried again next run. | Usually clears by itself; tell the PM if it repeats. |

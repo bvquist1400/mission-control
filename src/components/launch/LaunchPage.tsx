@@ -180,10 +180,16 @@ export function LaunchPageBody({ view, input, now }: { view: LaunchView; input: 
   const appStore = view.appStore;
   const appDates = appStore.days.map((day) => day.date);
   const appWindowText = appStore.window ? `${formatDay(appStore.window.since)}–${formatDay(appStore.window.until)}` : "";
-  const appDownloadsSum = appStore.days.reduce((sum, day) => sum + day.firstDownloads, 0);
-  const appRedownloadsSum = appStore.days.reduce((sum, day) => sum + day.redownloads, 0);
-  const appPageViewsSum = appStore.days.reduce((sum, day) => sum + day.pageViews, 0);
-  const appImpressionsSum = appStore.days.reduce((sum, day) => sum + day.impressions, 0);
+  const appDownloadsSum = appStore.days.reduce((sum, day) => sum + (day.firstDownloads ?? 0), 0);
+  const appRedownloadsSum = appStore.days.reduce((sum, day) => sum + (day.redownloads ?? 0), 0);
+  const appPageViewsSum = appStore.days.reduce((sum, day) => sum + (day.pageViews ?? 0), 0);
+  const appImpressionsSum = appStore.days.reduce((sum, day) => sum + (day.impressions ?? 0), 0);
+  const appThroughText =
+    appStore.engagementThrough && appStore.downloadsThrough && appStore.engagementThrough !== appStore.downloadsThrough
+      ? `. Downloads through ${formatDay(appStore.downloadsThrough)}; impressions and page views through ${formatDay(appStore.engagementThrough)}. A day Apple hasn't sent yet is left blank, not 0.`
+      : appStore.dataThrough
+        ? `. Data through ${formatDay(appStore.dataThrough)}.`
+        : ".";
   const appleHealth = view.health.find((entry) => entry.source === "apple");
   const appleConnected = appleHealth ? appleHealth.state !== "not_connected" && appleHealth.state !== "never" : false;
 
@@ -312,7 +318,7 @@ export function LaunchPageBody({ view, input, now }: { view: LaunchView; input: 
       <Section
         id="appstore"
         title="App Store"
-        note={`Apple's report days (Apple's own dates, not New York time); Apple's numbers arrive 2–3 days late${appStore.dataThrough ? `. Data through ${formatDay(appStore.dataThrough)}.` : "."}`}
+        note={`Apple's report days (Apple's own dates, not New York time); Apple's numbers arrive 2–3 days late${appThroughText}`}
         badge={sourceBadge(view, "apple")}
       >
         {appStore.hasData ? (
