@@ -210,6 +210,7 @@ function fakeSupabase(world) {
     let head = false;
     let insertRows = null;
     let updateFields = null;
+    let tooLong = false;
     const rows = () => {
       let out = tableRows(world, table).filter((row) => filters.every((filter) => filter(row)));
       if (orderBy) {
@@ -219,6 +220,7 @@ function fakeSupabase(world) {
       return out;
     };
     const run = () => {
+      if (tooLong) return { data: null, error: { message: "URI too long\n" } };
       if (world.failTable === table) return { data: null, error: { code: "42P01", message: `relation ${table} does not exist` } };
       if (insertRows) {
         const inserted = insertRows.map((row, offset) =>
@@ -263,6 +265,8 @@ function fakeSupabase(world) {
         return builder;
       },
       in(column, values) {
+        // The list travels in the URL; the real stack answers "URI too long" (found by the DB test).
+        if (values.join(",").length > 8000) tooLong = true;
         const allowed = new Set(values);
         filters.push((row) => allowed.has(row[column]));
         return builder;
@@ -527,6 +531,8 @@ await test("the read pages past the 1,000-row cap", async () => {
   assert.equal(result.unblocked.added, 1205);
   assert.equal(rowsOf(world).length, 1205);
   assert.equal(world.pages.task_unblocks, 3, "two pages and the empty one that proves the end");
+  const view = await service.getBrief(fakeSupabase(world), USER, result.code, { appUrl: "http://localhost:3000" });
+  assert.equal(Object.keys(view.tasks).length, 1205, "the page's task read goes past the URL limit too");
 });
 
 await test("the stuck count: only retries open at 8+ attempts, stored only above zero, the caller's value ignored", async () => {

@@ -78,6 +78,18 @@ const ITEM_SELECT =
   "id, user_id, brief_id, n, item_key, kind, payload, task_ids, source, state, dismissed_reason, dismissed_note, choice, created_task_id, prior_due, acted_at, created_at, updated_at";
 const TASK_ACTION_SELECT = "id, user_id, title, status, due_at, base_priority, priority_score, stakeholder_mentions";
 
+/**
+ * The most values one `.in()` carries: they travel in the URL, and a long list is
+ * refused ("URI too long"). Server rows have no 60-item limit, so a brief can reach it.
+ */
+const IN_LIST_CHUNK = 100;
+
+function inChunks<T>(values: T[]): T[][] {
+  const out: T[][] = [];
+  for (let index = 0; index < values.length; index += IN_LIST_CHUNK) out.push(values.slice(index, index + IN_LIST_CHUNK));
+  return out;
+}
+
 /** Kinds whose items come from meetings (the "decide" list); the rest need a call. */
 export const MEETING_ITEM_KINDS: ReadonlySet<BriefItemKind> = new Set(["proposed_task"]);
 
@@ -569,13 +581,16 @@ export async function saveBrief(
     .filter((row) => !keysInRequest.has(row.key));
 
   if (candidates.length || serverRows.length) {
-    const { data: existingKeys, error: keyError } = await supabase
-      .from("brief_items")
-      .select("item_key")
-      .eq("user_id", userId)
-      .in("item_key", [...candidates, ...serverRows].map((candidate) => candidate.key));
-    if (keyError) throw keyError;
-    const taken = new Set((existingKeys ?? []).map((row) => (row as { item_key: string }).item_key));
+    const taken = new Set<string>();
+    for (const keys of inChunks([...candidates, ...serverRows].map((candidate) => candidate.key))) {
+      const { data: existingKeys, error: keyError } = await supabase
+        .from("brief_items")
+        .select("item_key")
+        .eq("user_id", userId)
+        .in("item_key", keys);
+      if (keyError) throw keyError;
+      for (const row of existingKeys ?? []) taken.add((row as { item_key: string }).item_key);
+    }
     for (let i = candidates.length - 1; i >= 0; i--) {
       if (taken.has(candidates[i].key)) {
         skipped.push({ index: candidates[i].index, reason: "already_in_a_brief", item_key: candidates[i].key });
@@ -749,13 +764,13 @@ export async function getBrief(supabase: AnySupabase, userId: string, code: stri
 
   const tasks: Record<string, BriefTaskSummary> = {};
   if (taskIds.size) {
-    const { data: taskRows, error: taskError } = await supabase
-      .from("tasks")
-      .select("id, title, status, due_at, owner")
-      .eq("user_id", userId)
-      .in("id", [...taskIds]);
-    if (taskError) throw taskError;
-    for (const row of taskRows ?? []) tasks[(row as BriefTaskSummary).id] = row as BriefTaskSummary;
+    const reads = await Promise.all(
+      inChunks([...taskIds]).map((ids) => supabase.from("tasks").select("id, title, status, due_at, owner").eq("user_id", userId).in("id", ids))
+    );
+    for (const { data: taskRows, error: taskError } of reads) {
+      if (taskError) throw taskError;
+      for (const row of taskRows ?? []) tasks[(row as BriefTaskSummary).id] = row as BriefTaskSummary;
+    }
   }
 
   return { brief, items, tasks, counts: countItems(items), url: briefUrl(options.appUrl, brief.code) };

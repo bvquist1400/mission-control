@@ -62,7 +62,8 @@ async function test(name, fn) {
     console.log(`ok - ${name}`);
   } catch (error) {
     failures.push(name);
-    console.log(`not ok - ${name}\n  ${String(error?.stack ?? error).split("\n").slice(0, 8).join("\n  ")}`);
+    const detail = error instanceof Error ? error.stack : JSON.stringify(error);
+    console.log(`not ok - ${name}\n  ${String(detail).split("\n").slice(0, 8).join("\n  ")}`);
   }
 }
 
@@ -345,6 +346,13 @@ try {
     const result = await save(many.client, many.id);
     assert.equal(result.unblocked.read_failed, false);
     assert.equal(result.unblocked.added, count);
+    const view = await getBrief(many.client, many.id, result.code, { appUrl: APP_URL });
+    const { count: saved } = await admin.from("brief_items").select("id", { count: "exact", head: true }).eq("user_id", many.id);
+    assert.equal(saved, count, "every row is saved");
+    // The page's embedded read has the same cap: a brief past 1,000 rows shows the
+    // first 1,000 (known limit; what's left carries to the next brief once acted on).
+    assert.equal(view.items.length, 1000);
+    assert.equal(Object.keys(view.tasks).length, 1000, "and the page's task read survives a list that long");
   });
 
   await test("an unrelated user's pills never reach this user's brief", async () => {
