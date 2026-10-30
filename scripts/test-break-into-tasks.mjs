@@ -658,6 +658,26 @@ await test("FR3 P2-2: resolveEntityLink stores task/project/other uuid ids canon
   }
 });
 
+await test("Break fixes 1/4 (Brent 10/30): every new step defaults to Brent, whatever the umbrella's owner; Agent stays a per-step pick", () => {
+  // The case Brent hit: the umbrella was the agent's, and every step landed on the agent.
+  assert.equal(bit.defaultOwner(work({ owner: "agent" })), "brent");
+  assert.equal(bit.defaultOwner(), "brent");
+  assert.equal(bit.defaultOwner(work({ owner: null })), "brent");
+  const dialog = readSource(new URL("../src/components/tasks/BreakIntoTasks.tsx", import.meta.url), "utf8");
+  assert.match(dialog, /const owner = defaultOwner\(\);/, "the dialog prefills every step from defaultOwner(), not the task's owner");
+  assert.doesNotMatch(dialog, /defaultOwner\(task\)/);
+  assert.match(dialog, /<option value="agent">Agent<\/option>/, "Agent can still be picked per step");
+  // The server and 066 keep each step's own owner (no fallback to the umbrella's).
+  const rows = mockRows();
+  const plan = planFor(rows, [
+    { checklist_item_id: rows[4].id, due_date: null, owner: "brent" },
+    { checklist_item_id: rows[5].id, due_date: null, owner: "agent" },
+  ], undefined, work({ owner: "agent" }));
+  assert.equal(plan.ok, true);
+  assert.deepEqual(plan.value.steps.map((s) => s.owner), ["brent", "agent"]);
+  assert.match(MIGRATION_066, /v_step ->> 'owner',/, "066 writes the step's own owner");
+});
+
 console.log(`\n${passed} passed, ${failures.length} failed`);
 if (failures.length > 0) {
   console.log(`Failed:\n- ${failures.join("\n- ")}`);
