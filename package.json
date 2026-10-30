@@ -21,6 +21,8 @@
     "test:multiday-cards": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-multiday-cards.mjs",
     "test:break-into-tasks": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-break-into-tasks.mjs",
     "test:break-into-tasks-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-break-into-tasks-db.mjs",
+    "test:task-unblocks": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-task-unblocks.mjs",
+    "test:task-unblocks-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-task-unblocks-db.mjs",
     "test:personal-work-reviews": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-personal-work-reviews.mjs",
     "test:task-recurrence": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-task-recurrence.mjs",
     "test:calendar-sanitize": "node scripts/test-calendar-sanitizer.mjs",

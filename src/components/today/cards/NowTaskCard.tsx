@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { getTaskVisualState, TaskStateBadge } from "@/components/tasks/task-state";
+import { getTaskVisualState, NowUnblockedPill, TaskStateBadge } from "@/components/tasks/task-state";
 import { PersonalBadge } from "@/components/ui/PersonalBadge";
 import { Button } from "@/components/ui/Button";
 import {
@@ -86,6 +86,7 @@ export function NowTaskCard({
           >
             <p className="text-base font-semibold leading-snug text-foreground">{task.title}</p>
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
+              <NowUnblockedPill task={task} />
               {isPersonalTaskOrProject(task) ? <PersonalBadge /> : null}
               {dueLabel ? (
                 <span
@@ -135,6 +136,7 @@ export function NowTaskCard({
             <RangeSrText view={range} />
           </button>
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
+            <NowUnblockedPill task={task} />
             {isPersonalTaskOrProject(task) ? <PersonalBadge /> : null}
             <RangeChip view={range} />
             {state ? <TaskStateBadge state={state} /> : null}

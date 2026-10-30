@@ -4,6 +4,7 @@ import {
   fetchRecentlyResolvedTaskDependencySummaries,
   fetchTaskDependencySummaries,
 } from "@/lib/task-dependencies";
+import { fetchRecentUnblockDependencySummaries, mergeResolvedDependencyMaps } from "@/lib/task-unblocks";
 import type {
   Commitment,
   ImplementationSummary,
@@ -579,7 +580,11 @@ export async function readIntelligenceTaskContexts(
     fetchSprints(supabase, userId, sprintIds),
     fetchTaskDependencySummaries(supabase, userId, taskIds),
     fetchRecentTaskStatusTransitions(supabase, userId, taskIds, windowStartIso),
-    fetchRecentlyResolvedTaskDependencySummaries(supabase, userId, taskIds, windowStartIso),
+    // A removed link (038) or a finished blocker (067's task_unblocks) both clear a dependency.
+    Promise.all([
+      fetchRecentlyResolvedTaskDependencySummaries(supabase, userId, taskIds, windowStartIso),
+      fetchRecentUnblockDependencySummaries(supabase, userId, taskIds, windowStartIso),
+    ]).then(([removed, finished]) => mergeResolvedDependencyMaps(removed, finished)),
     fetchTaskComments(supabase, userId, taskIds),
     fetchTaskCommitments(supabase, userId, taskIds),
   ]);

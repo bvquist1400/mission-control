@@ -32,9 +32,11 @@ function truncateTitle(title: string, max = 48): string {
  * Owns the full lifecycle of a task mutation: optimistic update, request,
  * rollback on failure, success toast, and undo.
  *
- * Undo is safe for status changes: no database trigger fires on a transition to
- * Done, and recurring instances are produced by the explicit generator rather
- * than by completion, so restoring the previous status fully reverses the edit.
+ * Undo is safe for status changes: recurring instances are produced by the
+ * explicit generator rather than by completion, and the one trigger that fires on
+ * a transition to Done (migration 067: tasks waiting on it become "Now
+ * unblocked") puts itself back when the task leaves Done again within 7 days
+ * (compare-and-set), so restoring the previous status reverses the edit.
  * It does append a second row to `task_status_transitions`, which is the
  * intended behaviour for an append-only audit log.
  */

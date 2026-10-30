@@ -121,6 +121,8 @@ export interface Task {
   parent_task_id: string | null;
   /** Break into tasks (066): the umbrella checklist row this step was made from (pace counts the pair once). */
   source_checklist_item_id: string | null;
+  /** Now unblocked (migration 067): set while the task shows the green "Now unblocked" pill; written only by the database. */
+  unblocked_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -245,6 +247,54 @@ export interface RecentlyResolvedTaskDependencySummary {
   title: string;
   status: TaskDependencyStatus;
   resolved_at: string;
+  created_at: string;
+}
+
+/** Why a "Now unblocked" pill went away (067's task_unblocks.cleared_reason). */
+export type TaskUnblockClearReason =
+  | 'started'
+  | 'finished'
+  | 'parked'
+  | 'missed'
+  | 'waiting'
+  | 'redated'
+  | 'reblocked'
+  | 'reopened'
+  | 'brief'
+  | 'manual';
+
+/** One unblock (migration 067): the last item a task waited on became Done. Written only by the database. */
+export interface TaskUnblock {
+  id: string;
+  user_id: string;
+  task_id: string;
+  blocker_type: TaskDependencyType;
+  blocker_task_id: string | null;
+  blocker_commitment_id: string | null;
+  waited_on_task_ids: string[];
+  waited_on_commitment_ids: string[];
+  unblocked_at: string;
+  /** The ET day a missing or past due date was moved to (a weekend lands Monday for work tasks). */
+  landing_date: string;
+  is_recurring: boolean;
+  prior_status: TaskStatus;
+  new_status: TaskStatus;
+  status_changed: boolean;
+  prior_due_at: string | null;
+  new_due_at: string | null;
+  due_changed: boolean;
+  new_due_change_id: string | null;
+  prior_priority_score: number | null;
+  new_priority_score: number | null;
+  comment_id: string | null;
+  cleared_at: string | null;
+  cleared_reason: TaskUnblockClearReason | null;
+  reverted_at: string | null;
+  reverted_by_type: TaskDependencyType | null;
+  reverted_by_id: string | null;
+  revert_status_restored: boolean | null;
+  revert_due_restored: boolean | null;
+  revert_comment_id: string | null;
   created_at: string;
 }
 

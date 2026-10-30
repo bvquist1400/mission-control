@@ -23,7 +23,7 @@ export async function loadTaskPageInput(
   const { data: row, error } = await supabase
     .from("tasks")
     .select(
-      "id, title, status, owner, owner_label, status_line, due_at, waiting_on, follow_up_at, description, tags, implementation:implementations(name), project:projects(name), section:project_sections(name)"
+      "id, title, status, owner, owner_label, status_line, due_at, unblocked_at, waiting_on, follow_up_at, description, tags, implementation:implementations(name), project:projects(name), section:project_sections(name)"
     )
     .eq("id", taskId)
     .eq("user_id", userId)

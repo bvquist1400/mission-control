@@ -19,7 +19,8 @@ import { TaskDependencies } from "@/components/tasks/TaskDependencies";
 import { TaskMetaEditor } from "@/components/tasks/TaskMetaEditor";
 import { useDateCascade } from "@/components/tasks/DateCascadeProvider";
 import { TaskTagChips } from "@/components/tasks/TaskTagChips";
-import { getTaskVisualState, TaskStateBadge } from "@/components/tasks/task-state";
+import { getTaskVisualState, NowUnblockedPill, TaskStateBadge } from "@/components/tasks/task-state";
+import { withUnblockPillRule } from "@/lib/task-unblocks";
 import {
   localDateInputToEndOfDayIso,
   timestampToLocalDateInputValue,
@@ -778,8 +779,8 @@ export function TaskGrid({
             : task.sprint;
 
         return {
-          ...task,
-          ...updates,
+          // The "Now unblocked" pill goes when the database will clear it (067).
+          ...withUnblockPillRule(task, updates as Partial<TaskWithImplementation>),
           implementation: nextImplementation,
           sprint: nextSprint,
         };
@@ -1367,6 +1368,7 @@ export function TaskGrid({
                         {visualState ? (
                           <TaskStateBadge state={visualState} className="mt-1" />
                         ) : null}
+                        <NowUnblockedPill task={task} className={visualState ? "ml-1 mt-1" : "mt-1"} />
                         {task.implementation?.phase === "Sundown" ? (
                           <p className="mt-1 inline-flex rounded bg-orange-500/15 px-1.5 py-0.5 text-xs font-semibold text-orange-300">
                             Sundown implementation

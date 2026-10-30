@@ -103,6 +103,7 @@ function taskToCardData(
     implementationName: task.implementation?.name ?? null,
     dependencyBlocked: Boolean(task.dependency_blocked),
     updatedAt: task.updated_at ?? null,
+    unblockedAt: task.unblocked_at ?? null,
   };
 }
 

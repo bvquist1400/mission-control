@@ -36,6 +36,12 @@ class MemoryQueryBuilder {
     return this;
   }
 
+  // task_unblocks reads (067) filter on reverted_at IS NULL.
+  is(field, value) {
+    this.filters.push((row) => (row[field] ?? null) === value);
+    return this;
+  }
+
   in(field, values) {
     const allowed = new Set(values);
     this.filters.push((row) => allowed.has(row[field]));
@@ -131,6 +137,7 @@ class MemorySupabase {
       note_decisions: [],
       task_dependencies: [],
       task_status_transitions: [],
+      task_unblocks: [],
       ...seed,
     };
   }
@@ -500,5 +507,57 @@ assert.equal(runResult.detectedAt, NOW_ISO);
 assert.equal(runResult.taskContexts.length, contexts.length);
 assert.equal(runResult.contracts.length, contracts.length);
 assert.equal(runResult.contracts.length, 6);
+
+// Migration 067: a finished blocker (a task_unblocks row, the link still active)
+// feeds recently_unblocked like a removed link; a reverted unblock doesn't.
+{
+  const seed = (reverted) => new MemorySupabase({
+    tasks: [
+      makeTask("task-auto-unblocked", { title: "Send revised timeline", status: "Planned", updated_at: isoDaysAgo(1), due_at: "2026-03-26T23:59:59.999Z" }),
+      makeTask("task-finished-blocker", { title: "Get sign-off on scope", status: reverted ? "Planned" : "Done", updated_at: isoDaysAgo(1) }),
+    ],
+    task_dependencies: [
+      {
+        id: "dep-active",
+        user_id: USER_ID,
+        task_id: "task-auto-unblocked",
+        depends_on_task_id: "task-finished-blocker",
+        depends_on_commitment_id: null,
+        resolved_at: null,
+        is_resolved: false,
+        created_at: isoDaysAgo(5),
+      },
+    ],
+    task_status_transitions: [
+      { id: "t-in", user_id: USER_ID, task_id: "task-auto-unblocked", from_status: "Planned", to_status: "Blocked/Waiting", transitioned_at: isoDaysAgo(5), created_at: isoDaysAgo(5) },
+      { id: "t-out", user_id: USER_ID, task_id: "task-auto-unblocked", from_status: "Blocked/Waiting", to_status: "Planned", transitioned_at: isoDaysAgo(1), created_at: isoDaysAgo(1) },
+    ],
+    task_unblocks: [
+      {
+        id: "unblock-1",
+        user_id: USER_ID,
+        task_id: "task-auto-unblocked",
+        blocker_type: "task",
+        blocker_task_id: "task-finished-blocker",
+        blocker_commitment_id: null,
+        unblocked_at: isoDaysAgo(1),
+        created_at: isoDaysAgo(1),
+        reverted_at: reverted ? isoDaysAgo(0.5) : null,
+      },
+    ],
+  });
+  const unblockContexts = await readIntelligenceTaskContexts(seed(false), USER_ID, { now: new Date(NOW_ISO) });
+  const waitingContext = unblockContexts.find((context) => context.task.id === "task-auto-unblocked");
+  assert.deepEqual(waitingContext.recentlyResolvedDeps.map((dependency) => [dependency.id, dependency.title, dependency.type]), [["unblock-1", "Get sign-off on scope", "task"]]);
+  const unblockContracts = detectIntelligenceContracts(unblockContexts, { now: new Date(NOW_ISO) });
+  const auto = unblockContracts.find((contract) => contract.promotionFamilyKey === "recently_unblocked|unblocked:task-auto-unblocked");
+  assert.ok(auto, "a finished blocker makes a recently_unblocked contract");
+  assert.equal(auto.metrics.hoursBlocked, 96);
+  assert.ok(auto.evidence.some((item) => item.code === "recent_dependency_cleared" && /Get sign-off on scope/.test(item.summary)));
+
+  const revertedContexts = await readIntelligenceTaskContexts(seed(true), USER_ID, { now: new Date(NOW_ISO) });
+  const revertedContracts = detectIntelligenceContracts(revertedContexts, { now: new Date(NOW_ISO) });
+  assert.equal(revertedContracts.some((contract) => contract.contractType === "recently_unblocked"), false, "a reverted unblock is not recent");
+}
 
 console.log("Intelligence layer phase 1 tests passed.");
