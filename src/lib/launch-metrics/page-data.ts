@@ -181,6 +181,46 @@ export interface NamedCount {
   secondary?: number;
 }
 
+export interface AppStoreDay {
+  date: string;
+  impressions: number;
+  pageViews: number;
+  firstDownloads: number;
+  redownloads: number;
+}
+
+export interface AppStoreSourceRow {
+  label: string;
+  impressions: number;
+  pageViews: number;
+  firstDownloads: number;
+  redownloads: number;
+}
+
+export interface AppStoreView {
+  hasData: boolean;
+  /** Apple's report days from release to the newest day Apple has sent. */
+  days: AppStoreDay[];
+  dataThrough: string | null;
+  /** The headline window: the 30 report days ending at `dataThrough` (not before release). */
+  window: { since: string; until: string } | null;
+  impressions: number;
+  pageViews: number;
+  pageViewsUnique: number;
+  firstDownloads: number;
+  redownloads: number;
+  /** First-time downloads ÷ unique product page views over the window; null without unique views. */
+  conversion: number | null;
+  /** Since release, Standard reports. */
+  sourceTypes: AppStoreSourceRow[];
+  /** Since release, Detailed reports (Apple drops groups under 5 people, so often empty). */
+  sourceInfo: NamedCount[];
+  campaigns: NamedCount[];
+}
+
+/** Days in the App Store headline window. */
+export const APP_STORE_WINDOW_DAYS = 30;
+
 export interface MilestoneMarker {
   date: string;
   label: string;
@@ -217,6 +257,7 @@ export interface LaunchView {
     topPages: TopEntry[];
     topWindow: { since: string; until: string } | null;
   };
+  appStore: AppStoreView;
   markers: MilestoneMarker[];
   health: SourceHealth[];
   lastRun: { started_at: string; status: string; trigger: string; unfinished: boolean } | null;
@@ -255,6 +296,73 @@ function topDimensions(daily: DailyValue[], source: LaunchMetricSource, metric: 
     totals.set(label, entry);
   }
   return [...totals.values()].filter((entry) => entry.value > 0).sort((a, b) => b.value - a.value || a.label.localeCompare(b.label)).slice(0, 10);
+}
+
+function appStoreSourceRows(daily: DailyValue[]): AppStoreSourceRow[] {
+  const rows = new Map<string, AppStoreSourceRow>();
+  const prefix = 'source_type:';
+  for (const row of daily) {
+    if (row.source !== 'apple' || !row.dimension.startsWith(prefix) || row.metric_date < LAUNCH_RELEASE_DATE) {
+      continue;
+    }
+    const label = row.dimension.slice(prefix.length);
+    const entry = rows.get(label) ?? { label, impressions: 0, pageViews: 0, firstDownloads: 0, redownloads: 0 };
+    if (row.metric === 'impressions') entry.impressions += row.value;
+    else if (row.metric === 'product_page_views') entry.pageViews += row.value;
+    else if (row.metric === 'first_downloads') entry.firstDownloads += row.value;
+    else if (row.metric === 'redownloads') entry.redownloads += row.value;
+    else continue;
+    rows.set(label, entry);
+  }
+  return [...rows.values()]
+    .filter((entry) => entry.impressions + entry.pageViews + entry.firstDownloads + entry.redownloads > 0)
+    .sort((a, b) => b.firstDownloads - a.firstDownloads || b.pageViews - a.pageViews || b.impressions - a.impressions || a.label.localeCompare(b.label));
+}
+
+export function buildAppStoreView(daily: DailyValue[]): AppStoreView {
+  const totals = daily.filter((row) => row.source === 'apple' && row.dimension === '' && row.metric_date >= LAUNCH_RELEASE_DATE);
+  const dates = [...new Set(totals.map((row) => row.metric_date))].sort();
+  const dataThrough = dates.length ? dates[dates.length - 1] : null;
+  const get = byKey(daily, 'apple');
+  const days: AppStoreDay[] = dataThrough
+    ? dateRange(LAUNCH_RELEASE_DATE, dataThrough).map((date) => ({
+        date,
+        impressions: get(date, 'impressions'),
+        pageViews: get(date, 'product_page_views'),
+        firstDownloads: get(date, 'first_downloads'),
+        redownloads: get(date, 'redownloads'),
+      }))
+    : [];
+  const windowStart = dataThrough ? addDays(dataThrough, -(APP_STORE_WINDOW_DAYS - 1)) : null;
+  const since = windowStart && windowStart < LAUNCH_RELEASE_DATE ? LAUNCH_RELEASE_DATE : windowStart;
+  const inWindow = since && dataThrough ? dateRange(since, dataThrough) : [];
+  const windowSum = (metric: string) => inWindow.reduce((total, date) => total + get(date, metric), 0);
+  const pageViewsUnique = windowSum('product_page_views_unique');
+  const firstDownloads = windowSum('first_downloads');
+  const detailed = (prefix: string) =>
+    topDimensions(daily, 'apple', 'first_downloads', prefix, LAUNCH_RELEASE_DATE, dataThrough ?? LAUNCH_RELEASE_DATE, 'product_page_views')
+      .concat(
+        // A referrer with page views but no downloads still belongs in the list.
+        topDimensions(daily, 'apple', 'product_page_views', prefix, LAUNCH_RELEASE_DATE, dataThrough ?? LAUNCH_RELEASE_DATE)
+          .map((entry) => ({ label: entry.label, value: 0, secondary: entry.value }))
+      )
+      .filter((entry, index, all) => all.findIndex((other) => other.label === entry.label) === index)
+      .slice(0, 10);
+  return {
+    hasData: totals.length > 0,
+    days,
+    dataThrough,
+    window: since && dataThrough ? { since, until: dataThrough } : null,
+    impressions: windowSum('impressions'),
+    pageViews: windowSum('product_page_views'),
+    pageViewsUnique,
+    firstDownloads,
+    redownloads: windowSum('redownloads'),
+    conversion: pageViewsUnique > 0 ? firstDownloads / pageViewsUnique : null,
+    sourceTypes: appStoreSourceRows(daily),
+    sourceInfo: detailed('source_info:'),
+    campaigns: detailed('campaign:'),
+  };
 }
 
 export function buildLaunchView(input: LaunchPageInput, now: Date): LaunchView {
@@ -336,6 +444,7 @@ export function buildLaunchView(input: LaunchPageInput, now: Date): LaunchView {
       topPages: input.searchTop?.top_pages ?? [],
       topWindow: input.searchTop && input.searchTop.since ? { since: input.searchTop.since, until: input.searchTop.until } : null,
     },
+    appStore: buildAppStoreView(input.daily),
     markers: input.milestones.map((milestone) => ({
       date: etDate(new Date(milestone.happened_at)),
       label: milestone.label,

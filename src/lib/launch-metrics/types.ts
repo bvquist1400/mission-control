@@ -115,4 +115,6 @@ export interface DailyMetricInput {
   dimension: string;
   value: number;
   variant?: LaunchMetricVariant | null;
+  /** Apple only: the report instance's processing date (065's trigger keeps the newest). */
+  apple_processing_date?: string | null;
 }

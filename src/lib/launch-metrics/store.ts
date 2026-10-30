@@ -39,6 +39,25 @@ export interface AlertTaskPatch {
   status_line?: string;
 }
 
+/** An Apple row already stored (what a newer instance must replace, never merge into). */
+export interface AppleStoredKey {
+  metric_date: string;
+  metric: string;
+  dimension: string;
+  variant: string | null;
+  apple_processing_date: string | null;
+}
+
+export interface AppleInstanceRecord {
+  instance_id: string;
+  report_name: string;
+  granularity: 'DAILY';
+  processing_date: string;
+  segment_count: number;
+  rows_parsed: number;
+  fetched_at: string;
+}
+
 export interface LaunchStore {
   recentRuns(limit: number): Promise<RunRecord[]>;
   insertRun(run: { trigger: LaunchRunTrigger; kind: LaunchRunKind; started_at: string }): Promise<string>;
@@ -50,6 +69,11 @@ export interface LaunchStore {
   createAlertTask(task: NewAlertTask): Promise<AlertTask | null>;
   updateAlertTask(id: string, patch: AlertTaskPatch): Promise<void>;
   addTaskComment(taskId: string, content: string): Promise<void>;
+  /** Which of these Apple instance ids were already read (launch_apple_instances). */
+  knownAppleInstances(instanceIds: string[]): Promise<Set<string>>;
+  /** Stored Apple rows on these days (any metric, dimension and variant). */
+  appleRowsFor(dates: string[]): Promise<AppleStoredKey[]>;
+  recordAppleInstance(record: AppleInstanceRecord): Promise<void>;
 }
 
 export const ALERT_SOURCE_SYSTEM = 'launch_metrics';
@@ -71,6 +95,8 @@ export function readRunSources(value: unknown): Record<string, string> {
 }
 
 const UPSERT_CHUNK = 500;
+const ID_CHUNK = 100;
+const READ_PAGE = 1000;
 
 export function createSupabaseLaunchStore(supabase: SupabaseClient<Database>, userId: string): LaunchStore {
   return {
@@ -128,6 +154,7 @@ export function createSupabaseLaunchStore(supabase: SupabaseClient<Database>, us
           dimension: row.dimension,
           value: row.value,
           variant: row.variant ?? null,
+          apple_processing_date: row.apple_processing_date ?? null,
         }));
         const { error } = await supabase
           .from('launch_metric_daily')
@@ -207,6 +234,61 @@ export function createSupabaseLaunchStore(supabase: SupabaseClient<Database>, us
       const { error } = await supabase
         .from('task_comments')
         .insert({ user_id: userId, task_id: taskId, content, source: 'system' });
+      if (error) {
+        throw new LaunchSourceError('db_write');
+      }
+    },
+
+    async knownAppleInstances(instanceIds) {
+      const known = new Set<string>();
+      for (let index = 0; index < instanceIds.length; index += ID_CHUNK) {
+        const chunk = instanceIds.slice(index, index + ID_CHUNK);
+        const { data, error } = await supabase
+          .from('launch_apple_instances')
+          .select('instance_id')
+          .eq('user_id', userId)
+          .in('instance_id', chunk);
+        if (error) {
+          throw new LaunchSourceError('db_read');
+        }
+        for (const row of data ?? []) {
+          known.add(row.instance_id);
+        }
+      }
+      return known;
+    },
+
+    async appleRowsFor(dates) {
+      const out: AppleStoredKey[] = [];
+      for (let index = 0; index < dates.length; index += ID_CHUNK) {
+        const chunk = dates.slice(index, index + ID_CHUNK);
+        for (let from = 0; ; from += READ_PAGE) {
+          const { data, error } = await supabase
+            .from('launch_metric_daily')
+            .select('metric_date, metric, dimension, variant, apple_processing_date')
+            .eq('user_id', userId)
+            .eq('source', 'apple')
+            .in('metric_date', chunk)
+            .order('metric_date', { ascending: true })
+            .order('metric', { ascending: true })
+            .order('dimension', { ascending: true })
+            .range(from, from + READ_PAGE - 1);
+          if (error) {
+            throw new LaunchSourceError('db_read');
+          }
+          out.push(...(data ?? []));
+          if (!data || data.length < READ_PAGE) {
+            break;
+          }
+        }
+      }
+      return out;
+    },
+
+    async recordAppleInstance(record) {
+      const { error } = await supabase
+        .from('launch_apple_instances')
+        .upsert({ user_id: userId, ...record }, { onConflict: 'user_id,instance_id' });
       if (error) {
         throw new LaunchSourceError('db_write');
       }

@@ -2,10 +2,12 @@
 
 The Launch page in Baseline shows Menu & Market's launch numbers: app sign-ups
 and Plus (from the Grocery app database, counts only), website visits and App
-Store taps (Vercel Web Analytics), Google search (Search Console), Reddit posts
-and the launch timeline (kept by hand). App Store numbers come in phase 2.
+Store taps (Vercel Web Analytics), Google search (Search Console), App Store
+impressions, page views and downloads (Apple's daily analytics reports), Reddit
+posts and the launch timeline (kept by hand).
 
-Plan: `/Users/owner/dev/live-dashboard-plan.md`. Baseline task d51b2848.
+Plan: `/Users/owner/dev/live-dashboard-plan.md`. Baseline tasks d51b2848
+(phase 1) and c54b1ccf (phase 2, App Store).
 
 **Counts only.** No account id, email or name ever leaves the app database.
 If anything ever asks you to paste an account list into Baseline, stop.
@@ -19,14 +21,14 @@ browser. Nobody (PM or agent) asks you to paste a key into chat.
 
 | Run | When | Sources |
 |---|---|---|
-| Full | every morning, 11:30 UTC (7:30 New York in summer, 6:30 in winter) | app sign-ups, website, Google search (App Store: "not connected yet") |
-| Light | every hour at :15 | app sign-ups, website |
+| Full | every morning, 11:30 UTC (7:30 New York in summer, 6:30 in winter) | app sign-ups, website, Google search, App Store ("not connected yet" until its keys are set) |
+| Light | every hour at :15 | app sign-ups, website (Google search and App Store skipped) |
 | Refresh now | the button at the top of the page | same as Full; refused within a minute of the last run |
 
 Every run writes one row to the run log with a short code per source. The
 bottom of the page shows each source's last good update:
 
-- **Out of date**: app sign-ups or website not updated for 2 hours, Google search for 36 hours.
+- **Out of date**: app sign-ups or website not updated for 2 hours, Google search for 36 hours, App Store for 72 hours.
 - **Update failing**: the last try failed (the code is shown, e.g. `http_401`).
 - **Not set up yet**: that source's keys aren't in Baseline's environment.
 
@@ -47,6 +49,15 @@ update again, and the same task reopens if the source breaks again later.
 | `*_shape`, `bad_json`, `too_large` | The reply wasn't in the expected shape. Nothing from it was saved. | Tell the PM. |
 | `db_write`, `db_read` | Baseline couldn't save or read its own tables. | Tell the PM. |
 | `not_configured` | The keys aren't set. | Set them (below). |
+| `not_connected` (App Store) | No `ASC_*` value is set yet. | Normal until go-live; see "App Store (Apple read key)" below. |
+| `apple_bad_config`, `apple_bad_key` | One of the four `ASC_*` values is missing or wrong, or the key text isn't an App Store Connect .p8 key. | Compare the four values with the steps below; paste the .p8 again. |
+| `apple_request_stopped` | Apple stopped the daily report request because nobody read it for a while. | See "Apple request stopped" below. |
+| `apple_no_request` | There is no daily report request for the app. | Run the one-time Apple setup again (`docs/runbooks/launch-metrics-apple-setup.md`). |
+| `apple_reports_missing` | Apple listed reports, but none with the four names Baseline reads. | Tell the PM (Apple renamed a report). |
+| `apple_tsv_header` | Apple's report file has a column Baseline doesn't know, or lacks one it needs. Nothing from it was saved. | Tell the PM: the column list in `apple.ts` needs a look. |
+| `apple_checksum`, `apple_segment_size` | A downloaded report file didn't match Apple's checksum or size. Nothing from it was saved; it is tried again next run. | Usually clears by itself; tell the PM if it repeats. |
+| `apple_segment_host` | Apple's file link was on a host other than `*.apple.com`, so Baseline didn't download it. | Tell the PM (one allowlist line in `apple.ts`). |
+| `apple_shape`, `apple_tsv_*`, `apple_gzip` | Apple's reply or file wasn't in the expected shape. Nothing from it was saved. | Tell the PM. |
 
 ## Setup at go-live (one step at a time with the PM)
 
@@ -98,6 +109,37 @@ now and compare the numbers with the old dashboard.
 Baseline only asks for the read-only scope (`webmasters.readonly`) and only
 calls `oauth2.googleapis.com` and `searchconsole.googleapis.com`.
 
+### App Store (Apple read key)
+
+Do this only after the one-time Apple setup has run
+(`docs/runbooks/launch-metrics-apple-setup.md`, done around 10/27) and its
+temporary Admin key is revoked. One step at a time with the PM.
+
+1. App Store Connect → Users and Access → Integrations → App Store Connect API →
+   **Team Keys** → the + button. Name: `launch metrics read`. Access: **Sales**
+   (Apple's docs call it "Sales and Reports"; it reads reports and can't change
+   the app). It must be a Team key: individual keys can't read reports.
+2. Click **Download** on the key's row (Apple allows it once). Note the **Key ID**
+   (in the row) and the **Issuer ID** (above the list).
+3. In Baseline's Vercel project → Settings → Environment Variables, Production,
+   marked **Sensitive**, add four values:
+   - `ASC_PRIVATE_KEY`: open the downloaded `AuthKey_….p8` in TextEdit, copy all
+     of it including the `BEGIN` and `END` lines, paste it as the value.
+   - `ASC_KEY_ID`: the Key ID.
+   - `ASC_ISSUER_ID`: the Issuer ID.
+   - `ASC_APP_ID`: the app's Apple ID (a number: App Store Connect → Apps → Menu
+     & Market → App Information → Apple ID).
+4. Delete the downloaded `.p8` file (`rm ~/Downloads/AuthKey_….p8`).
+5. Redeploy Baseline, open the Launch page, press **Refresh now**. The footer's
+   App Store line should say "updated". If it says "failing (…)", find the code
+   in the table above. Apple's first daily reports can take a day or two after
+   the setup script ran; until then the section says it is waiting.
+6. Compare with App Store Connect → App Analytics for the same days. Small
+   differences are normal: Apple adds noise and hides groups under 5 people.
+
+Baseline only sends the key's token to `api.appstoreconnect.apple.com`. Report
+files are downloaded from Apple's own `*.apple.com` links without any key.
+
 ### Seed import (today's hand-kept numbers)
 
 Dry run first (prints counts only, writes nothing):
@@ -133,6 +175,11 @@ alert task says "the key was refused".
 - **Search Console key**: service account → Keys → Add key (JSON) → update
   `GSC_PRIVATE_KEY` → redeploy → Refresh now → delete the old key in the
   service account's Keys tab → delete the file.
+- **App Store key**: make a new "Sales" Team key (steps under "App Store (Apple
+  read key)"), replace `ASC_PRIVATE_KEY` and `ASC_KEY_ID` (the Issuer ID and app
+  id stay), redeploy, Refresh now, check the App Store line says updated, then
+  **Revoke** the old key in App Store Connect and delete the downloaded file.
+  The report request belongs to the app, not the key, so it keeps working.
 - **CRON_SECRET**: Vercel manages it for crons; rotating it only needs a
   redeploy.
 
@@ -144,15 +191,31 @@ expired (two failed runs). Follow "Website token" under Key rotation. Stored
 history is kept; the days missed are filled in on the next good run (it
 re-reads the last 45 days).
 
-## Apple request stopped (phase 2)
+## Apple request stopped
 
 App Store numbers come from an ONGOING report request created once with
 `scripts/launch-metrics/apple-create-requests.mjs`
 (`docs/runbooks/launch-metrics-apple-setup.md`). Apple stops a request that
-nobody reads for a while ("stoppedDueToInactivity"). Phase 2 reports that as
-`apple_request_stopped`; the fix is to run the setup script again (it makes a
-new ONGOING request only when the old one is stopped). Until phase 2 the page
-shows "App Store: not connected yet".
+nobody reads for a while ("stoppedDueToInactivity"). The sync reports that as
+`apple_request_stopped`, and after two morning runs in a row an alert task
+"Launch numbers: App Store stopped updating" is opened for you.
+
+The fix, one step at a time with the PM:
+
+1. Follow the Apple setup runbook again from step 1: a fresh temporary
+   **Admin** key (the everyday Sales key can't create requests).
+2. Dry run, then `--go` once. It sees the stopped ONGOING request and creates a
+   new one (it never touches a request that is still running).
+3. Revoke the Admin key and delete its file.
+4. Apple needs a day or two before the new request has reports. The next
+   morning runs after that read them, and the alert task closes itself.
+
+The new ONGOING request doesn't fill in the days missed while the old one was
+stopped; a new ONE_TIME_SNAPSHOT could (ask the PM: the script creates one only
+when none exists yet).
+
+Until the `ASC_*` values are set, the page shows "App Store: not connected
+yet" and no alert is raised.
 
 ## Rolling back
 

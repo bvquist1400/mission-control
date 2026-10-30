@@ -60,7 +60,7 @@ export function healthLine(health: SourceHealth): { text: string; tone: 'success
   const name = sourceName(health.source);
   switch (health.state) {
     case 'not_connected':
-      return { text: `${name}: not connected yet (comes in phase 2)`, tone: 'neutral' };
+      return { text: `${name}: not connected yet (the App Store keys aren't set up)`, tone: 'neutral' };
     case 'not_configured':
       return { text: `${name}: keys not set up yet`, tone: 'neutral' };
     case 'never':

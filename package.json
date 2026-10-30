@@ -30,6 +30,7 @@
     "test:week-board": "node --experimental-strip-types scripts/test-week-board.mjs",
     "test:launch-metrics-apple-setup": "node --test scripts/test-launch-metrics-apple-setup.mjs",
     "test:launch-metrics": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-launch-metrics.mjs",
+    "test:launch-metrics-apple": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-launch-metrics-apple.mjs",
     "test:launch-metrics-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-launch-metrics-db.mjs",
     "launch-metrics:seed": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/launch-metrics/seed-import.mjs",
     "test:mcp-oauth": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-mcp-oauth.mjs",

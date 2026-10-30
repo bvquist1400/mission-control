@@ -640,7 +640,7 @@ await test("sync: a light run skips Search Console", async () => {
   const store = memoryStore();
   const fetchImpl = allSourcesFetch();
   const result = await sync.runLaunchSync(deps(store, fetchImpl), { trigger: "cron", kind: "light" });
-  assert.deepEqual(result.sources, { app_db: "ok", web: "ok", search_console: "skipped", apple: "not_connected" });
+  assert.deepEqual(result.sources, { app_db: "ok", web: "ok", search_console: "skipped", apple: "skipped" });
   assert.ok(!fetchImpl.calls.some((c) => c.url.includes("googleapis.com")));
 });
 
@@ -959,7 +959,9 @@ await test("page: an empty database shows waiting states, not zeros as facts", (
   assert.equal(view.website.hasData, false);
   assert.equal(view.search.hasData, false);
   assert.equal(view.lastRun, null);
-  assert.deepEqual(view.health.map((h) => h.state), ["never", "never", "never", "not_connected"]);
+  assert.deepEqual(view.health.map((h) => h.state), ["never", "never", "never", "never"]);
+  assert.equal(view.appStore.hasData, false);
+  assert.deepEqual(view.appStore.days, []);
 });
 
 await test("page: the website token warning shows from 30 days out", () => {
@@ -1027,7 +1029,7 @@ await test("dates: New York wall-clock ↔ UTC across both DST changes", () => {
 });
 
 await test("words: footer lines per source state; no product copy names an assistant", () => {
-  assert.equal(format.healthLine({ source: "apple", state: "not_connected" }).text, "App Store: not connected yet (comes in phase 2)");
+  assert.equal(format.healthLine({ source: "apple", state: "not_connected" }).text, "App Store: not connected yet (the App Store keys aren't set up)");
   assert.equal(format.healthLine({ source: "web", state: "failing", lastCode: "http_403", lastOkAt: null }).tone, "danger");
   assert.match(format.healthLine({ source: "app_db", state: "fresh", lastOkAt: "2026-10-27T19:15:20Z" }).text, /^App sign-ups: updated Oct 27, 3:15 PM$/);
   assert.equal(format.formatPercent(7 / 104), "6.7%");
@@ -1414,7 +1416,7 @@ await test("tiles: short sentence-case labels that wrap; the status pill sits be
   // The badge is rendered in the number's row.
   assert.match(tile, /\{value\}<\/p>\s*\{badge\}/);
   const labels = [...page.matchAll(/<Tile\s+label="([^"]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(labels, ["Real users", "Not confirmed", "Paying Plus", "Website visitors", "Google search clicks"]);
+  assert.deepEqual(labels, ["Real users", "Not confirmed", "Paying Plus", "App downloads", "Website visitors", "Google search clicks"]);
   for (const label of labels) {
     assert.ok(label.length <= 20, label);
     assert.equal(label[0], label[0].toUpperCase());

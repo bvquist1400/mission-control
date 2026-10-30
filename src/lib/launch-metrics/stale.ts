@@ -2,7 +2,8 @@
  * Stale rules for the Launch page footer and section badges (plan §3.5 item 8).
  * App database and website: stale after 2 hours without a good update (the
  * hourly light run keeps them fresh). Search Console: 36 hours (it runs once a
- * day and Google's data lags). Apple: not connected yet (phase 2).
+ * day and Google's data lags). Apple: 72 hours (once a day, in the full run;
+ * "not connected" while no ASC_* value is set). Light runs skip both.
  */
 
 import { daysBetween } from './dates';
@@ -36,12 +37,9 @@ export function sourceHealth(runs: RunRecord[], now: Date): SourceHealth[] {
     .sort((a, b) => b.started_at.localeCompare(a.started_at));
 
   return LAUNCH_SYNC_SOURCES.map((source) => {
-    if (source === 'apple') {
-      return { source, state: 'not_connected', lastOkAt: null, lastTriedAt: null, lastCode: null };
-    }
     const tried = finished.filter((run) => {
       const code = run.sources[source];
-      return typeof code === 'string' && code !== 'skipped' && code !== 'not_connected';
+      return typeof code === 'string' && code !== 'skipped';
     });
     const last = tried[0] ?? null;
     const lastOk = tried.find((run) => run.sources[source] === 'ok') ?? null;
@@ -52,6 +50,8 @@ export function sourceHealth(runs: RunRecord[], now: Date): SourceHealth[] {
       state = 'never';
     } else if (lastCode === 'not_configured') {
       state = 'not_configured';
+    } else if (lastCode === 'not_connected') {
+      state = 'not_connected';
     } else if (lastCode !== 'ok') {
       state = 'failing';
     } else {

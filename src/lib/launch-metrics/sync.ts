@@ -1,9 +1,9 @@
 /**
- * One launch-metrics sync run (plan §3.4, piece 7).
+ * One launch-metrics sync run (plan §3.4, piece 7; Apple added in phase 2).
  *
- * - full (07:30 ET cron, "Refresh now"): app database + website + Search Console.
- * - light (hourly cron): app database + website only.
- * - Apple is "not connected yet" until phase 2.
+ * - full (07:30 ET cron, "Refresh now"): app database + website + Search Console + Apple.
+ * - light (hourly cron): app database + website only (Search Console and Apple `skipped`).
+ * - Apple without any ASC_* value is `not_connected` (never a crash).
  * Each source runs on its own; one failure never stops the others. The run log
  * always gets a row, with one short code per source and nothing else. Decision
  * 6 alerts are evaluated after the run is recorded.
@@ -12,6 +12,7 @@
 import type { Json } from '@/types/supabase.generated';
 import { appDbDailyRows, fetchAppDbSummary, readAppDbConfig, type AppDbConfig } from './app-db';
 import { evaluateAlerts, type AlertOutcome } from './alerts';
+import { readAppleConfig, syncApple, type AppleConfig } from './apple';
 import { etDate } from './dates';
 import { errorCode, type FetchLike } from './http';
 import { fetchSearchConsoleMetrics, readSearchConsoleConfig, type SearchConsoleConfig } from './search-console';
@@ -23,6 +24,8 @@ export interface LaunchEnv {
   appDb: AppDbConfig | null;
   web: VercelAnalyticsConfig | null;
   searchConsole: SearchConsoleConfig | null;
+  /** null = no ASC_* value set (not connected); otherwise validated at run time. */
+  apple: AppleConfig | null;
   alertProjectId: string | null;
 }
 
@@ -34,6 +37,7 @@ export function readLaunchEnv(env: Record<string, string | undefined>): LaunchEn
     appDb: readAppDbConfig(env),
     web: readVercelAnalyticsConfig(env),
     searchConsole: readSearchConsoleConfig(env),
+    apple: readAppleConfig(env),
     alertProjectId: UUID.test(project) ? project : null,
   };
 }
@@ -94,7 +98,7 @@ export async function runLaunchSync(
     app_db: 'skipped',
     web: 'skipped',
     search_console: 'skipped',
-    apple: 'not_connected',
+    apple: 'skipped',
   };
 
   sources.app_db = env.appDb
@@ -124,6 +128,14 @@ export async function runLaunchSync(
           await store.upsertSnapshot('search_console', result.topLists.until, now.toISOString(), result.topLists as unknown as Json);
         })
       : 'not_configured';
+
+    // Last: it is the slowest, and it stops starting new report files after
+    // its own time budget, so the route finishes inside its 120 seconds.
+    sources.apple = env.apple
+      ? await attempt(async () => {
+          await syncApple(env.apple as AppleConfig, fetchImpl, store, deps.now);
+        })
+      : 'not_connected';
   }
 
   const status = runStatus(sources);

@@ -8,15 +8,15 @@
  * runs at once can't both create it. A later outage reopens the same task.
  *
  * Counted as a run for a source: any finished run that tried it. Runs that
- * skipped it (a light run for Search Console), sources not connected yet
- * (Apple) and sources with no keys set (`not_configured`, shown on the page
- * instead) don't count either way.
+ * skipped it (a light run for Search Console and Apple), Apple with no keys
+ * (`not_connected`) and sources with no keys set (`not_configured`, shown on
+ * the page instead) don't count either way.
  */
 
 import { etDate } from './dates';
 import type { AlertTask, LaunchStore, RunRecord } from './store';
 
-export const ALERTED_SOURCES = ['app_db', 'web', 'search_console'] as const;
+export const ALERTED_SOURCES = ['app_db', 'web', 'search_console', 'apple'] as const;
 export type AlertedSource = (typeof ALERTED_SOURCES)[number];
 
 /** Codes that are not an attempt (no alert, no recovery). */
@@ -32,6 +32,30 @@ export const SOURCE_LABELS: Record<string, string> = {
 const OPEN_STATUSES = new Set(['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting']);
 
 export function plainReason(code: string): string {
+  if (code === 'apple_request_stopped') {
+    return 'Apple stopped the daily report request because its reports went unread for too long; the Apple setup script has to run again';
+  }
+  if (code === 'apple_no_request') {
+    return 'Apple has no daily report request for the app yet; the Apple setup script has to run';
+  }
+  if (code === 'apple_bad_key' || code === 'apple_bad_config') {
+    return 'the App Store key or one of its settings looks wrong';
+  }
+  if (code === 'apple_checksum' || code === 'apple_segment_size') {
+    return "a report file from Apple didn't match its checksum or size, so nothing from it was saved";
+  }
+  if (code === 'apple_tsv_header') {
+    return "Apple's report columns were not the expected ones, so nothing was saved";
+  }
+  if (code === 'apple_segment_host') {
+    return 'a report file was on an unexpected address, so it was not downloaded';
+  }
+  if (code === 'apple_reports_missing') {
+    return "Apple's report list did not include the expected App Store reports";
+  }
+  if (code.startsWith('apple_tsv_') || code === 'apple_gzip' || code === 'apple_too_many_rows' || code === 'apple_too_many_pages' || code === 'apple_segment_too_large') {
+    return 'the reply was not in the expected shape, so nothing was saved';
+  }
   if (code === 'http_401' || code === 'http_403' || code.endsWith('_bad_token')) {
     return 'the key was refused or has expired';
   }
@@ -109,7 +133,7 @@ export function alertTexts(source: string, code: string, now: Date) {
     description: [
       `The Launch page could not update the ${label} numbers on two runs in a row (last tried ${etStamp(now)}).`,
       `Why: ${reason} (code ${code}).`,
-      'What to do: open the Launch page in Baseline, look at "Last update" at the bottom, then follow docs/runbooks/launch-metrics.md for this source (key rotation, token expiry, Search Console access).',
+      'What to do: open the Launch page in Baseline, look at "Last update" at the bottom, then follow docs/runbooks/launch-metrics.md for this source (key rotation, token expiry, Search Console access, Apple request stopped).',
       'This task closes itself with a note when the numbers update again. Only one task is ever open per source.',
     ].join('\n\n'),
     openComment: `Opened automatically: the ${label} update failed on two runs in a row (${etStamp(now)}): ${reason} (code ${code}).`,
