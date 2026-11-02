@@ -191,14 +191,14 @@ function ActivitySection({ activity, weeks, badge }: { activity: ActivityTotalsV
               label="Still using it a week later"
               count={activity.stillUsing}
               of={activity.stillUsingEligible}
-              meaning="households that signed up 7+ days ago used it again in the last 7 days"
+              meaning="households that signed up 7+ days ago used it in the last 7 days"
               noneYet="No household signed up 7+ days ago yet"
             />
             <ShareTile
               label="Used together"
               count={activity.sharedHouseholds}
               of={activity.multiMemberHouseholds}
-              meaning="households with 2+ people had 2+ of them make changes in the last 30 days (checking items off alone isn't seen here)"
+              meaning="households with 2+ people had 2+ of them make changes in the last 30 days (checking items off, checking the pantry, marking a planned meal done and adding a recipe don't record who did them, so they aren't seen here)"
               noneYet="No household has 2+ people yet"
             />
             <ShareTile

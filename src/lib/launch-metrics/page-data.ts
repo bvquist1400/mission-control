@@ -290,7 +290,7 @@ export interface LaunchView {
     topWindow: { since: string; until: string } | null;
   };
   appStore: AppStoreView;
-  /** "Still using it": finished weeks (newest first) under the last 7 days; empty = not available yet. */
+  /** "Still using it": finished weeks (newest first) under the last 7 days up to the tiles' as-of day; empty = not available yet. */
   activity: { weeks: ActivityWeek[] };
   markers: MilestoneMarker[];
   health: SourceHealth[];
@@ -515,9 +515,11 @@ export function buildLaunchView(input: LaunchPageInput, now: Date): LaunchView {
   const lastRunRecord = input.runs[0] ?? null;
   const appStore = buildAppStoreView(input.daily);
 
+  const totals = appDbHasRows(input.daily) ? latestTotals(input.daily) : null;
+
   return {
     today,
-    totals: appDbHasRows(input.daily) ? latestTotals(input.daily) : null,
+    totals,
     signups: { days: signupDays, hasData: input.daily.some((row) => row.source === 'app_db') },
     website: {
       days: webDays,
@@ -543,7 +545,8 @@ export function buildLaunchView(input: LaunchPageInput, now: Date): LaunchView {
       topWindow: input.searchTop && input.searchTop.since ? { since: input.searchTop.since, until: input.searchTop.until } : null,
     },
     appStore,
-    activity: { weeks: activityTrend(input.daily, today) },
+    // The weekly table's top row reads the same as-of day as the tiles.
+    activity: { weeks: activityTrend(input.daily, totals?.asOfDate ?? today) },
     markers: input.milestones.map((milestone) => ({
       date: etDate(new Date(milestone.happened_at)),
       label: milestone.label,

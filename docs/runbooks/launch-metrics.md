@@ -49,12 +49,13 @@ left out, the same as the sign-up numbers.
 - **Still using it a week later**: of the households that signed up 7 or more
   days ago, how many used it in the last 7 days.
 - **Used together**: of the households with 2 or more people, how many had 2
-  or more of them make changes in the last 30 days. Checking items off records
-  no person, so someone who only checks items off isn't seen here.
+  or more of them make changes in the last 30 days. Checking items off,
+  checking the pantry, marking a planned meal done and adding a recipe don't
+  record who did them, so someone who only does those isn't seen here.
 - **Shopped with the list**: real households that checked items off in the
   last 7 days.
 - **By week**: each finished Monday–Sunday week (New York), plus the last 7
-  days on top. Past weeks are counted again on every update, so a deleted
+  days on top (up to the same day as the tiles: the day of the latest update). Past weeks are counted again on every update, so a deleted
   household or deleted list items can lower them a little.
 
 Each number shows as "N of M". A percentage appears only once M is 20 or more.

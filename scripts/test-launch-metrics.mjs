@@ -1306,6 +1306,21 @@ await test("page: the weekly trend reads each finished week's Sunday (Mon–Sun,
   assert.equal(activity.weekStart("2026-11-02"), "2026-11-02");
 });
 
+await test("page: the weekly table's 'Last 7 days' row reads the same as-of day as the tiles, not today", () => {
+  // The last good sync was yesterday (Sun 11/1, ET): nothing is stored for today yet.
+  const summary = appDb.validateAppDbSummary(fixture("app-db-summary-activity.json"), ACT_NOW);
+  const yesterday = appDb.appDbDailyRows({ ...summary, daily: summary.daily.filter((day) => day.date <= "2026-11-01") }, "2026-11-01");
+  const view = pageData.buildLaunchView(activityInput(yesterday), ACT_NOW);
+  assert.equal(view.today, "2026-11-02");
+  assert.equal(view.totals.asOfDate, "2026-11-01");
+  const top = view.activity.weeks[0];
+  assert.deepEqual([top.since, top.until, top.current], ["2026-10-26", "2026-11-01", true]);
+  // Numbers from that day's stored row, never a dash or a 0 for a day with no row.
+  assert.deepEqual([top.activeHouseholds, top.realHouseholds, top.stillUsing, top.stillUsingEligible], [14, 16, 11, 12]);
+  // The finished weeks stop before the as-of day's week.
+  assert.deepEqual(view.activity.weeks.map((week) => week.until), ["2026-11-01", "2026-10-25"]);
+});
+
 await test("words: shares are 'N of M'; a percentage only from 20 households up; a dash when unknown", () => {
   assert.equal(activity.PERCENT_MIN_HOUSEHOLDS, 20);
   assert.equal(activity.formatShare(6, 11), "6 of 11");
@@ -1325,7 +1340,10 @@ await test("page markup: a 'Still using it' section with four N-of-M tiles, a 3-
   for (const label of ["Used it in the last 7 days", "Still using it a week later", "Used together", "Shopped with the list"]) {
     assert.ok(page.includes(`label="${label}"`), label);
   }
-  assert.match(page, /households that signed up 7\+ days ago used it again in the last 7 days/);
+  assert.match(page, /households that signed up 7\+ days ago used it in the last 7 days/);
+  assert.doesNotMatch(page, /used it again/);
+  // The "Used together" caveat names exactly the actions the SQL records no person for.
+  assert.match(page, /checking items off, checking the pantry, marking a planned meal done and adding a recipe don't record who did them, so they aren't seen here/);
   assert.match(page, /head=\{\["Week", "Used it that week", "Still using it a week later"\]\}/);
   assert.match(page, /Not available yet\. These numbers start once the app&apos;s database update for them is live\./);
   // The section sits above the sign-ups, right under the headline tiles.

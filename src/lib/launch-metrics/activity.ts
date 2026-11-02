@@ -9,7 +9,8 @@
  * A week runs Monday to Sunday (New York days). A finished week reads its
  * Sunday row, so "active" is "used it that week" and "still using" is "signed
  * up before that week began and used it that week". The newest row reads
- * today's row: the last 7 days, the same numbers as the tiles.
+ * the as-of day's row (the day of the newest sign-up totals, the same day the
+ * tiles read): the last 7 days up to then, the same numbers as the tiles.
  */
 
 import { addDays, dateRange, LAUNCH_RELEASE_DATE } from './dates';
@@ -22,9 +23,9 @@ export const PERCENT_MIN_HOUSEHOLDS = 20;
 export interface ActivityWeek {
   /** First day shown for the week (its Monday, or the release day for the first week). */
   since: string;
-  /** The day whose row is read: the week's Sunday, or today for the newest row. */
+  /** The day whose row is read: the week's Sunday, or the as-of day for the newest row. */
   until: string;
-  /** true for the newest row: the last 7 days up to today, not a finished week. */
+  /** true for the newest row: the last 7 days up to the as-of day, not a finished week. */
   current: boolean;
   activeHouseholds: number | null;
   realHouseholds: number | null;
@@ -44,10 +45,13 @@ export function weekStart(isoDate: string): string {
 
 /**
  * Finished weeks since launch (newest first), then the last 7 days on top.
+ * `asOfDate` is the day the tiles read (`latestTotals().asOfDate`), so the
+ * top row never reads a day the last sync didn't reach (a dash) while the
+ * tiles show numbers.
  * A week whose row has no stored number shows null ("not available"), never
  * a made-up 0. Empty when no activity number is stored at all.
  */
-export function activityTrend(daily: DailyValue[], today: string): ActivityWeek[] {
+export function activityTrend(daily: DailyValue[], asOfDate: string): ActivityWeek[] {
   const rows = new Map<string, number>();
   for (const row of daily) {
     if (row.source === 'app_db' && row.dimension === '') {
@@ -58,7 +62,7 @@ export function activityTrend(daily: DailyValue[], today: string): ActivityWeek[
   const hasAny = daily.some(
     (row) => row.source === 'app_db' && row.dimension === '' && (row.metric === 'active_households_7d' || row.metric === 'still_using_households')
   );
-  if (!hasAny || today < LAUNCH_RELEASE_DATE) {
+  if (!hasAny || asOfDate < LAUNCH_RELEASE_DATE) {
     return [];
   }
 
@@ -72,15 +76,15 @@ export function activityTrend(daily: DailyValue[], today: string): ActivityWeek[
     stillUsing: read(until, 'still_using_households'),
     stillUsingEligible: read(until, 'still_using_eligible'),
   });
-  for (const monday of dateRange(weekStart(LAUNCH_RELEASE_DATE), today).filter((date) => weekday(date) === 1)) {
+  for (const monday of dateRange(weekStart(LAUNCH_RELEASE_DATE), asOfDate).filter((date) => weekday(date) === 1)) {
     const sunday = addDays(monday, 6);
-    if (sunday >= today) {
+    if (sunday >= asOfDate) {
       break;
     }
     weeks.push(point(monday < LAUNCH_RELEASE_DATE ? LAUNCH_RELEASE_DATE : monday, sunday, false));
   }
-  const lastSeven = addDays(today, -6);
-  weeks.push(point(lastSeven < LAUNCH_RELEASE_DATE ? LAUNCH_RELEASE_DATE : lastSeven, today, true));
+  const lastSeven = addDays(asOfDate, -6);
+  weeks.push(point(lastSeven < LAUNCH_RELEASE_DATE ? LAUNCH_RELEASE_DATE : lastSeven, asOfDate, true));
   return weeks.reverse();
 }
 
