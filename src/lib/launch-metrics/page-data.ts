@@ -6,6 +6,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from '@/types/supabase.generated';
+import { activityTrend, type ActivityWeek } from './activity';
 import { appDbHasRows, latestTotals, type AppDbTotalsView } from './page-totals';
 import { addDays, dateRange, etDate, LAUNCH_RELEASE_DATE, WEBSITE_TRACKING_START_DATE } from './dates';
 import { readRunSources, type RunRecord } from './store';
@@ -289,6 +290,8 @@ export interface LaunchView {
     topWindow: { since: string; until: string } | null;
   };
   appStore: AppStoreView;
+  /** "Still using it": finished weeks (newest first) under the last 7 days; empty = not available yet. */
+  activity: { weeks: ActivityWeek[] };
   markers: MilestoneMarker[];
   health: SourceHealth[];
   lastRun: { started_at: string; status: string; trigger: string; unfinished: boolean } | null;
@@ -540,6 +543,7 @@ export function buildLaunchView(input: LaunchPageInput, now: Date): LaunchView {
       topWindow: input.searchTop && input.searchTop.since ? { since: input.searchTop.since, until: input.searchTop.until } : null,
     },
     appStore,
+    activity: { weeks: activityTrend(input.daily, today) },
     markers: input.milestones.map((milestone) => ({
       date: etDate(new Date(milestone.happened_at)),
       label: milestone.label,

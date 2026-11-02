@@ -7,6 +7,8 @@ import { markerDays, notTrackedSpan } from "@/lib/launch-metrics/chart-model";
 import { appleDataText, appStoreTileLine, formatCount, formatCountOrDash, formatDay, formatEtClock, formatEtTime, formatPercent, formatPosition, healthLine, plural, sourceBadge as sourceBadgeState } from "@/lib/launch-metrics/format";
 import type { LaunchPageInput, LaunchView } from "@/lib/launch-metrics/page-data";
 import { isoToEtLocal } from "@/lib/launch-metrics/dates";
+import { hasActivity, shareParts, type ActivityWeek } from "@/lib/launch-metrics/activity";
+import type { ActivityTotalsView } from "@/lib/launch-metrics/page-totals";
 
 function Section({ id, title, note, badge, children }: { id: string; title: string; note?: string; badge?: ReactNode; children: ReactNode }) {
   return (
@@ -140,6 +142,95 @@ function Table({ caption, head, rows, empty }: { caption: string; head: string[]
   );
 }
 
+/** A table cell "6 of 11", with the percentage on its own small line from 20 households up. */
+function ShareCell({ count, of }: { count: number | null; of: number | null }) {
+  const { text, percent } = shareParts(count, of);
+  return (
+    <span className="inline-flex flex-col items-end">
+      <span>{text}</span>
+      {percent ? <span className="text-xs text-muted-foreground">{percent}</span> : null}
+    </span>
+  );
+}
+
+/** A "still using it" tile: "N of M" big, the plain meaning underneath (percentage first from 20 households up). */
+function ShareTile({ label, count, of, meaning, noneYet }: { label: string; count: number | null; of: number | null; meaning: string; noneYet: string }) {
+  const { text, percent } = shareParts(count, of);
+  const sub = count === null || of === null ? "Not available yet" : of === 0 ? noneYet : percent ? `${percent} · ${meaning}` : meaning;
+  return <Tile label={label} value={of === 0 ? "–" : text} sub={sub} />;
+}
+
+function weekLabel(week: ActivityWeek): string {
+  // A day never breaks inside itself ("Oct 26" stays on one line); the range may wrap at the dash.
+  const day = (date: string) => formatDay(date).replace(" ", "\u00a0");
+  return week.current ? "Last 7 days" : `${day(week.since)} – ${day(week.until)}`;
+}
+
+function ActivitySection({ activity, weeks, badge }: { activity: ActivityTotalsView | null; weeks: ActivityWeek[]; badge: ReactNode }) {
+  const known =
+    activity !== null &&
+    hasActivity([activity.activeHouseholds, activity.stillUsing, activity.stillUsingEligible, activity.sharedHouseholds, activity.multiMemberHouseholds, activity.shoppingHouseholds]);
+  return (
+    <Section
+      id="activity"
+      title="Still using it"
+      note={'Households, not people, and only real ones: family and test accounts are left out. "Used it" means someone in the household added or checked off a grocery item, added to or checked the pantry, put shopping away, planned or cooked a meal, or added a recipe. New York days.'}
+      badge={badge}
+    >
+      {known && activity ? (
+        <>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <ShareTile
+              label="Used it in the last 7 days"
+              count={activity.activeHouseholds}
+              of={activity.realHouseholds}
+              meaning="real households used it in the last 7 days"
+              noneYet="No real households yet"
+            />
+            <ShareTile
+              label="Still using it a week later"
+              count={activity.stillUsing}
+              of={activity.stillUsingEligible}
+              meaning="households that signed up 7+ days ago used it again in the last 7 days"
+              noneYet="No household signed up 7+ days ago yet"
+            />
+            <ShareTile
+              label="Used together"
+              count={activity.sharedHouseholds}
+              of={activity.multiMemberHouseholds}
+              meaning="households with 2+ people had 2+ of them make changes in the last 30 days (checking items off alone isn't seen here)"
+              noneYet="No household has 2+ people yet"
+            />
+            <ShareTile
+              label="Shopped with the list"
+              count={activity.shoppingHouseholds}
+              of={activity.realHouseholds}
+              meaning="real households checked items off their list in the last 7 days"
+              noneYet="No real households yet"
+            />
+          </div>
+          <h3 className="mb-2 mt-6 text-sm font-semibold text-foreground">By week</h3>
+          <Table
+            caption="Still using it, by week"
+            head={["Week", "Used it that week", "Still using it a week later"]}
+            rows={weeks.map((week) => [
+              weekLabel(week),
+              <ShareCell key="active" count={week.activeHouseholds} of={week.realHouseholds} />,
+              <ShareCell key="still" count={week.stillUsing} of={week.stillUsingEligible} />,
+            ])}
+            empty="No weeks yet."
+          />
+          <p className="mt-2 text-xs text-muted-foreground">
+            Weeks run Monday to Sunday. In a week, &quot;still using it&quot; counts the households that signed up before that week began and used it during the week. The top row is the last 7 days, the same as the tiles. Past weeks are counted again on every update, so a household or list items deleted later can lower them a little.
+          </p>
+        </>
+      ) : (
+        <p className="text-sm text-muted-foreground">Not available yet. These numbers start once the app&apos;s database update for them is live.</p>
+      )}
+    </Section>
+  );
+}
+
 function rangeText(dates: string[]): string {
   return dates.length ? `${formatDay(dates[0])} to ${formatDay(dates[dates.length - 1])}` : "no days yet";
 }
@@ -265,6 +356,8 @@ export function LaunchPageBody({ view, input, now }: { view: LaunchView; input: 
           {totals.plusAsOfDate !== totals.asOfDate ? `; Plus as of ${formatDay(totals.plusAsOfDate)}` : ""}. Plus is counted by household.
         </p>
       ) : null}
+
+      <ActivitySection activity={totals?.activity ?? null} weeks={view.activity.weeks} badge={sourceBadge(view, "app_db")} />
 
       <Section id="signups" title="Sign-ups since launch" note="New York days. Unconfirmed email sign-ups are shown separately. Accounts deleted later still count on the day they signed up." badge={sourceBadge(view, "app_db")}>
         {view.signups.hasData ? (

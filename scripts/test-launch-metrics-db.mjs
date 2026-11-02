@@ -382,6 +382,38 @@ await test("loader: the page reads only this user's rows and builds the counts-o
   assert.deepEqual([asOther.daily.length, asOther.runs.length], [0, 0], "RLS: another user reading Brent's id sees nothing");
 });
 
+await test("activity: a run with the household activity reply stores every count, and the page reads N of M and the weekly trend", async () => {
+  external.appDb = () =>
+    new Response(JSON.stringify(fixture("app-db-summary-activity.json")), { status: 200, headers: { "content-type": "application/json" } });
+  try {
+    const response = await cronGet({ authorization: `Bearer ${CRON_SECRET}` }, "light");
+    assert.equal((await response.json()).sources.app_db, "ok");
+    const { data: rows, error } = await admin
+      .from("launch_metric_daily")
+      .select("metric, metric_date, value")
+      .eq("user_id", brent.id)
+      .eq("source", "app_db")
+      .in("metric", ["active_households_7d", "still_using_households", "real_households_to_date", "still_using_eligible", "total_still_using_households", "total_shared_households_30d"]);
+    assert.equal(error, null);
+    const at = (metric, date) => Number(rows.find((row) => row.metric === metric && row.metric_date === date)?.value);
+    assert.equal(at("active_households_7d", "2026-11-01"), 14);
+    assert.equal(at("real_households_to_date", "2026-11-01"), 16);
+    assert.equal(rows.filter((row) => row.metric === "total_still_using_households").length >= 1, true);
+    const { loadLaunchPageInput, buildLaunchView } = await import("../src/lib/launch-metrics/page-data.ts");
+    const view = buildLaunchView(await loadLaunchPageInput(admin, brent.id, null), new Date("2026-11-02T21:00:00Z"));
+    assert.deepEqual(view.totals.activity, {
+      activeHouseholds: 13, realHouseholds: 16, stillUsing: 11, stillUsingEligible: 13,
+      sharedHouseholds: 2, multiMemberHouseholds: 5, shoppingHouseholds: 3,
+    });
+    const week = view.activity.weeks.find((entry) => entry.until === "2026-11-01");
+    assert.deepEqual([week.activeHouseholds, week.realHouseholds, week.stillUsing, week.stillUsingEligible], [14, 16, 11, 12]);
+    const { data: snaps } = await admin.from("launch_source_snapshots").select("payload").eq("user_id", brent.id).eq("source", "app_db");
+    assert.ok(!JSON.stringify(snaps).match(/[0-9a-f]{8}-[0-9a-f]{4}|@/), "the stored snapshot holds counts and dates only");
+  } finally {
+    external.appDb = null;
+  }
+});
+
 globalThis.fetch = realFetch;
 await admin.from("tasks").delete().eq("user_id", brent.id).eq("external_source_system", "launch_metrics");
 

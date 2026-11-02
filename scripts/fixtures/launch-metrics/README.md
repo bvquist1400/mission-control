@@ -16,6 +16,13 @@ Shapes, not recordings: no live call was made to build these (phase 1 rule).
   `validateSummary()` (supabase/functions/_shared/launch-metrics-core.ts) and the
   200 body was saved as is. Counts are synthetic (2 real Apple users, 1 unconfirmed,
   2 family, 1 deleted on 10-25, Plus trial 1 / comp 3). No account id of any kind.
+- `app-db-summary-activity.json`: the REAL 200 body of the Grocery `launch-metrics`
+  function with the household activity keys (Grocery branch claude/retention-metrics,
+  migration 20261102120000), fetched from `supabase functions serve` on the LOCAL
+  pantry-local stack (a random local token; no hosted call) on 2026-11-02, with the
+  pgTAP fixture households of `launch_metrics_retention.test.sql` loaded (synthetic
+  `@example.test` accounts only). Pretty-printed; values and key order as sent.
+  Counts and dates only.
 - `gsc-*.json`: Google's documented `token` and `searchAnalytics.query` replies.
 - `apple/*.tsv`: App Store report files built by hand from Apple's documented
   report fields (developer.apple.com Analytics Reports, "App Store Discovery and

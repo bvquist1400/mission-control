@@ -37,6 +37,35 @@ task for you named "Launch numbers: <source> stopped updating". It never makes a
 second task for the same source; it closes itself with a note when the numbers
 update again, and the same task reopens if the source breaks again later.
 
+## "Still using it" (household activity)
+
+The section under the headline tiles shows whether real households keep using
+the app. Households, not people; counts only; family and test accounts are
+left out, the same as the sign-up numbers.
+
+- **Used it in the last 7 days**: real households where someone added or
+  checked off a grocery item, added to or checked the pantry, put shopping
+  away, planned or cooked a meal, or added a recipe.
+- **Still using it a week later**: of the households that signed up 7 or more
+  days ago, how many used it in the last 7 days.
+- **Used together**: of the households with 2 or more people, how many had 2
+  or more of them make changes in the last 30 days. Checking items off records
+  no person, so someone who only checks items off isn't seen here.
+- **Shopped with the list**: real households that checked items off in the
+  last 7 days.
+- **By week**: each finished Monday–Sunday week (New York), plus the last 7
+  days on top. Past weeks are counted again on every update, so a deleted
+  household or deleted list items can lower them a little.
+
+Each number shows as "N of M". A percentage appears only once M is 20 or more.
+The exact definitions are at the top of the Grocery migration
+`supabase/migrations/20261102120000_launch_metrics_retention.sql`.
+
+**Ship order doesn't matter.** The Grocery function sends these numbers as
+extra counts (schema_version stays 1). An older Baseline ignores them; this
+Baseline shows "Not available yet" until the Grocery migration and function
+are live. Nothing to set up in Baseline (no migration, no new env value).
+
 ## Codes you may see
 
 | Code | Meaning | What to do |

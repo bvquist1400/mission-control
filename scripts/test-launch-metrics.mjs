@@ -143,9 +143,13 @@ await test("app db: the REAL Grocery reply (schema_version 1) validates and ever
 });
 
 await test("app db: the contract key lists match the Grocery contract exactly", () => {
-  const raw = fixture("app-db-summary.json");
+  // The newest Grocery reply (with the household activity keys of migration 20261102120000).
+  const raw = fixture("app-db-summary-activity.json");
   assert.deepEqual([...appDb.APP_DB_TOTAL_REQUIRED, ...appDb.APP_DB_TOTAL_OPTIONAL].sort(), Object.keys(raw.totals).sort());
   assert.deepEqual([...appDb.APP_DB_DAILY_REQUIRED, ...appDb.APP_DB_DAILY_OPTIONAL].sort(), Object.keys(raw.daily[0]).filter((k) => k !== "date").sort());
+  // The older reply's keys are all still accepted (the function before that migration).
+  const older = fixture("app-db-summary.json");
+  for (const key of Object.keys(older.totals)) assert.ok([...appDb.APP_DB_TOTAL_REQUIRED, ...appDb.APP_DB_TOTAL_OPTIONAL].includes(key), key);
 });
 
 await test("app db: an accounts list, an id, an email or a name anywhere refuses the whole reply", () => {
@@ -1189,6 +1193,158 @@ await test("page: Plus says its own as-of day when it differs from the sign-up t
   assert.deepEqual([seeded.totals.asOfDate, seeded.totals.plusAsOfDate], ["2026-10-26", "2026-10-27"]);
   const live = pageData.buildLaunchView(pageInput(), NOW);
   assert.equal(live.totals.plusAsOfDate, live.totals.asOfDate);
+});
+
+// ─── "still using it": household activity (Grocery migration 20261102120000) ─
+
+const activity = await import("../src/lib/launch-metrics/activity.ts");
+const ACT_NOW = new Date("2026-11-02T21:00:00Z"); // 4 PM ET Mon 11/2 (the fixture's day)
+const ACTIVITY_TOTAL_KEYS = ["active_households_7d", "still_using_eligible", "still_using_households", "multi_member_households", "shared_households_30d", "shopping_households_7d"];
+const ACTIVITY_DAILY_KEYS = ["real_households_to_date", "active_households_7d", "still_using_eligible", "still_using_households"];
+
+function activityInput(rows) {
+  return { ...pageInput(), daily: rows, runs: [], milestones: [] };
+}
+
+await test("app db: the REAL reply with household activity validates, and every activity count is kept and stored", () => {
+  const summary = appDb.validateAppDbSummary(fixture("app-db-summary-activity.json"), ACT_NOW);
+  assert.equal(summary.schema_version, 1);
+  assert.deepEqual(
+    Object.fromEntries(ACTIVITY_TOTAL_KEYS.map((key) => [key, summary.totals[key]])),
+    { active_households_7d: 13, still_using_eligible: 13, still_using_households: 11, multi_member_households: 5, shared_households_30d: 2, shopping_households_7d: 3 }
+  );
+  const nov1 = summary.daily.find((day) => day.date === "2026-11-01");
+  assert.deepEqual(ACTIVITY_DAILY_KEYS.map((key) => nov1[key]), [16, 14, 12, 11]);
+  const rows = appDb.appDbDailyRows(summary, "2026-11-02");
+  const value = (date, metric) => rows.find((row) => row.metric_date === date && row.metric === metric)?.value;
+  for (const key of ACTIVITY_TOTAL_KEYS) assert.equal(value("2026-11-02", `total_${key}`), summary.totals[key], key);
+  assert.equal(value("2026-10-25", "active_households_7d"), 3);
+  assert.equal(value("2026-11-01", "still_using_households"), 11);
+  assert.equal(rows.filter((row) => row.metric === "real_households_to_date").length, summary.daily.length);
+  // Every stored name passes migration 065's CHECK on launch_metric_daily.metric.
+  for (const row of rows) assert.match(row.metric, /^[a-z][a-z0-9_]{0,59}$/, row.metric);
+});
+
+await test("app db: an older reply without activity keys still validates and stores no activity row", () => {
+  const summary = appDb.validateAppDbSummary(fixture("app-db-summary.json"), NOW);
+  for (const key of ACTIVITY_TOTAL_KEYS) assert.equal(key in summary.totals, false, key);
+  const rows = appDb.appDbDailyRows(summary, "2026-10-27");
+  assert.equal(rows.some((row) => [...ACTIVITY_DAILY_KEYS, ...ACTIVITY_TOTAL_KEYS.map((key) => `total_${key}`)].includes(row.metric)), false);
+});
+
+await test("app db: an activity count that is negative, fractional or text is refused (nothing saved)", () => {
+  const base = fixture("app-db-summary-activity.json");
+  for (const bad of [-1, 1.5, "6", "5ee0000e-0000-4000-8000-000000000000", [1], { n: 1 }]) {
+    assert.throws(
+      () => appDb.validateAppDbSummary({ ...base, totals: { ...base.totals, still_using_households: bad } }, ACT_NOW),
+      (error) => ["app_db_shape", "app_db_not_counts"].includes(error.code),
+      JSON.stringify(bad)
+    );
+    assert.throws(
+      () => appDb.validateAppDbSummary({ ...base, daily: [{ ...base.daily[3], active_households_7d: bad }] }, ACT_NOW),
+      (error) => ["app_db_shape", "app_db_not_counts"].includes(error.code),
+      JSON.stringify(bad)
+    );
+  }
+});
+
+await test("page: still using it shows N of M from the as-of day", () => {
+  const summary = appDb.validateAppDbSummary(fixture("app-db-summary-activity.json"), ACT_NOW);
+  const view = pageData.buildLaunchView(activityInput(appDb.appDbDailyRows(summary, "2026-11-02")), ACT_NOW);
+  assert.deepEqual(view.totals.activity, {
+    activeHouseholds: 13,
+    realHouseholds: 16,
+    stillUsing: 11,
+    stillUsingEligible: 13,
+    sharedHouseholds: 2,
+    multiMemberHouseholds: 5,
+    shoppingHouseholds: 3,
+  });
+  assert.equal(activity.formatShare(view.totals.activity.stillUsing, view.totals.activity.stillUsingEligible), "11 of 13");
+});
+
+await test("page: with an older Grocery function every activity number is unknown (not available yet), never 0", () => {
+  const view = pageData.buildLaunchView(pageInput(), NOW);
+  const { realHouseholds, ...activityOnly } = view.totals.activity;
+  assert.equal(realHouseholds, 2, "the denominator is the ordinary real-households total");
+  assert.deepEqual(Object.values(activityOnly), [null, null, null, null, null, null]);
+  assert.deepEqual(view.activity.weeks, []);
+});
+
+await test("page: an activity total from an older day than the sign-up totals is not shown (a function rolled back)", () => {
+  const withActivity = appDb.validateAppDbSummary(fixture("app-db-summary-activity.json"), ACT_NOW);
+  const older = appDb.appDbDailyRows(withActivity, "2026-11-01").filter((row) => row.metric.startsWith("total_"));
+  const { totals } = withActivity;
+  const plain = { ...withActivity, totals: Object.fromEntries(Object.entries(totals).filter(([key]) => !ACTIVITY_TOTAL_KEYS.includes(key))), daily: [] };
+  const today = appDb.appDbDailyRows(plain, "2026-11-02");
+  const view = pageData.buildLaunchView(activityInput([...older, ...today]), ACT_NOW);
+  assert.equal(view.totals.asOfDate, "2026-11-02");
+  const { realHouseholds, ...activityOnly } = view.totals.activity;
+  assert.equal(realHouseholds, 16);
+  assert.deepEqual(Object.values(activityOnly), [null, null, null, null, null, null]);
+});
+
+await test("page: the weekly trend reads each finished week's Sunday (Mon–Sun, from launch) and today for the last 7 days", () => {
+  const summary = appDb.validateAppDbSummary(fixture("app-db-summary-activity.json"), ACT_NOW);
+  const view = pageData.buildLaunchView(activityInput(appDb.appDbDailyRows(summary, "2026-11-02")), ACT_NOW);
+  assert.deepEqual(view.activity.weeks, [
+    { since: "2026-10-27", until: "2026-11-02", current: true, activeHouseholds: 13, realHouseholds: 16, stillUsing: 11, stillUsingEligible: 13 },
+    { since: "2026-10-26", until: "2026-11-01", current: false, activeHouseholds: 14, realHouseholds: 16, stillUsing: 11, stillUsingEligible: 12 },
+    { since: "2026-10-21", until: "2026-10-25", current: false, activeHouseholds: 3, realHouseholds: 12, stillUsing: 0, stillUsingEligible: 0 },
+  ]);
+  // A week whose Sunday row is missing shows unknown (a dash), never 0.
+  const gap = appDb.appDbDailyRows(summary, "2026-11-02").filter((row) => !(row.metric_date === "2026-10-25" && ACTIVITY_DAILY_KEYS.includes(row.metric)));
+  const week = pageData.buildLaunchView(activityInput(gap), ACT_NOW).activity.weeks.at(-1);
+  assert.deepEqual([week.activeHouseholds, week.realHouseholds, week.stillUsing, week.stillUsingEligible], [null, null, null, null]);
+  // On a Sunday the week isn't finished yet: the top row is the last 7 days (= that week).
+  const sunday = activity.activityTrend(appDb.appDbDailyRows(summary, "2026-11-02"), "2026-11-01");
+  assert.deepEqual(sunday.map((w) => [w.since, w.until, w.current]), [["2026-10-26", "2026-11-01", true], ["2026-10-21", "2026-10-25", false]]);
+  // Launch week itself: only the last-7-days row, starting on the release day.
+  assert.deepEqual(activity.activityTrend(appDb.appDbDailyRows(summary, "2026-11-02"), "2026-10-23").map((w) => [w.since, w.until, w.current]), [["2026-10-21", "2026-10-23", true]]);
+  assert.equal(activity.weekStart("2026-10-21"), "2026-10-19");
+  assert.equal(activity.weekStart("2026-11-01"), "2026-10-26");
+  assert.equal(activity.weekStart("2026-11-02"), "2026-11-02");
+});
+
+await test("words: shares are 'N of M'; a percentage only from 20 households up; a dash when unknown", () => {
+  assert.equal(activity.PERCENT_MIN_HOUSEHOLDS, 20);
+  assert.equal(activity.formatShare(6, 11), "6 of 11");
+  assert.equal(activity.formatShare(19, 19), "19 of 19");
+  assert.equal(activity.formatShare(13, 20), "13 of 20 (65%)");
+  assert.equal(activity.formatShare(1200, 2000), "1,200 of 2,000 (60%)");
+  assert.equal(activity.formatShare(0, 0), "0 of 0");
+  assert.equal(activity.formatShare(null, 11), "–");
+  assert.equal(activity.formatShare(3, null), "–");
+  assert.deepEqual(activity.shareParts(6, 11), { text: "6 of 11", percent: null });
+  assert.deepEqual(activity.shareParts(13, 20), { text: "13 of 20", percent: "65%" });
+});
+
+await test("page markup: a 'Still using it' section with four N-of-M tiles, a 3-column weekly table and a not-available state", () => {
+  const page = launchSource("LaunchPage.tsx");
+  assert.match(page, /title="Still using it"/);
+  for (const label of ["Used it in the last 7 days", "Still using it a week later", "Used together", "Shopped with the list"]) {
+    assert.ok(page.includes(`label="${label}"`), label);
+  }
+  assert.match(page, /households that signed up 7\+ days ago used it again in the last 7 days/);
+  assert.match(page, /head=\{\["Week", "Used it that week", "Still using it a week later"\]\}/);
+  assert.match(page, /Not available yet\. These numbers start once the app&apos;s database update for them is live\./);
+  // The section sits above the sign-ups, right under the headline tiles.
+  assert.ok(page.indexOf("<ActivitySection") < page.indexOf('<Section id="signups"'));
+  // No percentage is built in the component itself: shareParts decides (20+ households only).
+  const section = page.slice(page.indexOf("function ShareCell"), page.indexOf("function rangeText"));
+  assert.doesNotMatch(section, /\* 100|toFixed|Math\.round/);
+});
+
+await test("page: the activity part of the page model carries counts only", () => {
+  const summary = appDb.validateAppDbSummary(fixture("app-db-summary-activity.json"), ACT_NOW);
+  const view = pageData.buildLaunchView(activityInput(appDb.appDbDailyRows(summary, "2026-11-02")), ACT_NOW);
+  const text = JSON.stringify({ totals: view.totals.activity, weeks: view.activity.weeks });
+  assert.doesNotMatch(text, /@|[0-9a-f]{8}-[0-9a-f]{4}|secret|household_id|user_id/i);
+  for (const week of view.activity.weeks) {
+    for (const [key, value] of Object.entries(week)) {
+      if (!["since", "until", "current"].includes(key)) assert.ok(value === null || Number.isInteger(value), key);
+    }
+  }
 });
 
 await test("words: Reddit stats use singular and plural correctly", () => {

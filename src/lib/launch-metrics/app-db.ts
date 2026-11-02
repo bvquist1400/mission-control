@@ -32,6 +32,17 @@
  *   signups_family, signups_internal (kept when sent) }]. `signups_real`
  *   includes `signups_deleted` (deleted accounts keep counting on their
  *   sign-up day, decision Q2).
+ * - Household activity ("still using it", Grocery migration 20261102120000;
+ *   definitions at the top of that migration and in the Grocery handoff).
+ *   Optional, so this side works against the function before and after that
+ *   migration: an older function simply doesn't send them, and the page then
+ *   says "not available yet". schema_version stays 1. All are households:
+ *   `totals`: active_households_7d, still_using_eligible,
+ *   still_using_households, multi_member_households, shared_households_30d,
+ *   shopping_households_7d. `daily` (the same rolling counts as of the end of
+ *   that ET day, for the weekly trend): real_households_to_date,
+ *   active_households_7d, still_using_eligible, still_using_households.
+ *   Older Baseline builds drop these keys (unknown numeric keys are dropped).
  */
 
 import { addDays, etDate, isIsoDate } from './dates';
@@ -39,6 +50,18 @@ import { fetchJson, isPlainObject, LaunchSourceError, type FetchLike } from './h
 import type { DailyMetricInput } from './types';
 
 export const APP_DB_SCHEMA_VERSION = 1;
+
+/** Household activity totals (all households; optional, see the contract above). */
+export const APP_DB_ACTIVITY_TOTALS = [
+  'active_households_7d',
+  'still_using_eligible',
+  'still_using_households',
+  'multi_member_households',
+  'shared_households_30d',
+  'shopping_households_7d',
+] as const;
+/** Per ET day, the rolling household activity counts as of that day (optional). */
+export const APP_DB_ACTIVITY_DAILY = ['real_households_to_date', 'active_households_7d', 'still_using_eligible', 'still_using_households'] as const;
 
 export const APP_DB_TOTAL_REQUIRED = [
   'real_users',
@@ -57,9 +80,18 @@ export const APP_DB_TOTAL_OPTIONAL = [
   'real_households_joined',
   'real_households_none',
   'real_households',
+  // Household activity (Grocery migration 20261102120000).
+  ...APP_DB_ACTIVITY_TOTALS,
 ] as const;
 export const APP_DB_DAILY_REQUIRED = ['signups_real', 'signups_apple', 'signups_email'] as const;
-export const APP_DB_DAILY_OPTIONAL = ['signups_deleted', 'signups_unconfirmed', 'signups_family', 'signups_internal'] as const;
+export const APP_DB_DAILY_OPTIONAL = [
+  'signups_deleted',
+  'signups_unconfirmed',
+  'signups_family',
+  'signups_internal',
+  // Household activity (Grocery migration 20261102120000).
+  ...APP_DB_ACTIVITY_DAILY,
+] as const;
 
 type TotalKey = (typeof APP_DB_TOTAL_REQUIRED)[number] | (typeof APP_DB_TOTAL_OPTIONAL)[number];
 type DailyKey = (typeof APP_DB_DAILY_REQUIRED)[number] | (typeof APP_DB_DAILY_OPTIONAL)[number];
