@@ -384,7 +384,12 @@ function buildRecentlyUnblockedContract(
     return hoursAgo !== null && hoursAgo <= RECENTLY_UNBLOCKED_WINDOW_HOURS;
   });
 
-  if (!exitTransition) {
+  // A finished blocker unblocks a task whatever its status was: a pill lands on
+  // Backlog, Planned and In Progress tasks too, and those never leave Waiting.
+  // A link removed by hand still needs the Waiting exit.
+  const finishedBlocker = recentlyResolvedDeps.find((dependency) => dependency.from_unblock);
+  const unblockedAt = exitTransition?.transitioned_at ?? finishedBlocker?.resolved_at;
+  if (!unblockedAt) {
     return null;
   }
 
@@ -399,7 +404,7 @@ function buildRecentlyUnblockedContract(
     return null;
   }
 
-  const exitMs = parseIso(exitTransition.transitioned_at);
+  const exitMs = exitTransition ? parseIso(exitTransition.transitioned_at) : null;
   const blockedEntryTransition =
     exitMs === null
       ? null
@@ -412,9 +417,12 @@ function buildRecentlyUnblockedContract(
           return transitionMs !== null && transitionMs <= exitMs;
         }) ?? null;
   const hoursBlocked = blockedEntryTransition
-    ? hoursBetween(blockedEntryTransition.transitioned_at, exitTransition.transitioned_at)
+    ? hoursBetween(blockedEntryTransition.transitioned_at, unblockedAt)
     : null;
-  const hoursSinceUnblocked = hoursSince(now, exitTransition.transitioned_at) ?? 0;
+  const hoursSinceUnblocked = hoursSince(now, unblockedAt) ?? 0;
+  const unblockEvent = exitTransition
+    ? `The task left Blocked/Waiting ${hoursSinceUnblocked} hour${hoursSinceUnblocked === 1 ? "" : "s"} ago.`
+    : `Everything the task waited on was finished ${hoursSinceUnblocked} hour${hoursSinceUnblocked === 1 ? "" : "s"} ago.`;
   const overdue = isOverdue(context.task.due_at, now);
   const severity = highestSeverity(
     overdue ? "high" : "medium",
@@ -425,9 +433,9 @@ function buildRecentlyUnblockedContract(
     {
       code: "recent_unblock_transition",
       kind: "task",
-      summary: `The task left Blocked/Waiting ${hoursSinceUnblocked} hour${hoursSinceUnblocked === 1 ? "" : "s"} ago.`,
+      summary: unblockEvent,
       relatedId: context.task.id,
-      recordedAt: exitTransition.transitioned_at,
+      recordedAt: unblockedAt,
     },
     {
       code: "current_task_state",
@@ -450,7 +458,9 @@ function buildRecentlyUnblockedContract(
     promotionFamilyKey: `recently_unblocked|unblocked:${context.task.id}`,
     detectedAt: now.toISOString(),
     summary: `${context.task.title} was recently unblocked.`,
-    reason: hoursBlocked === null
+    reason: !exitTransition
+      ? `Everything the task waited on was finished ${hoursSinceUnblocked} hours ago.`
+      : hoursBlocked === null
       ? `A dependency cleared and the task left Blocked/Waiting ${hoursSinceUnblocked} hours ago.`
       : `A dependency cleared and the task left Blocked/Waiting ${hoursSinceUnblocked} hours ago after roughly ${hoursBlocked} blocked hours.`,
     severity,
@@ -461,7 +471,7 @@ function buildRecentlyUnblockedContract(
       currentStatus: context.task.status,
     },
     metrics: {
-      unblockedAt: exitTransition.transitioned_at,
+      unblockedAt,
       hoursBlocked,
       recommendedActionWindow: "within 24 hours",
     },

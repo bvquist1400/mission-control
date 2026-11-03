@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getDateOnlyInTimeZone, getDateOnlyWeekday, addDateOnlyDays } from '@/lib/date-only';
 import { buildRecurringDueAt } from '@/lib/recurrence';
+import { fetchAllPages } from '@/lib/task-dependency-links';
 import type {
   RecentlyResolvedTaskDependencySummary,
   TaskStatus,
@@ -24,6 +25,9 @@ export const UNBLOCK_TIME_ZONE = 'America/New_York';
 export const NOW_UNBLOCKED_LABEL = 'Now unblocked';
 /** Reopening a blocker puts the unblock back only within this many days (067 rule 6). */
 export const UNBLOCK_UNDO_DAYS = 7;
+
+/** 067's task_unblock_run_retries gives up at this many attempts; the record stays open (S3's "stuck" count). */
+export const UNBLOCK_RETRY_MAX_ATTEMPTS = 8;
 
 /** Statuses an unblock touches and the pill shows on (067 rule 2). */
 export const UNBLOCK_OPEN_STATUSES: ReadonlyArray<TaskStatus> = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting'];
@@ -161,8 +165,10 @@ type RecentUnblockRow = Pick<
  * Recent unblocks (not reverted, unblocked at or after `sinceIso`) as the
  * "recently resolved dependency" summaries the intelligence layer's
  * recently_unblocked detector reads: a finished blocker clears a dependency just
- * like a removed link does. One per unblock, the blocker named by its title
- * (this read is the app's own, never FamCal's).
+ * like a removed link does. One per unblock, newest first, the blocker named by
+ * its title (this read is the app's own, never FamCal's), marked `from_unblock`
+ * because a pill can land on a task that was never Waiting. Each chunk is paged on
+ * the row id until an empty page, so PostgREST's row cap can't truncate it.
  */
 export async function fetchRecentUnblockDependencySummaries(
   supabase: SupabaseClient,
@@ -177,19 +183,22 @@ export async function fetchRecentUnblockDependencySummaries(
   const rows: RecentUnblockRow[] = [];
   for (let index = 0; index < unique.length; index += ID_CHUNK_SIZE) {
     const chunk = unique.slice(index, index + ID_CHUNK_SIZE);
-    const { data, error } = await supabase
-      .from('task_unblocks')
-      .select(UNBLOCK_ROW_SELECT)
-      .eq('user_id', userId)
-      .in('task_id', chunk)
-      .is('reverted_at', null)
-      .gte('unblocked_at', sinceIso)
-      .order('unblocked_at', { ascending: false })
-      .limit(1000);
-    if (error) throw error;
-    rows.push(...((data || []) as RecentUnblockRow[]));
+    rows.push(
+      ...(await fetchAllPages<RecentUnblockRow>((afterId, limit) => {
+        let query = supabase
+          .from('task_unblocks')
+          .select(UNBLOCK_ROW_SELECT)
+          .eq('user_id', userId)
+          .in('task_id', chunk)
+          .is('reverted_at', null)
+          .gte('unblocked_at', sinceIso);
+        if (afterId) query = query.gt('id', afterId);
+        return query.order('id', { ascending: true }).limit(limit);
+      }))
+    );
   }
   if (rows.length === 0) return byTaskId;
+  rows.sort((a, b) => Date.parse(b.unblocked_at) - Date.parse(a.unblocked_at));
 
   const blockerTaskIds = [...new Set(rows.map((row) => row.blocker_task_id).filter((id): id is string => Boolean(id)))];
   const blockerCommitmentIds = [
@@ -224,6 +233,7 @@ export async function fetchRecentUnblockDependencySummaries(
       status: (blocker?.status ?? 'Done') as RecentlyResolvedTaskDependencySummary['status'],
       resolved_at: row.unblocked_at,
       created_at: row.created_at,
+      from_unblock: true,
     } satisfies RecentlyResolvedTaskDependencySummary;
     const list = byTaskId.get(row.task_id) ?? [];
     list.push(summary);

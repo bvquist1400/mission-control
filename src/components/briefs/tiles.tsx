@@ -36,6 +36,7 @@ export function HeroTile({
   stats,
   wide,
   prepCount = 0,
+  refreshLine = null,
 }: {
   code: string;
   heading: string;
@@ -45,6 +46,8 @@ export function HeroTile({
   wide: boolean;
   /** Upcoming meetings with tasks preparing for them. */
   prepCount?: number;
+  /** "Refreshed 8:45 AM: AM work digest added" when the brief was rebuilt in place. */
+  refreshLine?: string | null;
 }) {
   const decided = counts.total - counts.open;
   const pct = counts.total ? (decided / counts.total) * 100 : 100;
@@ -57,6 +60,7 @@ export function HeroTile({
             {heading} · saved {etTime(savedAt)}
           </span>
         </div>
+        {refreshLine ? <p className="refreshed">{refreshLine}</p> : null}
         <h1>
           {counts.open ? (
             <>

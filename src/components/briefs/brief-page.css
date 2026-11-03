@@ -925,6 +925,42 @@
   font-weight: 500;
 }
 
+/* Recently unblocked */
+.brief-page .ub-pill {
+  color: var(--ok);
+  background: var(--ok-soft);
+  border-radius: 999px;
+  padding: 0 8px;
+  font-weight: 600;
+}
+.brief-page .ub-stuck {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.brief-page .refreshed {
+  margin: 6px 0 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.brief-page .late-digest {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+
 /* recap */
 .brief-page .narr {
   margin: 0;

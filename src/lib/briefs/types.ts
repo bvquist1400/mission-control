@@ -3,6 +3,7 @@
 // reruns and so Accept can use the key as the created task's external id.
 
 import type { AcceptDueChoice } from "@/lib/briefs/due";
+import type { SaveWarning } from "@/lib/briefs/text-cut";
 
 /** "eod" = end of day (EOD-MMDD), "am" = morning (AM-MMDD). Behavior never branches on edition. */
 export const BRIEF_EDITIONS = ["eod", "am"] as const;
@@ -26,7 +27,7 @@ export type BriefItemState = (typeof BRIEF_ITEM_STATES)[number];
 export const DISMISS_REASONS = ["already_tracked", "not_mine", "not_worth_it"] as const;
 export type DismissReason = (typeof DISMISS_REASONS)[number];
 
-export const BRIEF_ACTIONS = ["accept", "dismiss", "done", "tomorrow", "move", "park", "pick", "undo"] as const;
+export const BRIEF_ACTIONS = ["accept", "dismiss", "done", "tomorrow", "move", "keep", "park", "pick", "undo"] as const;
 export type BriefAction = (typeof BRIEF_ACTIONS)[number];
 
 /** Accepting a proposed_task creates a task with this external source system; the id is the item_key. */
@@ -179,6 +180,26 @@ export interface BriefContent {
    * same-day rerun only appends digest proposals from notes not recorded here.
    */
   work_digest_note_ids?: string[];
+  /**
+   * Server side only (a save overwrites whatever the caller sends): how many
+   * "Now unblocked" retries had given up when the brief was saved (067:
+   * task_unblock_retries still open after 8 attempts). Absent when 0; the page
+   * shows a plain line only then.
+   */
+  unblock_stuck?: number;
+  /**
+   * Server side only (a save ignores whatever the caller sends): one entry per
+   * `mode: "refresh"` save, oldest first, so the page can say "Refreshed 8:45 AM:
+   * AM digest added". The content each refresh replaced is in brief_revisions (068).
+   */
+  refreshes?: BriefRefresh[];
+}
+
+/** One refresh of a brief: when it was saved and the routine's one-line reason. */
+export interface BriefRefresh {
+  /** ISO timestamp of the refresh save. */
+  at: string;
+  reason?: string;
 }
 
 export interface BriefItemInput {
@@ -194,6 +215,16 @@ export interface SaveBriefInput {
   content: BriefContent;
   covered_meeting_ids: string[];
   items: BriefItemInput[];
+  /**
+   * Absent = the default save (create, or append to a same-day brief).
+   * "refresh" = rewrite the brief's content (snapshot first) and keep every
+   * existing item as it is; a refresh before the brief exists is a first save.
+   */
+  mode?: "refresh";
+  /** mode "refresh" only: one short line on why ("AM digest added"). */
+  refresh_reason?: string | null;
+  /** Text the parse cut to fit (field, original length); the save result passes them back. */
+  warnings?: SaveWarning[];
 }
 
 export interface BriefActionInput {
@@ -251,7 +282,7 @@ export interface BriefItemRow {
   created_task_id: string | null;
   /** Server side only: the saved snapshot (064). The brief view replaces it with can_undo. */
   prior_due?: BriefPriorDue[] | null;
-  /** A deferred carry item whose move can be undone (it has a saved snapshot). */
+  /** A deferred carry item whose move can be undone (it has a saved snapshot), or a kept Recently unblocked row. */
   can_undo?: boolean;
   acted_at: string | null;
   created_at: string;

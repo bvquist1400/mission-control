@@ -560,4 +560,55 @@ assert.equal(runResult.contracts.length, 6);
   assert.equal(revertedContracts.some((contract) => contract.contractType === "recently_unblocked"), false, "a reverted unblock is not recent");
 }
 
+// S3 follow-up: a pill can land on a task that was never Waiting, so a finished
+// blocker needs no Blocked/Waiting exit. A link removed by hand still does, and a
+// task still marked Waiting (it also waits on something else) doesn't fire.
+{
+  const seed = (status, withUnblock) => new MemorySupabase({
+    tasks: [makeTask("task-never-waiting", { title: "Book the review session", status, updated_at: isoDaysAgo(1), due_at: "2026-04-01T23:59:59.999Z" })],
+    task_dependencies: [
+      {
+        id: "dep-removed",
+        user_id: USER_ID,
+        task_id: "task-never-waiting",
+        depends_on_task_id: "task-other",
+        depends_on_commitment_id: null,
+        resolved_at: isoDaysAgo(1),
+        is_resolved: true,
+        created_at: isoDaysAgo(5),
+      },
+    ],
+    task_status_transitions: [],
+    task_unblocks: withUnblock
+      ? [
+          {
+            id: "unblock-2",
+            user_id: USER_ID,
+            task_id: "task-never-waiting",
+            blocker_type: "task",
+            blocker_task_id: "task-other",
+            blocker_commitment_id: null,
+            unblocked_at: isoDaysAgo(1),
+            created_at: isoDaysAgo(1),
+            reverted_at: null,
+          },
+        ]
+      : [],
+  });
+  const detect = async (status, withUnblock) =>
+    detectIntelligenceContracts(await readIntelligenceTaskContexts(seed(status, withUnblock), USER_ID, { now: new Date(NOW_ISO) }), { now: new Date(NOW_ISO) })
+      .find((contract) => contract.contractType === "recently_unblocked");
+
+  for (const status of ["Backlog", "Planned", "In Progress"]) {
+    const contract = await detect(status, true);
+    assert.ok(contract, `a pill on a ${status} task makes a recently_unblocked contract`);
+    assert.equal(contract.metrics.unblockedAt, isoDaysAgo(1));
+    assert.equal(contract.metrics.hoursBlocked, null);
+    assert.match(contract.reason, /Everything the task waited on was finished 24 hours ago/);
+    assert.equal(contract.evidence[0].code, "recent_unblock_transition");
+  }
+  assert.equal(await detect("Planned", false), undefined, "a link removed by hand still needs a Waiting exit");
+  assert.equal(await detect("Blocked/Waiting", true), undefined, "a task still marked Waiting is not ready");
+}
+
 console.log("Intelligence layer phase 1 tests passed.");
