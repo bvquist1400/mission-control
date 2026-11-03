@@ -2,6 +2,7 @@ import { normalizeDateOnly } from "@/lib/date-only";
 import { todayInBriefTimeZone } from "@/lib/briefs/keys";
 import { ACCEPT_DUE_HELP, isDateOnlyString, parseAcceptDue, type AcceptDueChoice } from "@/lib/briefs/due";
 import { safeBriefHref } from "@/lib/briefs/href";
+import { capIdentifier, capText, collectSaveWarnings } from "@/lib/briefs/text-cut";
 
 export { safeBriefHref };
 import {
@@ -22,6 +23,7 @@ import {
   type BriefItemPayload,
   type BriefMeeting,
   type BriefMeetingRef,
+  type BriefRefresh,
   type BriefStat,
   type BriefTile,
   type BriefTileGroup,
@@ -44,16 +46,34 @@ function isObject(value: unknown): value is Obj {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function str(value: unknown, max: number): string | null {
+/** The footnote cap, on the page and on a tile (was 500; AM-1103's was cut mid-sentence at 500). */
+export const FOOTNOTE_MAX = 1200;
+/** A refresh's one-line reason ("AM digest added"). */
+export const REFRESH_REASON_MAX = 200;
+
+/**
+ * Prose: trimmed, and over `max` cut at the last sentence end (else word
+ * boundary) with "…". Inside a save's parse the cut is reported as a warning
+ * naming `field`; nothing is cut mid-word or silently.
+ */
+function str(value: unknown, max: number, field: string): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
-  return trimmed.length > max ? trimmed.slice(0, max) : trimmed;
+  return capText(trimmed, max, field);
+}
+
+/** Ids, keys, links and times: cut short as before (no "…"), but reported like prose. */
+function ident(value: unknown, max: number, field: string): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return capIdentifier(trimmed, max, field);
 }
 
 /** Only http(s) links are ever rendered as hrefs. */
-export function safeUrl(value: unknown): string | null {
-  const raw = str(value, 1000);
+export function safeUrl(value: unknown, field = "url"): string | null {
+  const raw = ident(value, 1000, field);
   if (!raw) return null;
   try {
     const url = new URL(raw);
@@ -63,13 +83,27 @@ export function safeUrl(value: unknown): string | null {
   }
 }
 
-function strList(value: unknown, maxItems: number, maxLen: number): string[] {
+/** The first `maxItems` usable strings (later ones are left out before they are capped, so no warning names a dropped entry). */
+function listOf(value: unknown, maxItems: number, read: (item: unknown, index: number) => string | null): string[] {
   if (!Array.isArray(value)) return [];
-  return value.map((item) => str(item, maxLen)).filter((item): item is string => item !== null).slice(0, maxItems);
+  const out: string[] = [];
+  for (let index = 0; index < value.length && out.length < maxItems; index += 1) {
+    const item = read(value[index], index);
+    if (item !== null) out.push(item);
+  }
+  return out;
 }
 
-function isoOrNull(value: unknown): string | null {
-  const raw = str(value, 60);
+function strList(value: unknown, maxItems: number, maxLen: number, field: string): string[] {
+  return listOf(value, maxItems, (item, index) => str(item, maxLen, `${field}[${index}]`));
+}
+
+function identList(value: unknown, maxItems: number, maxLen: number, field: string): string[] {
+  return listOf(value, maxItems, (item, index) => ident(item, maxLen, `${field}[${index}]`));
+}
+
+function isoOrNull(value: unknown, field = "time"): string | null {
+  const raw = ident(value, 60, field);
   if (!raw) return null;
   return Number.isNaN(Date.parse(raw)) ? null : raw;
 }
@@ -84,23 +118,33 @@ export function isUuid(value: unknown): value is string {
 // so a slightly-off model output still renders. Used on save and on read.
 // ---------------------------------------------------------------------------
 
-function normalizeMeeting(value: unknown): BriefMeeting | null {
+/** The first `max` entries `read` accepts; later entries are never read, so no warning names one that was left out. */
+function takeFirst<T>(value: unknown[], max: number, read: (item: unknown, index: number) => T | null): T[] {
+  const out: T[] = [];
+  for (let index = 0; index < value.length && out.length < max; index += 1) {
+    const item = read(value[index], index);
+    if (item !== null) out.push(item);
+  }
+  return out;
+}
+
+function normalizeMeeting(value: unknown, path: string): BriefMeeting | null {
   if (!isObject(value)) return null;
-  const title = str(value.title, 300);
-  const start = isoOrNull(value.start);
+  const title = str(value.title, 300, `${path}.title`);
+  const start = isoOrNull(value.start, `${path}.start`);
   if (!title || !start) return null;
-  const id = str(value.id, 200);
+  const id = ident(value.id, 200, `${path}.id`);
   const meeting: BriefMeeting = {
     id,
     title,
-    short: str(value.short, 80),
+    short: str(value.short, 80, `${path}.short`),
     start,
-    end: isoOrNull(value.end),
-    url: safeUrl(value.url),
+    end: isoOrNull(value.end, `${path}.end`),
+    url: safeUrl(value.url, `${path}.url`),
     has_notes: typeof value.has_notes === "boolean" ? value.has_notes : id !== null,
   };
   // Optional, and only present when given, so content without them round-trips unchanged.
-  const prep = str(value.prep, 1000);
+  const prep = str(value.prep, 1000, `${path}.prep`);
   if (prep) meeting.prep = prep;
   if (Array.isArray(value.task_ids)) {
     const taskIds = [...new Set(value.task_ids.filter(isUuid).map((taskId) => taskId.toLowerCase()))].slice(0, 20);
@@ -109,115 +153,120 @@ function normalizeMeeting(value: unknown): BriefMeeting | null {
   return meeting;
 }
 
-function normalizeTileRow(value: unknown): BriefTileRow | null {
+function normalizeTileRow(value: unknown, path: string): BriefTileRow | null {
   if (typeof value === "string") {
-    const title = str(value, 500);
+    const title = str(value, 500, `${path}.title`);
     return title ? { title } : null;
   }
   if (!isObject(value)) return null;
-  const title = str(value.title, 500);
+  const title = str(value.title, 500, `${path}.title`);
   if (!title) return null;
   const row: BriefTileRow = { title };
-  const meta = str(value.meta, 500);
+  const meta = str(value.meta, 500, `${path}.meta`);
   if (meta) row.meta = meta;
   if (isUuid(value.task_id)) row.task_id = value.task_id.toLowerCase();
   return row;
 }
 
-function normalizeTile(value: unknown): BriefTile | null {
+function normalizeTile(value: unknown, path: string): BriefTile | null {
   if (!isObject(value)) return null;
-  const key = str(value.key, 40);
-  const label = str(value.label, 80);
+  const key = ident(value.key, 40, `${path}.key`);
+  const label = str(value.label, 80, `${path}.label`);
   const type = (BRIEF_TILE_TYPES as readonly string[]).includes(String(value.type)) ? (value.type as BriefTile["type"]) : "list";
   if (!key || !label) return null;
   const tile: BriefTile = { key, type, label };
   if (typeof value.value === "number" && Number.isFinite(value.value)) tile.value = value.value;
-  const suffix = str(value.suffix, 40);
+  const suffix = str(value.suffix, 40, `${path}.suffix`);
   if (suffix) tile.suffix = suffix;
-  const summary = str(value.summary, 300);
+  const summary = str(value.summary, 300, `${path}.summary`);
   if (summary) tile.summary = summary;
-  const text = str(value.text, 4000);
+  const text = str(value.text, 4000, `${path}.text`);
   if (text) tile.text = text;
-  const list = strList(value.list, 12, 1000);
+  const list = strList(value.list, 12, 1000, `${path}.list`);
   if (list.length) tile.list = list;
-  const listLabel = str(value.list_label, 80);
+  const listLabel = str(value.list_label, 80, `${path}.list_label`);
   if (listLabel) tile.list_label = listLabel;
   if (Array.isArray(value.groups)) {
-    const groups = value.groups
-      .map((group): BriefTileGroup | null => {
-        if (!isObject(group)) return null;
-        const rows = Array.isArray(group.rows)
-          ? group.rows.map(normalizeTileRow).filter((row): row is BriefTileRow => row !== null).slice(0, 60)
-          : [];
-        if (!rows.length) return null;
-        const groupLabel = str(group.label, 120);
-        return groupLabel ? { label: groupLabel, rows } : { rows };
-      })
-      .filter((group): group is BriefTileGroup => group !== null)
-      .slice(0, 8);
+    const groups = takeFirst(value.groups, 8, (group, groupIndex): BriefTileGroup | null => {
+      if (!isObject(group)) return null;
+      const groupPath = `${path}.groups[${groupIndex}]`;
+      const rows = Array.isArray(group.rows)
+        ? takeFirst(group.rows, 60, (row, rowIndex) => normalizeTileRow(row, `${groupPath}.rows[${rowIndex}]`))
+        : [];
+      if (!rows.length) return null;
+      const groupLabel = str(group.label, 120, `${groupPath}.label`);
+      return groupLabel ? { label: groupLabel, rows } : { rows };
+    });
     if (groups.length) tile.groups = groups;
   }
-  const footnote = str(value.footnote, 500);
+  const footnote = str(value.footnote, FOOTNOTE_MAX, `${path}.footnote`);
   if (footnote) tile.footnote = footnote;
   const href = safeBriefHref(value.href);
   if (href) tile.href = href;
   return tile;
 }
 
+/** How many refreshes a brief keeps a record of on the page (all of them are in brief_revisions). */
+export const MAX_REFRESH_RECORDS = 20;
+
+/** content.refreshes as stored (server-written; a read drops anything malformed). */
+function normalizeRefreshes(value: unknown): BriefRefresh[] {
+  if (!Array.isArray(value)) return [];
+  const out: BriefRefresh[] = [];
+  for (const entry of value) {
+    if (!isObject(entry) || typeof entry.at !== "string" || Number.isNaN(Date.parse(entry.at))) continue;
+    const reason = str(entry.reason, REFRESH_REASON_MAX, "content.refreshes.reason");
+    out.push(reason ? { at: entry.at, reason } : { at: entry.at });
+  }
+  return out.slice(-MAX_REFRESH_RECORDS);
+}
+
 export function normalizeBriefContent(value: unknown): BriefContent {
   if (!isObject(value)) return {};
   const content: BriefContent = {};
-  const heading = str(value.heading, 80);
+  const heading = str(value.heading, 80, "content.heading");
   if (heading) content.heading = heading;
-  const narrative = str(value.narrative, 4000);
+  const narrative = str(value.narrative, 4000, "content.narrative");
   if (narrative) content.narrative = narrative;
-  const moves = strList(value.first_moves, 8, 1000);
+  const moves = strList(value.first_moves, 8, 1000, "content.first_moves");
   if (moves.length) content.first_moves = moves;
   if (Array.isArray(value.stats)) {
-    const stats = value.stats
-      .map((stat): BriefStat | null => {
-        if (!isObject(stat)) return null;
-        const key = str(stat.key, 40);
-        const label = str(stat.label, 40);
-        if (!key || !label || typeof stat.value !== "number" || !Number.isFinite(stat.value)) return null;
-        return { key, label, value: stat.value };
-      })
-      .filter((stat): stat is BriefStat => stat !== null)
-      .slice(0, 6);
+    const stats = takeFirst(value.stats, 6, (stat, index): BriefStat | null => {
+      if (!isObject(stat)) return null;
+      if (typeof stat.value !== "number" || !Number.isFinite(stat.value)) return null;
+      const key = ident(stat.key, 40, `content.stats[${index}].key`);
+      const label = str(stat.label, 40, `content.stats[${index}].label`);
+      if (!key || !label) return null;
+      return { key, label, value: stat.value };
+    });
     if (stats.length) content.stats = stats;
   }
   if (isObject(value.next)) {
-    const label = str(value.next.label, 80);
+    const label = str(value.next.label, 80, "content.next.label");
     const agenda = Array.isArray(value.next.agenda)
-      ? value.next.agenda
-          .map((line): BriefAgendaLine | null => {
-            if (!isObject(line)) return null;
-            const time = str(line.time, 12);
-            const title = str(line.title, 200);
-            if (!time || !title) return null;
-            const out: BriefAgendaLine = { time, title };
-            if (line.free === true) out.free = true;
-            if (Number.isInteger(line.choice_n) && (line.choice_n as number) > 0) out.choice_n = line.choice_n as number;
-            if (Number.isInteger(line.choice_item) && (line.choice_item as number) >= 0) out.choice_item = line.choice_item as number;
-            return out;
-          })
-          .filter((line): line is BriefAgendaLine => line !== null)
-          .slice(0, 12)
+      ? takeFirst(value.next.agenda, 12, (line, index): BriefAgendaLine | null => {
+          if (!isObject(line)) return null;
+          const time = ident(line.time, 12, `content.next.agenda[${index}].time`);
+          const title = str(line.title, 200, `content.next.agenda[${index}].title`);
+          if (!time || !title) return null;
+          const out: BriefAgendaLine = { time, title };
+          if (line.free === true) out.free = true;
+          if (Number.isInteger(line.choice_n) && (line.choice_n as number) > 0) out.choice_n = line.choice_n as number;
+          if (Number.isInteger(line.choice_item) && (line.choice_item as number) >= 0) out.choice_item = line.choice_item as number;
+          return out;
+        })
       : [];
     if (label) content.next = { label, agenda };
   }
   if (Array.isArray(value.meetings)) {
-    const meetings = value.meetings
-      .map(normalizeMeeting)
-      .filter((meeting): meeting is BriefMeeting => meeting !== null)
-      .slice(0, 30);
+    const meetings = takeFirst(value.meetings, 30, (meeting, index) => normalizeMeeting(meeting, `content.meetings[${index}]`));
     if (meetings.length) content.meetings = meetings;
   }
   if (Array.isArray(value.tiles)) {
-    const tiles = value.tiles.map(normalizeTile).filter((tile): tile is BriefTile => tile !== null).slice(0, 12);
+    const tiles = takeFirst(value.tiles, 12, (tile, index) => normalizeTile(tile, `content.tiles[${index}]`));
     if (tiles.length) content.tiles = tiles;
   }
-  const footnote = str(value.footnote, 500);
+  const footnote = str(value.footnote, FOOTNOTE_MAX, "content.footnote");
   if (footnote) content.footnote = footnote;
   if (Array.isArray(value.work_digest_note_ids)) {
     const noteIds = [...new Set(value.work_digest_note_ids.filter(isUuid).map((id) => id.toLowerCase()))].slice(0, MAX_DIGEST_NOTES);
@@ -226,6 +275,8 @@ export function normalizeBriefContent(value: unknown): BriefContent {
   if (Number.isSafeInteger(value.unblock_stuck) && (value.unblock_stuck as number) > 0) {
     content.unblock_stuck = value.unblock_stuck as number;
   }
+  const refreshes = normalizeRefreshes(value.refreshes);
+  if (refreshes.length) content.refreshes = refreshes;
   return content;
 }
 
@@ -258,13 +309,13 @@ export function parseWorkDigestRef(value: unknown, path: string, errors: string[
   if (blocks.some((block) => !DIGEST_BLOCK_PATTERN.test(block))) errors.push(`${path}.blocks entries must be W1 to W20`);
 
   const rawLines = value.lines ?? (value.line !== undefined ? [value.line] : []);
-  const lines = strList(rawLines, MAX_DIGEST_BLOCKS, 1000);
+  const lines = strList(rawLines, MAX_DIGEST_BLOCKS, 1000, `${path}.lines`);
   if (lines.length === 0) errors.push(`${path}.lines must give each cited block's what line, verbatim`);
 
   if (errors.length > before) return null;
   const ref: BriefWorkDigestRef = { note_id: (value.note_id as string).toLowerCase(), edition: edition as "am" | "pm", blocks, lines };
   if (isDateOnlyString(value.date)) ref.date = value.date;
-  const where = str(value.where, 20);
+  const where = ident(value.where, 20, `${path}.where`);
   if (where && ["Mail", "Teams", "Mail and Teams"].includes(where)) ref.where = where;
   return ref;
 }
@@ -284,17 +335,18 @@ function parseMeetingRef(value: unknown, path: string, errors: string[]): BriefM
     errors.push(`${path} must be an object`);
     return null;
   }
-  const id = str(value.id, 200);
-  const title = str(value.title, 300);
+  if (typeof value.id === "string" && value.id.trim().length > 200) errors.push(`${path}.id must be 200 characters or fewer`);
+  const id = ident(value.id, 200, `${path}.id`);
+  const title = str(value.title, 300, `${path}.title`);
   if (!id) errors.push(`${path}.id is required`);
   if (!title) errors.push(`${path}.title is required`);
   if (!id || !title) return null;
   return {
     id,
     title,
-    start: isoOrNull(value.start),
-    url: safeUrl(value.url),
-    lines: strList(value.lines ?? (value.line !== undefined ? [value.line] : []), 10, 1000),
+    start: isoOrNull(value.start, `${path}.start`),
+    url: safeUrl(value.url, `${path}.url`),
+    lines: strList(value.lines ?? (value.line !== undefined ? [value.line] : []), 10, 1000, `${path}.lines`),
   };
 }
 
@@ -310,7 +362,7 @@ function parseOptions(value: unknown, path: string, errors: string[]): BriefChoi
       return;
     }
     const key = typeof option.key === "string" ? option.key.trim().toLowerCase() : "";
-    const label = str(option.label, 200);
+    const label = str(option.label, 200, `${path}[${index}].label`);
     if (!CHOICE_KEY_PATTERN.test(key)) errors.push(`${path}[${index}].key must match ${CHOICE_KEY_PATTERN}`);
     if (!label) errors.push(`${path}[${index}].label is required`);
     if (options.some((existing) => existing.key === key)) errors.push(`${path}[${index}].key "${key}" is repeated`);
@@ -348,18 +400,18 @@ function parseItem(value: unknown, index: number, errors: string[]): BriefItemIn
     return null;
   }
 
-  const title = str(value.title, 500);
+  const title = str(value.title, 500, `${path}.title`);
   if (!title) errors.push(`${path}.title is required`);
   if (typeof value.title === "string" && value.title.trim().length > 500) errors.push(`${path}.title must be 500 characters or fewer`);
 
   const payload: BriefItemPayload = { title: title ?? "" };
-  const detail = str(value.detail, 4000);
+  const detail = str(value.detail, 4000, `${path}.detail`);
   if (detail) payload.detail = detail;
-  const why = str(value.why, 1000);
+  const why = str(value.why, 1000, `${path}.why`);
   if (why) payload.why = why;
-  const group = str(value.group, 80);
+  const group = str(value.group, 80, `${path}.group`);
   if (group) payload.group = group;
-  const label = str(value.label, 80);
+  const label = str(value.label, 80, `${path}.label`);
   if (label) payload.label = label;
 
   // Optional, proposals only: a date the notes give. A malformed one is a routine bug, so it's rejected, not dropped.
@@ -390,7 +442,7 @@ function parseItem(value: unknown, index: number, errors: string[]): BriefItemIn
     if (!isObject(maybe) || !isUuid(maybe.task_id)) {
       errors.push(`${path}.maybe_tracked.task_id must be a task UUID`);
     } else {
-      payload.maybe_tracked = { task_id: maybe.task_id.toLowerCase(), text: str(maybe.text, 500) ?? "" };
+      payload.maybe_tracked = { task_id: maybe.task_id.toLowerCase(), text: str(maybe.text, 500, `${path}.maybe_tracked.text`) ?? "" };
     }
   }
 
@@ -417,7 +469,21 @@ function parseItem(value: unknown, index: number, errors: string[]): BriefItemIn
   return { kind, payload, task_ids: taskIds, source: workDigest ? { meetings, work_digest: workDigest } : { meetings } };
 }
 
+/** The save modes: "append" is the default (no `mode`); "refresh" rewrites the brief's content and keeps its items. */
+export const SAVE_BRIEF_MODES = ["refresh"] as const;
+
+/**
+ * A save's input, checked. Text over its cap is cut at a sentence or word
+ * boundary with "…" and listed in `warnings` (field, original length), which
+ * the save result passes back; nothing is cut silently.
+ */
 export function parseSaveBriefInput(raw: unknown, now: Date = new Date()): ParseResult<SaveBriefInput> {
+  const { value, warnings } = collectSaveWarnings(() => parseSaveBriefInputFields(raw, now));
+  if (!value.ok) return value;
+  return { ok: true, value: { ...value.value, warnings } };
+}
+
+function parseSaveBriefInputFields(raw: unknown, now: Date): ParseResult<SaveBriefInput> {
   const errors: string[] = [];
   if (!isObject(raw)) return { ok: false, errors: ["body must be a JSON object"] };
 
@@ -433,6 +499,20 @@ export function parseSaveBriefInput(raw: unknown, now: Date = new Date()): Parse
     else briefDate = normalized;
   }
 
+  // Absent (or null / "") = the default save: create, or append to a same-day brief.
+  let mode: SaveBriefInput["mode"];
+  if (raw.mode !== undefined && raw.mode !== null && raw.mode !== "") {
+    const given = typeof raw.mode === "string" ? raw.mode.trim().toLowerCase() : "";
+    if ((SAVE_BRIEF_MODES as readonly string[]).includes(given)) mode = given as SaveBriefInput["mode"];
+    else errors.push(`mode must be "refresh", or left out for a normal save`);
+  }
+  let refreshReason: string | null = null;
+  if (raw.refresh_reason !== undefined && raw.refresh_reason !== null && raw.refresh_reason !== "") {
+    if (typeof raw.refresh_reason !== "string") errors.push("refresh_reason must be a short line of text");
+    else if (mode !== "refresh") errors.push(`refresh_reason only applies with mode "refresh"`);
+    else refreshReason = str(raw.refresh_reason, REFRESH_REASON_MAX, "refresh_reason");
+  }
+
   if (raw.content !== undefined && !isObject(raw.content)) errors.push("content must be an object");
   if (isObject(raw.content) && JSON.stringify(raw.content).length > MAX_CONTENT_CHARS) {
     errors.push(`content must be under ${MAX_CONTENT_CHARS} characters of JSON`);
@@ -441,7 +521,7 @@ export function parseSaveBriefInput(raw: unknown, now: Date = new Date()): Parse
   if (raw.covered_meeting_ids !== undefined && !Array.isArray(raw.covered_meeting_ids)) {
     errors.push("covered_meeting_ids must be an array of meeting ids");
   }
-  const covered = strList(raw.covered_meeting_ids, 100, 200);
+  const covered = identList(raw.covered_meeting_ids, 100, 200, "covered_meeting_ids");
 
   if (!Array.isArray(raw.items)) errors.push("items must be an array");
   const rawItems = Array.isArray(raw.items) ? raw.items : [];
@@ -460,6 +540,8 @@ export function parseSaveBriefInput(raw: unknown, now: Date = new Date()): Parse
       content: normalizeBriefContent(raw.content),
       covered_meeting_ids: [...new Set(covered)],
       items,
+      ...(mode ? { mode } : {}),
+      ...(mode === "refresh" ? { refresh_reason: refreshReason } : {}),
     },
   };
 }

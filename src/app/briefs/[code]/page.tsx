@@ -3,11 +3,12 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { BriefPage } from "@/components/briefs/BriefPage";
 import { briefMono, briefSans } from "@/components/briefs/fonts";
-import { BriefServiceError, getBrief } from "@/lib/briefs/service";
+import { BriefServiceError, getBrief, getBriefStatus } from "@/lib/briefs/service";
+import { lateDigestBannerText } from "@/lib/briefs/refresh-view";
 import { normalizeBriefCode } from "@/lib/briefs/keys";
 import { getCanonicalAppUrl } from "@/lib/mcp/config";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import type { BriefView } from "@/lib/briefs/types";
+import { BRIEF_EDITIONS, type BriefEdition, type BriefView } from "@/lib/briefs/types";
 import "@/components/briefs/brief-page.css";
 
 export const dynamic = "force-dynamic";
@@ -58,9 +59,39 @@ export default async function BriefRoute({ params }: BriefRouteProps) {
     );
   }
 
+  const lateDigestBanner = await readLateDigestBanner(supabase, user.id, view);
+
   return (
     <div className={wrapperClass}>
-      <BriefPage view={view} />
+      <BriefPage view={view} lateDigestBanner={lateDigestBanner} />
     </div>
   );
+}
+
+/**
+ * The late-digest banner: a work digest note this brief should cover is filed
+ * but not in it (brief_status's rule). Read at render, so no hook on note
+ * creation is needed. A failed read only means no banner.
+ */
+async function readLateDigestBanner(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  userId: string,
+  view: BriefView
+): Promise<string | null> {
+  const { brief } = view;
+  if (!(BRIEF_EDITIONS as readonly string[]).includes(brief.edition)) return null;
+  const edition = brief.edition as BriefEdition;
+  try {
+    const status = await getBriefStatus(supabase, userId, edition, brief.brief_date);
+    return lateDigestBannerText({
+      edition,
+      briefDate: brief.brief_date,
+      builtAt: brief.created_at,
+      notes: status.digest_notes.filter((note) => note.needs_refresh).map((note) => ({ edition: note.edition, filed_at: note.filed_at })),
+      now: new Date(),
+    });
+  } catch (error) {
+    console.warn("[briefs] late digest check failed", { code: (error as { code?: unknown } | null)?.code ?? "unknown" });
+    return null;
+  }
 }

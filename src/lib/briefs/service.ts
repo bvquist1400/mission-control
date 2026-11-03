@@ -26,7 +26,9 @@ import {
 import type { TodayBriefStatus } from "@/lib/briefs/button";
 import { buildBriefNotice, telegramNotifierFromEnv, type BriefNotifier } from "@/lib/briefs/notify";
 import { normalizeBriefContent, normalizeStoredWorkDigestRef } from "@/lib/briefs/validate";
-import { checkWorkDigestBody, parseWorkDigestTitle, workDigestEditionsForMode } from "@/lib/briefing/work-digest";
+import type { SaveWarning } from "@/lib/briefs/text-cut";
+import { checkWorkDigestBody, parseWorkDigestTitle, workDigestEditionsForMode, workDigestTitle } from "@/lib/briefing/work-digest";
+import { buildBriefStatus, type BriefStatus, type BriefStatusNoteRow } from "@/lib/briefs/refresh-status";
 import { countBriefItems } from "@/lib/briefs/counts";
 import {
   isUnblockedRow,
@@ -42,6 +44,7 @@ import {
   type BriefAgendaLine,
   type BriefContent,
   type BriefCounts,
+  type BriefEdition,
   type BriefItemKind,
   type BriefItemRow,
   type BriefItemState,
@@ -247,8 +250,11 @@ export interface SaveBriefSkip {
     | "work_digest_already_covered"
     | "rerun_only_appends_meeting_items"
     | "duplicate_in_request"
-    | "already_in_a_brief";
+    | "already_in_a_brief"
+    | "kept_on_refresh";
   item_key: string;
+  /** kept_on_refresh only: the existing item's number (it stays exactly as it is). */
+  n?: number;
 }
 
 export interface SaveBriefResult {
@@ -272,13 +278,20 @@ export interface SaveBriefResult {
    * sent_at says whether it has been delivered yet). A failure never fails the save.
    */
   notify: {
-    status: "sent" | "failed" | "already_claimed";
+    /** skipped_refresh: a mode "refresh" save of an existing brief never notifies (notified_at is left as it is). */
+    status: "sent" | "failed" | "already_claimed" | "skipped_refresh";
     error: string | null;
     /** When the single attempt was claimed. */
     notified_at: string | null;
     /** When Telegram accepted the message; null until (unless) it did. Never set before delivery. */
     sent_at: string | null;
   };
+  /** "refresh" when this save rewrote an existing brief's content; "append" otherwise (a refresh before the brief existed is a first save). */
+  mode: "append" | "refresh";
+  /** mode "refresh": the brief_revisions row holding the content this save replaced. */
+  revision_id: string | null;
+  /** Text cut to fit its cap at a sentence or word boundary (field and original length). Empty when nothing was cut. */
+  warnings: SaveWarning[];
 }
 
 async function loadBriefByDate(supabase: AnySupabase, userId: string, edition: string, briefDate: string) {
@@ -499,6 +512,13 @@ async function readUnblockedForSave(supabase: AnySupabase, userId: string): Prom
   };
 }
 
+/** The caller's content without the fields only the server writes (`refreshes`). */
+function withoutServerFields(content: BriefContent): BriefContent {
+  const { refreshes: _sent, ...rest } = content;
+  void _sent;
+  return rest;
+}
+
 /** `content` with the server's stuck count: only a number above zero is ever stored, whatever the caller sent. */
 function withStuckCount(content: BriefContent, stuck: number | null): BriefContent {
   const { unblock_stuck: _sent, ...rest } = content;
@@ -523,7 +543,7 @@ export async function saveBrief(
   const unblocked = await readUnblockedForSave(supabase, userId);
   input = {
     ...input,
-    content: withStuckCount(input.content, unblocked.stuck),
+    content: withStuckCount(withoutServerFields(input.content), unblocked.stuck),
     items: squareItemsWithPills(input.items, unblocked.pills, now),
   };
 
@@ -536,14 +556,29 @@ export async function saveBrief(
     if (!brief) throw new BriefServiceError(500, "Brief could not be created");
   }
 
+  // A refresh rewrites an existing brief. A refresh that found no brief made it
+  // just now: that is a first save like any other (content as sent, the notice).
+  const refresh = input.mode === "refresh" && !created;
+  const ownKeys = refresh ? await loadOwnItemKeys(supabase, userId, brief.id) : new Map<string, number>();
+
   const covered = new Set(created ? [] : brief.covered_meeting_ids);
   const coveredNotes = new Set(created ? [] : brief.content.work_digest_note_ids ?? []);
   const skipped: SaveBriefSkip[] = [];
   const candidates: Array<{ index: number; key: string; item: SaveBriefInput["items"][number] }> = [];
   const keysInRequest = new Set<string>();
+  const nByIndex = new Map<number, number>();
 
   input.items.forEach((item, index) => {
     const key = computeBriefItemKey(input.edition, input.brief_date, item);
+    // Refresh: an item with the key of one already on this brief IS that item
+    // (the same key Accept uses as the task's external id). It stays exactly as
+    // it is: number, state, choice, acted_at, created task and payload.
+    const keptN = refresh ? ownKeys.get(key) : undefined;
+    if (keptN !== undefined) {
+      skipped.push({ index, reason: "kept_on_refresh", item_key: key, n: keptN });
+      nByIndex.set(index, keptN);
+      return;
+    }
     if (!created) {
       // A rerun appends only items with a source this brief hasn't covered yet:
       // a meeting not in covered_meeting_ids, or a work digest note not in
@@ -603,7 +638,6 @@ export async function saveBrief(
   const added = candidates.filter((candidate) => candidate.index >= input.items.length).length;
 
   const appended: SaveBriefResult["appended"] = [];
-  const nByIndex = new Map<number, number>();
   if (candidates.length) {
     const { data: maxRow, error: maxError } = await supabase
       .from("brief_items")
@@ -646,33 +680,44 @@ export async function saveBrief(
   const nextCovered = new Set([...brief.covered_meeting_ids, ...input.covered_meeting_ids]);
   for (const candidate of candidates) for (const meeting of candidate.item.source.meetings) nextCovered.add(meeting.id);
 
+  let revisionId: string | null = null;
   const briefUpdates: Record<string, unknown> = {};
-  if (nextCovered.size !== brief.covered_meeting_ids.length) briefUpdates.covered_meeting_ids = [...nextCovered];
-  if (created && brief.content.next?.agenda.some((line) => line.choice_item !== undefined)) {
-    briefUpdates.content = {
-      ...brief.content,
-      next: { ...brief.content.next, agenda: resolveAgendaChoices(brief.content.next.agenda, nByIndex) },
-    };
-  }
-  if (!created && input.content.meetings?.length) {
-    // Only the timeline grows on a rerun, so new items have their meeting on the page.
-    briefUpdates.content = { ...brief.content, meetings: mergeMeetings(brief.content.meetings, input.content.meetings) };
-  }
-  // Work digest notes read = what the brief had, what the caller says it read, and every note an appended item cites.
-  const knownNotes = brief.content.work_digest_note_ids ?? [];
-  const nextNotes = [...new Set([...knownNotes, ...(input.content.work_digest_note_ids ?? [])])];
-  for (const candidate of candidates) {
-    const noteId = candidate.item.source.work_digest?.note_id;
-    if (noteId && !nextNotes.includes(noteId)) nextNotes.push(noteId);
-  }
-  if (nextNotes.length !== knownNotes.length) {
-    const base = (briefUpdates.content as BriefContent | undefined) ?? brief.content;
-    briefUpdates.content = { ...base, work_digest_note_ids: nextNotes.slice(0, 4) };
-  }
-  // A rerun refreshes the stuck count; an unknown count (a failed read) leaves it as it was.
-  if (!created && unblocked.stuck !== null && (brief.content.unblock_stuck ?? 0) !== unblocked.stuck) {
-    const base = (briefUpdates.content as BriefContent | undefined) ?? brief.content;
-    briefUpdates.content = withStuckCount(base, unblocked.stuck);
+  if (refresh) {
+    const refreshed = await refreshBriefContent(supabase, userId, brief, {
+      content: refreshContent(input.content, brief.content, unblocked.stuck, nByIndex, candidates),
+      covered: [...input.covered_meeting_ids, ...candidates.flatMap((candidate) => candidate.item.source.meetings.map((meeting) => meeting.id))],
+      refresh: { at: now.toISOString(), ...(input.refresh_reason ? { reason: input.refresh_reason } : {}) },
+    });
+    brief = refreshed.brief;
+    revisionId = refreshed.revisionId;
+  } else {
+    if (nextCovered.size !== brief.covered_meeting_ids.length) briefUpdates.covered_meeting_ids = [...nextCovered];
+    if (created && brief.content.next?.agenda.some((line) => line.choice_item !== undefined)) {
+      briefUpdates.content = {
+        ...brief.content,
+        next: { ...brief.content.next, agenda: resolveAgendaChoices(brief.content.next.agenda, nByIndex) },
+      };
+    }
+    if (!created && input.content.meetings?.length) {
+      // Only the timeline grows on a rerun, so new items have their meeting on the page.
+      briefUpdates.content = { ...brief.content, meetings: mergeMeetings(brief.content.meetings, input.content.meetings) };
+    }
+    // Work digest notes read = what the brief had, what the caller says it read, and every note an appended item cites.
+    const knownNotes = brief.content.work_digest_note_ids ?? [];
+    const nextNotes = [...new Set([...knownNotes, ...(input.content.work_digest_note_ids ?? [])])];
+    for (const candidate of candidates) {
+      const noteId = candidate.item.source.work_digest?.note_id;
+      if (noteId && !nextNotes.includes(noteId)) nextNotes.push(noteId);
+    }
+    if (nextNotes.length !== knownNotes.length) {
+      const base = (briefUpdates.content as BriefContent | undefined) ?? brief.content;
+      briefUpdates.content = { ...base, work_digest_note_ids: nextNotes.slice(0, 4) };
+    }
+    // A rerun refreshes the stuck count; an unknown count (a failed read) leaves it as it was.
+    if (!created && unblocked.stuck !== null && (brief.content.unblock_stuck ?? 0) !== unblocked.stuck) {
+      const base = (briefUpdates.content as BriefContent | undefined) ?? brief.content;
+      briefUpdates.content = withStuckCount(base, unblocked.stuck);
+    }
   }
   if (Object.keys(briefUpdates).length) {
     const { error: updateError } = await supabase.from("briefs").update(briefUpdates).eq("id", brief.id).eq("user_id", userId);
@@ -689,7 +734,10 @@ export async function saveBrief(
   const counts = countItems((allItems ?? []) as Pick<BriefItemRow, "kind" | "state" | "source">[]);
   const url = briefUrl(options.appUrl, brief.code);
 
-  const notify = await notifyOnce(supabase, userId, brief, buildBriefNotice(brief.code, url, counts, brief.content), options.notifier);
+  // A refresh never notifies: Brent already had the one notice for this brief.
+  const notify: SaveBriefResult["notify"] = refresh
+    ? { status: "skipped_refresh", error: brief.notify_error, notified_at: brief.notified_at, sent_at: brief.notify_sent_at }
+    : await notifyOnce(supabase, userId, brief, buildBriefNotice(brief.code, url, counts, brief.content), options.notifier);
 
   return {
     code: brief.code,
@@ -702,6 +750,72 @@ export async function saveBrief(
     counts,
     unblocked: { added, stuck: unblocked.stuck, read_failed: unblocked.readFailed },
     notify,
+    mode: refresh ? "refresh" : "append",
+    revision_id: revisionId,
+    warnings: input.warnings ?? [],
+  };
+}
+
+/** item_key → n for every item already on the brief (a refresh keeps those as they are). */
+async function loadOwnItemKeys(supabase: AnySupabase, userId: string, briefId: string): Promise<Map<string, number>> {
+  const { data, error } = await supabase.from("brief_items").select("n, item_key").eq("user_id", userId).eq("brief_id", briefId);
+  if (error) throw error;
+  return new Map(((data ?? []) as Array<{ n: number; item_key: string }>).map((row) => [row.item_key, row.n] as const));
+}
+
+/**
+ * The content a refresh writes: everything the caller sent (every field is
+ * replaced; a field left out is gone, and the old one is in brief_revisions),
+ * with the agenda's choice_item swapped for the n of the item it names (kept
+ * or appended), the notes the appended items cite added to
+ * work_digest_note_ids, and the stuck count: the server's, or the brief's own
+ * when it couldn't be read. The database adds the old notes and the refresh
+ * record under its row lock (brief_refresh_content, 068).
+ */
+function refreshContent(
+  sent: BriefContent,
+  current: BriefContent,
+  stuck: number | null,
+  nByIndex: Map<number, number>,
+  appended: Array<{ item: SaveBriefInput["items"][number] }>
+): BriefContent {
+  let content: BriefContent = { ...sent };
+  if (content.next) content = { ...content, next: { ...content.next, agenda: resolveAgendaChoices(content.next.agenda, nByIndex) } };
+  const notes = [...(content.work_digest_note_ids ?? [])];
+  for (const candidate of appended) {
+    const noteId = candidate.item.source.work_digest?.note_id;
+    if (noteId && !notes.includes(noteId)) notes.push(noteId);
+  }
+  if (notes.length) content.work_digest_note_ids = notes;
+  if (stuck === null) content = withStuckCount(content, current.unblock_stuck ?? null);
+  return content;
+}
+
+/**
+ * One call to brief_refresh_content (068): under a row lock it saves the
+ * content and coverage being replaced as a brief_revisions row, then writes the
+ * new content (notes read and coverage unioned with what the row has, the
+ * refresh appended to content.refreshes). Items and notified_at are never touched.
+ */
+async function refreshBriefContent(
+  supabase: AnySupabase,
+  userId: string,
+  brief: BriefRow,
+  change: { content: BriefContent; covered: string[]; refresh: { at: string; reason?: string } }
+): Promise<{ brief: BriefRow; revisionId: string }> {
+  const { data, error } = await supabase.rpc("brief_refresh_content", {
+    p_user_id: userId,
+    p_brief_id: brief.id,
+    p_content: change.content,
+    p_covered_meeting_ids: [...new Set(change.covered)],
+    p_refresh: change.refresh,
+  });
+  if (error) throw error;
+  const outcome = data as { ok: boolean; reason?: string; revision_id?: string; content?: unknown; covered_meeting_ids?: string[] };
+  if (!outcome?.ok || !outcome.revision_id) throw new BriefServiceError(404, `No brief ${brief.code} to refresh`);
+  return {
+    brief: { ...brief, content: normalizeBriefContent(outcome.content), covered_meeting_ids: outcome.covered_meeting_ids ?? brief.covered_meeting_ids },
+    revisionId: outcome.revision_id,
   };
 }
 
@@ -862,6 +976,49 @@ export async function getTodayBriefStatus(
     open: rows.filter((row) => row.state === "open").length,
     total: rows.length,
   };
+}
+
+/**
+ * brief_status: whether the edition's brief for `date` exists, when it was
+ * built and last refreshed, the notes it read, and whether a work digest note
+ * it should cover came in after it was built. Two reads (three for the EOD:
+ * this morning's brief too), no items, no digest. Used by the routines first
+ * and by the page's late-digest banner.
+ */
+export async function getBriefStatus(
+  supabase: AnySupabase,
+  userId: string,
+  edition: BriefEdition,
+  date: string
+): Promise<BriefStatus> {
+  const editions = edition === "eod" ? ["eod", "am"] : [edition];
+  const titles = workDigestEditionsForMode(edition === "eod" ? "eod" : "morning").map((digestEdition) => workDigestTitle(date, digestEdition));
+  const [briefs, notes] = await Promise.all([
+    supabase
+      .from("briefs")
+      .select("edition, code, created_at, content, covered_meeting_ids")
+      .eq("user_id", userId)
+      .eq("brief_date", date)
+      .in("edition", editions),
+    supabase
+      .from("notes")
+      .select("id, title, body_markdown, status, created_at, updated_at")
+      .eq("user_id", userId)
+      .eq("status", "active")
+      .in("title", titles),
+  ]);
+  if (briefs.error) throw briefs.error;
+  if (notes.error) throw notes.error;
+  const rows = (briefs.data ?? []) as Array<{ edition: string; code: string; created_at: string; content: unknown; covered_meeting_ids: string[] | null }>;
+  const own = rows.find((row) => row.edition === edition) ?? null;
+  const morning = edition === "eod" ? (rows.find((row) => row.edition === "am") ?? null) : null;
+  return buildBriefStatus({
+    edition,
+    date,
+    brief: own ? { code: own.code, created_at: own.created_at, content: normalizeBriefContent(own.content), covered_meeting_ids: own.covered_meeting_ids ?? [] } : null,
+    morningNoteIds: morning ? (normalizeBriefContent(morning.content).work_digest_note_ids ?? []) : null,
+    notes: (notes.data ?? []) as BriefStatusNoteRow[],
+  });
 }
 
 // ---------------------------------------------------------------------------

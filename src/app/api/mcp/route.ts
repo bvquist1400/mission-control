@@ -394,7 +394,9 @@ function createMcpServer(): McpServer {
   // save_brief and its EOD alias share one input shape; only the edition differs.
   const SAVE_BRIEF_FIELDS = {
     date: z.string().optional().describe('Brief date YYYY-MM-DD (ET). Defaults to today ET.'),
-    content: z.record(z.string(), z.unknown()).describe('Read-only page content: heading, narrative, first_moves[], stats[{key,label,value}] (in display order; the ready notice quotes the stat with key "done" if there is one, else the first stat, e.g. {key:"due",label:"due today"} first on a morning), next{label, agenda[{time,title,free?,choice_item?}]} (free=true for a free-time line; choice_item = 0-based position of a choice item in items; Baseline links that agenda line to the choice), meetings[{id?,title,short?,start,end?,url?,has_notes,prep?,task_ids?}] for the day timeline (a meeting that starts after the save draws as upcoming: prep = one or two lines on how to go in, task_ids = Brent\'s tasks that prepare for it), tiles[{key,type:"narrative"|"list",label,value?,suffix?,summary?,text?,list?,list_label?,groups[{label?,rows[{title,meta?,task_id?}]}],footnote?,href?}] (href links the tile to another brief page and must be "/briefs/<CODE>", e.g. "/briefs/EOD-0925"; anything else is dropped), footnote, work_digest_note_ids[] (the work digest note ids this brief read, even ones that produced no items).'),
+    mode: z.enum(['refresh']).optional().describe('Leave out for a normal save. "refresh" rebuilds an existing brief in place: every content field is replaced by what you send (the old content is kept in Baseline\'s history), every existing item keeps its number and state untouched, new items are appended, and no second notice is sent. A refresh when the brief does not exist yet is a normal first save (with the notice).'),
+    refresh_reason: z.string().optional().describe('mode "refresh" only: one short line on why, shown on the page as "Refreshed 8:45 AM: <reason>", e.g. "AM work digest added" or "late meeting notes added". At most 200 characters.'),
+    content: z.record(z.string(), z.unknown()).describe('Read-only page content: heading, narrative, first_moves[], stats[{key,label,value}] (in display order; the ready notice quotes the stat with key "done" if there is one, else the first stat, e.g. {key:"due",label:"due today"} first on a morning), next{label, agenda[{time,title,free?,choice_item?}]} (free=true for a free-time line; choice_item = 0-based position of a choice item in items; Baseline links that agenda line to the choice), meetings[{id?,title,short?,start,end?,url?,has_notes,prep?,task_ids?}] for the day timeline (a meeting that starts after the save draws as upcoming: prep = one or two lines on how to go in, task_ids = Brent\'s tasks that prepare for it), tiles[{key,type:"narrative"|"list",label,value?,suffix?,summary?,text?,list?,list_label?,groups[{label?,rows[{title,meta?,task_id?}]}],footnote?,href?}] (href links the tile to another brief page and must be "/briefs/<CODE>", e.g. "/briefs/EOD-0925"; anything else is dropped), footnote (keep it under about 400 characters; the cap is 1,200), work_digest_note_ids[] (the work digest note ids this brief read, even ones that produced no items).'),
     covered_meeting_ids: z.array(z.string()).optional().describe('Granola ids of every meeting read for this brief, including ones that produced no items'),
     items: z.array(z.object({
       kind: z.enum(['proposed_task', 'carry_over', 'carry_group', 'choice']).describe('proposed_task = a meeting or work digest action item (Accept/Dismiss); carry_over = one task that needs a call (Done/Tomorrow/Park); carry_group = several tasks decided together (Tomorrow/Park); choice = pick one option, e.g. a calendar clash'),
@@ -434,7 +436,7 @@ function createMcpServer(): McpServer {
     return { ...toMcpResponse(data), ...(res.ok ? {} : { isError: true }) };
   }
 
-  const SAVE_BRIEF_RULES = 'Proposals are NOT tasks: nothing is created until Brent accepts an item. Every proposed_task must cite at least one meeting in source.meetings or a work digest item in source.work_digest (its lines must be the cited W blocks\' what lines, exactly; only notes of the brief\'s own day: the morning brief cites today\'s AM note, the EOD today\'s AM or PM; a proposal citing the digest keeps no detail; record every digest note read in content.work_digest_note_ids). The first save of the day creates the brief; a later save the same day only appends proposed_task items from meetings (or work digest notes) the brief has not covered yet, and never changes existing items, their numbers or their states. All task_ids and maybe_tracked.task_id must be Brent\'s own tasks. Baseline itself sends Brent one "brief ready" notice on the first save of the day (never on reruns); do not email or message him yourself. The notify.status in the result says sent, failed (with the reason) or already_claimed (an earlier save owns the one notice; notify.sent_at says whether it was delivered). Baseline adds a "Recently unblocked" row itself, on every save, for each work task still showing the "Now unblocked" pill (result.unblocked.added), so never list those yourself; a carry_over you send for such a task becomes its row, and the group name is reserved.';
+  const SAVE_BRIEF_RULES = 'Proposals are NOT tasks: nothing is created until Brent accepts an item. Every proposed_task must cite at least one meeting in source.meetings or a work digest item in source.work_digest (its lines must be the cited W blocks\' what lines, exactly; only notes of the brief\'s own day: the morning brief cites today\'s AM note, the EOD today\'s AM or PM; a proposal citing the digest keeps no detail; record every digest note read in content.work_digest_note_ids). The first save of the day creates the brief; a later save the same day only appends proposed_task items from meetings (or work digest notes) the brief has not covered yet, and never changes existing items, their numbers or their states. With mode "refresh" the content is rewritten as well (call brief_status first to see whether a refresh is needed); an item whose key matches one already on the brief is that item and stays exactly as it is (skipped as kept_on_refresh with its n), and new items follow the same append rules. Text over a field\'s cap is cut at a sentence or word boundary with "…" and listed in the result\'s warnings (field, original_length): shorten it and save again if it matters. All task_ids and maybe_tracked.task_id must be Brent\'s own tasks. Baseline itself sends Brent one "brief ready" notice on the first save of the day (never on reruns); do not email or message him yourself. The notify.status in the result says sent, failed (with the reason), already_claimed (an earlier save owns the one notice; notify.sent_at says whether it was delivered) or skipped_refresh (a refresh never notifies). Baseline adds a "Recently unblocked" row itself, on every save, for each work task still showing the "Now unblocked" pill (result.unblocked.added), so never list those yourself; a carry_over you send for such a task becomes its row, and the group name is reserved.';
 
   mcp.tool(
     'save_brief',
@@ -451,6 +453,25 @@ function createMcpServer(): McpServer {
     `Save the end-of-day brief as a stored page in Baseline and get its code (EOD-MMDD) and link. Same as save_brief with edition "eod". ${SAVE_BRIEF_RULES}`,
     SAVE_BRIEF_FIELDS,
     async (args) => postBrief('eod', args)
+  );
+
+  mcp.tool(
+    'brief_status',
+    'Read-only and cheap: whether the brief of an edition ("am" or "eod") for a day exists, its code, built_at (first save), last_refresh {at, reason} and refresh_count, the work digest notes it read (work_digest_note_ids) and the Granola meetings it covered (covered_meeting_ids), plus that day\'s work digest notes it should cover (am: the AM note; eod: the PM note, and the AM note when the morning brief did not read it), each with status ok | missing | unreadable, note_id, filed_at and in_brief. refresh_needed.digest is true when a readable note it should cover is not in the brief (reasons: am_digest_not_in_brief, pm_digest_not_in_brief); it is false while the brief does not exist (build it instead). Baseline cannot see Granola: compare finished meetings with notes against covered_meeting_ids yourself. Call it first in a brief run.',
+    {
+      edition: z.enum(['am', 'eod']).describe('am = morning brief (AM-MMDD); eod = end of day (EOD-MMDD)'),
+      date: z.string().optional().describe('Brief date YYYY-MM-DD (ET). Defaults to today ET.'),
+    },
+    async ({ edition, date }) => {
+      const url = new URL('/api/briefs/status', 'https://mission-control-orpin-chi.vercel.app');
+      url.searchParams.set('edition', edition);
+      if (date) url.searchParams.set('date', date);
+      const res = await fetch(url.toString(), {
+        headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
+      });
+      const data = await res.json();
+      return { ...toMcpResponse(data), ...(res.ok ? {} : { isError: true }) };
+    }
   );
 
   mcp.tool(

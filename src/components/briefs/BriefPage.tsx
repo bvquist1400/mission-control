@@ -23,6 +23,7 @@ import { patchForRefusedAction } from "@/lib/briefs/act-patch";
 import { countBriefItems } from "@/lib/briefs/counts";
 import { assistantReviewLine } from "@/lib/briefs/copy";
 import { stuckUnblocksText } from "@/lib/briefs/unblocked";
+import { refreshLineText } from "@/lib/briefs/refresh-view";
 import { buildDayTimeline } from "@/components/briefs/timeline";
 import type { BriefCounts, BriefItemRow, BriefMeetingRef, BriefTaskSummary, BriefTile, BriefView } from "@/lib/briefs/types";
 
@@ -52,7 +53,11 @@ function countOpen(items: BriefItemRow[]): BriefCounts {
   return countBriefItems(items, (kind) => CARD_REGISTRY[kind].section === "meetings");
 }
 
-export function BriefPage({ view }: { view: BriefView }) {
+/**
+ * `lateDigestBanner`: the server's sentence when a work digest note this brief
+ * should cover came in after it was built (computed at render, never stored).
+ */
+export function BriefPage({ view, lateDigestBanner = null }: { view: BriefView; lateDigestBanner?: string | null }) {
   const router = useRouter();
   const { toast } = useToast();
   const { brief } = view;
@@ -393,6 +398,7 @@ export function BriefPage({ view }: { view: BriefView }) {
           stats={content.stats}
           wide={!content.next}
           prepCount={timeline.withPrep}
+          refreshLine={refreshLineText(content.refreshes)}
         />
         {content.next ? (
           <NextTile next={content.next} items={items} movesCount={content.first_moves?.length ?? 0} onOpen={() => setSheetKey("next")} />
@@ -409,6 +415,12 @@ export function BriefPage({ view }: { view: BriefView }) {
           />
         ) : null}
       </div>
+
+      {lateDigestBanner ? (
+        <p className="late-digest" role="status">
+          {lateDigestBanner}
+        </p>
+      ) : null}
 
       {content.unblock_stuck ? (
         <p className="ub-stuck" role="status">

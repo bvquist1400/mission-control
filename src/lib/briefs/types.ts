@@ -3,6 +3,7 @@
 // reruns and so Accept can use the key as the created task's external id.
 
 import type { AcceptDueChoice } from "@/lib/briefs/due";
+import type { SaveWarning } from "@/lib/briefs/text-cut";
 
 /** "eod" = end of day (EOD-MMDD), "am" = morning (AM-MMDD). Behavior never branches on edition. */
 export const BRIEF_EDITIONS = ["eod", "am"] as const;
@@ -186,6 +187,19 @@ export interface BriefContent {
    * shows a plain line only then.
    */
   unblock_stuck?: number;
+  /**
+   * Server side only (a save ignores whatever the caller sends): one entry per
+   * `mode: "refresh"` save, oldest first, so the page can say "Refreshed 8:45 AM:
+   * AM digest added". The content each refresh replaced is in brief_revisions (068).
+   */
+  refreshes?: BriefRefresh[];
+}
+
+/** One refresh of a brief: when it was saved and the routine's one-line reason. */
+export interface BriefRefresh {
+  /** ISO timestamp of the refresh save. */
+  at: string;
+  reason?: string;
 }
 
 export interface BriefItemInput {
@@ -201,6 +215,16 @@ export interface SaveBriefInput {
   content: BriefContent;
   covered_meeting_ids: string[];
   items: BriefItemInput[];
+  /**
+   * Absent = the default save (create, or append to a same-day brief).
+   * "refresh" = rewrite the brief's content (snapshot first) and keep every
+   * existing item as it is; a refresh before the brief exists is a first save.
+   */
+  mode?: "refresh";
+  /** mode "refresh" only: one short line on why ("AM digest added"). */
+  refresh_reason?: string | null;
+  /** Text the parse cut to fit (field, original length); the save result passes them back. */
+  warnings?: SaveWarning[];
 }
 
 export interface BriefActionInput {

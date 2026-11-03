@@ -117,6 +117,50 @@ export type Database = {
           },
         ]
       }
+      brief_revisions: {
+        Row: {
+          brief_id: string
+          content: Json
+          covered_meeting_ids: string[]
+          created_at: string
+          id: string
+          reason: string | null
+          replaced_at: string
+          saved_at: string
+          user_id: string
+        }
+        Insert: {
+          brief_id: string
+          content: Json
+          covered_meeting_ids?: string[]
+          created_at?: string
+          id?: string
+          reason?: string | null
+          replaced_at?: string
+          saved_at: string
+          user_id: string
+        }
+        Update: {
+          brief_id?: string
+          content?: Json
+          covered_meeting_ids?: string[]
+          created_at?: string
+          id?: string
+          reason?: string | null
+          replaced_at?: string
+          saved_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "brief_revisions_brief_user_fkey"
+            columns: ["brief_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "briefs"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
       briefing_review_snapshots: {
         Row: {
           anchor_date: string
@@ -3227,6 +3271,16 @@ export type Database = {
           p_state: string
           p_task?: Json
           p_task_updates?: Json
+          p_user_id: string
+        }
+        Returns: Json
+      }
+      brief_refresh_content: {
+        Args: {
+          p_brief_id: string
+          p_content: Json
+          p_covered_meeting_ids: string[]
+          p_refresh: Json
           p_user_id: string
         }
         Returns: Json
