@@ -42,6 +42,8 @@
   --bar-ink: light-dark(#f4f5ea, #f1efe3);
   --bar-ink-2: light-dark(#c9ceb2, #bfc2a6);
   --bar-rule: rgba(255, 255, 255, 0.18);
+  /* Keyboard focus ring on the bar: the bar's own ink (>= 3:1 on the bar in both themes), not the page ring, which is olive-on-olive here. */
+  --bar-focus: var(--bar-ink);
 
   /* "Needs you": marigold, only for the brief button and what Brent must act on. */
   --hi: #f2b230;
@@ -341,8 +343,21 @@ body {
  * Pointer interaction is unaffected: :focus-visible only matches keyboard focus.
  */
 :focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: 2px solid var(--focus-ring, var(--accent-text));
   outline-offset: 2px;
+}
+
+/*
+ * The top bar is dark olive in both themes, so the page ring (olive text on
+ * paper) vanishes on it (1.3:1 in light). Controls on the bar use the bar's
+ * ink; the drop-down panels that hang from it are paper again and keep the
+ * page ring. Plain class selectors, so other <header>s are untouched.
+ */
+.bar-surface {
+  --focus-ring: var(--bar-focus);
+}
+.bar-surface .bar-panel {
+  --focus-ring: var(--accent-text);
 }
 
 /*

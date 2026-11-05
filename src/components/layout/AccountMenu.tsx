@@ -10,7 +10,9 @@ import {
   THEME_LABELS,
   THEME_PAPER_COLORS,
   THEME_PREFERENCES,
+  applyThemeColorMeta,
   themeChoiceNote,
+  themeForRadioKey,
   themeCookieString,
   type ThemePreference,
 } from "@/lib/theme";
@@ -42,11 +44,13 @@ const PREVIEW: Record<ThemePreference, [string, string]> = {
 /**
  * Applies a theme choice at once (no reload) and remembers it on this device.
  * The cookie is what the server reads on the next page load, so that page
- * paints in the right colours from the start.
+ * paints in the right colours from the start; the theme-color tags are updated
+ * here too, so the browser bar tint follows without waiting for that load.
  */
 export function applyThemePreference(preference: ThemePreference): void {
   document.cookie = themeCookieString(preference);
   document.documentElement.dataset.theme = preference;
+  applyThemeColorMeta(document, preference);
 }
 
 /**
@@ -72,6 +76,7 @@ export function AccountMenu({
   const systemIsDark = useSystemIsDark();
   const wrapperRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const groupRef = useRef<HTMLDivElement>(null);
   const menuId = useId();
 
   const initial = (email?.trim()?.[0] ?? "B").toUpperCase();
@@ -100,9 +105,24 @@ export function AccountMenu({
     };
   }, [open, close]);
 
+  // Opening the menu moves focus onto the chosen Appearance radio, the group's one tab stop.
+  useEffect(() => {
+    if (open) groupRef.current?.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]')?.focus();
+  }, [open]);
+
   function choose(next: ThemePreference) {
     applyThemePreference(next);
     setPreference(next);
+  }
+
+  /** Radio-group keys: arrows move and select (wrapping), Home/End jump, Tab leaves the group. */
+  function handleRadioKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    const from = (event.target as HTMLElement).dataset.value as ThemePreference | undefined;
+    const next = from ? themeForRadioKey(from, event.key) : null;
+    if (!next) return;
+    event.preventDefault();
+    choose(next);
+    groupRef.current?.querySelector<HTMLElement>(`[data-value="${next}"]`)?.focus();
   }
 
   async function handleSignOut() {
@@ -132,7 +152,7 @@ export function AccountMenu({
         ref={buttonRef}
         type="button"
         onClick={() => setOpen((current) => !current)}
-        aria-haspopup="true"
+        aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
         aria-label="Account and appearance"
@@ -149,7 +169,7 @@ export function AccountMenu({
           id={menuId}
           role="dialog"
           aria-label="Account"
-          className="absolute right-0 top-[calc(100%+10px)] z-50 w-[300px] max-w-[calc(100vw-24px)] border-[1.5px] border-foreground bg-panel text-foreground shadow-lg"
+          className="bar-panel absolute right-0 top-[calc(100%+10px)] z-50 w-[300px] max-w-[calc(100vw-24px)] border-[1.5px] border-foreground bg-panel text-foreground shadow-lg"
         >
           <div className="border-b border-stroke px-3.5 py-3">
             <p className="truncate font-cond text-[15px] font-semibold leading-tight" title={email ?? undefined}>
@@ -161,7 +181,13 @@ export function AccountMenu({
           <p id={`${menuId}-appearance`} className="px-3.5 pb-1 pt-3 font-mono text-xs font-semibold text-muted-foreground">
             Appearance
           </p>
-          <div role="radiogroup" aria-labelledby={`${menuId}-appearance`} className="grid grid-cols-3 gap-1.5 px-3.5 pb-1.5 pt-2">
+          <div
+            ref={groupRef}
+            role="radiogroup"
+            aria-labelledby={`${menuId}-appearance`}
+            onKeyDown={handleRadioKeyDown}
+            className="grid grid-cols-3 gap-1.5 px-3.5 pb-1.5 pt-2"
+          >
             {THEME_PREFERENCES.map((value) => {
               const selected = preference === value;
               const [a, b] = PREVIEW[value];
@@ -171,6 +197,8 @@ export function AccountMenu({
                   type="button"
                   role="radio"
                   aria-checked={selected}
+                  data-value={value}
+                  tabIndex={selected ? 0 : -1}
                   onClick={() => choose(value)}
                   className={`flex min-h-11 flex-col items-center gap-1.5 px-1.5 pb-2 pt-1.5 font-cond text-[13px] font-semibold transition ${
                     selected ? "border-2 border-brand bg-brand-wash" : "border border-stroke hover:bg-panel-muted"
@@ -205,7 +233,9 @@ export function AccountMenu({
               type="button"
               className={itemClass}
               onClick={() => {
-                close();
+                // Focus goes back to the account button first, so the dialog remembers
+                // it and hands focus back there when it closes.
+                close(true);
                 onOpenShortcuts();
               }}
             >

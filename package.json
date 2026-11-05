@@ -32,6 +32,7 @@
     "test:theme": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-theme.mjs",
     "test:project-colors": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-project-colors.mjs",
     "test:project-colors-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-project-colors-db.mjs",
+    "test:shell-a11y": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-shell-a11y.mjs",
     "test:calendar-sanitize": "node scripts/test-calendar-sanitizer.mjs",
     "test:calendar-api": "node scripts/test-calendar-api-contract.mjs",
     "test:sprint-dates": "node --experimental-strip-types scripts/test-sprint-date-ranges.mjs",

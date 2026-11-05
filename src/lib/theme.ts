@@ -58,6 +58,48 @@ export function themeColorMeta(
   ];
 }
 
+/**
+ * Brings the page's `<meta name="theme-color">` tags in line with a choice made
+ * in the account menu, so the browser/iOS bar tint follows it without a reload
+ * (the server only writes these tags on a full load). Tags the server rendered
+ * are changed in place and never removed: React owns them, and a stale extra
+ * one is switched off with `media="not all"` instead.
+ */
+export function applyThemeColorMeta(
+  doc: Pick<Document, "querySelectorAll" | "createElement" | "head">,
+  preference: ThemePreference
+): void {
+  const entries = themeColorMeta(preference);
+  const existing = Array.from(doc.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]'));
+  entries.forEach((entry, index) => {
+    let meta = existing[index];
+    if (!meta) {
+      meta = doc.createElement("meta");
+      meta.setAttribute("name", "theme-color");
+      doc.head.appendChild(meta);
+    }
+    meta.setAttribute("content", entry.color);
+    if (entry.media) meta.setAttribute("media", entry.media);
+    else meta.removeAttribute("media");
+  });
+  existing.slice(entries.length).forEach((meta) => meta.setAttribute("media", "not all"));
+}
+
+/**
+ * Radio-group keys for the Appearance choice: arrows move to the next/previous
+ * option and wrap, Home/End jump to the ends. null = not a radio-group key.
+ */
+export function themeForRadioKey(current: ThemePreference, key: string): ThemePreference | null {
+  const count = THEME_PREFERENCES.length;
+  const index = THEME_PREFERENCES.indexOf(current);
+  if (index < 0) return null;
+  if (key === "ArrowRight" || key === "ArrowDown") return THEME_PREFERENCES[(index + 1) % count];
+  if (key === "ArrowLeft" || key === "ArrowUp") return THEME_PREFERENCES[(index - 1 + count) % count];
+  if (key === "Home") return THEME_PREFERENCES[0];
+  if (key === "End") return THEME_PREFERENCES[count - 1];
+  return null;
+}
+
 export const THEME_LABELS: Record<ThemePreference, string> = {
   system: "System",
   light: "Light",
