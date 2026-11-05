@@ -3,6 +3,7 @@ import { DEFAULT_PROJECT_STAGE, PROJECT_STAGE_VALUES, normalizeProjectStage } fr
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import { normalizeTaskTags } from '@/lib/task-tags';
 import { parsePaceSettings } from '@/lib/pace';
+import { isProjectColorCheckViolation, parseProjectColorInput, PROJECT_COLOR_PROBLEM_TEXT } from '@/lib/project-colors';
 import { DependencyReadIncompleteError, fetchProjectDependencyLinks } from '@/lib/task-dependency-links';
 
 function withNormalizedProjectStage<T extends Record<string, unknown>>(project: T): T & { stage: string } {
@@ -121,6 +122,7 @@ export async function PATCH(
       'tags',
       'unit_label',
       'pace_settings',
+      'color',
     ];
 
     if (typeof body.name === 'string' && body.name.trim().length === 0) {
@@ -150,6 +152,16 @@ export async function PATCH(
       if (typeof value !== 'number' || !Number.isFinite(value) || Math.round(value) < 1) {
         return NextResponse.json({ error: 'portfolio_rank must be a positive integer' }, { status: 400 });
       }
+    }
+
+    // Project square colour (069): "#RRGGBB", or null / "" for the default (its application's colour).
+    let color: string | null | undefined;
+    if ('color' in body) {
+      const parsed = parseProjectColorInput(body.color);
+      if (!parsed.ok) {
+        return NextResponse.json({ error: parsed.error }, { status: 400 });
+      }
+      color = parsed.value;
     }
 
     // Pace tracking (migration 059).
@@ -197,6 +209,8 @@ export async function PATCH(
         updates[field] = typeof value === 'string' ? value.trim().toLowerCase() || null : null;
       } else if (field === 'pace_settings') {
         updates[field] = paceSettings;
+      } else if (field === 'color') {
+        updates[field] = color;
       } else {
         updates[field] = value;
       }
@@ -236,6 +250,9 @@ export async function PATCH(
     if (error) {
       if (error.code === 'PGRST116') {
         return NextResponse.json({ error: 'Project not found' }, { status: 404 });
+      }
+      if (isProjectColorCheckViolation(error)) {
+        return NextResponse.json({ error: PROJECT_COLOR_PROBLEM_TEXT.format }, { status: 400 });
       }
       throw error;
     }

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore }
 import { useRouter } from "next/navigation";
 import { createSupabaseBrowserClient } from "@/lib/supabase";
 import { useToast } from "@/components/ui/Toast";
+import { useProjectColors } from "@/components/project-colors/ProjectColorsProvider";
 import {
   THEME_BAR_COLORS,
   THEME_LABELS,
@@ -64,6 +65,7 @@ export function AccountMenu({
 }) {
   const router = useRouter();
   const { toast } = useToast();
+  const { openEditor: openColourEditor } = useProjectColors();
   const [open, setOpen] = useState(false);
   const [preference, setPreference] = useState<ThemePreference>(theme);
   const [signingOut, setSigningOut] = useState(false);
@@ -188,9 +190,16 @@ export function AccountMenu({
           </p>
 
           <div>
-            <button type="button" disabled className={`${itemClass} text-muted-foreground hover:bg-transparent`}>
+            <button
+              type="button"
+              className={itemClass}
+              onClick={() => {
+                close();
+                openColourEditor();
+              }}
+            >
               Project colours…
-              <span className="ml-auto font-mono text-xs text-muted-foreground">coming soon</span>
+              <span className="ml-auto font-mono text-xs text-muted-foreground">Edit colours</span>
             </button>
             <button
               type="button"

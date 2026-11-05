@@ -6,6 +6,8 @@ import type { BlockedReason, TaskWithImplementation } from "@/types/database";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
 import { isPersonalTaskOrProject } from "@/lib/personal-exclusion";
 import { PersonalBadge } from "@/components/ui/PersonalBadge";
+import { ProjectSquare } from "@/components/project-colors/ProjectSquare";
+import { squareInputOf } from "@/lib/project-colors";
 
 const TIME_ZONE = DEFAULT_WORKDAY_CONFIG.timezone;
 
@@ -51,6 +53,8 @@ export function WaitingStrip({ tasks }: { tasks: TaskWithImplementation[] }) {
               onClick={() => openTask(task)}
               className="group inline-flex max-w-full items-center gap-2 rounded-full border border-l-4 border-stroke border-l-amber-400 bg-panel px-3 py-1.5 text-left shadow-sm transition hover:border-foreground/20 hover:bg-panel-muted/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
             >
+              {/* Inside the chip's button, so the square is a plain mark. */}
+              <ProjectSquare {...squareInputOf(task)} editable={false} />
               <span className="truncate text-sm font-medium text-foreground">{task.title}</span>
               {isPersonalTaskOrProject(task) ? <PersonalBadge className="shrink-0" /> : null}
               <span className="shrink-0 rounded px-1.5 py-0.5 text-xs font-semibold text-amber-300 ring-1 ring-inset ring-amber-500/30">

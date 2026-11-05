@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { DEFAULT_PROJECT_STAGE, PROJECT_STAGE_VALUES, normalizeProjectStage } from '@/lib/project-stage';
 import { chunks, pagedSelect } from '@/lib/supabase/batch';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
+import { isProjectColorCheckViolation, parseProjectColorInput, PROJECT_COLOR_PROBLEM_TEXT } from '@/lib/project-colors';
 import { normalizeTaskTags } from '@/lib/task-tags';
 
 interface ProjectTaskStats {
@@ -291,6 +292,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Project square colour (069): optional "#RRGGBB"; left out or null = the default.
+    let color: string | null = null;
+    if ('color' in body) {
+      const parsed = parseProjectColorInput(body.color);
+      if (!parsed.ok) {
+        return NextResponse.json({ error: parsed.error }, { status: 400 });
+      }
+      color = parsed.value;
+    }
+
     const nextRank = await getNextPortfolioRank(supabase, userId, implementationId);
 
     const insertPayload: Record<string, unknown> = {
@@ -306,6 +317,10 @@ export async function POST(request: NextRequest) {
       tags: normalizeTaskTags(body.tags),
       portfolio_rank: typeof body.portfolio_rank === 'number' ? body.portfolio_rank : nextRank,
     };
+    // Only sent when set, so a create without a colour works the same before and after 069.
+    if (color !== null) {
+      insertPayload.color = color;
+    }
 
     const { data, error } = await supabase
       .from('projects')
@@ -313,7 +328,12 @@ export async function POST(request: NextRequest) {
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      if (isProjectColorCheckViolation(error)) {
+        return NextResponse.json({ error: PROJECT_COLOR_PROBLEM_TEXT.format }, { status: 400 });
+      }
+      throw error;
+    }
 
     return NextResponse.json(withNormalizedProjectStage(data), { status: 201 });
   } catch (error) {

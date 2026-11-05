@@ -12,6 +12,30 @@ import {
 } from "@/lib/task-handoff";
 import { formatShortDate, type AssignedTask, type LaterTask } from "@/lib/portfolio";
 import type { TaskWithImplementation } from "@/types/database";
+import { ProjectSquare, ProjectTag, resolveSquareFromCatalog } from "@/components/project-colors/ProjectSquare";
+import { useProjectColors } from "@/components/project-colors/ProjectColorsProvider";
+
+/**
+ * The colour square before a row's app name (S2); names come from the colour
+ * list. With no app name in the line (a personal project without an app), the
+ * project's short name goes with it, so colour is never the only signal.
+ */
+function TaskSquare({ task }: { task: Pick<AssignedTask, "app" | "appId" | "projectId"> }) {
+  const colors = useProjectColors();
+  if (!task.appId && !task.projectId) return null;
+  const app = task.appId ? { id: task.appId, name: task.app ?? "" } : null;
+  const project = task.projectId ? { id: task.projectId, name: "" } : null;
+  if (!task.app) {
+    if (!resolveSquareFromCatalog(colors, app, project)) return null;
+    return (
+      <>
+        <ProjectTag app={app} project={project} className="align-[-1px]" />
+        {" · "}
+      </>
+    );
+  }
+  return <ProjectSquare className="mr-1.5 align-[-1px]" app={app} project={project} />;
+}
 
 /**
  * Lets v5 pages (Portfolio, record pages) open the app's task editor in place.
@@ -107,7 +131,10 @@ function AssignedRow({
       <button type="button" className="pf-what" onClick={onOpen} disabled={opening}>
         {task.title}
       </button>
-      <span className={`pf-ctx${task.overdue ? " late" : ""}`}>{ctx.length ? ctx.join(" · ") : task.status}</span>
+      <span className={`pf-ctx${task.overdue ? " late" : ""}`}>
+        <TaskSquare task={task} />
+        {ctx.length ? ctx.join(" · ") : task.status}
+      </span>
       <div className="pf-row-actions">
         <button type="button" className="btn sm" onClick={onOpen} disabled={opening}>
           {opening ? "Opening…" : "Open"}
@@ -228,7 +255,10 @@ export function LaterList({ tasks }: { tasks: LaterTask[] }) {
               <button type="button" className="pf-what" onClick={() => void open(task.id)} disabled={openingId === task.id}>
                 {task.title}
               </button>
-              <span className="pf-ctx">{laterContext(task).join(" · ")}</span>
+              <span className="pf-ctx">
+                <TaskSquare task={task} />
+                {laterContext(task).join(" · ")}
+              </span>
               {task.statusLine ? <span className="pf-ctx pf-later-line">{task.statusLine}</span> : null}
               {openError?.id === task.id ? (
                 <span className="pf-err" role="alert">

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { ProjectTag } from "@/components/project-colors/ProjectSquare";
 import type { TaskCardData } from "@/components/tasks/TaskCard";
 import { getTaskVisualState, NowUnblockedPill, TaskStateBadge } from "@/components/tasks/task-state";
 import { PersonalBadge } from "@/components/ui/PersonalBadge";
@@ -116,6 +117,7 @@ export function WeeklyTaskCard({
           {state ? <TaskStateBadge state={state} className="mt-1" /> : null}
           <NowUnblockedPill task={{ status: task.status, unblocked_at: task.unblockedAt }} className="ml-1 mt-1" />
         </button>
+        {task.squareInput ? <ProjectTag {...task.squareInput} className="mt-1 max-w-full" /> : null}
 
         <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
           <Button variant="success" size="sm"
@@ -173,6 +175,7 @@ export function WeeklyTaskCard({
           <RangeSrText view={range} />
         </button>
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+          {task.squareInput ? <ProjectTag {...task.squareInput} className="max-w-full" /> : null}
           {task.isPersonal ? <PersonalBadge /> : null}
           <RangeChip view={range} />
           {state ? <TaskStateBadge state={state} /> : null}

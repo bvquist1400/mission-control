@@ -1,5 +1,6 @@
 "use client";
 
+import { ProjectSquare } from "@/components/project-colors/ProjectSquare";
 import Link from "next/link";
 import { formatDateOnly } from "@/components/utils/dates";
 import { ProjectStageBadge } from "@/components/ui/ProjectStageBadge";
@@ -36,6 +37,10 @@ export function ProjectTable({ projects }: ProjectTableProps) {
               <tr key={project.id} className="border-b border-stroke/60 last:border-b-0 hover:bg-panel-muted/30">
                 <td className="px-3 py-2.5 align-top">
                   <div className="flex max-w-[300px] items-center gap-2">
+                    <ProjectSquare
+                      app={project.implementationId && project.implementationName ? { id: project.implementationId, name: project.implementationName } : null}
+                      project={{ id: project.id, name: project.name, tags: project.isPersonal ? ["personal"] : [] }}
+                    />
                     <Link
                       href={`/projects/${project.id}`}
                       title={project.name}

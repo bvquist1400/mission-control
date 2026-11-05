@@ -10,6 +10,16 @@ import {
   type Timeline,
 } from "@/lib/portfolio";
 import { AssignedList, LaterList, TaskEditorLayer } from "@/components/portfolio/PortfolioTasks";
+import { ProjectSquare } from "@/components/project-colors/ProjectSquare";
+
+/** A lane's colour square: an application lane, or a personal project lane (`project:<id>`, tagged personal by definition). */
+function LaneSquare({ app }: { app: PortfolioApp }) {
+  return app.kind === "app" ? (
+    <ProjectSquare app={{ id: app.id, name: app.name }} />
+  ) : (
+    <ProjectSquare project={{ id: app.id.replace(/^project:/, ""), name: app.name, tags: ["personal"] }} />
+  );
+}
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -222,6 +232,7 @@ function AppRow({ app, open }: { app: PortfolioApp; open: boolean }) {
             <span className="pf-chev" aria-hidden="true">
               ›
             </span>
+            <LaneSquare app={app} />
             {app.name}
           </span>
           <span className="pf-ph">{app.phase}</span>
@@ -306,7 +317,8 @@ export function PortfolioPage({ view }: { view: PortfolioView }) {
             {view.apps.length > 0 ? (
               <div className="pf-where">
                 {view.apps.map((app) => (
-                  <span key={app.id}>
+                  <span key={app.id} className="pf-where-item">
+                    <LaneSquare app={app} />
                     {app.name} <b>{app.counts.pct ?? 0}%</b>
                   </span>
                 ))}

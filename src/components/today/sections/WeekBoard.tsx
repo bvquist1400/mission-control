@@ -1,5 +1,7 @@
 "use client";
 
+import { squareInputOf } from "@/lib/project-colors";
+import { ProjectTag } from "@/components/project-colors/ProjectSquare";
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -72,6 +74,7 @@ interface WaitingTask {
   waitingOn: string;
   followUpAt: string | null;
   isPersonal: boolean;
+  squareInput: ReturnType<typeof squareInputOf>;
 }
 
 interface WeekBoardProps {
@@ -101,6 +104,7 @@ function taskToCardData(
     pinned: Boolean(task.pinned),
     syncedToday,
     implementationName: task.implementation?.name ?? null,
+    squareInput: squareInputOf(task),
     dependencyBlocked: Boolean(task.dependency_blocked),
     updatedAt: task.updated_at ?? null,
     unblockedAt: task.unblocked_at ?? null,
@@ -133,6 +137,7 @@ function taskToWaitingTask(task: TaskWithImplementation): WaitingTask {
     waitingOn: task.waiting_on || "Unknown",
     followUpAt: task.follow_up_at,
     isPersonal: isPersonalTaskOrProject(task),
+    squareInput: squareInputOf(task),
   };
 }
 
@@ -570,6 +575,8 @@ function WaitingReviewColumn({
             >
               <h3 className="text-sm font-semibold leading-relaxed text-foreground">{item.title}</h3>
               {item.isPersonal ? <PersonalBadge className="mt-1" /> : null}
+              {/* Inside the open button, so the square is a plain mark here. */}
+              <ProjectTag {...item.squareInput} editable={false} className="mt-1 max-w-full" />
               <p className="mt-2 text-xs text-muted-foreground">
                 Waiting on {item.waitingOn}
                 {item.followUpAt ? ` · follow up ${formatDate(item.followUpAt)}` : ""}

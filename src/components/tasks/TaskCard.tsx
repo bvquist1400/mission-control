@@ -1,3 +1,4 @@
+import type { ColorEntity, ProjectColorEntity } from "@/lib/project-colors";
 import type { MouseEvent } from "react";
 import { getTaskVisualState, NowUnblockedPill, TaskStateBadge } from "@/components/tasks/task-state";
 import { TaskTagChips } from "@/components/tasks/TaskTagChips";
@@ -21,6 +22,8 @@ export interface TaskCardData {
   updatedAt?: string | null;
   /** Now unblocked (067): set while the task shows the green pill. */
   unblockedAt?: string | null;
+  /** Project colours (S2): the task's application and project, for its colour square. */
+  squareInput?: { app: ColorEntity | null; project: ProjectColorEntity | null };
 }
 
 interface TaskCardProps {

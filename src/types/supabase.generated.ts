@@ -480,6 +480,7 @@ export type Database = {
       }
       implementations: {
         Row: {
+          color: string | null
           created_at: string
           health_snapshot: Json | null
           id: string
@@ -499,6 +500,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          color?: string | null
           created_at?: string
           health_snapshot?: Json | null
           id?: string
@@ -518,6 +520,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          color?: string | null
           created_at?: string
           health_snapshot?: Json | null
           id?: string
@@ -2084,6 +2087,7 @@ export type Database = {
       }
       projects: {
         Row: {
+          color: string | null
           created_at: string
           description: string | null
           id: string
@@ -2102,6 +2106,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          color?: string | null
           created_at?: string
           description?: string | null
           id?: string
@@ -2120,6 +2125,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          color?: string | null
           created_at?: string
           description?: string | null
           id?: string

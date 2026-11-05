@@ -1,5 +1,6 @@
 "use client";
 
+import { ProjectSquare } from "@/components/project-colors/ProjectSquare";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -471,6 +472,7 @@ export default function ImplementationsPage() {
                           >
                             DRAG
                           </span>
+                          <ProjectSquare app={{ id: implementation.id, name: implementation.name }} />
                           <Link href={`/applications/${implementation.id}`} className="font-medium text-foreground hover:underline">
                             {implementation.name}
                           </Link>

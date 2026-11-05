@@ -1,5 +1,6 @@
 "use client";
 
+import { ProjectSquare } from "@/components/project-colors/ProjectSquare";
 import Link from "next/link";
 import { formatDateOnly } from "@/components/utils/dates";
 import type { ProjectStage, RagStatus } from "@/types/database";
@@ -46,6 +47,10 @@ export function ProjectCard({ project }: ProjectCardProps) {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex flex-wrap items-center gap-2">
+            <ProjectSquare
+              app={project.implementationId && project.implementationName ? { id: project.implementationId, name: project.implementationName } : null}
+              project={{ id: project.id, name: project.name, tags: project.isPersonal ? ["personal"] : [] }}
+            />
             <h3 className="text-base font-semibold text-foreground">{project.name}</h3>
             {project.isPersonal ? <PersonalBadge /> : null}
           </div>

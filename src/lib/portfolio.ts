@@ -254,6 +254,9 @@ export interface AssignedTask {
   id: string;
   title: string;
   app: string | null;
+  /** Project colours (S2): the ids behind its colour square. */
+  appId: string | null;
+  projectId: string | null;
   statusLine: string | null;
   status: TaskStatus;
   due: string | null;
@@ -267,6 +270,9 @@ export interface LaterTask {
   id: string;
   title: string;
   app: string | null;
+  /** Project colours (S2): the ids behind its colour square. */
+  appId: string | null;
+  projectId: string | null;
   statusLine: string | null;
   status: TaskStatus;
   /** waiting_on text, if any. */
@@ -1004,6 +1010,8 @@ export function buildPortfolio(
         id: task.id,
         title: task.title,
         app: appName(task),
+        appId: task.implementation_id,
+        projectId: task.project_id,
         statusLine: task.status_line,
         status: task.status,
         due,
@@ -1028,6 +1036,8 @@ export function buildPortfolio(
         id: task.id,
         title: task.title,
         app: appName(task),
+        appId: task.implementation_id,
+        projectId: task.project_id,
         statusLine: task.status_line,
         status: task.status,
         waitingOn: task.waiting_on?.trim() || null,

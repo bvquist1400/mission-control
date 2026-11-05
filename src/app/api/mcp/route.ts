@@ -1361,6 +1361,7 @@ function createMcpServer(): McpServer {
       priority_weight: z.number().int().min(0).max(10).optional(),
       priority_note: z.string().nullable().optional(),
       portfolio_rank: z.number().int().min(1).optional(),
+      color: z.string().nullable().optional().describe('Project square colour as "#RRGGBB" (e.g. "#3B5BA5"); null clears it back to the default. Yellow/gold is kept for "needs you" and refused, and so is a colour too pale for the light background (3:1).'),
     },
     async ({ application_id, ...updates }) => {
       const res = await fetch(
@@ -1375,7 +1376,7 @@ function createMcpServer(): McpServer {
         }
       );
       const data = await res.json();
-      return toMcpResponse(data);
+      return { ...toMcpResponse(data), ...(res.ok ? {} : { isError: true }) };
     }
   );
 
@@ -1514,6 +1515,7 @@ function createMcpServer(): McpServer {
       status_summary: z.string().optional(),
       tags: z.array(z.string()).optional().describe('Freeform lowercase tags'),
       portfolio_rank: z.number().int().min(1).optional().describe('Positive integer for ordering within the portfolio'),
+      color: z.string().optional().describe('Project square colour as "#RRGGBB" (e.g. "#3B5BA5"); leave out for the default (its application\'s colour, else the theme default). Yellow/gold and colours too pale for the light background are refused.'),
     },
     async (args) => {
       const res = await fetch('https://mission-control-orpin-chi.vercel.app/api/projects', {
@@ -1525,7 +1527,7 @@ function createMcpServer(): McpServer {
         body: JSON.stringify(args),
       });
       const data = await res.json();
-      return toMcpResponse(data);
+      return { ...toMcpResponse(data), ...(res.ok ? {} : { isError: true }) };
     }
   );
 
@@ -1711,6 +1713,7 @@ function createMcpServer(): McpServer {
           }).nullable().optional().describe('Stitch gauge from the swatch (e.g. 18 stitches per 4 in): with it set, each width also returns its length; null clears'),
         }).nullable().optional(),
       }).nullable().optional().describe('Pace tracking settings; null clears'),
+      color: z.string().nullable().optional().describe('Project square colour as "#RRGGBB" (e.g. "#3B5BA5"); null clears it (the square then shows its application\'s colour, else the theme default). Yellow/gold is kept for "needs you" and refused, and so is a colour too pale for the light background (3:1).'),
     },
     async ({ project_id, ...updates }) => {
       const res = await fetch(

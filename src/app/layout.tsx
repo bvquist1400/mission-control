@@ -6,6 +6,8 @@ import { TopBar } from "@/components/layout/TopBar";
 import { PageViewAnalytics } from "@/components/analytics/PageViewAnalytics";
 import { ToastProvider } from "@/components/ui/Toast";
 import { DateCascadeProvider } from "@/components/tasks/DateCascadeProvider";
+import { ProjectColorsProvider } from "@/components/project-colors/ProjectColorsProvider";
+import { EMPTY_PROJECT_COLOR_CATALOG, loadProjectColorCatalog, type ProjectColorCatalog } from "@/lib/project-colors-queries";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { isMcpDeployment } from "@/lib/mcp/config";
 import { getTodayBriefStatus } from "@/lib/briefs/service";
@@ -68,6 +70,7 @@ export default async function RootLayout({
 
   let userEmail: string | null = null;
   let todayBrief: TodayBriefStatus | null = null;
+  let colorCatalog: ProjectColorCatalog = EMPTY_PROJECT_COLOR_CATALOG;
   try {
     const supabase = await createSupabaseServerClient();
     const {
@@ -75,10 +78,17 @@ export default async function RootLayout({
     } = await supabase.auth.getUser();
     userEmail = user?.email ?? null;
     if (user) {
-      todayBrief = await getTodayBriefStatus(supabase, user.id).catch((error: unknown) => {
-        console.error("[layout] today's brief status failed:", error);
-        return null;
-      });
+      // Project colours (S2) are read here too, so every square paints right on the first frame.
+      [todayBrief, colorCatalog] = await Promise.all([
+        getTodayBriefStatus(supabase, user.id).catch((error: unknown) => {
+          console.error("[layout] today's brief status failed:", error);
+          return null;
+        }),
+        loadProjectColorCatalog(supabase, user.id).catch((error: unknown) => {
+          console.error("[layout] project colours failed:", error);
+          return EMPTY_PROJECT_COLOR_CATALOG;
+        }),
+      ]);
     }
   } catch {
     // Signed out, or auth is unreachable — the top bar just shows no account.
@@ -93,7 +103,9 @@ export default async function RootLayout({
       <body className="antialiased">
         <ToastProvider>
           <DateCascadeProvider>
-            <AppShell topBar={<TopBar userEmail={userEmail} todayBrief={todayBrief} theme={theme} />}>{children}</AppShell>
+            <ProjectColorsProvider initialCatalog={colorCatalog}>
+              <AppShell topBar={<TopBar userEmail={userEmail} todayBrief={todayBrief} theme={theme} />}>{children}</AppShell>
+            </ProjectColorsProvider>
           </DateCascadeProvider>
         </ToastProvider>
         {/* Page views: main deployment only. The MCP proxy never reports. */}

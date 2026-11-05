@@ -1,5 +1,7 @@
 "use client";
 
+import { ProjectTag } from "@/components/project-colors/ProjectSquare";
+import { squareInputOf } from "@/lib/project-colors";
 import {
   Fragment,
   useCallback,
@@ -1365,6 +1367,7 @@ export function TaskGrid({
                         >
                           {task.title}
                         </button>
+                        <ProjectTag {...squareInputOf(task)} className="mr-2 mt-1 max-w-full" />
                         {visualState ? (
                           <TaskStateBadge state={visualState} className="mt-1" />
                         ) : null}

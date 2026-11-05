@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ProjectSquare } from "@/components/project-colors/ProjectSquare";
 import { formatDateOnly } from "@/components/utils/dates";
 import type { HealthLabel, HealthTrend, ImplPhase, RagStatus } from "@/types/database";
 import { PhaseBadge } from "@/components/ui/PhaseBadge";
@@ -110,7 +111,10 @@ export function ImplementationCard({ implementation, onCopyUpdate }: Implementat
     >
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h3 className="text-base font-semibold text-foreground">{implementation.name}</h3>
+            <h3 className="flex items-center gap-2 text-base font-semibold text-foreground">
+              <ProjectSquare app={{ id: implementation.id, name: implementation.name }} />
+              {implementation.name}
+            </h3>
             <p className="mt-1 text-xs text-muted-foreground">Target: {formatDateOnly(implementation.targetDate)}</p>
           </div>
         <div className="flex items-center gap-2">

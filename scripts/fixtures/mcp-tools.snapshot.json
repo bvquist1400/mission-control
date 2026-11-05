@@ -616,6 +616,10 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 9007199254740991
+        },
+        "color": {
+          "description": "Project square colour as \"#RRGGBB\" (e.g. \"#3B5BA5\"); leave out for the default (its application's colour, else the theme default). Yellow/gold and colours too pale for the light background are refused.",
+          "type": "string"
         }
       },
       "required": [
@@ -2955,6 +2959,17 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 9007199254740991
+        },
+        "color": {
+          "description": "Project square colour as \"#RRGGBB\" (e.g. \"#3B5BA5\"); null clears it back to the default. Yellow/gold is kept for \"needs you\" and refused, and so is a colour too pale for the light background (3:1).",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -3382,6 +3397,17 @@
                   ]
                 }
               }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "color": {
+          "description": "Project square colour as \"#RRGGBB\" (e.g. \"#3B5BA5\"); null clears it (the square then shows its application's colour, else the theme default). Yellow/gold is kept for \"needs you\" and refused, and so is a colour too pale for the light background (3:1).",
+          "anyOf": [
+            {
+              "type": "string"
             },
             {
               "type": "null"

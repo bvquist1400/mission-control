@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
+import { isProjectColorCheckViolation, parseProjectColorInput, PROJECT_COLOR_PROBLEM_TEXT } from '@/lib/project-colors';
 
 function toStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) {
@@ -105,7 +106,18 @@ export async function PATCH(
       'priority_weight',
       'priority_note',
       'portfolio_rank',
+      'color',
     ];
+
+    // Project square colour (069): "#RRGGBB", or null / "" for the default.
+    let color: string | null | undefined;
+    if ('color' in body) {
+      const parsed = parseProjectColorInput(body.color);
+      if (!parsed.ok) {
+        return NextResponse.json({ error: parsed.error }, { status: 400 });
+      }
+      color = parsed.value;
+    }
 
     if (typeof body.name === 'string' && body.name.length > 200) {
       return NextResponse.json({ error: 'name must be 200 characters or fewer' }, { status: 400 });
@@ -154,6 +166,8 @@ export async function PATCH(
         updates[field] = Math.max(1, Math.round(value));
       } else if ((field === 'stakeholders' || field === 'keywords') && value !== undefined) {
         updates[field] = toStringArray(value);
+      } else if (field === 'color') {
+        updates[field] = color;
       } else {
         updates[field] = value;
       }
@@ -174,6 +188,9 @@ export async function PATCH(
     if (error) {
       if (error.code === 'PGRST116') {
         return NextResponse.json({ error: 'Application not found' }, { status: 404 });
+      }
+      if (isProjectColorCheckViolation(error)) {
+        return NextResponse.json({ error: PROJECT_COLOR_PROBLEM_TEXT.format }, { status: 400 });
       }
       throw error;
     }

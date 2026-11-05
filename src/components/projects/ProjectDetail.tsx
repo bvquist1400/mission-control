@@ -1,5 +1,6 @@
 "use client";
 
+import { ProjectSquare } from "@/components/project-colors/ProjectSquare";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ProjectTaskSectionsPanel } from "@/components/projects/ProjectTaskSectionsPanel";
@@ -202,6 +203,11 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
           />
         ) : (
           <div className="flex flex-wrap items-center gap-2">
+            <ProjectSquare
+              size="md"
+              app={project.implementation ? { id: project.implementation.id, name: project.implementation.name } : null}
+              project={{ id: project.id, name: project.name, tags: project.tags, color: project.color ?? null }}
+            />
             <h2 className="text-lg font-semibold text-foreground">{project.name}</h2>
             {isPersonal ? <PersonalBadge /> : null}
           </div>
@@ -251,12 +257,15 @@ export function ProjectDetail({ id }: ProjectDetailProps) {
           <article className="rounded-lg bg-panel-muted p-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Application</p>
             {project.implementation ? (
-              <Link
-                href={`/applications/${project.implementation.id}`}
-                className="mt-1 block text-sm font-medium text-accent-text hover:underline"
-              >
-                {project.implementation.name}
-              </Link>
+              <span className="mt-1 flex items-center gap-2">
+                <ProjectSquare app={{ id: project.implementation.id, name: project.implementation.name }} />
+                <Link
+                  href={`/applications/${project.implementation.id}`}
+                  className="block text-sm font-medium text-accent-text hover:underline"
+                >
+                  {project.implementation.name}
+                </Link>
+              </span>
             ) : (
               <p className="mt-1 text-sm text-muted-foreground">Not linked</p>
             )}

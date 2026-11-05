@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import { ProjectTag } from "@/components/project-colors/ProjectSquare";
+import { squareInputOf } from "@/lib/project-colors";
 import { getTaskVisualState, NowUnblockedPill, TaskStateBadge } from "@/components/tasks/task-state";
 import { PersonalBadge } from "@/components/ui/PersonalBadge";
 import { Button } from "@/components/ui/Button";
@@ -102,9 +104,8 @@ export function NowTaskCard({
                 </span>
               ) : null}
               {state ? <TaskStateBadge state={state} /> : null}
-              {task.implementation?.name ? (
-                <span className="text-xs text-muted-foreground">{task.implementation.name}</span>
-              ) : null}
+              {/* Inside the open button, so the square is a plain mark here. */}
+              <ProjectTag {...squareInputOf(task)} editable={false} />
             </div>
           </button>
           <Button variant="success" size="sm" className="shrink-0"
@@ -143,9 +144,7 @@ export function NowTaskCard({
             {onToggleSteps ? (
               <StepsPill view={range} expanded={stepsOpen} onToggle={onToggleSteps} controlsId={stepsId} />
             ) : null}
-            {task.implementation?.name ? (
-              <span className="text-xs text-muted-foreground">{task.implementation.name}</span>
-            ) : null}
+            <ProjectTag {...squareInputOf(task)} />
           </div>
         </div>
         <Button variant={range.allStepsDone ? "ready" : "success"} size="sm" className="shrink-0"

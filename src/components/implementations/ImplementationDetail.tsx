@@ -1,5 +1,6 @@
 "use client";
 
+import { ProjectSquare } from "@/components/project-colors/ProjectSquare";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ImplementationNotesPanel } from "@/components/implementations/ImplementationNotesPanel";
@@ -316,7 +317,10 @@ export function ImplementationDetail({ id }: ImplementationDetailProps) {
 
       {/* Header Section */}
       <section className={cardClasses()}>
-        <h2 className="text-lg font-semibold text-foreground">{impl.name}</h2>
+        <h2 className="flex items-center gap-2 text-lg font-semibold text-foreground">
+          <ProjectSquare size="md" app={{ id: impl.id, name: impl.name, color: impl.color ?? null }} />
+          {impl.name}
+        </h2>
 
         <div className="mt-4 flex flex-wrap items-start justify-between gap-4">
           <div className="flex items-center gap-3">

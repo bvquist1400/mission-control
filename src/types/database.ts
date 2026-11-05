@@ -143,6 +143,8 @@ export interface Implementation {
   next_milestone_date: string | null;
   stakeholders: string[];
   keywords: string[];
+  /** Project square colour (migration 069), "#RRGGBB"; NULL = the theme default (src/lib/project-colors.ts). */
+  color: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -505,6 +507,8 @@ export interface Project {
   unit_label: string | null;
   /** Validated in app code (src/lib/pace.ts `parsePaceSettings`). */
   pace_settings: Json | null;
+  /** Project square colour (migration 069), "#RRGGBB"; NULL = its application's colour, else the theme default. */
+  color: string | null;
   created_at: string;
   updated_at: string;
 }
