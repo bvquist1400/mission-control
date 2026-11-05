@@ -232,16 +232,17 @@ function TabBar({ pathname }: { pathname: string }) {
         </button>
       </nav>
       {/*
-        The sheet comes after the tabs in the DOM (it is fixed-position, so it
-        still draws above them): Tab from More lands on the sheet's links, and
-        Shift+Tab from the first link returns to More.
+        The sheet comes after the tabs in the DOM: Tab from More lands on the
+        sheet's links, and Shift+Tab from the first link returns to More. It is
+        z-[39], one under the tab bar (z-40), so its shadow falls under the bar
+        and the bar's top line stays visible.
       */}
       {moreOpen ? (
         <nav
           ref={sheetRef}
           id={sheetId}
           aria-labelledby={`${sheetId}-title`}
-          className="fixed inset-x-0 bottom-[calc(3.5rem+env(safe-area-inset-bottom))] z-40 border-t-[1.5px] border-foreground bg-panel shadow-lg"
+          className="fixed inset-x-0 bottom-[calc(3.5rem+env(safe-area-inset-bottom))] z-[39] border-t-[1.5px] border-foreground bg-panel shadow-lg"
         >
           <p id={`${sheetId}-title`} className="px-3.5 pb-1 pt-3 font-mono text-xs font-semibold text-muted-foreground">
             More pages

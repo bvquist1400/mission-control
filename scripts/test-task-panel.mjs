@@ -246,6 +246,55 @@ await test("the old pop-up editor is gone: no TaskDetailModal, no TodayModalProv
   assert.doesNotMatch(grid, /<TaskMetaEditor|expandedTaskId|Expand task details/);
 });
 
+// ── 3b. layer order (fix round 1: review F1–F4) ──────────────────────────
+// Shell order: header 30 → panel (desktop) 25 → phone More sheet 39 → phone tab bar 40 → phone panel
+// sheet 45 → Modal / colour editor 50 → toast 60 → search 70.
+function zIndexOf(source) {
+  const bare = source.replace(/\/\*[\s\S]*?\*\//g, "");
+  const match = bare.match(/z-index:\s*(\d+)/) ?? bare.match(/\bz-\[?(\d+)\]?/);
+  return match ? Number(match[1]) : null;
+}
+await test("layers: the desktop panel sits below the sticky header so its menus drop over it (F3)", () => {
+  const css = read("src/components/tasks/panel/task-panel.css");
+  const base = css.match(/\.tp-panel \{[^}]*\}/)?.[0] ?? "";
+  const topBar = read("src/components/layout/TopBar.tsx");
+  const header = Number(topBar.match(/<header className="[^"]*\bz-(\d+)\b/)?.[1]);
+  const panel = zIndexOf(base);
+  assert.ok(Number.isFinite(header), "header z-index found");
+  assert.ok(panel !== null && panel < header, `panel z-index ${panel} must be below the header's ${header}`);
+  assert.ok(panel > 10, `panel z-index ${panel} stays above page content (z-10 and below)`);
+});
+await test("layers: the phone sheet sits above the tab bar and below Modal / colour editor / toast (F1, F2)", () => {
+  const css = read("src/components/tasks/panel/task-panel.css");
+  const phone = css.match(/@media \(max-width: 1023px\) \{\s*\.tp-panel \{[^}]*\}/)?.[0] ?? "";
+  const sheet = zIndexOf(phone);
+  const tabBar = Number(read("src/components/layout/TopBar.tsx").match(/aria-label="Main tabs"\s*className="[^"]*\bz-(\d+)\b/)?.[1]);
+  const modal = zIndexOf(read("src/components/ui/Modal.tsx").match(/className="fixed inset-0 z-\d+/)?.[0] ?? "");
+  const editor = zIndexOf(read("src/components/project-colors/ProjectColorEditor.tsx").match(/fixed inset-0 z-\d+/)?.[0] ?? "");
+  const toast = zIndexOf(read("src/components/ui/Toast.tsx").match(/pointer-events-none fixed[^"]*z-\[\d+\]/)?.[0] ?? "");
+  assert.ok(sheet !== null, "phone sheet z-index found");
+  assert.ok(sheet > tabBar, `sheet ${sheet} above the tab bar ${tabBar}`);
+  assert.ok(sheet < modal, `sheet ${sheet} below Modal ${modal}`);
+  assert.ok(sheet < editor, `sheet ${sheet} below the colour editor ${editor}`);
+  assert.ok(sheet < toast, `sheet ${sheet} below the toast ${toast}`);
+});
+await test("layers: the phone More sheet's shadow stays under the tab bar so its top line shows", () => {
+  const topBar = read("src/components/layout/TopBar.tsx");
+  const bar = Number(topBar.match(/aria-label="Main tabs"\s*className="[^"]*\bz-(\d+)\b/)?.[1]);
+  const sheetClass = topBar.match(/aria-labelledby=\{`\$\{sheetId\}-title`\}\s*className="([^"]*)"/)?.[1] ?? "";
+  const sheet = Number(sheetClass.match(/\bz-\[?(\d+)\]?/)?.[1]);
+  assert.ok(sheet < bar, `More sheet z ${sheet} must be below the tab bar's ${bar} (its shadow would cover the bar's top edge)`);
+});
+await test("Esc with the colour editor (aria-modal=false) open closes only the editor, not the panel (F4)", () => {
+  const panel = read("src/components/tasks/TaskPanel.tsx".replace("tasks/", "tasks/panel/"));
+  const fn = panel.match(/function anyDialogOpen\(\)[\s\S]*?\n\}/)?.[0] ?? "";
+  assert.match(fn, /role="dialog"\]\[aria-modal="true"\]/);
+  assert.match(fn, /role="dialog"\]\[aria-modal="false"\]/);
+  assert.match(fn, /header \[aria-expanded="true"\]/);
+  const editor = read("src/components/project-colors/ProjectColorEditor.tsx");
+  assert.match(editor, /role="dialog"[\s\S]{0,80}aria-modal="false"/, "the colour editor is the aria-modal=false dialog");
+});
+
 const ENTRY_POINTS = [
   ["Today: Now panel", "src/components/today/sections/NowPanel.tsx", /useTaskPanel\(\)[\s\S]*onOpen=\{\(\) => openTask\(task\)\}/],
   ["Today: week board", "src/components/today/sections/WeekBoard.tsx", /useTaskPanel\(\)[\s\S]*openTask\(raw\)/],

@@ -41,9 +41,16 @@ function taskOrder(taskId: string, listRoot: Element | null): string[] {
   return uniqueIds(shown.map((el) => el.getAttribute("data-task-open") ?? ""));
 }
 
-/** A modal (search, a confirm box, Break into tasks) or a top-bar menu is open: its own Esc wins. */
+/**
+ * A modal (search, a confirm box, Break into tasks), the non-modal colour editor (aria-modal="false")
+ * or a top-bar menu is open: its own Esc wins, so Esc closes only the top layer.
+ */
 function anyDialogOpen(): boolean {
-  return Boolean(document.querySelector('[role="dialog"][aria-modal="true"], header [aria-expanded="true"]'));
+  return Boolean(
+    document.querySelector(
+      '[role="dialog"][aria-modal="true"], [role="dialog"][aria-modal="false"], header [aria-expanded="true"]',
+    ),
+  );
 }
 
 export function TaskPanel({
