@@ -144,7 +144,7 @@ function buildTaskHref(result: MissionControlSearchResult, rawId: string | null)
     return toRelativeHref(result.url);
   }
 
-  return `/backlog?expand=${encodeURIComponent(rawId)}`;
+  return `/backlog?task=${encodeURIComponent(rawId)}`;
 }
 
 function buildBrowserHref(result: MissionControlSearchResult, entity: BrowserSearchEntity): string {

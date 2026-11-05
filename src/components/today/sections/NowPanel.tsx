@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useTodayModal } from "@/components/today/TodayModalProvider";
+import { useTaskPanel } from "@/components/tasks/panel/TaskPanelProvider";
 import { useTaskMutation } from "@/hooks/useTaskMutation";
 import type { TaskWithImplementation } from "@/types/database";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
@@ -64,7 +64,7 @@ function formatCountdown(meeting: NowPanelMeeting, nowMs: number): string {
 
 export function NowPanel({ topTasks, nextMeeting }: NowPanelProps) {
   const router = useRouter();
-  const { openTask, registerTasks } = useTodayModal();
+  const { openTask, seedTasks: registerTasks } = useTaskPanel();
   const { completeTask } = useTaskMutation();
   // Multi-day tasks S2: the open steps, and rows ticked here until fresh props land.
   const [openStepsId, setOpenStepsId] = useState<string | null>(null);
@@ -159,7 +159,7 @@ export function NowPanel({ topTasks, nextMeeting }: NowPanelProps) {
             No planned or in-progress tasks. Enjoy the clear runway.
           </p>
         ) : (
-          <ul className="mt-2 space-y-2.5">
+          <ul className="mt-2 space-y-2.5" data-task-list="now">
             {visibleTasks.map((task) => {
               // An umbrella (Break into tasks) counts its step tasks; others their checklist.
               const progress = progressRowsFor(task);

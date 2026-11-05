@@ -9,7 +9,7 @@ import {
   type TaskCounts,
   type Timeline,
 } from "@/lib/portfolio";
-import { AssignedList, LaterList, TaskEditorLayer } from "@/components/portfolio/PortfolioTasks";
+import { AssignedList, LaterList } from "@/components/portfolio/PortfolioTasks";
 import { ProjectSquare } from "@/components/project-colors/ProjectSquare";
 
 /** A lane's colour square: an application lane, or a personal project lane (`project:<id>`, tagged personal by definition). */
@@ -282,7 +282,7 @@ export function PortfolioPage({ view }: { view: PortfolioView }) {
   const appLanes = view.apps.filter((app) => app.kind === "app");
   const projectLanes = view.apps.filter((app) => app.kind === "project");
   return (
-    <TaskEditorLayer>
+    <>
       <div className="page pf-portfolio">
         <div className="bento">
           <section className="tile hero span-6" aria-label="Summary">
@@ -393,6 +393,6 @@ export function PortfolioPage({ view }: { view: PortfolioView }) {
           its planned end, cut at the chart edge with an arrow when it runs off the chart.
         </p>
       </div>
-    </TaskEditorLayer>
+    </>
   );
 }

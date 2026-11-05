@@ -177,7 +177,7 @@ export function TaskOwnerSection({ task, disabled, onSave, onHandBack }: TaskOwn
         </div>
       ) : null}
 
-      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+      <div className="mt-3 grid gap-3 @min-[440px]:grid-cols-2">
         <div className="space-y-1">
           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Owner</span>
           <div className="flex gap-2" role="group" aria-label="Who has it">

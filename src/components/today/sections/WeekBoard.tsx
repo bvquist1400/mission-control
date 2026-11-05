@@ -9,7 +9,7 @@ import { ErrorBanner } from "@/components/ui/ErrorBanner";
 import { Modal } from "@/components/ui/Modal";
 import type { TaskCardData } from "@/components/tasks/TaskCard";
 import { TaskCreateForm } from "@/components/tasks/TaskCreateForm";
-import { useTodayModal } from "@/components/today/TodayModalProvider";
+import { useTaskPanel } from "@/components/tasks/panel/TaskPanelProvider";
 import { useTaskMutation } from "@/hooks/useTaskMutation";
 import { useDateCascade } from "@/components/tasks/DateCascadeProvider";
 import { useSprints } from "@/hooks/useSprints";
@@ -567,7 +567,7 @@ function WaitingReviewColumn({
 
       <div className="space-y-3">
         {waitingOn.slice(0, 5).map((item) => (
-          <article key={item.id} className="rounded-card border border-l-4 border-stroke border-l-amber-400 bg-panel p-3 shadow-sm">
+          <article key={item.id} data-task-open={item.id} className="rounded-card border border-l-4 border-stroke border-l-amber-400 bg-panel p-3 shadow-sm">
             <button
               type="button"
               onClick={() => onOpenTask(item.id)}
@@ -623,7 +623,7 @@ export function WeekBoard({
   mode,
 }: WeekBoardProps) {
   const router = useRouter();
-  const { openTask, registerTasks } = useTodayModal();
+  const { openTask, seedTasks: registerTasks } = useTaskPanel();
   const { sprints } = useSprints();
 
   const { completeTask, updateTask } = useTaskMutation();
@@ -1032,7 +1032,7 @@ export function WeekBoard({
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8" data-task-list="board">
       {error && <ErrorBanner message={error} />}
 
       <section className="space-y-4">

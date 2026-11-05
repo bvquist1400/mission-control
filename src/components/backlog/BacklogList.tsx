@@ -118,7 +118,7 @@ async function fetchCommitments(): Promise<CommitmentSummary[]> {
 export function BacklogList() {
   const searchParams = useSearchParams();
   const reviewParam = searchParams.get("review");
-  const expandParam = searchParams.get("expand");
+  // ?task=<id> (and the old ?expand=<id>) open the app-wide task panel, not a row here (redesign S3).
   const sprintParam = searchParams.get("sprint");
   const { sprints, loading: sprintsLoading } = useSprints();
 
@@ -582,7 +582,6 @@ export function BacklogList() {
                 </Button>
               ) : undefined
             }
-            initialExpandedTaskId={expandParam}
           />
         )
       ) : null}

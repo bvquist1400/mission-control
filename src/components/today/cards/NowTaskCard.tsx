@@ -79,7 +79,7 @@ export function NowTaskCard({
   if (!range) {
     const dueLabel = getDueLabel(task.due_at, nowMs);
     return (
-      <li className="rounded-xl border border-l-4 border-stroke border-l-accent bg-panel-muted/40 p-3">
+      <li data-task-open={task.id} className="rounded-xl border border-l-4 border-stroke border-l-accent bg-panel-muted/40 p-3">
         <div className="flex items-start justify-between gap-3">
           <button
             type="button"
@@ -122,6 +122,7 @@ export function NowTaskCard({
   const stepsId = nowStepsId(task.id);
   return (
     <li
+      data-task-open={task.id}
       data-range-card={range.kind}
       className={`relative overflow-hidden rounded-xl border border-l-4 border-stroke ${rangeEdgeClass(range)} bg-panel-muted/40 p-3`}
     >

@@ -1,7 +1,6 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { TodayModalProvider } from "@/components/today/TodayModalProvider";
 import { MeetingsSection } from "@/components/today/sections/MeetingsSection";
 import { NowPanelSection } from "@/components/today/sections/NowPanelSection";
 import { WeekBoardSection } from "@/components/today/sections/WeekBoardSection";
@@ -67,24 +66,23 @@ export default async function TodayPage({
         }
       />
 
-      <TodayModalProvider key={mode}>
-        <section className="grid gap-4 xl:grid-cols-[2fr_1fr]">
-          <Suspense fallback={<SectionSkeleton label="now panel" />}>
-            <NowPanelSection userId={user.id} mode={mode} />
-          </Suspense>
-          <Suspense fallback={<SectionSkeleton label="today's meetings" />}>
-            <MeetingsSection userId={user.id} mode={mode} />
-          </Suspense>
-        </section>
-
-        <Suspense fallback={<SectionSkeleton label="weekly board" />}>
-          <WeekBoardSection userId={user.id} mode={mode} />
+      {/* Tasks open in the app-wide task panel (redesign S3, TaskPanelProvider in AppShell). */}
+      <section className="grid gap-4 xl:grid-cols-[2fr_1fr]">
+        <Suspense fallback={<SectionSkeleton label="now panel" />}>
+          <NowPanelSection userId={user.id} mode={mode} />
         </Suspense>
-
-        <Suspense fallback={null}>
-          <WaitingStripSection userId={user.id} mode={mode} />
+        <Suspense fallback={<SectionSkeleton label="today's meetings" />}>
+          <MeetingsSection userId={user.id} mode={mode} />
         </Suspense>
-      </TodayModalProvider>
+      </section>
+
+      <Suspense fallback={<SectionSkeleton label="weekly board" />}>
+        <WeekBoardSection userId={user.id} mode={mode} />
+      </Suspense>
+
+      <Suspense fallback={null}>
+        <WaitingStripSection userId={user.id} mode={mode} />
+      </Suspense>
     </div>
   );
 }

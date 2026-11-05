@@ -14,6 +14,15 @@ export const GO_TO_KEYS: Record<string, string> = {
   c: "/calendar",
 };
 
+/** The task panel's keys (redesign S3; TaskPanel.tsx). They work while a task is open and no field has focus. */
+export const TASK_PANEL_KEYS: Array<{ keys: string[]; label: string }> = [
+  { keys: ["↑"], label: "Previous task in the list" },
+  { keys: ["↓"], label: "Next task in the list" },
+  { keys: ["Esc"], label: "Close the task" },
+  { keys: ["["], label: "Panel narrower" },
+  { keys: ["]"], label: "Panel wider" },
+];
+
 const LABEL_BY_HREF = new Map(NAV_ITEMS.map((item) => [item.href, item.label]));
 
 function Key({ children }: { children: string }) {
@@ -52,6 +61,17 @@ export function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () 
             <Row keys={["⌘/Ctrl", "K"]} label="Search everything" />
             <Row keys={["?"]} label="Show this list" />
             <Row keys={["Esc"]} label="Close a dialog" />
+          </div>
+        </section>
+
+        <section>
+          <h3 className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+            Task panel
+          </h3>
+          <div className="divide-y divide-stroke">
+            {TASK_PANEL_KEYS.map((row) => (
+              <Row key={row.label} keys={row.keys} label={row.label} />
+            ))}
           </div>
         </section>
 

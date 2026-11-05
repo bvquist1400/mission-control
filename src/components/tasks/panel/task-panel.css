@@ -1,0 +1,538 @@
+/*
+ * The task panel (redesign S3). Look: d3-olive.html / d2-schemes.html (the
+ * "panel", "grip", "facts", "sec", "stands", "cmt", "keys", "pacts" rules),
+ * on the app's olive tokens from globals.css, so it follows System / Light /
+ * Dark like every page. Desktop (1024 px and up): docked on the right under
+ * the top bar, the page narrows beside it (.tp-reflow gets padding from the
+ * panel's own <style>). Smaller: a full-screen sheet over the page.
+ */
+
+.tp-panel {
+  position: fixed;
+  z-index: 40;
+  right: 0;
+  top: calc(56px + env(safe-area-inset-top));
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 360px;
+  max-width: 70vw;
+  background: var(--sheet);
+  color: var(--ink);
+  border-left: 1.5px solid var(--ink);
+}
+
+.tp-panel[data-enter] {
+  animation: tp-slide-in 200ms ease-out;
+}
+
+@keyframes tp-slide-in {
+  from {
+    transform: translateX(32px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tp-panel[data-enter] {
+    animation: none;
+  }
+}
+
+/* The grip on the left edge: a line that darkens on hover; olive with a width readout while dragging. */
+.tp-grip {
+  position: absolute;
+  z-index: 5;
+  left: -8px;
+  top: 0;
+  bottom: 0;
+  width: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  touch-action: none;
+}
+.tp-grip::before {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: 0;
+  bottom: 0;
+  border-left: 1.5px solid transparent;
+}
+.tp-grip:hover::before,
+.tp-grip:focus-visible::before {
+  border-left: 3px solid var(--rule);
+  left: 6px;
+}
+.tp-grip i {
+  position: relative;
+  width: 12px;
+  height: 52px;
+  background: var(--sheet);
+  border: 1.5px solid var(--ink);
+  display: grid;
+  grid-template-columns: 2px 2px;
+  gap: 3px 2px;
+  align-content: center;
+  justify-content: center;
+}
+.tp-grip i b {
+  width: 2px;
+  height: 2px;
+  background: var(--ink);
+}
+.tp-panel[data-dragging] .tp-grip::before {
+  left: 5px;
+  border-left: 5px solid var(--brand);
+}
+.tp-panel[data-dragging] .tp-grip i {
+  background: var(--brand);
+  border-color: var(--brand);
+}
+.tp-panel[data-dragging] .tp-grip i b {
+  background: var(--brand-ink);
+}
+/* The readout sits just left of the grip, over the page (as in d2-schemes.html). */
+.tp-wtip {
+  position: absolute;
+  right: 16px;
+  top: calc(50% + 36px);
+  font: 600 12px/1 var(--font-mono);
+  background: var(--ink);
+  color: var(--on-ink);
+  padding: 5px 7px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+html.tp-resizing,
+html.tp-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+html.tp-resizing .tp-reflow {
+  transition: none;
+}
+
+/* Header row: ↑ ↓, Open full page, × */
+.tp-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px 0 26px;
+}
+.tp-nav {
+  display: flex;
+  gap: 4px;
+  margin-right: auto;
+}
+.tp-icon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--rule);
+  background: var(--sheet);
+  color: var(--ink);
+}
+.tp-icon:hover:not(:disabled) {
+  border-color: var(--ink);
+  background: var(--brand-wash);
+}
+.tp-icon:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.tp-icon svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: square;
+}
+.tp-close {
+  border-color: var(--ink);
+}
+.tp-full {
+  font: 500 13px/1 var(--font-cond);
+  color: var(--ink-2);
+  padding: 9px 10px;
+  border: 1px solid transparent;
+}
+.tp-full:hover {
+  color: var(--ink);
+  border-color: var(--rule);
+}
+
+/* Body: scrolls; actions stick to the bottom. */
+.tp-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px 26px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.tp-crumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+.tp-square-slot {
+  display: inline-flex;
+  align-items: center;
+}
+.tp-square-slot:empty {
+  display: none;
+}
+.tp-title {
+  margin: 0;
+  font: 700 25px/1.1 var(--font-cond);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+  outline-offset: 4px;
+}
+.tp-title:focus:not(:focus-visible) {
+  outline: none;
+}
+.tp-muted {
+  font-size: 14px;
+  color: var(--ink-2);
+}
+
+.tp-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border: 1px solid var(--ink);
+}
+.tp-facts > div {
+  padding: 8px 10px;
+  border-right: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  min-width: 0;
+}
+.tp-facts > div:nth-child(2n) {
+  border-right: 0;
+}
+.tp-facts > div:nth-last-child(-n + 2) {
+  border-bottom: 0;
+}
+@container (min-width: 560px) {
+  .tp-facts {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .tp-facts > div {
+    border-bottom: 0;
+    border-right: 1px solid var(--rule);
+  }
+  .tp-facts > div:nth-child(2n) {
+    border-right: 1px solid var(--rule);
+  }
+  .tp-facts > div:last-child {
+    border-right: 0;
+  }
+}
+.tp-facts span {
+  display: block;
+  font: 400 12px/1 var(--font-mono);
+  color: var(--ink-3);
+  margin-bottom: 5px;
+}
+.tp-facts b {
+  display: block;
+  font: 600 14px/1.2 var(--font-cond);
+  overflow-wrap: anywhere;
+}
+.tp-facts select,
+.tp-date {
+  width: 100%;
+  min-height: 30px;
+  font: 600 14px/1.2 var(--font-cond);
+  border: 1px solid var(--rule);
+  background: var(--sheet);
+  color: var(--ink);
+  padding: 3px 6px;
+}
+
+.tp-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tp-pills:empty {
+  display: none;
+}
+.tp-pill {
+  font: 500 12px/1 var(--font-mono);
+  padding: 4px 8px;
+  border: 1px solid var(--rule);
+  color: var(--ink-2);
+}
+.tp-pill.tone-wait {
+  color: var(--warning);
+  border-color: var(--warning-border);
+  background: var(--warning-soft);
+}
+.tp-pill.tone-late {
+  color: var(--danger);
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+}
+.tp-alert {
+  font-size: 13px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  border: 1px solid var(--danger-border);
+  padding: 8px 10px;
+}
+
+.tp-sec h3 {
+  margin: 0 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: 600 12px/1 var(--font-mono);
+  color: var(--ink-3);
+  letter-spacing: 0;
+}
+.tp-sec h3::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--rule);
+  order: 1;
+}
+.tp-sec-aside {
+  order: 2;
+  color: var(--ink-2);
+}
+.tp-stands {
+  margin: 0;
+  font: 400 15px/1.45 var(--font-sans);
+}
+.tp-stands span {
+  background: linear-gradient(transparent 62%, light-dark(rgba(151, 170, 84, 0.38), rgba(169, 188, 106, 0.3)) 62%) 0 0 / 100% 100% no-repeat;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.tp-waits {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--warning);
+}
+.tp-prog-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+.tp-prog-row .tp-prog {
+  flex: 1;
+  margin-bottom: 0;
+}
+.tp-prog {
+  height: 8px;
+  border: 1px solid var(--ink);
+  background: var(--paper);
+  margin-bottom: 8px;
+  position: relative;
+}
+.tp-prog i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--progress-fill);
+  border-right: 2px solid var(--progress-fill-edge);
+}
+
+.tp-desc,
+.tp-details,
+.tp-older,
+.tp-cmt-more {
+  font-size: 14px;
+}
+.tp-desc > summary,
+.tp-details > summary,
+.tp-older > summary,
+.tp-cmt-more > summary {
+  cursor: pointer;
+  font: 600 12px/1.4 var(--font-mono);
+  color: var(--ink-2);
+}
+.tp-desc[open] > summary,
+.tp-details[open] > summary {
+  margin-bottom: 10px;
+}
+.tp-details {
+  border-top: 1px solid var(--rule);
+  padding-top: 12px;
+}
+.tp-details > section {
+  margin-bottom: 12px;
+}
+.tp-danger {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink-2);
+  border: 1px solid var(--danger-border);
+  padding: 8px 10px;
+}
+
+.tp-cmts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.tp-cmt {
+  border: 1px solid var(--rule);
+  padding: 10px 12px;
+  background: var(--paper);
+}
+.tp-cmt-m {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.tp-who {
+  font: 600 12px/1 var(--font-mono);
+  color: var(--ink-2);
+}
+.tp-cmt-tools {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+}
+.tp-cmt-g {
+  margin: 0;
+  font: 400 14px/1.4 var(--font-sans);
+  overflow-wrap: anywhere;
+}
+.tp-cmt-more {
+  margin-top: 6px;
+}
+.tp-older {
+  margin-top: 4px;
+}
+
+.tp-acts {
+  position: sticky;
+  bottom: 0;
+  margin: auto -26px 0;
+  padding: 12px 26px calc(12px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  background: var(--sheet);
+  border-top: 1px solid var(--ink);
+}
+
+.tp-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 8px 26px 10px;
+  font-size: 12px;
+  color: var(--ink-3);
+  border-top: 1px solid var(--rule-2);
+}
+.tp-keys kbd {
+  font: 500 12px/1 var(--font-mono);
+  border: 1px solid var(--rule);
+  padding: 2px 5px;
+  margin-right: 2px;
+  color: var(--ink-2);
+  background: var(--paper);
+}
+
+.tp-skeleton {
+  display: grid;
+  gap: 10px;
+}
+.tp-skeleton span {
+  height: 18px;
+  background: var(--panel-muted);
+}
+.tp-skeleton span:nth-child(2) {
+  width: 70%;
+}
+
+/* Phone and tablet: the same panel as a full-screen sheet over the page (no reflow, no grip, no key hints). */
+@media (max-width: 1023px) {
+  .tp-panel {
+    z-index: 60;
+    top: 0;
+    left: 0;
+    width: 100% !important;
+    min-width: 0;
+    max-width: none;
+    border-left: 0;
+    padding-top: env(safe-area-inset-top);
+  }
+  .tp-panel[data-enter] {
+    animation-name: tp-sheet-up;
+  }
+  .tp-grip,
+  .tp-keys {
+    display: none;
+  }
+  .tp-top {
+    padding: 8px 12px 0 16px;
+  }
+  .tp-icon {
+    width: 44px;
+    height: 44px;
+  }
+  .tp-full {
+    padding: 14px 10px;
+  }
+  .tp-body {
+    padding: 10px 16px 0;
+  }
+  .tp-acts {
+    margin: auto -16px 0;
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+  }
+  html:has(.tp-panel) body {
+    overflow: hidden;
+  }
+  /*
+   * The page under the sheet is hidden: a page wider than the phone (the
+   * Tasks table, the project page) would otherwise widen the layout viewport
+   * and the sheet with it, pushing × off screen. Closing puts the page back
+   * at the same scroll position (TaskPanel).
+   */
+  html:has(.tp-panel) .tp-reflow {
+    display: none;
+  }
+}
+
+@keyframes tp-sheet-up {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}

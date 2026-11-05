@@ -199,7 +199,8 @@ import { readFileSync } from "node:fs";
 import ts from "typescript";
 
 const ownerSectionSource = readFileSync(new URL("../src/components/tasks/TaskOwnerSection.tsx", import.meta.url), "utf8");
-const modalSource = readFileSync(new URL("../src/components/tasks/TaskDetailModal.tsx", import.meta.url), "utf8");
+// The task panel (redesign S3) replaced the pop-up editor; its body renders the owner section now.
+const modalSource = readFileSync(new URL("../src/components/tasks/panel/TaskPanelBody.tsx", import.meta.url), "utf8");
 const ownerSectionJs = ts
   .transpileModule(ownerSectionSource, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } })
   .outputText.replace(/^import[\s\S]*?from\s+["'][^"']+["'];?\s*$/gm, "");
@@ -228,7 +229,7 @@ await test("ownerDraftReset: a new status line or agent name refreshes those dra
 
 await test("the editor keys the owner section on the task id only, never on updated_at", () => {
   const section = modalSource.match(/<TaskOwnerSection[\s\S]*?\/>/);
-  assert.ok(section, "TaskOwnerSection is rendered in TaskDetailModal");
+  assert.ok(section, "TaskOwnerSection is rendered in the task panel (TaskPanelBody)");
   const key = section[0].match(/\bkey=(\{[^}]*\}|"[^"]*")/);
   assert.ok(key, "TaskOwnerSection has a key");
   assert.equal(key[1], "{task.id}");

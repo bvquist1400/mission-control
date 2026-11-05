@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { useTodayModal } from "@/components/today/TodayModalProvider";
+import { useTaskPanel } from "@/components/tasks/panel/TaskPanelProvider";
 import type { BlockedReason, TaskWithImplementation } from "@/types/database";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
 import { isPersonalTaskOrProject } from "@/lib/personal-exclusion";
@@ -29,7 +29,7 @@ function formatFollowUp(value: string): string | null {
 }
 
 export function WaitingStrip({ tasks }: { tasks: TaskWithImplementation[] }) {
-  const { openTask, registerTasks } = useTodayModal();
+  const { openTask, seedTasks: registerTasks } = useTaskPanel();
 
   useEffect(() => {
     registerTasks(tasks);
@@ -40,7 +40,7 @@ export function WaitingStrip({ tasks }: { tasks: TaskWithImplementation[] }) {
   }
 
   return (
-    <section className="space-y-3">
+    <section className="space-y-3" data-task-list="waiting">
       <h2 className="text-lg font-semibold text-foreground">Blocked / Waiting</h2>
       <div className="flex flex-wrap gap-2">
         {tasks.map((task) => {
@@ -50,6 +50,7 @@ export function WaitingStrip({ tasks }: { tasks: TaskWithImplementation[] }) {
             <button
               key={task.id}
               type="button"
+              data-task-open={task.id}
               onClick={() => openTask(task)}
               className="group inline-flex max-w-full items-center gap-2 rounded-full border border-l-4 border-stroke border-l-amber-400 bg-panel px-3 py-1.5 text-left shadow-sm transition hover:border-foreground/20 hover:bg-panel-muted/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
             >

@@ -525,7 +525,7 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
         </Button>
       </div>
 
-      <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-8">
+      <div className="mt-3 grid gap-3 @min-[440px]:grid-cols-2 @min-[1000px]:grid-cols-4">
         <label className="space-y-1">
           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Title</span>
           <Input
@@ -819,7 +819,7 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
 
             {recurrenceEnabledDraft ? (
               <div className="mt-3 space-y-3">
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <div className="grid gap-3 @min-[440px]:grid-cols-2 @min-[1000px]:grid-cols-4">
                 <label className="space-y-1">
                   <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Frequency</span>
                   <Select

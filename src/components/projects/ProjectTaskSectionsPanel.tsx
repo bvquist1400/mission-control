@@ -530,7 +530,8 @@ export function ProjectTaskSectionsPanel({
     : "Create sections to group project work, or add a task to keep the project flat for now.";
 
   return (
-    <div className="min-w-0 space-y-4">
+    // One list for the task panel's ↑ / ↓ across every section (redesign S3).
+    <div className="min-w-0 space-y-4" data-task-list="project">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <label className="inline-flex items-center gap-2 rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground">
           <input
@@ -691,6 +692,7 @@ export function ProjectTaskSectionsPanel({
         <TaskGridLoadingSkeleton />
       ) : sortedSections.length === 0 ? (
         <TaskGrid
+          taskList={null}
           tasks={tasksForProject}
           setTasks={setProjectTasks}
           implementations={implementations}
@@ -807,6 +809,7 @@ export function ProjectTaskSectionsPanel({
 
                 {sectionTasks.length > 0 ? (
                   <TaskGrid
+                    taskList={null}
                     tasks={tasksForProject}
                     visibleTasks={sectionTasks}
                     setTasks={setProjectTasks}
@@ -842,6 +845,7 @@ export function ProjectTaskSectionsPanel({
               </div>
 
               <TaskGrid
+                taskList={null}
                 tasks={tasksForProject}
                 visibleTasks={unsectionedTasks}
                 setTasks={setProjectTasks}

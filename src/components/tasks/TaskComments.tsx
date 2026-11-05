@@ -4,6 +4,8 @@ import { useState, useCallback } from "react";
 import type { TaskComment } from "@/types/database";
 import { Button } from "@/components/ui/Button";
 import { Textarea } from "@/components/ui/Field";
+import { Markdown } from "@/components/markdown/Markdown";
+import { commentAuthor, commentGist, composePageComment, formatCommentTime } from "@/lib/task-page";
 
 interface TaskCommentsProps {
   taskId: string;
@@ -11,7 +13,16 @@ interface TaskCommentsProps {
   onCommentAdded?: (comment: TaskComment) => void;
   onCommentUpdated?: (comment: TaskComment) => void;
   onCommentDeleted?: (commentId: string) => void;
+  /**
+   * "gist" is the task page's way (redesign S3 panel): the box first, newest
+   * first, one-line gists with who wrote them that unfold to the full Markdown,
+   * and comments saved as "Brent: ..." like the task page's own box.
+   */
+  variant?: "full" | "gist";
 }
+
+/** Newest comments shown in the panel before the rest fold away. */
+export const PANEL_RECENT_COMMENTS = 5;
 
 function formatRelativeTime(dateString: string): string {
   const date = new Date(dateString);
@@ -44,7 +55,9 @@ export function TaskComments({
   onCommentAdded,
   onCommentUpdated,
   onCommentDeleted,
+  variant = "full",
 }: TaskCommentsProps) {
+  const gist = variant === "gist";
   const [newComment, setNewComment] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -52,7 +65,7 @@ export function TaskComments({
   const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = useCallback(async () => {
-    const content = newComment.trim();
+    const content = gist ? composePageComment(newComment) : newComment.trim();
     if (!content) return;
 
     setIsSubmitting(true);
@@ -78,7 +91,7 @@ export function TaskComments({
     } finally {
       setIsSubmitting(false);
     }
-  }, [taskId, newComment, onCommentAdded]);
+  }, [taskId, newComment, onCommentAdded, gist]);
 
   const handleUpdate = useCallback(async (commentId: string) => {
     const content = editContent.trim();
@@ -138,6 +151,106 @@ export function TaskComments({
     setEditingId(null);
     setEditContent("");
   }, []);
+
+  if (gist) {
+    const ordered = [...comments].sort((a, b) => b.created_at.localeCompare(a.created_at));
+    const now = new Date();
+    const renderItem = (comment: TaskComment) => {
+      const author = commentAuthor(comment.content);
+      const { gist: line, truncated } = commentGist(author.body);
+      const label = author.label ?? (comment.source === "system" ? "System" : comment.source === "llm" ? "AI" : null);
+      return (
+        <li key={comment.id} className="tp-cmt" data-comment-id={comment.id}>
+          {editingId === comment.id ? (
+            <div className="space-y-2">
+              <Textarea
+                className="resize-none"
+                aria-label="Edit comment"
+                value={editContent}
+                onChange={(e) => setEditContent(e.target.value)}
+                disabled={isSubmitting}
+                rows={3}
+              />
+              <div className="flex justify-end gap-2">
+                <Button variant="ghost" size="sm" onClick={cancelEditing} disabled={isSubmitting}>
+                  Cancel
+                </Button>
+                <Button variant="primary" size="sm" onClick={() => handleUpdate(comment.id)} disabled={isSubmitting || !editContent.trim()}>
+                  Save
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="tp-cmt-m">
+                <span className="tp-who">{label ?? "Comment"}</span>
+                <span className="mono">
+                  {formatCommentTime(comment.created_at, now)}
+                  {comment.updated_at !== comment.created_at ? " · edited" : ""}
+                </span>
+                {comment.source !== "system" ? (
+                  <span className="tp-cmt-tools">
+                    <Button variant="ghost" size="xs" onClick={() => startEditing(comment)} aria-label="Edit comment">
+                      Edit
+                    </Button>
+                    <Button variant="ghost" size="xs" onClick={() => handleDelete(comment.id)} aria-label="Delete comment">
+                      Delete
+                    </Button>
+                  </span>
+                ) : null}
+              </div>
+              <p className="tp-cmt-g">{line || <span className="text-muted-foreground">(empty comment)</span>}</p>
+              {truncated ? (
+                <details className="tp-cmt-more">
+                  <summary>Show the full comment</summary>
+                  <Markdown source={comment.content} />
+                </details>
+              ) : null}
+            </>
+          )}
+        </li>
+      );
+    };
+    const recent = ordered.slice(0, PANEL_RECENT_COMMENTS);
+    const older = ordered.slice(PANEL_RECENT_COMMENTS);
+    return (
+      <div className="space-y-3">
+        <div className="space-y-2">
+          <Textarea
+            className="resize-none"
+            aria-label="Add a comment"
+            value={newComment}
+            onChange={(e) => setNewComment(e.target.value)}
+            onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); handleSubmit(); } }}
+            placeholder="Add a comment (saved as yours)"
+            disabled={isSubmitting}
+            rows={2}
+          />
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs text-muted-foreground">⌘+Enter to add</span>
+            <Button variant="primary" size="sm" onClick={handleSubmit} disabled={isSubmitting || !newComment.trim()}>
+              {isSubmitting ? "Adding..." : "Add comment"}
+            </Button>
+          </div>
+        </div>
+        {error ? (
+          <p className="rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
+            {error}
+          </p>
+        ) : null}
+        {ordered.length === 0 ? <p className="text-sm text-muted-foreground">No comments yet.</p> : null}
+        {recent.length ? <ul className="tp-cmts">{recent.map(renderItem)}</ul> : null}
+        {older.length ? (
+          <details className="tp-older">
+            <summary>
+              Show {older.length} older {older.length === 1 ? "comment" : "comments"}
+            </summary>
+            <ul className="tp-cmts">{older.map(renderItem)}</ul>
+          </details>
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">

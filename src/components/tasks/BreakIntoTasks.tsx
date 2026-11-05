@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import Link from "next/link";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
@@ -65,14 +65,23 @@ function statusTone(status: string): "success" | "accent" | "warning" | "neutral
 }
 
 /** "Part of <umbrella>" on a step, and the steps list on an umbrella. */
-export function TaskStepsPanel({ steps }: { steps: TaskStepsData }) {
+export function TaskStepsPanel({ steps, onOpenTask }: { steps: TaskStepsData; onOpenTask?: (taskId: string) => void }) {
+  // In the task panel a step or the umbrella opens in the panel; the link still works in a new tab.
+  const openHere = (taskId: string) =>
+    onOpenTask
+      ? (event: ReactMouseEvent<HTMLAnchorElement>) => {
+          if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
+          event.preventDefault();
+          onOpenTask(taskId);
+        }
+      : undefined;
   if (!steps.part_of && steps.step_tasks.length === 0) return null;
   return (
     <div className="space-y-2">
       {steps.part_of ? (
         <p className="text-sm text-muted-foreground">
           Part of{" "}
-          <Link href={`/r/task/${steps.part_of.id}`} className="font-semibold text-accent-text hover:underline">
+          <Link href={`/r/task/${steps.part_of.id}`} onClick={openHere(steps.part_of.id)} className="font-semibold text-accent-text hover:underline">
             {steps.part_of.title}
           </Link>
           {steps.part_of.status === "Done" ? " (done)" : ""}
@@ -96,6 +105,7 @@ export function TaskStepsPanel({ steps }: { steps: TaskStepsData }) {
               <li key={step.id} className="flex flex-wrap items-center gap-2 text-sm">
                 <Link
                   href={`/r/task/${step.id}`}
+                  onClick={openHere(step.id)}
                   className={`min-w-0 break-words hover:underline ${step.status === "Done" ? "text-muted-foreground line-through" : "text-foreground"}`}
                 >
                   {step.title}

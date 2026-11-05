@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
-import { TodayModalProvider, useTodayModal } from "@/components/today/TodayModalProvider";
+import { useTaskPanel } from "@/components/tasks/panel/TaskPanelProvider";
 import {
   HAND_BACK_EMPTY_DECISION_WARNING,
   HAND_BACK_NOTE_LABEL,
@@ -11,7 +11,6 @@ import {
   handBackTask,
 } from "@/lib/task-handoff";
 import { formatShortDate, type AssignedTask, type LaterTask } from "@/lib/portfolio";
-import type { TaskWithImplementation } from "@/types/database";
 import { ProjectSquare, ProjectTag, resolveSquareFromCatalog } from "@/components/project-colors/ProjectSquare";
 import { useProjectColors } from "@/components/project-colors/ProjectColorsProvider";
 
@@ -37,42 +36,11 @@ function TaskSquare({ task }: { task: Pick<AssignedTask, "app" | "appId" | "proj
   return <ProjectSquare className="mr-1.5 align-[-1px]" app={app} project={project} />;
 }
 
-/**
- * Lets v5 pages (Portfolio, record pages) open the app's task editor in place.
- * It reuses the Today page's provider: one shared TaskDetailModal, and every
- * save calls router.refresh() so the server-rendered page re-reads its data.
- */
-export function TaskEditorLayer({ children }: { children: ReactNode }) {
-  return <TodayModalProvider>{children}</TodayModalProvider>;
-}
-
-/** Loads a task through GET /api/tasks/[id] and opens it in the shared editor. */
+/** Opens a task in the app-wide task panel (redesign S3); the row the page has isn't a full task, so the panel reads it. */
 function useOpenTaskById() {
-  const { openTask } = useTodayModal();
-  const [openingId, setOpeningId] = useState<string | null>(null);
-  const [openError, setOpenError] = useState<{ id: string; message: string } | null>(null);
-
-  const open = useCallback(
-    async (taskId: string) => {
-      setOpeningId(taskId);
-      setOpenError(null);
-      try {
-        const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, { cache: "no-store" });
-        const body = await response.json().catch(() => null);
-        if (!response.ok || !body || typeof body.id !== "string") {
-          throw new Error(body && typeof body.error === "string" ? body.error : "Couldn't load the task.");
-        }
-        openTask(body as TaskWithImplementation);
-      } catch (error) {
-        setOpenError({ id: taskId, message: error instanceof Error ? error.message : "Couldn't load the task." });
-      } finally {
-        setOpeningId(null);
-      }
-    },
-    [openTask]
-  );
-
-  return { open, openingId, openError };
+  const { openTask } = useTaskPanel();
+  const open = useCallback((taskId: string) => openTask(taskId), [openTask]);
+  return { open, openingId: null as string | null, openError: null as { id: string; message: string } | null };
 }
 
 function AssignedRow({
@@ -127,7 +95,7 @@ function AssignedRow({
 
   const noteId = `pf-note-${task.id}`;
   return (
-    <li>
+    <li data-task-open={task.id}>
       <button type="button" className="pf-what" onClick={onOpen} disabled={opening}>
         {task.title}
       </button>
@@ -201,7 +169,7 @@ export function AssignedList({ tasks }: { tasks: AssignedTask[] }) {
   }
 
   return (
-    <ul className="pf-you">
+    <ul className="pf-you" data-task-list="assigned">
       {visible.map((task) => (
         <AssignedRow
           key={task.id}
@@ -247,9 +215,9 @@ export function LaterList({ tasks }: { tasks: LaterTask[] }) {
         <h3 id="pf-later-h">Coming to you later</h3>
         <span className="mono">{tasks.length}</span>
       </div>
-      <ul className="pf-later-list">
+      <ul className="pf-later-list" data-task-list="later">
         {tasks.map((task) => (
-          <li key={task.id}>
+          <li key={task.id} data-task-open={task.id}>
             <span className="pf-blocked">Blocked</span>
             <div className="pf-later-body">
               <button type="button" className="pf-what" onClick={() => void open(task.id)} disabled={openingId === task.id}>
@@ -273,27 +241,14 @@ export function LaterList({ tasks }: { tasks: LaterTask[] }) {
   );
 }
 
-function EditButtonInner({ taskId }: { taskId: string }) {
-  const { open, openingId, openError } = useOpenTaskById();
+/** The record page's Edit button: opens the same task in the task panel, over the readable page. */
+export function TaskEditButton({ taskId }: { taskId: string }) {
+  const { openTask } = useTaskPanel();
   return (
     <span className="pf-edit">
-      <button type="button" className="btn sm" onClick={() => void open(taskId)} disabled={openingId === taskId}>
-        {openingId === taskId ? "Opening…" : "Edit"}
+      <button type="button" className="btn sm" onClick={() => openTask(taskId)}>
+        Edit
       </button>
-      {openError ? (
-        <span className="pf-err" role="alert">
-          {openError.message}
-        </span>
-      ) : null}
     </span>
-  );
-}
-
-/** The record page's Edit button: the same editor, over the readable record. */
-export function TaskEditButton({ taskId }: { taskId: string }) {
-  return (
-    <TaskEditorLayer>
-      <EditButtonInner taskId={taskId} />
-    </TaskEditorLayer>
   );
 }

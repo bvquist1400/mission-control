@@ -96,6 +96,7 @@ export function WeeklyTaskCard({
   if (!range) {
     return (
       <article
+        data-task-open={task.id}
         draggable={!completing && !pinning && !moving}
         onDragStart={(event) => {
           event.dataTransfer.effectAllowed = "move";
@@ -147,6 +148,7 @@ export function WeeklyTaskCard({
   const draggable = canDrag && !completing && !pinning && !moving;
   return (
     <article
+      data-task-open={task.id}
       data-range-card={range.kind}
       draggable={draggable}
       onDragStart={

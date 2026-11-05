@@ -13,6 +13,7 @@ import { isMcpDeployment } from "@/lib/mcp/config";
 import { getTodayBriefStatus } from "@/lib/briefs/service";
 import type { TodayBriefStatus } from "@/lib/briefs/button";
 import { THEME_COOKIE, parseThemePreference, themeColorMeta, themeHtmlAttributes } from "@/lib/theme";
+import { readPanelWidths } from "@/lib/task-panel";
 import "./globals.css";
 
 // IBM Plex (redesign S1): Sans for body text, Condensed for titles, tabs and
@@ -67,6 +68,9 @@ export default async function RootLayout({
   // The light/dark choice is read here, on the server, and written onto <html>
   // so the first paint has the right colours (lib/theme.ts, globals.css).
   const theme = await readThemePreference();
+  // The task panel's width per screen (redesign S3), read here so it renders at its final width.
+  const cookieStore = await cookies();
+  const panelWidths = readPanelWidths((name) => cookieStore.get(name)?.value);
 
   let userEmail: string | null = null;
   let todayBrief: TodayBriefStatus | null = null;
@@ -104,7 +108,9 @@ export default async function RootLayout({
         <ToastProvider>
           <DateCascadeProvider>
             <ProjectColorsProvider initialCatalog={colorCatalog}>
-              <AppShell topBar={<TopBar userEmail={userEmail} todayBrief={todayBrief} theme={theme} />}>{children}</AppShell>
+              <AppShell topBar={<TopBar userEmail={userEmail} todayBrief={todayBrief} theme={theme} />} panelWidths={panelWidths}>
+                {children}
+              </AppShell>
             </ProjectColorsProvider>
           </DateCascadeProvider>
         </ToastProvider>

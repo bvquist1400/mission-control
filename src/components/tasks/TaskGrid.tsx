@@ -4,21 +4,15 @@ import { ProjectTag } from "@/components/project-colors/ProjectSquare";
 import { squareInputOf } from "@/lib/project-colors";
 import {
   Fragment,
-  useCallback,
   useEffect,
   useMemo,
   useReducer,
-  useRef,
   useState,
   type Dispatch,
   type ReactNode,
   type SetStateAction,
 } from "react";
 import { useSprints } from "@/hooks/useSprints";
-import { ChecklistSection } from "@/components/tasks/ChecklistSection";
-import { TaskComments } from "@/components/tasks/TaskComments";
-import { TaskDependencies } from "@/components/tasks/TaskDependencies";
-import { TaskMetaEditor } from "@/components/tasks/TaskMetaEditor";
 import { useDateCascade } from "@/components/tasks/DateCascadeProvider";
 import { TaskTagChips } from "@/components/tasks/TaskTagChips";
 import { getTaskVisualState, NowUnblockedPill, TaskStateBadge } from "@/components/tasks/task-state";
@@ -28,13 +22,10 @@ import {
   timestampToLocalDateInputValue,
 } from "@/components/utils/dates";
 import { StatusSelector } from "@/components/ui/StatusSelector";
-import { fetchTaskDetails, type TaskDetailData } from "@/lib/task-detail";
 import { createDraftStore, draftCellHandlers } from "@/lib/cell-draft";
 import type {
   CommitmentSummary,
   ImplementationSummary,
-  TaskChecklistItem,
-  TaskComment,
   SprintWithImplementation,
   TaskDependencySummary,
   TaskStatus,
@@ -44,7 +35,7 @@ import type {
 import { Button } from "@/components/ui/Button";
 import { Input, Select } from "@/components/ui/Field";
 import { cardClasses } from "@/components/ui/Card";
-import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
+import { useTaskPanel, useTaskPanelEvents } from "@/components/tasks/panel/TaskPanelProvider";
 
 export type TaskGridScopeMode = "global" | "implementation" | "project";
 
@@ -68,14 +59,20 @@ interface TaskGridProps {
   visibleTasks?: TaskWithImplementation[];
   setTasks: Dispatch<SetStateAction<TaskWithImplementation[]>>;
   implementations: ImplementationSummary[];
-  commitments: CommitmentSummary[];
+  /** Kept for callers; the task panel loads commitments itself now (redesign S3). */
+  commitments?: CommitmentSummary[];
   /** Sprints the parent already loaded; without it the grid fetches its own. */
   sprints?: SprintWithImplementation[];
   scopeMode: TaskGridScopeMode;
   emptyStateTitle: string;
   emptyStateBody: string;
   emptyStateAction?: ReactNode;
-  initialExpandedTaskId?: string | null;
+  /**
+   * The list ↑ / ↓ walk in the task panel (data-task-list on the rows). A page
+   * with several grids (the project page's sections) passes null and marks one
+   * list around all of them.
+   */
+  taskList?: string | null;
 }
 
 export function TaskGridLoadingSkeleton() {
@@ -136,10 +133,6 @@ function getDependencyWaitingLabel(task: TaskWithImplementation): string | null 
   return `${first.title} +${unresolvedDependencies.length - 1} more`;
 }
 
-function getDependencyBlockedState(dependencies: TaskDependencySummary[]): boolean {
-  return dependencies.some((dependency) => dependency.unresolved);
-}
-
 function getDueTimestamp(task: TaskWithImplementation): number | null {
   if (!task.due_at) {
     return null;
@@ -154,13 +147,12 @@ export function TaskGrid({
   visibleTasks,
   setTasks,
   implementations,
-  commitments,
   sprints: sprintsFromParent,
   scopeMode,
   emptyStateTitle,
   emptyStateBody,
   emptyStateAction,
-  initialExpandedTaskId = null,
+  taskList = "grid",
 }: TaskGridProps) {
   const [error, setError] = useState<string | null>(null);
   const [savingIds, setSavingIds] = useState<Record<string, number>>({});
@@ -181,23 +173,14 @@ export function TaskGrid({
   const [bulkSprintId, setBulkSprintId] = useState<string>("");
   const [bulkDueDate, setBulkDueDate] = useState<string>("");
   const [bulkActionBusy, setBulkActionBusy] = useState(false);
-  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(initialExpandedTaskId);
-  // Clicking a title opens the same modal as the Today page; the caret still
-  // expands inline for fast editing across many rows.
-  const [modalTaskId, setModalTaskId] = useState<string | null>(null);
-  const [taskDetailsById, setTaskDetailsById] = useState<Record<string, TaskDetailData>>({});
-  const [loadingDetailIds, setLoadingDetailIds] = useState<Record<string, boolean>>({});
+  // Clicking a row's title opens the app-wide task panel (redesign S3): one task view everywhere.
+  const { openTask } = useTaskPanel();
   const ownSprints = useSprints({ skip: sprintsFromParent !== undefined });
   const sprints = sprintsFromParent ?? ownSprints.sprints;
-  const isMountedRef = useRef(true);
-  const taskDetailsByIdRef = useRef(taskDetailsById);
-  const activeDetailRequestIdsRef = useRef<Record<string, number>>({});
-  const detailRequestCounterRef = useRef(0);
 
   const scopedTasks = visibleTasks ?? tasks;
   const showImplementationColumn = scopeMode === "global";
   const showSprintColumn = true;
-  const columnCount = showImplementationColumn ? 12 : 11;
   // Columns fall away as the *table's own container* narrows. Container queries
   // rather than viewport ones, because collapsing the sidebar changes the
   // available width by 216px without changing the viewport at all.
@@ -217,20 +200,16 @@ export function TaskGrid({
   const dueColumnWidthClass = "w-[110px]";
   const actionsColumnWidthClass = "w-[108px]";
 
-  useEffect(() => {
-    setExpandedTaskId(initialExpandedTaskId ?? null);
-  }, [initialExpandedTaskId]);
-
-  useEffect(() => {
-    isMountedRef.current = true;
-    return () => {
-      isMountedRef.current = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    taskDetailsByIdRef.current = taskDetailsById;
-  }, [taskDetailsById]);
+  // Saves made in the panel update this grid's rows (the panel tells every list that shows the task).
+  useTaskPanelEvents({
+    onTaskUpdated: (taskId, updates) =>
+      setTasks((current) => current.map((item) => (item.id === taskId ? { ...item, ...updates } : item))),
+    onTaskDeleted: (taskId) => {
+      clearTaskLocalState(taskId);
+      setTasks((current) => current.filter((item) => item.id !== taskId));
+    },
+    onDatesChanged: (changes) => applyDateChanges(changes),
+  });
 
   useEffect(() => {
     const availableIds = new Set(tasks.map((task) => task.id));
@@ -239,400 +218,6 @@ export function TaskGrid({
       return next.size === current.size ? current : next;
     });
   }, [tasks]);
-
-  useEffect(() => {
-    if (!expandedTaskId) {
-      return;
-    }
-
-    if (tasks.some((task) => task.id === expandedTaskId)) {
-      return;
-    }
-
-    setExpandedTaskId(null);
-  }, [expandedTaskId, tasks]);
-
-  useEffect(() => {
-    if (!expandedTaskId || taskDetailsByIdRef.current[expandedTaskId]) {
-      return;
-    }
-
-    const taskId = expandedTaskId;
-    const controller = new AbortController();
-    const requestId = detailRequestCounterRef.current + 1;
-    detailRequestCounterRef.current = requestId;
-    activeDetailRequestIdsRef.current = { ...activeDetailRequestIdsRef.current, [taskId]: requestId };
-    setLoadingDetailIds((current) => {
-      if (current[taskId]) {
-        return current;
-      }
-
-      return { ...current, [taskId]: true };
-    });
-
-    void fetchTaskDetails(taskId, controller.signal)
-      .then((details) => {
-        if (
-          controller.signal.aborted ||
-          !isMountedRef.current ||
-          activeDetailRequestIdsRef.current[taskId] !== requestId
-        ) {
-          return;
-        }
-
-        setTaskDetailsById((current) => ({ ...current, [taskId]: details }));
-      })
-      .catch(() => {
-        if (
-          controller.signal.aborted ||
-          !isMountedRef.current ||
-          activeDetailRequestIdsRef.current[taskId] !== requestId
-        ) {
-          return;
-        }
-
-        setTaskDetailsById((current) => ({
-          ...current,
-          [taskId]: { comments: [], checklist: [], dependencies: [], blocks: null },
-        }));
-      })
-      .finally(() => {
-        if (!isMountedRef.current || activeDetailRequestIdsRef.current[taskId] !== requestId) {
-          return;
-        }
-
-        const nextRequests = { ...activeDetailRequestIdsRef.current };
-        delete nextRequests[taskId];
-        activeDetailRequestIdsRef.current = nextRequests;
-        setLoadingDetailIds((current) => {
-          if (!current[taskId]) {
-            return current;
-          }
-
-          const next = { ...current };
-          delete next[taskId];
-          return next;
-        });
-      });
-
-    return () => {
-      controller.abort();
-    };
-  }, [expandedTaskId]);
-
-  useEffect(() => {
-    if (!expandedTaskId) {
-      return;
-    }
-
-    let isMounted = true;
-    const intervalId = window.setInterval(() => {
-      void fetchTaskDetails(expandedTaskId)
-        .then((details) => {
-          if (!isMounted) {
-            return;
-          }
-
-          setTaskDetailsById((current) => ({ ...current, [expandedTaskId]: details }));
-        })
-        .catch(() => {
-          // Non-blocking refresh.
-        });
-    }, 15000);
-
-    return () => {
-      isMounted = false;
-      window.clearInterval(intervalId);
-    };
-  }, [expandedTaskId]);
-
-  const toggleExpanded = useCallback((taskId: string) => {
-    setExpandedTaskId((current) => (current === taskId ? null : taskId));
-  }, []);
-
-  const handleCommentAdded = useCallback((taskId: string, comment: TaskComment) => {
-    setTaskDetailsById((current) => {
-      const details = current[taskId];
-      if (!details) {
-        return current;
-      }
-
-      return {
-        ...current,
-        [taskId]: { ...details, comments: [...details.comments, comment] },
-      };
-    });
-  }, []);
-
-  const handleCommentUpdated = useCallback((taskId: string, updated: TaskComment) => {
-    setTaskDetailsById((current) => {
-      const details = current[taskId];
-      if (!details) {
-        return current;
-      }
-
-      return {
-        ...current,
-        [taskId]: {
-          ...details,
-          comments: details.comments.map((comment) => (comment.id === updated.id ? updated : comment)),
-        },
-      };
-    });
-  }, []);
-
-  const handleCommentDeleted = useCallback((taskId: string, commentId: string) => {
-    setTaskDetailsById((current) => {
-      const details = current[taskId];
-      if (!details) {
-        return current;
-      }
-
-      return {
-        ...current,
-        [taskId]: {
-          ...details,
-          comments: details.comments.filter((comment) => comment.id !== commentId),
-        },
-      };
-    });
-  }, []);
-
-  const handleDependencyAdded = useCallback((taskId: string, dependency: TaskDependencySummary) => {
-    setTaskDetailsById((current) => {
-      const details = current[taskId];
-      if (!details) {
-        return current;
-      }
-
-      return {
-        ...current,
-        [taskId]: { ...details, dependencies: [...details.dependencies, dependency] },
-      };
-    });
-
-    setTasks((current) =>
-      current.map((task) => {
-        if (task.id !== taskId) {
-          return task;
-        }
-
-        const nextDependencies = [...(task.dependencies || []), dependency];
-        return {
-          ...task,
-          dependencies: nextDependencies,
-          dependency_blocked: getDependencyBlockedState(nextDependencies),
-        };
-      })
-    );
-  }, [setTasks]);
-
-  const handleDependencyRemoved = useCallback((taskId: string, dependencyId: string) => {
-    setTaskDetailsById((current) => {
-      const details = current[taskId];
-      if (!details) {
-        return current;
-      }
-
-      return {
-        ...current,
-        [taskId]: {
-          ...details,
-          dependencies: details.dependencies.filter((dependency) => dependency.id !== dependencyId),
-        },
-      };
-    });
-
-    setTasks((current) =>
-      current.map((task) => {
-        if (task.id !== taskId) {
-          return task;
-        }
-
-        const nextDependencies = (task.dependencies || []).filter((dependency) => dependency.id !== dependencyId);
-        return {
-          ...task,
-          dependencies: nextDependencies,
-          dependency_blocked: getDependencyBlockedState(nextDependencies),
-        };
-      })
-    );
-  }, [setTasks]);
-
-  const handleChecklistToggle = useCallback(async (taskId: string, item: TaskChecklistItem) => {
-    setTaskDetailsById((current) => {
-      const details = current[taskId];
-      if (!details) {
-        return current;
-      }
-
-      return {
-        ...current,
-        [taskId]: {
-          ...details,
-          checklist: details.checklist.map((checklistItem) =>
-            checklistItem.id === item.id ? { ...checklistItem, is_done: !checklistItem.is_done } : checklistItem
-          ),
-        },
-      };
-    });
-
-    try {
-      const response = await fetch(`/api/tasks/${taskId}/checklist`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: [{ id: item.id, is_done: !item.is_done }] }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to update checklist");
-      }
-    } catch {
-      setTaskDetailsById((current) => {
-        const details = current[taskId];
-        if (!details) {
-          return current;
-        }
-
-        return {
-          ...current,
-          [taskId]: {
-            ...details,
-            checklist: details.checklist.map((checklistItem) =>
-              checklistItem.id === item.id ? { ...checklistItem, is_done: item.is_done } : checklistItem
-            ),
-          },
-        };
-      });
-    }
-  }, []);
-
-  const handleAddChecklistItem = useCallback(async (taskId: string, text: string) => {
-    if (!text.trim()) {
-      return;
-    }
-
-    try {
-      const response = await fetch(`/api/tasks/${taskId}/checklist`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: text.trim() }),
-      });
-
-      if (!response.ok) {
-        return;
-      }
-
-      const newItem = (await response.json()) as TaskChecklistItem;
-      setTaskDetailsById((current) => {
-        const details = current[taskId];
-        if (!details) {
-          return current;
-        }
-
-        return {
-          ...current,
-          [taskId]: { ...details, checklist: [...details.checklist, newItem] },
-        };
-      });
-    } catch {
-      // Silently fail.
-    }
-  }, []);
-
-  const handleUpdateChecklistItem = useCallback(async (taskId: string, itemId: string, text: string) => {
-    const nextText = text.trim();
-    if (!nextText) {
-      return;
-    }
-
-    const details = taskDetailsById[taskId];
-    const existingItem = details?.checklist.find((checklistItem) => checklistItem.id === itemId);
-    if (!existingItem) {
-      return;
-    }
-
-    const previousText = existingItem.text;
-    if (previousText === nextText) {
-      return;
-    }
-
-    setTaskDetailsById((current) => {
-      const currentDetails = current[taskId];
-      if (!currentDetails) {
-        return current;
-      }
-
-      return {
-        ...current,
-        [taskId]: {
-          ...currentDetails,
-          checklist: currentDetails.checklist.map((checklistItem) =>
-            checklistItem.id === itemId ? { ...checklistItem, text: nextText } : checklistItem
-          ),
-        },
-      };
-    });
-
-    try {
-      const response = await fetch(`/api/tasks/${taskId}/checklist`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: [{ id: itemId, text: nextText }] }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to update checklist item");
-      }
-    } catch {
-      setTaskDetailsById((current) => {
-        const details = current[taskId];
-        if (!details) {
-          return current;
-        }
-
-        return {
-          ...current,
-          [taskId]: {
-            ...details,
-            checklist: details.checklist.map((checklistItem) =>
-              checklistItem.id === itemId ? { ...checklistItem, text: previousText ?? checklistItem.text } : checklistItem
-            ),
-          },
-        };
-      });
-    }
-  }, [taskDetailsById]);
-
-  const handleDeleteChecklistItem = useCallback(async (taskId: string, itemId: string) => {
-    setTaskDetailsById((current) => {
-      const details = current[taskId];
-      if (!details) {
-        return current;
-      }
-
-      return {
-        ...current,
-        [taskId]: {
-          ...details,
-          checklist: details.checklist.filter((checklistItem) => checklistItem.id !== itemId),
-        },
-      };
-    });
-
-    try {
-      const response = await fetch(`/api/tasks/${taskId}/checklist?itemId=${itemId}`, {
-        method: "DELETE",
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to delete checklist item");
-      }
-    } catch {
-      const details = await fetchTaskDetails(taskId);
-      setTaskDetailsById((current) => ({ ...current, [taskId]: details }));
-    }
-  }, []);
 
   function markSaving(taskId: string) {
     setSavingIds((current) => ({
@@ -668,31 +253,8 @@ export function TaskGrid({
       return next;
     });
 
-    setExpandedTaskId((current) => (current === taskId ? null : current));
-    setTaskDetailsById((current) => {
-      if (!(taskId in current)) {
-        return current;
-      }
-
-      const next = { ...current };
-      delete next[taskId];
-      return next;
-    });
-    setLoadingDetailIds((current) => {
-      if (!(taskId in current)) {
-        return current;
-      }
-
-      const next = { ...current };
-      delete next[taskId];
-      return next;
-    });
     estimateDrafts.cancel(taskId);
     dueDrafts.cancel(taskId);
-
-    const nextRequests = { ...activeDetailRequestIdsRef.current };
-    delete nextRequests[taskId];
-    activeDetailRequestIdsRef.current = nextRequests;
   }
 
   function replaceTaskSnapshot(updatedTask: TaskWithImplementation) {
@@ -823,43 +385,6 @@ export function TaskGrid({
   function handleToggleDone(task: TaskWithImplementation) {
     const nextStatus: TaskStatus = task.status === "Done" ? "Backlog" : "Done";
     void updateTask(task.id, { status: nextStatus });
-  }
-
-  async function deleteTask(taskId: string): Promise<void> {
-    const task = tasks.find((item) => item.id === taskId);
-    if (!task || deletingIds[taskId]) {
-      return;
-    }
-
-    if (!window.confirm(`Delete task "${task.title}"? This cannot be undone.`)) {
-      return;
-    }
-
-    setDeletingIds((current) => ({ ...current, [taskId]: true }));
-    setError(null);
-
-    try {
-      const response = await fetch(`/api/tasks/${taskId}`, { method: "DELETE" });
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({ error: "Delete failed" }));
-        throw new Error(typeof data.error === "string" ? data.error : "Delete failed");
-      }
-
-      clearTaskLocalState(taskId);
-      setTasks((current) => current.filter((item) => item.id !== taskId));
-    } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : "Failed to delete task");
-    } finally {
-      setDeletingIds((current) => {
-        if (!current[taskId]) {
-          return current;
-        }
-
-        const next = { ...current };
-        delete next[taskId];
-        return next;
-      });
-    }
   }
 
   function toggleTaskSelected(taskId: string) {
@@ -1212,7 +737,6 @@ export function TaskGrid({
                     className="h-4 w-4 rounded border-stroke bg-panel text-accent-text focus:ring-accent"
                   />
                 </th>
-                <th className="w-10 px-2 py-3" />
                 <th className={`${taskColumnWidthClass} px-3 py-3`}>
                   <button
                     type="button"
@@ -1305,17 +829,14 @@ export function TaskGrid({
                 <th className={`${actionsColumnWidthClass} px-3 py-3`}>Actions</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody data-task-list={taskList ?? undefined}>
               {sortedTasks.map((task) => {
                 const isSaving = Boolean(savingIds[task.id]);
                 const isDeleting = Boolean(deletingIds[task.id]);
                 const isBusy = isSaving || isDeleting;
                 const dueCell = draftCellHandlers({ id: task.id, store: dueDrafts, commit: (draft) => commitDueDraft(task, draft) });
                 const estimateCell = draftCellHandlers({ id: task.id, store: estimateDrafts, commit: (draft) => void commitEstimatedMinutes(task, draft), enter: "blur" });
-                const isExpanded = expandedTaskId === task.id;
                 const isSelected = selectedTaskIds.has(task.id);
-                const details = taskDetailsById[task.id];
-                const isLoadingDetails = Boolean(loadingDetailIds[task.id]);
                 const dependencyWaitingLabel = getDependencyWaitingLabel(task);
                 const visualState = getTaskVisualState({
                   status: task.status,
@@ -1327,7 +848,8 @@ export function TaskGrid({
                   <Fragment key={task.id}>
                     <tr
                       id={`task-${task.id}`}
-                      className={`border-b border-solid border-stroke ${isBusy ? "opacity-70" : visualState?.rowClass ?? ""} ${isExpanded ? "bg-accent/10" : "hover:bg-panel-muted/40"}`}
+                      data-task-open={task.id}
+                      className={`border-b border-solid border-stroke ${isBusy ? "opacity-70" : visualState?.rowClass ?? ""} hover:bg-panel-muted/40`}
                     >
                       <td className="w-10 px-2 py-2.5 align-middle text-center">
                         <input
@@ -1339,30 +861,10 @@ export function TaskGrid({
                           className="h-4 w-4 rounded border-stroke bg-panel text-accent-text focus:ring-accent disabled:cursor-not-allowed disabled:opacity-60"
                         />
                       </td>
-                      <td className="w-10 px-2 py-2.5 align-middle text-center">
-                        <button
-                          type="button"
-                          onClick={() => toggleExpanded(task.id)}
-                          aria-label={isExpanded ? "Collapse task details" : "Expand task details"}
-                          className="inline-flex h-7 w-7 items-center justify-center rounded border border-stroke bg-panel-muted text-foreground transition hover:bg-accent hover:text-on-accent hover:border-accent"
-                          title={isExpanded ? "Collapse" : "Expand"}
-                        >
-                          <svg
-                            className={`h-4 w-4 transition-transform ${isExpanded ? "rotate-90" : ""}`}
-                            fill="none"
-                            viewBox="0 0 24 24"
-                            stroke="currentColor"
-                            strokeWidth={2.5}
-                          >
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                          </svg>
-                        </button>
-                      </td>
-
                       <td className={`${taskCellWidthClass} px-3 py-2.5 align-middle`}>
                         <button
                           type="button"
-                          onClick={() => setModalTaskId(task.id)}
+                          onClick={() => openTask(task)}
                           className="block w-full break-words text-left text-sm font-medium leading-tight text-foreground transition hover:text-accent-text"
                         >
                           {task.title}
@@ -1537,68 +1039,6 @@ export function TaskGrid({
                       </td>
                     </tr>
 
-                    {isExpanded ? (
-                      <tr className="bg-accent/5">
-                        <td colSpan={columnCount} className="border-b border-stroke px-4 py-4">
-                          {isLoadingDetails ? (
-                            <div className="flex items-center justify-center py-8">
-                              <div className="h-6 w-6 animate-spin rounded-full border-2 border-accent border-t-transparent" />
-                            </div>
-                          ) : details ? (
-                            <div className="space-y-4">
-                              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-stroke bg-panel-muted px-3 py-2">
-                                <p className="text-xs text-muted-foreground">Manage task details, checklist, dependencies, and comments.</p>
-                                <Button
-                                  variant="danger"
-                                  size="sm"
-                                  onClick={() => void deleteTask(task.id)}
-                                  disabled={isBusy}
-                                >
-                                  {isDeleting ? "Deleting..." : "Delete Task"}
-                                </Button>
-                              </div>
-
-                              <TaskMetaEditor
-                                key={`${task.id}:${task.updated_at}`}
-                                task={task}
-                                isSaving={isBusy}
-                                onUpdate={updateTask}
-                                onReplaceTask={replaceTaskSnapshot}
-                                blocks={details.blocks}
-                              />
-
-                              <div className="grid gap-6 xl:grid-cols-3">
-                                <ChecklistSection
-                                  checklist={details.checklist}
-                                  onToggle={(item) => void handleChecklistToggle(task.id, item)}
-                                  onAdd={(text) => void handleAddChecklistItem(task.id, text)}
-                                  onUpdate={(itemId, text) => void handleUpdateChecklistItem(task.id, itemId, text)}
-                                  onDelete={(itemId) => void handleDeleteChecklistItem(task.id, itemId)}
-                                />
-
-                                <TaskDependencies
-                                  taskId={task.id}
-                                  dependencies={details.dependencies}
-                                  blocks={details.blocks}
-                                  availableTasks={tasks}
-                                  availableCommitments={commitments}
-                                  onDependencyAdded={(dependency) => handleDependencyAdded(task.id, dependency)}
-                                  onDependencyRemoved={(dependencyId) => handleDependencyRemoved(task.id, dependencyId)}
-                                />
-
-                                <TaskComments
-                                  taskId={task.id}
-                                  comments={details.comments}
-                                  onCommentAdded={(comment) => handleCommentAdded(task.id, comment)}
-                                  onCommentUpdated={(comment) => handleCommentUpdated(task.id, comment)}
-                                  onCommentDeleted={(commentId) => handleCommentDeleted(task.id, commentId)}
-                                />
-                              </div>
-                            </div>
-                          ) : null}
-                        </td>
-                      </tr>
-                    ) : null}
                   </Fragment>
                 );
               })}
@@ -1607,22 +1047,6 @@ export function TaskGrid({
         </div>
       </section>
 
-      <TaskDetailModal
-        task={tasks.find((item) => item.id === modalTaskId) ?? null}
-        allTasks={tasks}
-        commitments={commitments}
-        onClose={() => setModalTaskId(null)}
-        onTaskUpdated={(taskId, updates) =>
-          setTasks((current) =>
-            current.map((item) => (item.id === taskId ? { ...item, ...updates } : item))
-          )
-        }
-        onTaskDeleted={(taskId) => {
-          setModalTaskId(null);
-          setTasks((current) => current.filter((item) => item.id !== taskId));
-        }}
-        onDatesChanged={applyDateChanges}
-      />
     </div>
   );
 }
