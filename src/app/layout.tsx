@@ -2,9 +2,11 @@ import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { AppShell } from "@/components/layout/AppShell";
 import { Sidebar } from "@/components/layout/Sidebar";
+import { PageViewAnalytics } from "@/components/analytics/PageViewAnalytics";
 import { ToastProvider } from "@/components/ui/Toast";
 import { DateCascadeProvider } from "@/components/tasks/DateCascadeProvider";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { isMcpDeployment } from "@/lib/mcp/config";
 import { getTodayBriefStatus } from "@/lib/briefs/service";
 import type { TodayBriefStatus } from "@/lib/briefs/button";
 import "./globals.css";
@@ -50,6 +52,8 @@ export default async function RootLayout({
             <AppShell sidebar={<Sidebar userEmail={userEmail} defaultCollapsed={collapsed} todayBrief={todayBrief} />}>{children}</AppShell>
           </DateCascadeProvider>
         </ToastProvider>
+        {/* Page views: main deployment only. The MCP proxy never reports. */}
+        {!isMcpDeployment() && <PageViewAnalytics />}
       </body>
     </html>
   );
