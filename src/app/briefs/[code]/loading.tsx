@@ -1,5 +1,3 @@
-import Link from "next/link";
-import { briefMono, briefSans } from "@/components/briefs/fonts";
 import "@/components/briefs/brief-page.css";
 
 /**
@@ -8,11 +6,10 @@ import "@/components/briefs/brief-page.css";
  */
 export default function BriefLoading() {
   return (
-    <div className={`brief-page ${briefSans.variable} ${briefMono.variable}`}>
+    <div className="brief-page">
       <div className="page" role="status" aria-live="polite" aria-busy="true">
         <div className="topbar">
-          <Link href="/">← Baseline</Link>
-          <span className="skel-sr">Loading the brief…</span>
+            <span className="skel-sr">Loading the brief…</span>
         </div>
 
         <div className="bento" aria-hidden="true">

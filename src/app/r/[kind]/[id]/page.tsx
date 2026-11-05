@@ -1,7 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
-import { briefMono, briefSans } from '@/components/briefs/fonts';
 import { Markdown } from '@/components/markdown/Markdown';
 import { TaskRecordPage } from '@/components/portfolio/TaskRecordPage';
 import { fetchMissionControlItemById, mapRouteKindToTypedId } from '@/lib/mcp/search';
@@ -127,14 +126,11 @@ export default async function ReaderPage({ params }: ReaderPageProps) {
   );
 
   return (
-    <div className={`brief-page pf ${briefSans.variable} ${briefMono.variable}`}>
+    <div className="brief-page pf">
       <div className={`page pf-record${taskInput ? ' pf-task' : ''}`}>
         <nav className="pf-top" aria-label="Baseline">
-          <Link href="/" className="pf-back">
-            <span aria-hidden="true">←</span> Baseline
-          </Link>
-          <Link href="/portfolio" className="pf-toplink">
-            Portfolio
+          <Link href="/portfolio" className="pf-back">
+            <span aria-hidden="true">←</span> Portfolio
           </Link>
         </nav>
 

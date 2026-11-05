@@ -16,7 +16,7 @@ export type FieldSize = "xs" | "sm" | "md";
  * full strength, so it read as no indicator at all.
  */
 const BASE =
-  "w-full rounded-lg border border-stroke text-foreground placeholder:text-muted-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60";
+  "w-full rounded-lg border border-stroke text-foreground placeholder:text-muted-foreground outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-60 pointer-coarse:min-h-11";
 
 const TONES: Record<FieldTone, string> = {
   default: "bg-panel",

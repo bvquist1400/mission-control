@@ -1,19 +1,20 @@
 "use client";
 
 import { Modal } from "@/components/ui/Modal";
-import { NAV_GROUPS } from "@/components/layout/nav-items";
+import { NAV_ITEMS } from "@/components/layout/nav-items";
 
+/** `g` then a key. Every target is a top-bar or More item (nav-items.tsx). */
 export const GO_TO_KEYS: Record<string, string> = {
   t: "/",
   b: "/backlog",
+  o: "/portfolio",
+  l: "/launch",
   a: "/applications",
   p: "/projects",
   c: "/calendar",
 };
 
-const LABEL_BY_HREF = new Map(
-  NAV_GROUPS.flatMap((group) => group.items).map((item) => [item.href, item.label])
-);
+const LABEL_BY_HREF = new Map(NAV_ITEMS.map((item) => [item.href, item.label]));
 
 function Key({ children }: { children: string }) {
   return (
@@ -49,7 +50,6 @@ export function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () 
           </h3>
           <div className="divide-y divide-stroke">
             <Row keys={["⌘/Ctrl", "K"]} label="Search everything" />
-            <Row keys={["["]} label="Collapse or expand the sidebar" />
             <Row keys={["?"]} label="Show this list" />
             <Row keys={["Esc"]} label="Close a dialog" />
           </div>

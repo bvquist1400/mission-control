@@ -394,7 +394,7 @@ export default function CalendarPage() {
           </p>
           <Link
             href="/login?next=%2Fcalendar"
-            className="mt-4 inline-flex rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90"
+            className="mt-4 inline-flex rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-on-accent transition hover:opacity-90"
           >
             Sign in with magic link
           </Link>

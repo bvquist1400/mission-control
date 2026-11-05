@@ -1,4 +1,3 @@
-import Link from "next/link";
 import {
   formatTick,
   hasPartialCredit,
@@ -10,14 +9,7 @@ import {
   type TaskCounts,
   type Timeline,
 } from "@/lib/portfolio";
-import type { TaskScope } from "@/lib/personal-exclusion";
 import { AssignedList, LaterList, TaskEditorLayer } from "@/components/portfolio/PortfolioTasks";
-
-const SCOPES: Array<{ value: TaskScope; label: string }> = [
-  { value: "personal", label: "Personal" },
-  { value: "work", label: "Work" },
-  { value: "all", label: "All" },
-];
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -281,23 +273,6 @@ export function PortfolioPage({ view }: { view: PortfolioView }) {
   return (
     <TaskEditorLayer>
       <div className="page pf-portfolio">
-        <nav className="pf-top" aria-label="Baseline">
-          <Link href="/" className="pf-back">
-            <span aria-hidden="true">←</span> Baseline
-          </Link>
-          <div className="pf-scope" role="group" aria-label="Which tasks">
-            {SCOPES.map((scope) => (
-              <Link
-                key={scope.value}
-                href={scope.value === "personal" ? "/portfolio" : `/portfolio?scope=${scope.value}`}
-                aria-current={view.scope === scope.value ? "page" : undefined}
-              >
-                {scope.label}
-              </Link>
-            ))}
-          </div>
-        </nav>
-
         <div className="bento">
           <section className="tile hero span-6" aria-label="Summary">
             <div className="eyebrow">

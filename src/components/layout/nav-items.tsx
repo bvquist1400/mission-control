@@ -3,27 +3,23 @@ import type { ReactNode } from "react";
 export interface NavItem {
   href: string;
   label: string;
-  /** Shown as a tooltip, and as the subtitle in the mobile drawer. */
+  /** Shown as a tooltip, and as the line under the name in the More menu. */
   hint: string;
   icon: ReactNode;
-}
-
-export interface NavGroup {
-  label: string;
-  items: NavItem[];
+  /** Other paths that count as this item for the active marker. */
+  also?: string[];
 }
 
 function Icon({ children }: { children: ReactNode }) {
   return (
     <svg
       aria-hidden="true"
-      className="h-[18px] w-[18px] shrink-0"
-      viewBox="0 0 24 24"
+      className="h-5 w-5 shrink-0"
+      viewBox="0 0 20 20"
       fill="none"
       stroke="currentColor"
-      strokeWidth={1.75}
-      strokeLinecap="round"
-      strokeLinejoin="round"
+      strokeWidth={1.6}
+      strokeLinecap="square"
     >
       {children}
     </svg>
@@ -31,75 +27,120 @@ function Icon({ children }: { children: ReactNode }) {
 }
 
 /**
- * Grouped so the daily drivers sit above the things consulted occasionally.
- * One source of truth — the desktop rail, the mobile drawer and the tablet bar
- * all render from this.
+ * The top bar (redesign S1, menu B): Today · Tasks · Portfolio · Launch · More.
+ * One source of truth: the desktop bar, the phone tab bar and the More menu all
+ * render from these two lists, and the `g` shortcuts in ShortcutsDialog point
+ * at them. Never link a page from only one of them.
  */
-export const NAV_GROUPS: NavGroup[] = [
+export const PRIMARY_NAV: NavItem[] = [
   {
-    label: "Daily",
-    items: [
-      {
-        href: "/",
-        label: "Today",
-        hint: "Daily operating view",
-        icon: <Icon><path d="M3 12h3l2.5-7 4 14 2.5-7H21" /></Icon>,
-      },
-      {
-        href: "/backlog",
-        label: "Backlog",
-        hint: "All tasks with filters and edits",
-        icon: <Icon><path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01" /></Icon>,
-      },
-    ],
+    href: "/",
+    label: "Today",
+    hint: "Your week, meetings and what to do now",
+    icon: (
+      <Icon>
+        <rect x="3" y="4" width="14" height="13" />
+        <path d="M3 8h14M7 2v4M13 2v4" />
+      </Icon>
+    ),
   },
   {
+    href: "/backlog",
+    label: "Tasks",
+    hint: "Every task, with filters and edits",
+    icon: (
+      <Icon>
+        <path d="M7 5h10M7 10h10M7 15h10" />
+        <rect x="2.5" y="3.5" width="2.5" height="2.5" />
+        <rect x="2.5" y="8.5" width="2.5" height="2.5" />
+        <rect x="2.5" y="13.5" width="2.5" height="2.5" />
+      </Icon>
+    ),
+  },
+  {
+    href: "/portfolio",
     label: "Portfolio",
-    items: [
-      {
-        href: "/portfolio",
-        label: "Portfolio",
-        hint: "What needs you, % done and a timeline per app",
-        icon: <Icon><path d="M4 6h9M4 12h13M4 18h6" /><path d="M20 4v16" /></Icon>,
-      },
-      {
-        href: "/launch",
-        label: "Launch",
-        hint: "Menu & Market launch numbers: sign-ups, website, Google search",
-        icon: <Icon><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></Icon>,
-      },
-      {
-        href: "/applications",
-        label: "Applications",
-        hint: "Portfolio health and updates",
-        icon: <Icon><path d="m12 3 9 5-9 5-9-5 9-5Z" /><path d="m3 13 9 5 9-5" /></Icon>,
-      },
-      {
-        href: "/projects",
-        label: "Projects",
-        hint: "Track work within applications",
-        icon: <Icon><path d="M3 7a2 2 0 0 1 2-2h3.5l2 2.5H19a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /></Icon>,
-      },
-    ],
+    hint: "What needs you, % done and a timeline per app",
+    also: ["/r"],
+    icon: (
+      <Icon>
+        <rect x="3" y="3" width="6" height="6" />
+        <rect x="11" y="3" width="6" height="6" />
+        <rect x="3" y="11" width="6" height="6" />
+        <rect x="11" y="11" width="6" height="6" />
+      </Icon>
+    ),
   },
   {
-    label: "Review",
-    items: [
-      {
-        href: "/calendar",
-        label: "Calendar",
-        hint: "Imported schedule metadata",
-        icon: <Icon><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 10h18M8 3v4M16 3v4" /></Icon>,
-      },
-    ],
+    href: "/launch",
+    label: "Launch",
+    hint: "Menu & Market launch numbers",
+    icon: (
+      <Icon>
+        <path d="M3 17V11M8 17V7M13 17V9M18 17V3" />
+      </Icon>
+    ),
   },
 ];
 
-export const NAV_ITEMS: NavItem[] = NAV_GROUPS.flatMap((group) => group.items);
+/** Under "More". The page-view data (~11/19) may still change what sits here. */
+export const MORE_NAV: NavItem[] = [
+  {
+    href: "/applications",
+    label: "Applications",
+    hint: "Each app's health and updates",
+    also: ["/implementations"],
+    icon: (
+      <Icon>
+        <path d="m10 3 7 4-7 4-7-4 7-4Z" />
+        <path d="m3 11 7 4 7-4" />
+      </Icon>
+    ),
+  },
+  {
+    href: "/projects",
+    label: "Projects",
+    hint: "Projects, sections and templates",
+    icon: (
+      <Icon>
+        <path d="M3 6h5l2 2h7v9H3z" />
+      </Icon>
+    ),
+  },
+  {
+    href: "/calendar",
+    label: "Calendar",
+    hint: "Imported meetings",
+    icon: (
+      <Icon>
+        <rect x="3" y="4" width="14" height="13" />
+        <path d="M3 8h14M7 2v4M13 2v4M7 11h2M11 11h2M7 14h2" />
+      </Icon>
+    ),
+  },
+];
 
-export function isActive(pathname: string, href: string): boolean {
+export const MORE_ICON = (
+  <Icon>
+    <path d="M3 6h14M3 10h14M3 14h14" />
+  </Icon>
+);
+
+export const NAV_ITEMS: NavItem[] = [...PRIMARY_NAV, ...MORE_NAV];
+
+function matchesPath(pathname: string, href: string): boolean {
   if (href === "/") {
     return pathname === href;
   }
   return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+export function isActive(pathname: string, item: NavItem | string): boolean {
+  if (typeof item === "string") return matchesPath(pathname, item);
+  return [item.href, ...(item.also ?? [])].some((href) => matchesPath(pathname, href));
+}
+
+/** The More tab is lit when the page is one of its items. */
+export function isMoreActive(pathname: string): boolean {
+  return MORE_NAV.some((item) => isActive(pathname, item));
 }

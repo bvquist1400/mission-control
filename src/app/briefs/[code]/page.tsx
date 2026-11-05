@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { BriefPage } from "@/components/briefs/BriefPage";
-import { briefMono, briefSans } from "@/components/briefs/fonts";
 import { BriefServiceError, getBrief, getBriefStatus } from "@/lib/briefs/service";
 import { lateDigestBannerText } from "@/lib/briefs/refresh-view";
 import { normalizeBriefCode } from "@/lib/briefs/keys";
@@ -34,7 +33,7 @@ export default async function BriefRoute({ params }: BriefRouteProps) {
     redirect(`/login?next=${encodeURIComponent(`/briefs/${code}`)}`);
   }
 
-  const wrapperClass = `brief-page ${briefSans.variable} ${briefMono.variable}`;
+  const wrapperClass = "brief-page";
 
   let view: BriefView | null = null;
   try {

@@ -8,7 +8,7 @@ const TONES: Record<BadgeTone, string> = {
   accent: "border-accent/30 bg-accent-soft text-accent-text",
   danger: "border-danger-border bg-danger-soft text-danger",
   success: "border-success-border bg-success-soft text-success",
-  warning: "border-amber-500/40 bg-amber-500/10 text-amber-300",
+  warning: "border-warning-border bg-warning-soft text-warning",
 };
 
 export type BadgeSize = "sm" | "md";
@@ -24,7 +24,7 @@ export function badgeClasses({
   className,
 }: { tone?: BadgeTone; size?: BadgeSize; className?: string } = {}): string {
   return cn(
-    "inline-flex items-center gap-1 rounded-full border font-medium",
+    "inline-flex items-center gap-1 border font-mono font-medium",
     TONES[tone],
     SIZES[size],
     className

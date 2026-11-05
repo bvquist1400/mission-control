@@ -8,7 +8,6 @@ import { WeekBoardSection } from "@/components/today/sections/WeekBoardSection";
 import { WaitingStripSection } from "@/components/today/sections/WaitingStripSection";
 import { TodayHeaderChips } from "@/components/today/sections/TodayHeaderChips";
 import { SectionSkeleton } from "@/components/today/sections/SectionSkeleton";
-import { TodayModeToggle } from "@/components/today/TodayModeToggle";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
 import { normalizeTaskScope } from "@/lib/personal-exclusion";
@@ -67,8 +66,6 @@ export default async function TodayPage({
           </div>
         }
       />
-
-      <TodayModeToggle mode={mode} />
 
       <TodayModalProvider key={mode}>
         <section className="grid gap-4 xl:grid-cols-[2fr_1fr]">

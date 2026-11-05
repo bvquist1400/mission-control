@@ -419,7 +419,7 @@ export function BacklogList() {
               className={`rounded-lg border px-3 py-2 text-sm font-semibold transition ${
                 isArtifactInboxView
                   ? "border-stroke bg-panel text-foreground hover:bg-panel-muted"
-                  : "border-accent bg-accent text-white hover:opacity-90"
+                  : "border-accent bg-accent text-on-accent hover:opacity-90"
               }`}
             >
               Task Backlog
@@ -428,7 +428,7 @@ export function BacklogList() {
               href={artifactInboxHref}
               className={`rounded-lg border px-3 py-2 text-sm font-semibold transition ${
                 isArtifactInboxView
-                  ? "border-accent bg-accent text-white hover:opacity-90"
+                  ? "border-accent bg-accent text-on-accent hover:opacity-90"
                   : "border-stroke bg-panel text-foreground hover:bg-panel-muted"
               }`}
             >

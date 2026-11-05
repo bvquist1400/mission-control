@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useToast } from "@/components/ui/Toast";
@@ -385,7 +384,6 @@ export function BriefPage({ view, lateDigestBanner = null }: { view: BriefView; 
     <>
     <div className="page">
       <div className="topbar">
-        <Link href="/">← Baseline</Link>
         <span className="mono">{assistantReviewLine(brief.code)}</span>
       </div>
 

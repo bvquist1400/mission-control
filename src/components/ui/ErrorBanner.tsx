@@ -17,7 +17,7 @@ export function ErrorBanner({ message }: { message: string }) {
       {authRequired && (
         <Link
           href={`/login?next=${encodeURIComponent(pathname || '/')}`}
-          className="mt-2 inline-flex rounded-lg bg-accent px-3 py-1.5 text-sm font-semibold text-white transition hover:opacity-90"
+          className="mt-2 inline-flex rounded-lg bg-accent px-3 py-1.5 text-sm font-semibold text-on-accent transition hover:opacity-90"
         >
           Go to sign in
         </Link>

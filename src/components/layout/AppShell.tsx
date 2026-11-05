@@ -4,25 +4,37 @@ import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
 /**
- * Routes that render full-bleed, without the sidebar rail or the main panel:
- * the v5 pages (brief pages, the Portfolio and record pages), which follow the
- * OS light/dark setting and carry their own "← Baseline" link.
+ * Pages that keep their own full-width layout under the top bar: the v5 pages
+ * (brief pages, the Portfolio and record pages). They draw their own column.
  */
 const FULL_BLEED_PREFIXES = ["/briefs/", "/portfolio", "/r/"];
 
-export function AppShell({ sidebar, children }: { sidebar: ReactNode; children: ReactNode }) {
+/** Signed-out pages: no top bar (its links would only bounce to sign-in). */
+const BARE_PREFIXES = ["/login"];
+
+/** Room under the content for the phone/tablet tab bar (56px + the home indicator). */
+const TAB_BAR_ROOM = "pb-[calc(4.5rem+env(safe-area-inset-bottom))] lg:pb-0";
+
+export function AppShell({ topBar, children }: { topBar: ReactNode; children: ReactNode }) {
   const pathname = usePathname() ?? "";
 
+  if (BARE_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
+    return <main className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6">{children}</main>;
+  }
+
   if (FULL_BLEED_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
-    return <>{children}</>;
+    return (
+      <>
+        {topBar}
+        <div className={TAB_BAR_ROOM}>{children}</div>
+      </>
+    );
   }
 
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-[2000px] gap-6 px-4 py-4 sm:px-6 lg:px-8">
-      {sidebar}
-      <main className="min-h-[calc(100vh-2rem)] min-w-0 flex-1 rounded-2xl border border-stroke bg-panel p-5 pb-24 shadow-sm max-lg:pt-14 sm:p-6 sm:pb-24 sm:max-lg:pt-14 xl:p-7 xl:pb-8">
-        {children}
-      </main>
-    </div>
+    <>
+      {topBar}
+      <main className="mx-auto w-full max-w-[1680px] px-4 pb-[calc(5.5rem+env(safe-area-inset-bottom))] pt-5 sm:px-6 lg:pb-10">{children}</main>
+    </>
   );
 }

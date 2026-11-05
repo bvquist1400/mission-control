@@ -96,8 +96,8 @@ export function ImplementationCard({ implementation, onCopyUpdate }: Implementat
   }[copyState];
 
   const buttonClass = {
-    idle: "bg-accent text-white hover:opacity-90",
-    loading: "bg-accent/60 text-white cursor-wait",
+    idle: "bg-accent text-on-accent hover:opacity-90",
+    loading: "bg-accent/60 text-on-accent cursor-wait",
     copied: "bg-green-500/15 text-green-400",
     error: "bg-red-500/15 text-red-400",
   }[copyState];

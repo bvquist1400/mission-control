@@ -589,7 +589,7 @@ function WaitingReviewColumn({
             <p className="mt-2 text-xs text-muted-foreground">Review queue remains one click away from the board.</p>
             <Link
               href="/backlog?review=needs_review"
-              className="mt-3 inline-flex rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-white transition hover:opacity-90"
+              className="mt-3 inline-flex rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-on-accent transition hover:opacity-90"
             >
               Open Review Queue
             </Link>

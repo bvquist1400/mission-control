@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { briefMono, briefSans } from "@/components/briefs/fonts";
 import { PortfolioPage } from "@/components/portfolio/PortfolioPage";
 import { normalizeTaskScope } from "@/lib/personal-exclusion";
 import { buildPortfolio } from "@/lib/portfolio";
@@ -32,7 +31,7 @@ export default async function PortfolioRoute({ searchParams }: PortfolioRoutePro
   const view = buildPortfolio(input, { scope });
 
   return (
-    <div className={`brief-page pf ${briefSans.variable} ${briefMono.variable}`}>
+    <div className="brief-page pf">
       <PortfolioPage view={view} />
     </div>
   );

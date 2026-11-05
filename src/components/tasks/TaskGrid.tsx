@@ -1342,7 +1342,7 @@ export function TaskGrid({
                           type="button"
                           onClick={() => toggleExpanded(task.id)}
                           aria-label={isExpanded ? "Collapse task details" : "Expand task details"}
-                          className="inline-flex h-7 w-7 items-center justify-center rounded border border-stroke bg-panel-muted text-foreground transition hover:bg-accent hover:text-white hover:border-accent"
+                          className="inline-flex h-7 w-7 items-center justify-center rounded border border-stroke bg-panel-muted text-foreground transition hover:bg-accent hover:text-on-accent hover:border-accent"
                           title={isExpanded ? "Collapse" : "Expand"}
                         >
                           <svg

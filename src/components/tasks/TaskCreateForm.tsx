@@ -732,7 +732,7 @@ export function TaskCreateForm({
               {parseState === "parsed" && (
                 <>
                   {qcDraft.needsReview && (
-                    <div className="flex items-center gap-2 rounded-lg border border-yellow-200 bg-yellow-50 px-3 py-2 text-xs text-yellow-800 dark:border-yellow-800 dark:bg-yellow-950 dark:text-yellow-300">
+                    <div className="flex items-center gap-2 rounded-lg border border-warning-border bg-warning-soft px-3 py-2 text-xs text-warning">
                       Review suggested — LLM confidence is low. Check all fields before creating.
                     </div>
                   )}

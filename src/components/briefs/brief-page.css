@@ -1,92 +1,55 @@
 /*
- * Brief pages (/briefs/[code]) — the v5 design. Everything is scoped under
- * .brief-page so the rest of Baseline keeps its own (dark-only) theme. Unlike
- * the app, this page follows the OS light/dark setting.
+ * Brief pages (/briefs/[code]) — the v5 layout, also used by the Portfolio and
+ * record pages. Everything is scoped under .brief-page. Since the redesign
+ * (S1) the colours are the app's own olive tokens from globals.css, so these
+ * pages follow the same System · Light · Dark choice as every other page;
+ * the names below are kept so the v5 rules didn't need rewriting. Nothing here
+ * may set `color-scheme` (globals.css owns it).
  */
 
 .brief-page {
-  --canvas: #e6e8ee;
-  --bg: #f5f6f9;
-  --surface: #ffffff;
-  --surface-2: #f0f1f5;
-  --ink: #12141c;
-  --ink-2: #3a3e4c;
-  --muted: #6a6f80;
-  --hair: #e4e6ec;
-  --hair-strong: #d3d6df;
-  --accent: #e11d48;
-  --g2: #8b5cf6;
-  --g3: #5b6cff;
-  --mesh-a: rgba(225, 29, 72, 0.1);
-  --mesh-b: rgba(91, 108, 255, 0.13);
-  --mesh-c: rgba(139, 92, 246, 0.08);
-  --ok: #15803d;
-  --ok-soft: rgba(21, 128, 61, 0.1);
-  --warn: #b45309;
-  --warn-soft: rgba(180, 83, 9, 0.1);
-  --danger: #b91c1c;
-  --solid-bg: #12141c;
-  --solid-fg: #ffffff;
-  --shadow-sm: 0 1px 2px rgba(18, 20, 28, 0.04), 0 2px 10px rgba(18, 20, 28, 0.04);
-  --shadow-md: 0 1px 2px rgba(18, 20, 28, 0.05), 0 12px 32px rgba(18, 20, 28, 0.09);
-  --m-1: #5b6cff;
-  --m-2: #0f9f86;
-  --m-3: #c7880a;
-  --m-4: #8b5cf6;
-  --m-5: #0e9fc4;
-  --m-6: #d9467a;
-  --backdrop: rgba(18, 20, 28, 0.28);
-  --sans: var(--font-geist), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --mono: var(--font-geist-mono), ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --canvas: var(--paper);
+  --bg: var(--paper);
+  --surface: var(--sheet);
+  --surface-2: var(--panel-muted);
+  /* --ink and --ink-2 come straight from globals.css. */
+  --muted: var(--muted-foreground);
+  --hair: var(--rule-2);
+  --hair-strong: var(--rule);
+  /* --accent (brand olive) and --danger also come from globals.css. */
+  --g2: var(--accent);
+  --g3: var(--accent);
+  --mesh-a: transparent;
+  --mesh-b: transparent;
+  --mesh-c: transparent;
+  --ok: var(--success);
+  --ok-soft: var(--success-soft);
+  --warn: var(--warning);
+  --warn-soft: var(--warning-soft);
+  --solid-bg: var(--accent);
+  --solid-fg: var(--on-accent);
+  --shadow-sm: none;
+  --shadow-md: 4px 4px 0 var(--rule-2);
+  /* Meeting / timeline series: same hues as the project colour defaults (NOTES.md D3). */
+  --m-1: light-dark(#3d6c99, #72a8e2);
+  --m-2: light-dark(#2b8780, #52c2b6);
+  --m-3: light-dark(#96592a, #d8a574);
+  --m-4: light-dark(#6e4f9c, #ad98f0);
+  --m-5: light-dark(#5b6b2c, #aebf62);
+  --m-6: light-dark(#b1435c, #ee7fa0);
+  --backdrop: light-dark(rgba(23, 26, 16, 0.32), rgba(0, 0, 0, 0.55));
+  --sans: var(--font-plex-sans), -apple-system, "Segoe UI", sans-serif;
+  --cond: var(--font-plex-cond), "Arial Narrow", -apple-system, "Segoe UI", sans-serif;
+  --mono: var(--font-plex-mono), ui-monospace, "SF Mono", Menlo, monospace;
 
-  color-scheme: light;
-  min-height: 100vh;
-  background:
-    radial-gradient(70% 40% at 0% 0%, var(--mesh-a), transparent 70%),
-    radial-gradient(60% 35% at 100% 0%, var(--mesh-b), transparent 70%),
-    var(--bg);
+  /* Height under the top bar (52px phone, 56px desktop). */
+  min-height: calc(100vh - 56px);
+  background: transparent;
   color: var(--ink);
   font-family: var(--sans);
   font-size: 15px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
-}
-
-@media (prefers-color-scheme: dark) {
-  .brief-page {
-    color-scheme: dark;
-    --canvas: #050608;
-    --bg: #0b0c10;
-    --surface: #14161b;
-    --surface-2: #1c1f26;
-    --ink: #eef0f5;
-    --ink-2: #c5c9d4;
-    --muted: #8d93a3;
-    --hair: rgba(255, 255, 255, 0.07);
-    --hair-strong: rgba(255, 255, 255, 0.13);
-    --accent: #ff5c7a;
-    --g2: #a98bff;
-    --g3: #8391ff;
-    --mesh-a: rgba(255, 92, 122, 0.16);
-    --mesh-b: rgba(131, 145, 255, 0.17);
-    --mesh-c: rgba(169, 139, 255, 0.12);
-    --ok: #4ade80;
-    --ok-soft: rgba(74, 222, 128, 0.1);
-    --warn: #fbbf24;
-    --warn-soft: rgba(251, 191, 36, 0.1);
-    --danger: #f87171;
-    --solid-bg: #eef0f5;
-    --solid-fg: #0b0c10;
-    --shadow-sm: 0 0 0 1px rgba(255, 255, 255, 0.04);
-    --shadow-md: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 14px 36px rgba(0, 0, 0, 0.45);
-    --m-1: #8391ff;
-    --m-2: #2dd4b0;
-    --m-3: #f0b53a;
-    --m-4: #a98bff;
-    --m-5: #38c6ea;
-    --m-6: #f472a6;
-    --backdrop: rgba(0, 0, 0, 0.55);
-  }
 }
 
 .brief-page *,
@@ -116,9 +79,9 @@
 }
 .brief-page kbd {
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 12px;
   padding: 1px 5px;
-  border-radius: 5px;
+  border-radius: 0;
   border: 1px solid currentColor;
   opacity: 0.45;
   line-height: 1.3;
@@ -180,7 +143,7 @@
 .brief-page .tile {
   position: relative;
   background: var(--surface);
-  border-radius: 20px;
+  border-radius: 0;
   box-shadow: var(--shadow-sm);
   border: 1px solid var(--hair);
   padding: 18px;
@@ -198,7 +161,7 @@
   content: "";
   position: absolute;
   inset: -1px;
-  border-radius: inherit;
+  border-radius: 0;
   padding: 1px;
   background: linear-gradient(135deg, var(--accent), var(--g2) 55%, var(--g3));
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
@@ -270,7 +233,7 @@
   content: "";
   position: absolute;
   inset: 0;
-  border-radius: 20px;
+  border-radius: 0;
 }
 .brief-page .tile a,
 .brief-page .tile .lift {
@@ -281,9 +244,6 @@
 /* hero */
 .brief-page .hero {
   background:
-    radial-gradient(90% 120% at 0% 0%, var(--mesh-a), transparent 62%),
-    radial-gradient(80% 100% at 100% 100%, var(--mesh-b), transparent 62%),
-    radial-gradient(60% 70% at 70% 0%, var(--mesh-c), transparent 60%),
     var(--surface);
   padding: 22px 22px 18px;
 }
@@ -304,7 +264,7 @@
   font-size: 12.5px;
   color: var(--ink-2);
   background: var(--surface-2);
-  border-radius: 999px;
+  border-radius: 0;
   padding: 3px 10px;
 }
 .brief-page .where b {
@@ -341,15 +301,15 @@
 .brief-page .prog {
   margin-top: 16px;
   height: 6px;
-  border-radius: 999px;
+  border-radius: 0;
   background: var(--surface-2);
   overflow: hidden;
 }
 .brief-page .prog span {
   display: block;
   height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, var(--accent), var(--g2) 60%, var(--g3));
+  border-radius: 0;
+  background: var(--progress-fill-edge);
   transition: width 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .brief-page .prog-l {
@@ -389,7 +349,7 @@
 }
 .brief-page .agenda .tm {
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--muted);
 }
 .brief-page .agenda li.clash span:last-child {
@@ -412,7 +372,7 @@
   inset: 0 0 auto 0;
   height: 14px;
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--muted);
 }
 .brief-page .ticks span {
@@ -425,21 +385,21 @@
   right: 0;
   top: 20px;
   height: 26px;
-  border-radius: 8px;
+  border-radius: 0;
   background: var(--surface-2);
 }
 .brief-page .blk {
   position: absolute;
   top: 20px;
   height: 26px;
-  border-radius: 7px;
+  border-radius: 0;
   border: 0;
   padding: 0;
   min-width: 7px;
 }
 .brief-page .blk.notes {
-  background: linear-gradient(180deg, color-mix(in oklab, var(--mc) 62%, white), var(--mc));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 3px 10px color-mix(in oklab, var(--mc) 35%, transparent);
+  background: var(--mc);
+  box-shadow: none;
 }
 .brief-page .blk.nonotes {
   background: repeating-linear-gradient(135deg, var(--hair-strong) 0 3px, transparent 3px 6px);
@@ -453,7 +413,7 @@
   width: 2px;
   min-width: 2px;
   background: var(--accent);
-  border-radius: 1px;
+  border-radius: 0;
   top: 15px;
   height: 36px;
   cursor: default;
@@ -470,7 +430,7 @@
   gap: 7px;
   border: 1px solid var(--hair);
   background: transparent;
-  border-radius: 999px;
+  border-radius: 0;
   padding: 4px 11px 4px 9px;
   font-size: 12.5px;
   color: var(--ink-2);
@@ -478,22 +438,22 @@
 .brief-page .mchip .dot {
   width: 8px;
   height: 8px;
-  border-radius: 50%;
+  border-radius: 0;
   background: var(--mc);
   flex: none;
 }
 .brief-page .mchip .t {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
 }
 .brief-page .mchip .c {
   font-variant-numeric: tabular-nums;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--ink);
   background: var(--surface-2);
-  border-radius: 999px;
+  border-radius: 0;
   padding: 0 6px;
 }
 .brief-page .mchip[aria-pressed="true"] {
@@ -531,7 +491,7 @@
   color: var(--muted);
   background: var(--surface);
   border: 1px solid var(--hair);
-  border-radius: 999px;
+  border-radius: 0;
   padding: 0 8px;
 }
 .brief-page .sec-h .hint {
@@ -570,7 +530,7 @@
 .brief-page .card {
   background: var(--surface);
   border: 1px solid var(--hair);
-  border-radius: 18px;
+  border-radius: 0;
   box-shadow: var(--shadow-sm);
   padding: 16px 18px;
   display: grid;
@@ -628,7 +588,7 @@
 }
 .brief-page .seg.due .when {
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: 12px;
   margin-left: 2px;
 }
 @container page (max-width: 620px) {
@@ -652,13 +612,13 @@
 .brief-page .src-row .dot {
   width: 7px;
   height: 7px;
-  border-radius: 50%;
+  border-radius: 0;
   background: var(--mc);
 }
 .brief-page .src-row .t,
 .brief-page .src-row .n {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 12px;
 }
 .brief-page .src-row .n {
   margin-left: auto;
@@ -686,13 +646,13 @@
   font-size: 13px;
   color: var(--ink-2);
   background: var(--warn-soft);
-  border-radius: 10px;
+  border-radius: 0;
   padding: 7px 10px;
 }
 .brief-page .maybe .dot {
   width: 6px;
   height: 6px;
-  border-radius: 50%;
+  border-radius: 0;
   background: var(--warn);
   flex: none;
   transform: translateY(-1px);
@@ -726,7 +686,7 @@
 .brief-page .btn {
   height: 34px;
   padding: 0 14px;
-  border-radius: 10px;
+  border-radius: 0;
   font-size: 14px;
   font-weight: 500;
   display: inline-flex;
@@ -745,7 +705,7 @@
   background: var(--solid-bg);
   color: var(--solid-fg);
   border-color: var(--solid-bg);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  box-shadow: none;
 }
 .brief-page .btn.solid:hover {
   opacity: 0.88;
@@ -765,13 +725,13 @@
   cursor: not-allowed;
 }
 .brief-page .badge {
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.02em;
   padding: 1px 6px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, var(--accent), var(--g2));
-  color: #fff;
+  border-radius: 0;
+  background: var(--accent);
+  color: var(--on-accent);
 }
 .brief-page .dbox {
   grid-column: 1 / -1;
@@ -791,7 +751,7 @@
 .brief-page .seg button {
   border: 1px solid var(--hair-strong);
   background: transparent;
-  border-radius: 999px;
+  border-radius: 0;
   padding: 4px 12px;
   font-size: 13px;
 }
@@ -805,7 +765,7 @@
   background: var(--surface-2);
   border: 1px solid transparent;
   color: var(--ink);
-  border-radius: 10px;
+  border-radius: 0;
   padding: 8px 12px;
   font: inherit;
   font-size: 14px;
@@ -832,7 +792,7 @@
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
-  border-radius: 14px;
+  border-radius: 0;
   border: 1px dashed var(--hair-strong);
   font-size: 14px;
   min-width: 0;
@@ -840,7 +800,7 @@
 .brief-page .ic {
   width: 20px;
   height: 20px;
-  border-radius: 50%;
+  border-radius: 0;
   display: grid;
   place-items: center;
   flex: none;
@@ -863,7 +823,7 @@
 }
 .brief-page .slim .tx .n {
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--muted);
   margin-right: 6px;
 }
@@ -929,14 +889,14 @@
 .brief-page .ub-pill {
   color: var(--ok);
   background: var(--ok-soft);
-  border-radius: 999px;
+  border-radius: 0;
   padding: 0 8px;
   font-weight: 600;
 }
 .brief-page .ub-stuck {
   margin: 0;
   padding: 10px 14px;
-  border-radius: 12px;
+  border-radius: 0;
   font-size: 14px;
   line-height: 1.45;
   color: var(--warn);
@@ -954,7 +914,7 @@
 .brief-page .late-digest {
   margin: 0;
   padding: 10px 14px;
-  border-radius: 12px;
+  border-radius: 0;
   font-size: 14px;
   line-height: 1.45;
   color: var(--warn);
@@ -1007,7 +967,7 @@
   height: 100%;
   overflow-y: auto;
   background: var(--surface);
-  box-shadow: -24px 0 60px rgba(0, 0, 0, 0.18);
+  box-shadow: -6px 0 0 var(--rule-2);
   padding: calc(20px + env(safe-area-inset-top, 0px)) 22px calc(24px + env(safe-area-inset-bottom, 0px));
   display: grid;
   gap: 16px;
@@ -1028,7 +988,7 @@
   margin-left: auto;
   width: 34px;
   height: 34px;
-  border-radius: 10px;
+  border-radius: 0;
   border: 1px solid var(--hair-strong);
   background: transparent;
   font-size: 18px;
@@ -1071,7 +1031,7 @@
 }
 .brief-page .idlink {
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--muted);
 }
 .brief-page .subh {
@@ -1115,8 +1075,8 @@
   color: var(--muted);
 }
 .brief-page .blk.up {
-  background: linear-gradient(180deg, color-mix(in oklab, var(--mc) 62%, white), var(--mc));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 3px 10px color-mix(in oklab, var(--mc) 35%, transparent);
+  background: var(--mc);
+  box-shadow: none;
   cursor: default;
 }
 .brief-page .blk.up.prep {
@@ -1126,7 +1086,7 @@
 .brief-page .blk.freeblk {
   top: 26px;
   height: 14px;
-  border-radius: 5px;
+  border-radius: 0;
   background: color-mix(in oklab, var(--ok) 16%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ok) 30%, transparent);
   cursor: default;
@@ -1149,7 +1109,7 @@
   padding-top: 6px;
 }
 .brief-page .preplist .pt {
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--muted);
   padding-top: 2px;
 }
@@ -1169,13 +1129,13 @@
 .brief-page .preplist .pn .dot {
   width: 8px;
   height: 8px;
-  border-radius: 50%;
+  border-radius: 0;
   background: var(--mc);
   flex: none;
 }
 .brief-page .preplist .pd {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   font-weight: 400;
 }
@@ -1222,7 +1182,7 @@
 }
 .brief-page .pickrow .when {
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--ink);
   margin-left: 2px;
 }
@@ -1246,7 +1206,7 @@
   gap: 12px;
 }
 .brief-page .skel {
-  border-radius: 6px;
+  border-radius: 0;
   background: var(--surface-2);
   animation: brief-skel-pulse 1.4s ease-in-out infinite;
 }
@@ -1271,4 +1231,37 @@
 @keyframes brief-skel-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.45; }
+}
+
+/*
+ * Redesign S1: titles in Plex Sans Condensed, and on a touch screen the
+ * buttons are at least 44px tall, fields at least 16px (iOS zooms the page
+ * otherwise) and the J/K/A/D/S key hints are hidden (no keyboard).
+ */
+.brief-page :is(h1, h2, h3),
+.brief-page .btn {
+  font-family: var(--cond);
+}
+/* Sheets on the drafting paper get the mockup's 1px rule (rows inside keep the faint one). */
+.brief-page .tile {
+  border-color: var(--hair-strong);
+}
+@media (pointer: coarse) {
+  .brief-page .btn,
+  .brief-page .btn.sm,
+  .brief-page .seg button {
+    min-height: 44px;
+  }
+  .brief-page .note-in,
+  .brief-page .pickrow .note-in,
+  .brief-page .pf-handback textarea,
+  .brief-page .pf-compose textarea,
+  .brief-page input,
+  .brief-page select,
+  .brief-page textarea {
+    font-size: 16px;
+  }
+  .brief-page .kbdhint {
+    display: none;
+  }
 }

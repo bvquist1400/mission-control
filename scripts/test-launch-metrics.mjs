@@ -1571,7 +1571,8 @@ await test("charts: one scale per chart (no own-scale line), no red on data, col
   }
   const css = readFileSync(new URL("../src/app/globals.css", import.meta.url), "utf8");
   for (const token of ["--chart-1", "--chart-2", "--chart-3", "--chart-neutral", "--chart-grid", "--chart-axis", "--chart-hatch", "--chart-hover", "--chart-text-2", "--chart-1-wash"]) {
-    assert.match(css, new RegExp(`${token}:\\s*[#r]`), token);
+    // A colour, or (redesign S1) one value per theme / an alias of another token.
+    assert.match(css, new RegExp(`${token}:\\s*(#|rgba?\\(|light-dark\\(|var\\(--)`), token);
     for (const use of [...(page + charts).matchAll(/var\((--chart-[a-z0-9-]+)\)/g)].map((m) => m[1])) {
       assert.match(css, new RegExp(`${use}:`), `${use} is defined`);
     }

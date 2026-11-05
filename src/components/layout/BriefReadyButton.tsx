@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { buttonClasses } from "@/components/ui/Button";
 import { briefButtonView, type TodayBriefStatus } from "@/lib/briefs/button";
 
 /**
@@ -43,51 +42,43 @@ export function useTodayBrief(initial: TodayBriefStatus | null): TodayBriefStatu
   return status;
 }
 
+/**
+ * Today's brief in the top bar: marigold ("needs you") while items wait,
+ * a quiet outline once everything is decided, nothing without a brief.
+ * `compact` (phone bar) drops the words after the count.
+ */
 export function BriefReadyButton({
   status,
   variant,
   className,
 }: {
   status: TodayBriefStatus | null;
-  variant: "rail" | "rail-collapsed" | "chrome";
+  variant: "bar" | "compact";
   className?: string;
 }) {
   const view = briefButtonView(status);
   if (!view) return null;
-  const look = view.tone === "open" ? "primary" : "secondary";
-
-  if (variant === "rail-collapsed") {
-    return (
-      <Link
-        href={view.href}
-        title={view.label}
-        aria-label={view.label}
-        className={`${buttonClasses({ variant: look, size: "icon" })} h-9 w-9 ${className ?? ""}`}
-      >
-        {view.tone === "open" ? (
-          <span className="text-sm tabular-nums">{status?.open}</span>
-        ) : (
-          <svg aria-hidden="true" className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="m5 12.5 4.5 4.5L19 7" />
-          </svg>
-        )}
-      </Link>
-    );
-  }
+  const lit = view.tone === "open";
+  const label =
+    variant === "compact" && status
+      ? lit
+        ? `${status.code} · ${status.open}`
+        : `${status.code} · done`
+      : view.label;
 
   return (
     <Link
       href={view.href}
       title={view.title}
-      className={`${buttonClasses({ variant: look, size: variant === "rail" ? "md" : "sm" })} ${
-        variant === "chrome" ? "h-9 shadow-sm" : "w-full justify-between"
+      aria-label={variant === "compact" ? view.title : undefined}
+      className={`inline-flex h-[34px] shrink-0 items-center gap-2 whitespace-nowrap border px-3 font-mono text-[13px] font-semibold tabular-nums transition pointer-coarse:min-h-11 ${
+        lit
+          ? "border-hi bg-hi text-hi-ink hover:brightness-105"
+          : "border-bar-ink-2 text-bar-ink-2 hover:text-bar-ink"
       } ${className ?? ""}`}
     >
-      <span className="flex items-center gap-2 tabular-nums">
-        {view.tone === "open" ? <span aria-hidden="true" className="h-2 w-2 rounded-full bg-white" /> : null}
-        {view.label}
-      </span>
-      {variant === "rail" ? <span aria-hidden="true">›</span> : null}
+      {lit ? <span aria-hidden="true" className="h-[7px] w-[7px] bg-hi-ink" /> : null}
+      {label}
     </Link>
   );
 }
