@@ -157,7 +157,6 @@ function MoreMenu({ pathname }: { pathname: string }) {
         ref={buttonRef}
         type="button"
         onClick={() => setOpen((current) => !current)}
-        aria-haspopup="true"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
         className={`-mb-px flex items-center border-b-[3px] px-3 font-cond text-[15px] transition xl:px-[18px] ${
@@ -172,9 +171,11 @@ function MoreMenu({ pathname }: { pathname: string }) {
       {open ? (
         <div
           id={menuId}
-          className="absolute left-0 top-full z-50 mt-1 w-72 border-[1.5px] border-foreground bg-panel text-foreground shadow-lg"
+          role="group"
+          aria-label="More pages"
+          className="bar-panel absolute left-0 top-full z-50 mt-1 w-72 border-[1.5px] border-foreground bg-panel text-foreground shadow-lg"
         >
-          <MoreList pathname={pathname} onNavigate={() => close(false)} />
+          <MoreList pathname={pathname} onNavigate={() => close(true)} />
         </div>
       ) : null}
     </div>
@@ -208,13 +209,13 @@ function ScopeSwitch({ placement }: { placement: "bar" | "row" }) {
   }
 
   return (
-    <nav aria-label={view.label} className="flex h-[34px] border border-bar-ink-2">
+    <nav aria-label={view.label} className="flex min-h-[34px] border border-bar-ink-2">
       {view.options.map((option) => (
         <Link
           key={option.value}
           href={option.href}
           aria-current={option.active ? "page" : undefined}
-          className={`flex items-center border-r border-bar-rule px-3 font-cond text-[13px] last:border-r-0 ${
+          className={`flex items-center border-r border-bar-rule px-3 font-cond text-[13px] last:border-r-0 pointer-coarse:min-h-11 ${
             option.active ? "bg-bar-ink font-semibold text-bar" : "font-medium text-bar-ink-2 hover:text-bar-ink"
           }`}
         >
@@ -229,9 +230,21 @@ function ScopeSwitch({ placement }: { placement: "bar" | "row" }) {
 function TabBar({ pathname }: { pathname: string }) {
   const [moreOpen, setMoreOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const close = useCallback(() => setMoreOpen(false), []);
+  const moreButtonRef = useRef<HTMLButtonElement>(null);
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const sheetId = useId();
+  const close = useCallback((returnFocus: boolean) => {
+    setMoreOpen(false);
+    if (returnFocus) moreButtonRef.current?.focus();
+  }, []);
   useDismiss(moreOpen, ref, close);
   const moreActive = isMoreActive(pathname);
+
+  // Opening the sheet moves focus into it (the first link), so a keyboard or
+  // switch user lands on the new links instead of staying on the trigger.
+  useEffect(() => {
+    if (moreOpen) sheetRef.current?.querySelector<HTMLElement>("a")?.focus();
+  }, [moreOpen]);
 
   const tabClass = (active: boolean) =>
     `flex min-h-14 flex-col items-center justify-center gap-1 font-cond text-xs transition ${
@@ -240,12 +253,6 @@ function TabBar({ pathname }: { pathname: string }) {
 
   return (
     <div ref={ref} className="lg:hidden">
-      {moreOpen ? (
-        <div className="fixed inset-x-0 bottom-[calc(3.5rem+env(safe-area-inset-bottom))] z-40 border-t-[1.5px] border-foreground bg-panel shadow-lg">
-          <p className="px-3.5 pb-1 pt-3 font-mono text-xs font-semibold text-muted-foreground">More</p>
-          <MoreList pathname={pathname} onNavigate={close} />
-        </div>
-      ) : null}
       <nav
         aria-label="Main tabs"
         className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t-[1.5px] border-foreground bg-panel pb-[env(safe-area-inset-bottom)]"
@@ -260,15 +267,35 @@ function TabBar({ pathname }: { pathname: string }) {
           );
         })}
         <button
+          ref={moreButtonRef}
           type="button"
           onClick={() => setMoreOpen((current) => !current)}
           aria-expanded={moreOpen}
+          aria-controls={moreOpen ? sheetId : undefined}
           className={tabClass(moreActive || moreOpen)}
         >
           {MORE_ICON}
           More
         </button>
       </nav>
+      {/*
+        The sheet comes after the tabs in the DOM (it is fixed-position, so it
+        still draws above them): Tab from More lands on the sheet's links, and
+        Shift+Tab from the first link returns to More.
+      */}
+      {moreOpen ? (
+        <nav
+          ref={sheetRef}
+          id={sheetId}
+          aria-labelledby={`${sheetId}-title`}
+          className="fixed inset-x-0 bottom-[calc(3.5rem+env(safe-area-inset-bottom))] z-40 border-t-[1.5px] border-foreground bg-panel shadow-lg"
+        >
+          <p id={`${sheetId}-title`} className="px-3.5 pb-1 pt-3 font-mono text-xs font-semibold text-muted-foreground">
+            More pages
+          </p>
+          <MoreList pathname={pathname} onNavigate={() => close(true)} />
+        </nav>
+      ) : null}
     </div>
   );
 }
@@ -426,7 +453,7 @@ export function TopBar({
 
   return (
     <>
-      <header className="sticky top-0 z-30 bg-bar pt-[env(safe-area-inset-top)] text-bar-ink">
+      <header className="bar-surface sticky top-0 z-30 bg-bar pt-[env(safe-area-inset-top)] text-bar-ink">
         <div className="flex h-[52px] items-stretch px-4 sm:px-6 lg:h-14">
           <Link
             href="/"
@@ -477,7 +504,7 @@ export function TopBar({
               onClick={openSearch}
               aria-label="Search everything"
               title="Search everything (⌘K)"
-              className="hidden h-[34px] w-44 items-center gap-2 bg-bar-2 px-2.5 text-left text-[13px] text-bar-ink-2 transition hover:text-bar-ink xl:flex"
+              className="hidden h-[34px] w-44 items-center gap-2 bg-bar-2 px-2.5 text-left text-[13px] text-bar-ink-2 transition hover:text-bar-ink pointer-coarse:min-h-11 xl:flex"
             >
               <SearchGlyph />
               <span className="flex-1">Search</span>
