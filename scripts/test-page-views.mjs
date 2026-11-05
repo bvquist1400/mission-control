@@ -7,7 +7,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const root = process.cwd();
-const { toRoutePattern, sanitizeAnalyticsUrl, beforeSendPageView } = await import(
+const { toRoutePattern, sanitizeAnalyticsUrl, beforeSendPageView, reportedRoute } = await import(
   pathToFileURL(path.join(root, "src/lib/analytics/route-pattern.ts")).href
 );
 
@@ -151,6 +151,43 @@ eq(toRoutePattern("/something/new"), "/something/new");
 eq(toRoutePattern("/not-a-page"), "/not-a-page");
 eq(toRoutePattern("/wp-admin/setup.php"), "/wp-admin/setup.php");
 
+// --- 4b. Hardening (fix round 1): encoded slashes, file-like and odd segments --
+eq(toRoutePattern(`/projects%2F${UUID}`), "/projects/[id]", "encoded slash before a uuid");
+eq(toRoutePattern(`/projects%2f${UUID}`), "/projects/[id]", "lowercase encoded slash");
+eq(toRoutePattern(`/r%2Ftask%2F${UUID}`), "/r/task/[id]", "encoded slashes in /r");
+eq(toRoutePattern(`/api%2Ftasks`), null, "encoded slash cannot hide /api");
+eq(toRoutePattern(`/%2e%2e/api/tasks`), null, "encoded dot-dot cannot hide /api");
+eq(toRoutePattern(`/x/${UUID}.json`), "/x/[id]", "uuid with a file extension");
+eq(toRoutePattern(`/x/report-${UUID}`), "/x/[id]", "uuid inside a longer segment");
+eq(toRoutePattern(`/x/${UUID_UPPER}.PDF`), "/x/[id]", "uppercase uuid with extension");
+eq(toRoutePattern(`/projects/${UUID}.json`), "/projects/[id]", "known slot with extension");
+eq(toRoutePattern(`/x/file-123456.json`), "/x/[id]", "long digit run inside a segment");
+eq(toRoutePattern(`/x/John%20Smith`), "/x/[id]", "free text with a space is not printed");
+eq(toRoutePattern(`/x/caf%C3%A9`), "/x/[id]", "non-ascii text is not printed");
+eq(toRoutePattern(`/x/%E0%A4%A`), "/x/[id]", "bad encoding falls back to [id]");
+eq(toRoutePattern(`/x/%zz/portfolio`), "/x/[id]/portfolio", "bad escape only hides its own segment");
+eq(toRoutePattern(`/projects/%ZZ`), "/projects/[id]", "bad escape in a known slot");
+eq(toRoutePattern(`/x%3Fsecret=1`), "/[id]", "encoded ? is text, not a query start");
+eq(toRoutePattern(`/x/${UUID}%23frag`), "/x/[id]", "encoded # is text, not a hash start");
+eq(toRoutePattern("/./portfolio/../focus"), "/focus", "dot segments resolve");
+eq(
+  sanitizeAnalyticsUrl(`https://h.example.com/projects%2F${UUID}.json?x=1`),
+  "https://h.example.com/projects/[id]",
+  "absolute url with encoded slash"
+);
+eq(sanitizeAnalyticsUrl(`https://h.example.com/x/%E0%A4%A`), "https://h.example.com/x/[id]");
+
+// --- 4c. reportedRoute: what <Analytics route=...> receives -------------------
+eq(reportedRoute(`/r/task/${UUID}/extra`), "/r/task/[id]/extra", "404 under /r is a pattern, not a raw path");
+eq(reportedRoute(`/r/task/${UUID}`), "/r/task/[id]");
+eq(reportedRoute(`/nope/${UUID}`), "/nope/[id]", "404 route is a pattern");
+eq(reportedRoute("/portfolio"), "/portfolio");
+eq(reportedRoute("/login"), "/login");
+eq(reportedRoute("/oauth/authorize"), "", "dropped path has an empty route (no page view)");
+eq(reportedRoute("/api/tasks"), "");
+eq(reportedRoute(null), "");
+eq(reportedRoute(undefined), "");
+
 // --- 5. Never reported -------------------------------------------------------
 for (const p of [
   "/api",
@@ -211,6 +248,13 @@ const wrapper = fs.readFileSync(path.join(root, "src/components/analytics/PageVi
 assert.match(wrapper, /^["']use client["']/, "wrapper must be a client component");
 assert.match(wrapper, /from ["']@vercel\/analytics\/next["']/);
 assert.match(wrapper, /beforeSend=\{beforeSendPageView\}/, "wrapper must pass the route-pattern beforeSend");
-checks += 3;
+assert.match(wrapper, /from ["']next\/navigation["']/, "wrapper reads the pathname");
+assert.match(
+  wrapper,
+  /route:\s*reportedRoute\(usePathname\(\)\)/,
+  "wrapper must hand Vercel our route pattern (the package computes a raw path on 404s otherwise)"
+);
+assert.match(wrapper, /<Analytics\s+\{\.\.\.routeProps\}/, "the route prop must actually reach <Analytics>");
+checks += 6;
 
 console.log(`page-views: ${checks} checks passed`);

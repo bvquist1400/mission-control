@@ -41,32 +41,65 @@ const READER_KINDS = new Set([
   'calendar',
 ]);
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const HEX_ID_RE = /^[0-9a-f]{12,}$/i;
-const LONG_TOKEN_RE = /^[A-Za-z0-9_-]{20,}$/;
-const NUMERIC_ID_RE = /^\d{5,}$/;
+const UUID_ANYWHERE_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+const HEX_RUN_RE = /[0-9a-f]{12,}/i;
+const LONG_TOKEN_RE = /[A-Za-z0-9_-]{20,}/;
+const DIGIT_RUN_RE = /\d{5,}/;
+// A segment we are willing to print as-is: a plain page name. Anything else
+// (spaces, quotes, unicode, a stray "?" or "\\" left by decoding) is not.
+const SAFE_PAGE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/;
 
-/** True for a segment that looks like an identifier rather than a page name. */
-function looksLikeId(segment: string): boolean {
+/**
+ * True for a segment that looks like it carries an identifier anywhere in it
+ * (`<uuid>`, `<uuid>.json`, `report-<uuid>`) or is not a plain page name.
+ */
+function isUnsafeSegment(segment: string): boolean {
   return (
-    UUID_RE.test(segment) ||
-    HEX_ID_RE.test(segment) ||
+    UUID_ANYWHERE_RE.test(segment) ||
+    HEX_RUN_RE.test(segment) ||
     LONG_TOKEN_RE.test(segment) ||
-    NUMERIC_ID_RE.test(segment) ||
-    segment.includes('@')
+    DIGIT_RUN_RE.test(segment) ||
+    !SAFE_PAGE_NAME_RE.test(segment)
   );
 }
 
-function decodeSegment(segment: string): string {
+/**
+ * Decode the whole path first so an encoded slash (`/projects%2F<uuid>`) is
+ * split like a real one. A bad escape never throws and never leaks: the broken
+ * segment becomes [id].
+ */
+function decodePath(pathname: string): string {
   try {
-    return decodeURIComponent(segment);
+    return decodeURIComponent(pathname);
   } catch {
-    return segment;
+    return pathname
+      .split('/')
+      .map((segment) => {
+        try {
+          return decodeURIComponent(segment);
+        } catch {
+          return '[id]';
+        }
+      })
+      .join('/');
   }
 }
 
+function pathSegments(pathname: string): string[] {
+  const out: string[] = [];
+  for (const segment of decodePath(pathname).split('/')) {
+    if (segment === '' || segment === '.') continue;
+    if (segment === '..') {
+      out.pop();
+      continue;
+    }
+    out.push(segment);
+  }
+  return out;
+}
+
 function collapseUnknown(segments: string[]): string[] {
-  return segments.map((segment) => (looksLikeId(decodeSegment(segment)) ? '[id]' : segment));
+  return segments.map((segment) => (isUnsafeSegment(segment) ? '[id]' : segment));
 }
 
 /**
@@ -75,16 +108,16 @@ function collapseUnknown(segments: string[]): string[] {
  */
 export function toRoutePattern(path: string): string | null {
   const pathname = String(path ?? '').split('#')[0].split('?')[0];
-  const segments = pathname.split('/').filter((segment) => segment.length > 0);
+  const segments = pathSegments(pathname);
 
   if (segments.length === 0) return '/';
 
-  const root = decodeSegment(segments[0]).toLowerCase();
+  const root = segments[0].toLowerCase();
   if (NEVER_REPORTED_ROOTS.has(root)) return null;
 
   // /r/<kind>/<id>
   if (root === 'r' && segments.length >= 3) {
-    const kind = decodeSegment(segments[1]).toLowerCase();
+    const kind = segments[1].toLowerCase();
     const reportedKind = READER_KINDS.has(kind) ? kind : '[kind]';
     return `/r/${[reportedKind, '[id]', ...collapseUnknown(segments.slice(3))].join('/')}`;
   }
@@ -93,7 +126,7 @@ export function toRoutePattern(path: string): string | null {
   if (
     root === CALENDAR_EVENT_PREFIX[0] &&
     segments.length >= 3 &&
-    decodeSegment(segments[1]).toLowerCase() === CALENDAR_EVENT_PREFIX[1]
+    segments[1].toLowerCase() === CALENDAR_EVENT_PREFIX[1]
   ) {
     return `/calendar/events/${['[id]', ...collapseUnknown(segments.slice(3))].join('/')}`;
   }
@@ -101,14 +134,24 @@ export function toRoutePattern(path: string): string | null {
   // /<root>/<id> pages (projects, applications, briefs, ...)
   const idPage = ID_PAGE_ROOTS[root];
   if (idPage && segments.length >= 2) {
-    const second = decodeSegment(segments[1]).toLowerCase();
-    if (!idPage.staticChildren.has(second)) {
+    if (!idPage.staticChildren.has(segments[1].toLowerCase())) {
       return `/${[root, idPage.slot, ...collapseUnknown(segments.slice(2))].join('/')}`;
     }
   }
 
-  // Static pages and anything unknown: keep page names, collapse id-like pieces.
+  // Static pages and anything unknown: keep plain page names, collapse the rest.
   return `/${collapseUnknown(segments).join('/')}`;
+}
+
+/**
+ * The `route` to hand to <Analytics route=...>. Vercel reports this as the
+ * page's route, and for URLs that match no Next route (a 404) the package
+ * would otherwise fall back to the raw path. Returns "" for paths that must
+ * not be reported: an empty route sends no page view.
+ */
+export function reportedRoute(pathname: string | null | undefined): string {
+  if (typeof pathname !== 'string') return '';
+  return toRoutePattern(pathname) ?? '';
 }
 
 /**
