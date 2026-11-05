@@ -13,9 +13,9 @@ function ArtifactInboxChip({ count }: { count: number }) {
   return (
     <Link
       href="/backlog?review=intelligence"
-      className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
+      className={`inline-flex items-center border px-2 py-1 font-mono text-xs transition pointer-coarse:min-h-11 ${
         count > 0
-          ? "border-red-500/30 bg-red-500/10 text-red-300 hover:border-red-400/40 hover:bg-red-500/15"
+          ? "border-danger-border bg-danger-soft text-danger hover:bg-danger-soft-hover"
           : "border-stroke bg-panel text-muted-foreground hover:bg-panel-muted hover:text-foreground"
       }`}
     >
@@ -28,10 +28,10 @@ function SprintChip({ sprint }: { sprint: CurrentSprintChip }) {
   return (
     <Link
       href={`/backlog?sprint=${encodeURIComponent(sprint.id)}`}
-      className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
+      className={`inline-flex items-center border px-2 py-1 font-mono text-xs transition pointer-coarse:min-h-11 ${
         sprint.onTrack
-          ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/15"
-          : "border-red-500/40 bg-red-500/10 text-red-300 hover:bg-red-500/15"
+          ? "border-success-border bg-success-soft text-success hover:bg-success-soft-hover"
+          : "border-danger-border bg-danger-soft text-danger hover:bg-danger-soft-hover"
       }`}
     >
       {sprint.name} · {sprint.completedTasks}/{sprint.totalTasks} · {sprint.onTrack ? "on track" : "at risk"}

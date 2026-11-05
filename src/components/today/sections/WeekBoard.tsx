@@ -1,11 +1,10 @@
 "use client";
 
 import { squareInputOf } from "@/lib/project-colors";
-import { ProjectTag } from "@/components/project-colors/ProjectSquare";
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import { ProjectSquare, ProjectTag } from "@/components/project-colors/ProjectSquare";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { ErrorBanner } from "@/components/ui/ErrorBanner";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Modal } from "@/components/ui/Modal";
 import type { TaskCardData } from "@/components/tasks/TaskCard";
 import { TaskCreateForm } from "@/components/tasks/TaskCreateForm";
@@ -16,89 +15,113 @@ import { useSprints } from "@/hooks/useSprints";
 import type { ImplementationSummary, TaskWithImplementation } from "@/types/database";
 import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
 import { isPersonalTaskOrProject, PERSONAL_TAG, type TaskScope } from "@/lib/personal-exclusion";
-import { PersonalBadge } from "@/components/ui/PersonalBadge";
-import {
-  addDateOnlyDays,
-  getDisplayedWeekRange,
-  isDueAtInWeekStarting,
-} from "@/lib/today/week-board";
-import { Button } from "@/components/ui/Button";
-import { isPastDue } from "@/lib/task-range";
+import { addDateOnlyDays, getDisplayedWeekRange, isDueAtInWeekStarting } from "@/lib/today/week-board";
+import { etDate, isPastDue } from "@/lib/task-range";
 import { buildRangeCardView, type RangeCardView } from "@/lib/task-range-view";
 import { progressRowsFor } from "@/lib/break-into-tasks";
+import { taskIdFromParams } from "@/lib/task-panel";
 import {
   dayStrip,
   laneContinuesText,
-  laneCountsByColumn,
   laneStartedText,
   mergeTasksById,
   placeWeekTasks,
   rangeOverlapsWeek,
   type LanePlacement,
 } from "@/lib/today/multi-day-board";
-import { boardStepsId, WeeklyTaskCard, type WeekBoardTaskData } from "@/components/today/cards/BoardTaskCard";
+import {
+  cardDueText,
+  dayColumns,
+  dueAtForBoardDay,
+  foldedDayText,
+  gridTracks,
+  isoWeekNumber,
+  moveToChoices,
+  moveToastText,
+  moveUpdates,
+  overdueLabel,
+  railQueue,
+  shortDayLabel,
+  splitTodayBoard,
+  weekRangeLabel,
+  type MoveChoice,
+} from "@/lib/today/today-board";
+import {
+  boardStepsId,
+  DoneRow,
+  LaneBar,
+  WeeklyTaskCard,
+  type CardMove,
+  type WeekBoardTaskData,
+} from "@/components/today/cards/BoardTaskCard";
 import { DayStrip } from "@/components/tasks/TaskRangeParts";
 import { InlineSteps } from "@/components/tasks/InlineSteps";
+import { TodayStrip, type StripEvent } from "@/components/today/sections/TodayStrip";
+import "@/components/today/today-board.css";
 
 const TIME_ZONE = DEFAULT_WORKDAY_CONFIG.timezone;
-
-type WeekColumnKey = "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "weekend";
+const WAITING_RAIL_LIMIT = 8;
 
 type ChecklistRows = NonNullable<TaskWithImplementation["checklist_rows"]>;
 
-interface WeekBoardColumn {
-  key: WeekColumnKey;
-  title: string;
-  subtitle: string;
-  tasks: WeekBoardTaskData[];
-  dueDate: string;
-  isCurrentDay: boolean;
-  /** Multi-day tasks covering this day (shown in the lane above, counted here). */
-  laneCount: number;
-}
-
-/** Extra props a ranged card gets (steps pill + open steps); empty for other tasks. */
-type RangeCardProps = (
-  task: WeekBoardTaskData,
-  context: string
-) => Pick<ComponentProps<typeof WeeklyTaskCard>, "stepsOpen" | "onToggleSteps" | "steps" | "canDrag" | "context">;
-
-interface LaneCard {
-  placement: LanePlacement<TaskWithImplementation>;
-  data: WeekBoardTaskData;
-}
-
-interface WaitingTask {
-  id: string;
-  title: string;
-  waitingOn: string;
-  followUpAt: string | null;
-  isPersonal: boolean;
-  squareInput: ReturnType<typeof squareInputOf>;
-}
+const BLOCKED_REASON_WORDS: Record<string, string> = {
+  prerequisite: "waits on another task",
+  need_info: "needs info",
+  decision: "needs a decision",
+  approval: "needs approval",
+  external: "external",
+  other: "waiting",
+};
 
 interface WeekBoardProps {
   weekBoardTasks: TaskWithImplementation[];
   waitingTasks: TaskWithImplementation[];
+  /** Done tasks due this week (Mon–Sun): the struck-through lines and the "n done" counts. */
+  doneTasks: TaskWithImplementation[];
   needsReviewCount: number;
   syncedTaskIds: string[];
   updatedAt: string;
   hasError: boolean;
   mode: TaskScope;
+  meetings: StripEvent[];
+  meetingsFailed: boolean;
+  /** Server-rendered chips for the strip (Artifact Inbox, sprint). */
+  chips?: ReactNode;
 }
 
-function taskToCardData(
+function getDateInTimeZone(date: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date);
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+  return `${year}-${month}-${day}`;
+}
+
+function getDueState(dueAt: string | null, now: Date): TaskCardData["dueState"] {
+  if (!dueAt) return null;
+  if (isPastDue(dueAt, now)) return "Overdue";
+  return getDateInTimeZone(new Date(dueAt), TIME_ZONE) === getDateInTimeZone(now, TIME_ZONE) ? "Due Today" : "Due Soon";
+}
+
+function formatDateOnlyLabel(dateOnly: string): string {
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }).format(
+    new Date(`${dateOnly}T12:00:00Z`)
+  );
+}
+
+function taskToWeekBoardData(
   task: TaskWithImplementation,
-  dueState: TaskCardData["dueState"],
-  syncedToday: boolean
-): TaskCardData {
+  now: Date,
+  syncedToday: boolean,
+  range: RangeCardView | null = null
+): WeekBoardTaskData {
   return {
     id: task.id,
     title: task.title,
     tags: task.tags ?? [],
     estimatedMinutes: task.estimated_minutes,
     dueAt: task.due_at,
-    dueState,
+    dueState: getDueState(task.due_at, now),
     status: task.status,
     blocker: task.blocker,
     pinned: Boolean(task.pinned),
@@ -108,17 +131,6 @@ function taskToCardData(
     dependencyBlocked: Boolean(task.dependency_blocked),
     updatedAt: task.updated_at ?? null,
     unblockedAt: task.unblocked_at ?? null,
-  };
-}
-
-function taskToWeekBoardData(
-  task: TaskWithImplementation,
-  dueState: TaskCardData["dueState"],
-  syncedToday: boolean,
-  range: RangeCardView | null = null
-): WeekBoardTaskData {
-  return {
-    ...taskToCardData(task, dueState, syncedToday),
     range,
     priorityScore: task.priority_score,
     projectName: task.project?.name ?? null,
@@ -126,518 +138,68 @@ function taskToWeekBoardData(
     followUpAt: task.follow_up_at,
     isPersonal: isPersonalTaskOrProject(task),
     needsReview: task.needs_review,
-    dependencyBlocked: Boolean(task.dependency_blocked),
+    owner: task.owner ?? null,
+    ownerLabel: task.owner_label ?? null,
+    statusLine: task.status_line ?? null,
   };
 }
 
-function taskToWaitingTask(task: TaskWithImplementation): WaitingTask {
-  return {
-    id: task.id,
-    title: task.title,
-    waitingOn: task.waiting_on || "Unknown",
-    followUpAt: task.follow_up_at,
-    isPersonal: isPersonalTaskOrProject(task),
-    squareInput: squareInputOf(task),
-  };
-}
-
-function getDateInTimeZone(date: Date, timeZone: string): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
-
-  const year = parts.find((part) => part.type === "year")?.value;
-  const month = parts.find((part) => part.type === "month")?.value;
-  const day = parts.find((part) => part.type === "day")?.value;
-
-  if (!year || !month || !day) {
-    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-  }
-
-  return `${year}-${month}-${day}`;
-}
-
-function getDueState(dueAt: string | null, now: Date, timeZone: string): TaskCardData["dueState"] {
-  if (!dueAt) {
-    return null;
-  }
-
-  const dueDate = new Date(dueAt);
-  if (isPastDue(dueAt, now)) {
-    return "Overdue";
-  }
-
-  const dueDay = getDateInTimeZone(dueDate, timeZone);
-  const todayDay = getDateInTimeZone(now, timeZone);
-  if (dueDay === todayDay) {
-    return "Due Today";
-  }
-
-  return "Due Soon";
-}
-
-function formatDateOnlyLabel(dateOnly: string, includeYear = false): string {
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    ...(includeYear ? { year: "numeric" } : {}),
-    timeZone: "UTC",
-  }).format(new Date(`${dateOnly}T12:00:00Z`));
-}
-
-function buildDateOnlyDueAt(dateOnly: string): string {
-  return `${dateOnly}T23:59:59.999Z`;
-}
-
-function compareTasksByDueThenPriority(a: WeekBoardTaskData, b: WeekBoardTaskData): number {
-  const aDue = a.dueAt ? new Date(a.dueAt).getTime() : Number.POSITIVE_INFINITY;
-  const bDue = b.dueAt ? new Date(b.dueAt).getTime() : Number.POSITIVE_INFINITY;
-
-  if (aDue !== bDue) {
-    return aDue - bDue;
-  }
-
-  if (a.priorityScore !== b.priorityScore) {
-    return b.priorityScore - a.priorityScore;
-  }
-
+function compareDueThenPriority(a: WeekBoardTaskData, b: WeekBoardTaskData): number {
+  const aDue = a.dueAt ? Date.parse(a.dueAt) : Number.POSITIVE_INFINITY;
+  const bDue = b.dueAt ? Date.parse(b.dueAt) : Number.POSITIVE_INFINITY;
+  if (aDue !== bDue) return aDue - bDue;
+  if (a.priorityScore !== b.priorityScore) return b.priorityScore - a.priorityScore;
   return a.title.localeCompare(b.title);
 }
 
-function buildWeekBoardColumns(
-  tasks: WeekBoardTaskData[],
-  weekStart: string,
-  todayDate: string,
-  weekendRanges: WeekBoardTaskData[] = [],
-  laneCounts: number[] = [0, 0, 0, 0, 0]
-): WeekBoardColumn[] {
-  const monday = weekStart;
-  const tuesday = addDateOnlyDays(weekStart, 1);
-  const wednesday = addDateOnlyDays(weekStart, 2);
-  const thursday = addDateOnlyDays(weekStart, 3);
-  const friday = addDateOnlyDays(weekStart, 4);
-  const saturday = addDateOnlyDays(weekStart, 5);
-  const sunday = addDateOnlyDays(weekStart, 6);
-  const grouped: Record<WeekColumnKey, WeekBoardTaskData[]> = {
-    monday: [],
-    tuesday: [],
-    wednesday: [],
-    thursday: [],
-    friday: [],
-    weekend: [],
-  };
-
-  for (const task of tasks) {
-    if (!task.dueAt) {
-      continue;
-    }
-
-    const dueDate = getDateInTimeZone(new Date(task.dueAt), TIME_ZONE);
-    if (dueDate <= monday) {
-      grouped.monday.push(task);
-    } else if (dueDate === tuesday) {
-      grouped.tuesday.push(task);
-    } else if (dueDate === wednesday) {
-      grouped.wednesday.push(task);
-    } else if (dueDate === thursday) {
-      grouped.thursday.push(task);
-    } else if (dueDate === friday) {
-      grouped.friday.push(task);
-    } else if (dueDate === saturday || dueDate === sunday) {
-      grouped.weekend.push(task);
-    }
-  }
-  // Multi-day ranges that touch this week only on Sat/Sun.
-  grouped.weekend.push(...weekendRanges);
-
-  return [
-    {
-      key: "monday",
-      title: "Monday",
-      subtitle: formatDateOnlyLabel(monday),
-      tasks: grouped.monday.sort(compareTasksByDueThenPriority),
-      dueDate: monday,
-      isCurrentDay: monday === todayDate,
-      laneCount: laneCounts[0] ?? 0,
-    },
-    {
-      key: "tuesday",
-      title: "Tuesday",
-      subtitle: formatDateOnlyLabel(tuesday),
-      tasks: grouped.tuesday.sort(compareTasksByDueThenPriority),
-      dueDate: tuesday,
-      isCurrentDay: tuesday === todayDate,
-      laneCount: laneCounts[1] ?? 0,
-    },
-    {
-      key: "wednesday",
-      title: "Wednesday",
-      subtitle: formatDateOnlyLabel(wednesday),
-      tasks: grouped.wednesday.sort(compareTasksByDueThenPriority),
-      dueDate: wednesday,
-      isCurrentDay: wednesday === todayDate,
-      laneCount: laneCounts[2] ?? 0,
-    },
-    {
-      key: "thursday",
-      title: "Thursday",
-      subtitle: formatDateOnlyLabel(thursday),
-      tasks: grouped.thursday.sort(compareTasksByDueThenPriority),
-      dueDate: thursday,
-      isCurrentDay: thursday === todayDate,
-      laneCount: laneCounts[3] ?? 0,
-    },
-    {
-      key: "friday",
-      title: "Friday",
-      subtitle: formatDateOnlyLabel(friday),
-      tasks: grouped.friday.sort(compareTasksByDueThenPriority),
-      dueDate: friday,
-      isCurrentDay: friday === todayDate,
-      laneCount: laneCounts[4] ?? 0,
-    },
-    {
-      key: "weekend",
-      title: "Weekend",
-      subtitle: `${formatDateOnlyLabel(saturday)} - ${formatDateOnlyLabel(sunday)}`,
-      tasks: grouped.weekend.sort(compareTasksByDueThenPriority),
-      dueDate: saturday,
-      isCurrentDay: saturday === todayDate || sunday === todayDate,
-      laneCount: 0,
-    },
-  ];
+function waitingLine(task: TaskWithImplementation): string {
+  const parts: string[] = [];
+  if (task.waiting_on) parts.push(`on ${task.waiting_on}`);
+  else if (task.blocked_reason) parts.push(BLOCKED_REASON_WORDS[task.blocked_reason] ?? "waiting");
+  else if (task.dependency_blocked) parts.push("waits on another task");
+  else parts.push("waiting");
+  const followUp = etDate(task.follow_up_at ?? null);
+  if (followUp) parts.push(`nudge ${shortDayLabel(followUp)}`);
+  return parts.join(" · ");
 }
 
-function formatDate(value: string): string {
-  return new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric" }).format(new Date(value));
-}
-
-function formatUpdatedTime(updatedAt: string, timeZone: string): string {
-  const updatedDate = new Date(updatedAt);
-  if (Number.isNaN(updatedDate.getTime())) {
-    return "Unknown";
-  }
-
-  return new Intl.DateTimeFormat("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    timeZone,
-  }).format(updatedDate);
-}
-
-function WeeklyBoardColumn({
-  column,
-  completingIds,
-  pinningIds,
-  movingIds,
-  draggingTaskId,
-  dropTargetKey,
-  onOpenTask,
-  onDoneTask,
-  onTogglePinned,
-  onDragStartTask,
-  onDragEndTask,
-  onDropTask,
-  onDropTargetChange,
-  onCreateTask,
-  rangeCardProps,
-}: {
-  column: WeekBoardColumn;
-  completingIds: Set<string>;
-  pinningIds: Set<string>;
-  movingIds: Set<string>;
-  draggingTaskId: string | null;
-  dropTargetKey: WeekColumnKey | null;
-  onOpenTask: (taskId: string) => void;
-  onDoneTask: (taskId: string) => void;
-  onTogglePinned: (taskId: string, nextPinned: boolean) => void | Promise<void>;
-  onDragStartTask: (taskId: string) => void;
-  onDragEndTask: () => void;
-  onDropTask: (taskId: string, dueDate: string) => void;
-  onDropTargetChange: (key: WeekColumnKey | null) => void;
-  onCreateTask?: (dueDate: string) => void;
-  rangeCardProps: RangeCardProps;
-}) {
-  const isDropTarget = dropTargetKey === column.key;
-
-  return (
-    <section
-      onDragOver={(event) => {
-        event.preventDefault();
-        event.dataTransfer.dropEffect = "move";
-        if (dropTargetKey !== column.key) {
-          onDropTargetChange(column.key);
-        }
-      }}
-      onDragLeave={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-          onDropTargetChange(null);
-        }
-      }}
-      onDrop={(event) => {
-        event.preventDefault();
-        const taskId = event.dataTransfer.getData("text/plain");
-        onDropTargetChange(null);
-        if (taskId) {
-          onDropTask(taskId, column.dueDate);
-        }
-      }}
-      className={`min-w-0 rounded-card border p-3 transition-colors ${
-        isDropTarget
-          ? "border-accent bg-accent-soft/40"
-          : column.isCurrentDay
-            ? "border-accent/50 bg-accent-soft/30"
-            : "border-stroke bg-background/50"
-      }`}
-    >
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-semibold text-foreground">
-            {column.title}
-            {column.isCurrentDay ? <span className="ml-2 text-xs font-bold text-red-200">Today</span> : null}
-          </h3>
-          <p className="text-xs text-muted-foreground">{column.subtitle}</p>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <span className="rounded-full border border-stroke bg-panel px-2 py-0.5 text-xs font-bold text-foreground">
-            {column.tasks.length + column.laneCount}
-          </span>
-          {onCreateTask ? (
-            <button
-              type="button"
-              onClick={() => onCreateTask(column.dueDate)}
-              aria-label={`Add task due ${column.title}, ${column.subtitle}`}
-              title={`Add task due ${column.title}`}
-              className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-stroke bg-panel text-sm font-bold text-muted-foreground transition hover:border-accent/50 hover:bg-accent-soft hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
-            >
-              +
-            </button>
-          ) : null}
-        </div>
-      </div>
-
-      {column.tasks.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-stroke bg-panel/50 px-3 py-5 text-center text-xs text-muted-foreground">
-          {column.laneCount > 0 ? "No single-day tasks." : "No tasks here."}
-        </p>
-      ) : (
-        <div className="space-y-3">
-          {column.tasks.map((task) => (
-            <WeeklyTaskCard
-              key={task.id}
-              task={task}
-              completing={completingIds.has(task.id)}
-              pinning={pinningIds.has(task.id)}
-              moving={movingIds.has(task.id)}
-              dragging={draggingTaskId === task.id}
-              onOpen={() => onOpenTask(task.id)}
-              onDone={() => onDoneTask(task.id)}
-              onTogglePinned={onTogglePinned}
-              onDragStart={onDragStartTask}
-              onDragEnd={onDragEndTask}
-              {...rangeCardProps(task, `col-${column.key}`)}
-            />
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function OverdueQueueSection({
-  tasks,
-  updatedAt,
-  hasError,
-  completingIds,
-  pinningIds,
-  movingIds,
-  draggingTaskId,
-  onOpenTask,
-  onDoneTask,
-  onTogglePinned,
-  onDragStartTask,
-  onDragEndTask,
-  onHide,
-  sectionRef,
-  rangeCardProps,
-}: {
-  tasks: WeekBoardTaskData[];
-  updatedAt: string;
-  hasError: boolean;
-  completingIds: Set<string>;
-  pinningIds: Set<string>;
-  movingIds: Set<string>;
-  draggingTaskId: string | null;
-  onOpenTask: (taskId: string) => void;
-  onDoneTask: (taskId: string) => void;
-  onTogglePinned: (taskId: string, nextPinned: boolean) => void | Promise<void>;
-  onDragStartTask: (taskId: string) => void;
-  onDragEndTask: () => void;
-  onHide: () => void;
-  sectionRef: { current: HTMLElement | null };
-  rangeCardProps: RangeCardProps;
-}) {
-  return (
-    <section
-      id="overdue-queue"
-      ref={sectionRef}
-      className="rounded-card border border-red-500/30 bg-red-500/10 p-4 shadow-sm"
-    >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h3 className="text-base font-semibold text-red-100">Overdue Queue</h3>
-          <p className="text-sm text-red-100/80">
-            Older overdue work lives here so the weekday board stays focused on the current week.
-          </p>
-          <p className="mt-1 text-xs text-red-100/70">Updated {formatUpdatedTime(updatedAt, TIME_ZONE)}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="rounded-full border border-red-400/30 bg-red-500/10 px-2 py-0.5 text-xs font-bold text-red-100">
-            {tasks.length}
-          </span>
-          <Button variant="danger" size="sm"
-            onClick={onHide}>
-            Hide
-          </Button>
-        </div>
-      </div>
-
-      {hasError ? (
-        <p className="mt-3 rounded-md border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-          Overdue queue refresh failed. Showing available data.
-        </p>
-      ) : null}
-
-      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        {tasks.map((task) => (
-          <WeeklyTaskCard
-            key={task.id}
-            task={task}
-            completing={completingIds.has(task.id)}
-            pinning={pinningIds.has(task.id)}
-            moving={movingIds.has(task.id)}
-            dragging={draggingTaskId === task.id}
-            onOpen={() => onOpenTask(task.id)}
-            onDone={() => onDoneTask(task.id)}
-            onTogglePinned={onTogglePinned}
-            onDragStart={onDragStartTask}
-            onDragEnd={onDragEndTask}
-            {...rangeCardProps(task, "overdue")}
-            canDrag
-          />
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function WaitingReviewColumn({
-  waitingOn,
-  needsReviewCount,
-  updatedAt,
-  hasError,
-  onOpenTask,
-}: {
-  waitingOn: WaitingTask[];
-  needsReviewCount: number;
-  updatedAt: string;
-  hasError: boolean;
-  onOpenTask: (taskId: string) => void;
-}) {
-  const total = waitingOn.length + needsReviewCount;
-
-  return (
-    <section className="min-w-0 rounded-card border border-stroke bg-background/50 p-3">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-semibold text-foreground">Waiting / Review</h3>
-          <p className="text-xs text-muted-foreground">Updated {formatUpdatedTime(updatedAt, TIME_ZONE)}</p>
-        </div>
-        <span className="rounded-full border border-stroke bg-panel px-2 py-0.5 text-xs font-bold text-foreground">{total}</span>
-      </div>
-
-      {hasError ? (
-        <p className="mb-3 rounded-md border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-          Waiting list refresh failed. Showing available data.
-        </p>
-      ) : null}
-
-      <div className="space-y-3">
-        {waitingOn.slice(0, 5).map((item) => (
-          <article key={item.id} data-task-open={item.id} className="rounded-card border border-l-4 border-stroke border-l-amber-400 bg-panel p-3 shadow-sm">
-            <button
-              type="button"
-              onClick={() => onOpenTask(item.id)}
-              className="block w-full text-left focus:outline-none focus-visible:rounded-lg focus-visible:ring-2 focus-visible:ring-accent/50"
-            >
-              <h3 className="text-sm font-semibold leading-relaxed text-foreground">{item.title}</h3>
-              {item.isPersonal ? <PersonalBadge className="mt-1" /> : null}
-              {/* Inside the open button, so the square is a plain mark here. */}
-              <ProjectTag {...item.squareInput} editable={false} className="mt-1 max-w-full" />
-              <p className="mt-2 text-xs text-muted-foreground">
-                Waiting on {item.waitingOn}
-                {item.followUpAt ? ` · follow up ${formatDate(item.followUpAt)}` : ""}
-              </p>
-              <span className="mt-3 inline-flex rounded-md border border-stroke bg-panel-muted px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-panel">
-                Open Task
-              </span>
-            </button>
-          </article>
-        ))}
-
-        {needsReviewCount > 0 ? (
-          <article className="rounded-card border border-l-4 border-stroke border-l-amber-400 bg-panel p-3 shadow-sm">
-            <h3 className="text-sm font-semibold leading-relaxed text-foreground">
-              {needsReviewCount} {needsReviewCount === 1 ? "task needs" : "tasks need"} review
-            </h3>
-            <p className="mt-2 text-xs text-muted-foreground">Review queue remains one click away from the board.</p>
-            <Link
-              href="/backlog?review=needs_review"
-              className="mt-3 inline-flex rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-on-accent transition hover:opacity-90"
-            >
-              Open Review Queue
-            </Link>
-          </article>
-        ) : null}
-
-        {waitingOn.length === 0 && needsReviewCount === 0 ? (
-          <p className="rounded-lg border border-dashed border-stroke bg-panel/50 px-3 py-5 text-center text-xs text-muted-foreground">
-            Nothing blocked or waiting for review.
-          </p>
-        ) : null}
-      </div>
-    </section>
-  );
-}
-
+/**
+ * Today, board first (redesign S4). The one-line strip (date, next meeting,
+ * colour key), then the week: a side rail with Overdue (a short queue) and
+ * Waiting (each waiting task once), Mon–Fri with the multi-day lane, done lines
+ * and cards with Done + Move to…, and the weekend strip. While the task panel
+ * shows a task the board narrows beside it: the rail folds into two side tabs,
+ * past days into one "n done" line, and the open card is outlined.
+ */
 export function WeekBoard({
   weekBoardTasks,
   waitingTasks,
+  doneTasks,
   needsReviewCount,
   syncedTaskIds,
   updatedAt,
   hasError,
   mode,
+  meetings,
+  meetingsFailed,
+  chips,
 }: WeekBoardProps) {
   const router = useRouter();
+  const params = useSearchParams();
+  const openTaskId = taskIdFromParams(params, "/");
   const { openTask, seedTasks: registerTasks } = useTaskPanel();
   const { sprints } = useSprints();
-
-  const { completeTask, updateTask } = useTaskMutation();
+  const { completeTask, updateTaskWithUndo } = useTaskMutation();
   const dateCascade = useDateCascade();
+
   const [tasks, setTasks] = useState<TaskWithImplementation[]>(weekBoardTasks);
   const [waiting, setWaiting] = useState<TaskWithImplementation[]>(waitingTasks);
+  const [done, setDone] = useState<TaskWithImplementation[]>(doneTasks);
   const [completingIds, setCompletingIds] = useState<Set<string>>(new Set());
-  const [pinningIds, setPinningIds] = useState<Set<string>>(new Set());
   const [movingIds, setMovingIds] = useState<Set<string>>(new Set());
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
-  const [dropTargetKey, setDropTargetKey] = useState<WeekColumnKey | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const [showOverdueQueue, setShowOverdueQueue] = useState(false);
-  const [scrollToOverdueQueue, setScrollToOverdueQueue] = useState(false);
   const [weekOffset, setWeekOffset] = useState(0);
   const [weekLoading, setWeekLoading] = useState(false);
   const [createDueDate, setCreateDueDate] = useState<string | null>(null);
@@ -647,39 +209,36 @@ export function WeekBoard({
   const [implementationsError, setImplementationsError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [openStepsKey, setOpenStepsKey] = useState<string | null>(null);
-  const overdueQueueRef = useRef<HTMLElement | null>(null);
+  const [overdueExpanded, setOverdueExpanded] = useState(false);
+  const [waitingExpanded, setWaitingExpanded] = useState(false);
+  const [flyout, setFlyout] = useState<"overdue" | "waiting" | null>(null);
+  const railRef = useRef<HTMLElement | null>(null);
 
-  // A tick in a card's open steps: move the fill at once (the refresh that
-  // follows brings the same rows from the server).
   const applyChecklistRows = useCallback((taskId: string, rows: ChecklistRows) => {
     setTasks((current) => current.map((task) => (task.id === taskId ? { ...task, checklist_rows: rows } : task)));
   }, []);
 
-  // Reconcile local optimistic state with freshly streamed server props.
-  useEffect(() => {
-    const currentWeek = getDisplayedWeekRange(new Date(), TIME_ZONE);
-    // Keep tasks loaded for later weeks; the streamed props own this week. A
-    // multi-day task overlapping this week comes back in the props, so it's
-    // dropped from the kept set and the merge never shows it twice.
-    setTasks((current) =>
-      mergeTasksById(
-        current.filter((task) => {
-          if (!task.due_at) {
-            return false;
-          }
-          return (
-            getDateInTimeZone(new Date(task.due_at), TIME_ZONE) > currentWeek.end &&
-            !rangeOverlapsWeek(task, currentWeek.start)
-          );
-        }),
-        weekBoardTasks
-      )
-    );
-  }, [weekBoardTasks]);
-
-  useEffect(() => {
-    setWaiting(waitingTasks);
-  }, [waitingTasks]);
+  // Reconcile local optimistic state with freshly streamed server props (during
+  // render, React's pattern for state that follows a prop). Tasks loaded for later
+  // weeks stay; the streamed props own this week.
+  const [seen, setSeen] = useState({ weekBoardTasks, waitingTasks, doneTasks });
+  if (seen.weekBoardTasks !== weekBoardTasks || seen.waitingTasks !== waitingTasks || seen.doneTasks !== doneTasks) {
+    if (seen.weekBoardTasks !== weekBoardTasks) {
+      const currentWeek = getDisplayedWeekRange(new Date(), TIME_ZONE);
+      setTasks((current) =>
+        mergeTasksById(
+          current.filter((task) => {
+            if (!task.due_at) return false;
+            return getDateInTimeZone(new Date(task.due_at), TIME_ZONE) > currentWeek.end && !rangeOverlapsWeek(task, currentWeek.start);
+          }),
+          weekBoardTasks
+        )
+      );
+    }
+    if (seen.waitingTasks !== waitingTasks) setWaiting(waitingTasks);
+    if (seen.doneTasks !== doneTasks) setDone(doneTasks);
+    setSeen({ weekBoardTasks, waitingTasks, doneTasks });
+  }
 
   useEffect(() => {
     const intervalId = window.setInterval(() => setNowMs(Date.now()), 60_000);
@@ -687,8 +246,33 @@ export function WeekBoard({
   }, []);
 
   useEffect(() => {
-    registerTasks([...tasks, ...waiting]);
-  }, [tasks, waiting, registerTasks]);
+    registerTasks([...tasks, ...waiting, ...done]);
+  }, [tasks, waiting, done, registerTasks]);
+
+  // The fly-out only lives while the panel is open; Esc or a click elsewhere closes it.
+  const activeFlyout = openTaskId ? flyout : null;
+  useEffect(() => {
+    if (!activeFlyout) return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      const which = activeFlyout;
+      setFlyout(null);
+      document.querySelector<HTMLElement>(`[data-rail-tab="${which}"]`)?.focus({ preventScroll: true });
+    }
+    function onPointer(event: PointerEvent) {
+      const target = event.target as Element | null;
+      if (!target || railRef.current?.contains(target) || target.closest("[data-rail-tab]") || target.closest(".tb-move")) return;
+      setFlyout(null);
+    }
+    window.addEventListener("keydown", onKey, true);
+    document.addEventListener("pointerdown", onPointer, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      document.removeEventListener("pointerdown", onPointer, true);
+    };
+  }, [activeFlyout]);
 
   const syncedSet = useMemo(() => new Set(syncedTaskIds), [syncedTaskIds]);
   const now = new Date(nowMs);
@@ -697,81 +281,79 @@ export function WeekBoard({
   const selectedWeekEnd = addDateOnlyDays(selectedWeekStart, 6);
   const todayDate = getDateInTimeZone(now, TIME_ZONE);
   const isCurrentWeek = weekOffset === 0;
-  const selectedWeekLabel = `${formatDateOnlyLabel(selectedWeekStart)} – ${formatDateOnlyLabel(selectedWeekEnd, true)}`;
 
-  const weekBoard = useMemo(
-    () =>
-      tasks.map((task) =>
-        taskToWeekBoardData(
-          task,
-          getDueState(task.due_at, now, TIME_ZONE),
-          syncedSet.has(task.id),
-          (() => {
-            // An umbrella (Break into tasks) counts its step tasks; others their checklist.
-            const progress = progressRowsFor(task);
-            return buildRangeCardView(task, progress.rows, now, { stepsAreTasks: progress.source === "tasks" });
-          })()
-        )
-      ),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [tasks, syncedSet, nowMs]
+  const toData = useCallback(
+    (task: TaskWithImplementation): WeekBoardTaskData => {
+      // An umbrella (Break into tasks) counts its step tasks; others their checklist.
+      const progress = progressRowsFor(task);
+      const range = buildRangeCardView(task, progress.rows, new Date(nowMs), { stepsAreTasks: progress.source === "tasks" });
+      return taskToWeekBoardData(task, new Date(nowMs), syncedSet.has(task.id), range);
+    },
+    [nowMs, syncedSet]
   );
-  const weekBoardById = useMemo(() => new Map(weekBoard.map((task) => [task.id, task])), [weekBoard]);
 
-  const waitingOn = useMemo(() => waiting.map(taskToWaitingTask), [waiting]);
+  // Each task has one home: Waiting, the Overdue queue, or the board.
+  const split = splitTodayBoard({ tasks, waiting, todayDate, now });
+  const dataById = new Map<string, WeekBoardTaskData>();
+  for (const task of [...split.board, ...split.overdue]) dataById.set(task.id, toData(task));
+  const rawById = new Map([...tasks, ...waiting, ...done].map((task) => [task.id, task]));
 
-  const overdueTasks = weekBoard.filter((task) => task.dueState === "Overdue");
-  // Multi-day tasks S2: ranges overlapping Mon–Fri go in the lane (each once),
-  // weekend-only ranges in the Weekend column, other tasks by due date as before.
-  const placement = placeWeekTasks(tasks, selectedWeekStart, (task) =>
-    isDueAtInWeekStarting(task.due_at, selectedWeekStart, TIME_ZONE)
-  );
-  const toBoardData = (task: TaskWithImplementation) => weekBoardById.get(task.id);
-  const scheduledWeekTasks = placement.single.map(toBoardData).filter((task): task is WeekBoardTaskData => Boolean(task));
-  const weekendRangeTasks = placement.weekendRanges.map(toBoardData).filter((task): task is WeekBoardTaskData => Boolean(task));
-  const laneCards: LaneCard[] = placement.lane.flatMap((item) => {
-    const data = weekBoardById.get(item.task.id);
-    return data ? [{ placement: item, data }] : [];
+  const placement = placeWeekTasks(split.board, selectedWeekStart, (task) => isDueAtInWeekStarting(task.due_at, selectedWeekStart, TIME_ZONE));
+  const laneCards = placement.lane.flatMap((item) => {
+    const data = dataById.get(item.task.id);
+    return data && data.range ? [{ placement: item, data, view: data.range }] : [];
   });
-  const weekColumns = buildWeekBoardColumns(
-    scheduledWeekTasks,
+
+  const weekDates = Array.from({ length: 7 }, (_, index) => addDateOnlyDays(selectedWeekStart, index));
+  const singlesByDate = new Map<string, WeekBoardTaskData[]>(weekDates.map((date) => [date, []]));
+  for (const task of placement.single) {
+    const date = etDate(task.due_at);
+    const data = dataById.get(task.id);
+    if (date && data && singlesByDate.has(date)) singlesByDate.get(date)!.push(data);
+  }
+  for (const list of singlesByDate.values()) list.sort(compareDueThenPriority);
+  const doneByDate = new Map<string, WeekBoardTaskData[]>(weekDates.map((date) => [date, []]));
+  for (const task of done) {
+    const date = etDate(task.due_at);
+    if (date && doneByDate.has(date)) doneByDate.get(date)!.push(toData(task));
+  }
+
+  const columns = dayColumns(
     selectedWeekStart,
     todayDate,
-    weekendRangeTasks,
-    laneCountsByColumn(placement.lane)
+    weekDates.slice(0, 5).map((date) => singlesByDate.get(date)?.length ?? 0),
+    weekDates.slice(0, 5).map((date) => doneByDate.get(date)?.length ?? 0)
   );
-  const weekdayColumns = weekColumns.filter((column) => column.key !== "weekend");
-  const weekendColumn = weekColumns.find((column) => column.key === "weekend") ?? null;
-  const shownWeekTasks = [...scheduledWeekTasks, ...weekendRangeTasks, ...laneCards.map((card) => card.data)];
-  const boardTaskCount = shownWeekTasks.length;
-  const overdueCount = overdueTasks.length;
-  const todayDueCount = shownWeekTasks.filter((task) => task.dueState === "Due Today").length;
-  const boardMinutes = shownWeekTasks.reduce((sum, task) => sum + task.estimatedMinutes, 0);
-  const multiDayInProgress = laneCards.filter(
-    (card) => card.data.range?.kind === "in_range" || card.data.range?.kind === "due_today"
-  );
-  const multiDayBehind = multiDayInProgress.filter((card) => card.data.range?.behindPace).length;
+  const saturday = weekDates[5];
+  const sunday = weekDates[6];
+  const weekendRanges = placement.weekendRanges.map((task) => dataById.get(task.id)).filter((task): task is WeekBoardTaskData => Boolean(task));
 
-  const rangeCardProps: RangeCardProps = (task, context) => {
+  const overdueData = split.overdue.flatMap((task) => {
+    const data = dataById.get(task.id);
+    return data ? [data] : [];
+  });
+  const overdueQueue = railQueue(overdueData, overdueExpanded);
+  const waitingQueue = railQueue(split.waiting, waitingExpanded, WAITING_RAIL_LIMIT);
+
+  const legendInputs = [...split.board, ...split.overdue, ...split.waiting].map((task) => squareInputOf(task));
+
+  const panelOpen = Boolean(openTaskId);
+
+  const rangeStepsProps = (task: WeekBoardTaskData, context: string) => {
     const view = task.range;
-    if (!view) {
-      return {};
-    }
+    if (!view || !view.steps) return {};
     const key = `${context}:${task.id}`;
     const open = openStepsKey === key;
     return {
-      context,
-      // A real range changes its dates in the task window; an umbrella card without one drags like any task.
-      canDrag: !view.isRange,
       stepsOpen: open,
-      onToggleSteps: view.steps ? () => setOpenStepsKey((current) => (current === key ? null : key)) : undefined,
+      onToggleSteps: () => setOpenStepsKey((current) => (current === key ? null : key)),
       steps: open ? (
         <InlineSteps
           id={boardStepsId(context, task.id)}
           taskId={task.id}
           view={view}
           compact
-          stepTasks={view.steps?.basis === "tasks" ? tasks.find((candidate) => candidate.id === task.id)?.step_tasks : undefined}
+          stepTasks={view.steps.basis === "tasks" ? rawById.get(task.id)?.step_tasks : undefined}
           onRowsChange={(rows) => applyChecklistRows(task.id, rows)}
           onSaved={() => router.refresh()}
           onDone={() => handleQuickComplete(task.id)}
@@ -781,37 +363,27 @@ export function WeekBoard({
     };
   };
 
+  // Other weeks load on demand (the streamed props hold this week).
   useEffect(() => {
-    if (isCurrentWeek) {
-      setWeekLoading(false);
-      return;
-    }
-
+    if (isCurrentWeek) return;
     const controller = new AbortController();
-    const params = new URLSearchParams({
+    const query = new URLSearchParams({
       view: "weekly_board",
       week_start_date: selectedWeekStart,
       week_end_date: selectedWeekEnd,
       limit: "300",
       scope: mode,
     });
-
-    setWeekLoading(true);
-    setError(null);
-    fetch(`/api/tasks?${params.toString()}`, { cache: "no-store", signal: controller.signal })
+    fetch(`/api/tasks?${query.toString()}`, { cache: "no-store", signal: controller.signal })
       .then(async (response) => {
-        if (!response.ok) {
-          throw new Error("Failed to load the selected week");
-        }
+        if (!response.ok) throw new Error("Failed to load the selected week");
         return response.json() as Promise<TaskWithImplementation[]>;
       })
       .then((selectedTasks) => {
         setTasks((current) =>
           mergeTasksById(
             current.filter(
-              (task) =>
-                !isDueAtInWeekStarting(task.due_at, selectedWeekStart, TIME_ZONE) &&
-                !rangeOverlapsWeek(task, selectedWeekStart)
+              (task) => !isDueAtInWeekStarting(task.due_at, selectedWeekStart, TIME_ZONE) && !rangeOverlapsWeek(task, selectedWeekStart)
             ),
             selectedTasks
           )
@@ -823,27 +395,17 @@ export function WeekBoard({
         }
       })
       .finally(() => {
-        if (!controller.signal.aborted) {
-          setWeekLoading(false);
-        }
+        if (!controller.signal.aborted) setWeekLoading(false);
       });
-
     return () => controller.abort();
   }, [isCurrentWeek, mode, selectedWeekEnd, selectedWeekStart]);
 
   useEffect(() => {
-    if (!createDueDate || implementations.length > 0) {
-      return;
-    }
-
+    if (!createDueDate || implementations.length > 0) return;
     const controller = new AbortController();
-    setImplementationsLoading(true);
-    setImplementationsError(null);
     fetch("/api/applications", { cache: "no-store", signal: controller.signal })
       .then(async (response) => {
-        if (!response.ok) {
-          throw new Error("Failed to load applications");
-        }
+        if (!response.ok) throw new Error("Failed to load applications");
         return response.json() as Promise<ImplementationSummary[]>;
       })
       .then((rows) => {
@@ -856,133 +418,85 @@ export function WeekBoard({
           setImplementationsError(loadError instanceof Error ? loadError.message : "Failed to load applications");
         }
       });
-
     return () => controller.abort();
   }, [createDueDate, implementations.length, implementationsLoadRequest]);
 
-  useEffect(() => {
-    if (overdueCount === 0 && showOverdueQueue) {
-      setShowOverdueQueue(false);
+  const handleOpenTask = (taskId: string) => {
+    const raw = rawById.get(taskId);
+    if (raw) openTask(raw);
+    else openTask(taskId);
+  };
+
+  /** Another week: its tasks load on demand (the streamed props hold this week). */
+  function goToWeek(offset: number) {
+    setWeekOffset(offset);
+    setWeekLoading(offset !== 0);
+    setError(null);
+  }
+
+  function openCreate(date: string) {
+    setCreateDueDate(date);
+    if (implementations.length === 0) {
+      setImplementationsLoading(true);
+      setImplementationsError(null);
     }
-  }, [overdueCount, showOverdueQueue]);
+  }
 
-  useEffect(() => {
-    if (!showOverdueQueue || !scrollToOverdueQueue) {
-      return;
-    }
-
-    overdueQueueRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    setScrollToOverdueQueue(false);
-  }, [showOverdueQueue, scrollToOverdueQueue]);
-
-  const handleOpenTask = useCallback(
-    (taskId: string) => {
-      const raw = tasks.find((task) => task.id === taskId) ?? waiting.find((task) => task.id === taskId);
-      if (raw) {
-        openTask(raw);
-      }
-    },
-    [tasks, waiting, openTask]
-  );
+  function markBusy(setter: typeof setMovingIds, taskId: string, busy: boolean) {
+    setter((prev) => {
+      const next = new Set(prev);
+      if (busy) next.add(taskId);
+      else next.delete(taskId);
+      return next;
+    });
+  }
 
   async function handleQuickComplete(taskId: string) {
-    if (completingIds.has(taskId)) {
-      return;
-    }
-
-    const task =
-      tasks.find((item) => item.id === taskId) ?? waiting.find((item) => item.id === taskId);
-    if (!task) {
-      return;
-    }
+    if (completingIds.has(taskId)) return;
+    const task = tasks.find((item) => item.id === taskId) ?? waiting.find((item) => item.id === taskId);
+    if (!task) return;
     const wasWaiting = waiting.some((item) => item.id === taskId);
 
-    // Put the row back exactly where it came from, for both a failed request
-    // and an undo. Guarded against double-insert if the server refresh wins the race.
+    // Put the row back exactly where it came from, for a failed request and an undo.
     const restore = () => {
-      const insert = (prev: TaskWithImplementation[]) =>
-        prev.some((item) => item.id === taskId) ? prev : [task, ...prev];
-      if (wasWaiting) {
-        setWaiting(insert);
-      } else {
-        setTasks(insert);
-      }
+      const insert = (prev: TaskWithImplementation[]) => (prev.some((item) => item.id === taskId) ? prev : [task, ...prev]);
+      if (wasWaiting) setWaiting(insert);
+      else setTasks(insert);
+      setDone((prev) => prev.filter((item) => item.id !== taskId));
     };
 
-    setCompletingIds((prev) => new Set(prev).add(taskId));
+    markBusy(setCompletingIds, taskId, true);
     setError(null);
-
     await completeTask(task, {
       onOptimistic: () => {
         setTasks((prev) => prev.filter((item) => item.id !== taskId));
         setWaiting((prev) => prev.filter((item) => item.id !== taskId));
+        // Shown struck through on its day at once (the refresh brings the same row).
+        setDone((prev) => (prev.some((item) => item.id === taskId) ? prev : [...prev, { ...task, status: "Done" }]));
       },
       onRollback: restore,
       onUndo: restore,
     });
-
-    setCompletingIds((prev) => {
-      const next = new Set(prev);
-      next.delete(taskId);
-      return next;
-    });
+    markBusy(setCompletingIds, taskId, false);
   }
 
-  async function handleTogglePinned(taskId: string, nextPinned: boolean) {
-    if (pinningIds.has(taskId)) {
-      return;
-    }
-
-    setPinningIds((prev) => new Set(prev).add(taskId));
-    setError(null);
-
-    const applyPinned = (pinned: boolean) =>
-      setTasks((prev) => prev.map((task) => (task.id === taskId ? { ...task, pinned } : task)));
-
-    await updateTask(
-      taskId,
-      { pinned: nextPinned },
-      {
-        onOptimistic: () => applyPinned(nextPinned),
-        onRollback: () => applyPinned(!nextPinned),
-        failureMessage: "Couldn't update the pin state.",
-      }
-    );
-
-    setPinningIds((prev) => {
-      const next = new Set(prev);
-      next.delete(taskId);
-      return next;
-    });
-  }
-
-  async function handleMoveTask(taskId: string, dateOnly: string) {
-    if (movingIds.has(taskId)) {
-      return;
-    }
-
+  /** A day on the board (Move to… or a drag): the date cascade, like the panel's Due box. */
+  async function handleMoveToDay(taskId: string, dateOnly: string) {
+    if (movingIds.has(taskId)) return;
     const task = tasks.find((item) => item.id === taskId);
-    if (!task) {
-      return;
-    }
-
-    const nextDueAt = buildDateOnlyDueAt(dateOnly);
-    if (task.due_at === nextDueAt) {
-      return;
-    }
-
+    if (!task) return;
+    const nextDueAt = dueAtForBoardDay(dateOnly);
+    if (task.due_at === nextDueAt) return;
     const previousDueAt = task.due_at;
 
-    setMovingIds((prev) => new Set(prev).add(taskId));
+    markBusy(setMovingIds, taskId, true);
     setError(null);
-
     const applyDueAt = (dueAt: string | null) =>
       setTasks((prev) => prev.map((item) => (item.id === taskId ? { ...item, due_at: dueAt } : item)));
 
     if (dateCascade) {
-      // Cascade S2: the date saves at once; the toast (bottom right) lists the
-      // tasks that moved with it, with Undo, "how far", and "Show next week"
-      // when they left this week's board.
+      // Cascade S2: the date saves at once; the toast lists the tasks that moved with
+      // it, with Undo, "how far", and "Show next week" when they left this week's board.
       await dateCascade.changeDueDate({
         taskId,
         title: task.title,
@@ -994,35 +508,45 @@ export function WeekBoard({
           const byId = new Map(changes.map((change) => [change.task_id, change.due_at]));
           setTasks((prev) => prev.map((item) => (byId.has(item.id) ? { ...item, due_at: byId.get(item.id) ?? null } : item)));
         },
-        week: { weekStart: selectedWeekStart, showNextWeek: () => setWeekOffset((current) => current + 1) },
+        week: { weekStart: selectedWeekStart, showNextWeek: () => goToWeek(weekOffset + 1) },
       });
-    } else {
-      await updateTask(
-        taskId,
-        { due_at: nextDueAt },
-        {
-          onOptimistic: () => applyDueAt(nextDueAt),
-          onRollback: () => applyDueAt(previousDueAt),
-          failureMessage: "Couldn't move the task.",
-        }
-      );
     }
 
-    setMovingIds((prev) => {
-      const next = new Set(prev);
-      next.delete(taskId);
-      return next;
-    });
+    markBusy(setMovingIds, taskId, false);
     setDraggingTaskId(null);
-    setDropTargetKey(null);
+    setDropTarget(null);
   }
 
-  function handleOpenOverdueQueue() {
-    if (overdueCount === 0) {
-      return;
-    }
-    setShowOverdueQueue(true);
-    setScrollToOverdueQueue(true);
+  /** Backlog (no date) or Park (someday): a status change with Undo in its toast. */
+  async function handleMoveUndated(task: TaskWithImplementation, choice: MoveChoice) {
+    if (movingIds.has(task.id)) return;
+    const plan = moveUpdates(choice);
+    if (plan.kind !== "status") return;
+    const undo = choice.kind === "backlog" ? { status: task.status, due_at: task.due_at } : { status: task.status };
+    const restore = () => setTasks((prev) => (prev.some((item) => item.id === task.id) ? prev : [task, ...prev]));
+    markBusy(setMovingIds, task.id, true);
+    setError(null);
+    await updateTaskWithUndo(task.id, plan.updates, undo, {
+      message: moveToastText(choice, task.title),
+      onOptimistic: () => setTasks((prev) => prev.filter((item) => item.id !== task.id)),
+      onRollback: restore,
+      onUndo: restore,
+      failureMessage: "Couldn't move the task.",
+    });
+    markBusy(setMovingIds, task.id, false);
+  }
+
+  function moveFor(taskId: string): CardMove | undefined {
+    const raw = tasks.find((item) => item.id === taskId);
+    if (!raw) return undefined;
+    return {
+      input: raw,
+      choices: moveToChoices(raw, todayDate, selectedWeekStart),
+      onPick: (choice) => {
+        if (choice.kind === "day" && choice.date) void handleMoveToDay(raw.id, choice.date);
+        else void handleMoveUndated(raw, choice);
+      },
+    };
   }
 
   function handleTaskCreated(task: TaskWithImplementation) {
@@ -1031,286 +555,362 @@ export function WeekBoard({
     router.refresh();
   }
 
-  return (
-    <div className="space-y-8" data-task-list="board">
-      {error && <ErrorBanner message={error} />}
+  const dropProps = (date: string, enabled: boolean) =>
+    enabled
+      ? {
+          "data-drop": dropTarget === date ? "" : undefined,
+          onDragOver: (event: DragEvent) => {
+            if (!draggingTaskId) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "move";
+            if (dropTarget !== date) setDropTarget(date);
+          },
+          onDragLeave: (event: DragEvent<HTMLElement>) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null);
+          },
+          onDrop: (event: DragEvent) => {
+            event.preventDefault();
+            const taskId = event.dataTransfer.getData("text/plain");
+            setDropTarget(null);
+            if (taskId) void handleMoveToDay(taskId, date);
+          },
+        }
+      : {};
 
-      <section className="space-y-4">
-        <div className="flex flex-wrap gap-2">
-          <article className="rounded-xl border border-stroke bg-panel px-3 py-2 shadow-sm">
-            <p className="text-xs font-bold uppercase tracking-[0.12em] text-muted-foreground">
-              {isCurrentWeek ? "This Week" : "Selected Week"}
-            </p>
-            <p className="mt-0.5 text-sm font-semibold text-foreground">
-              {boardTaskCount} <span className="font-medium text-muted-foreground">tasks · {boardMinutes} min</span>
-            </p>
-          </article>
+  const endDrag = () => {
+    setDraggingTaskId(null);
+    setDropTarget(null);
+  };
+
+  const renderCard = (data: WeekBoardTaskData, context: string, tense: "past" | "today" | "future" | "overdue", dueText: { text: string | null; late: boolean }) => (
+    <WeeklyTaskCard
+      key={data.id}
+      task={data}
+      tense={tense}
+      dueText={dueText.text}
+      dueLate={dueText.late || tense === "overdue"}
+      open={openTaskId === data.id}
+      completing={completingIds.has(data.id)}
+      moving={movingIds.has(data.id)}
+      dragging={draggingTaskId === data.id}
+      onOpen={() => handleOpenTask(data.id)}
+      onDone={() => void handleQuickComplete(data.id)}
+      move={moveFor(data.id)}
+      canDrag={!data.range?.isRange || tense === "overdue"}
+      onDragStart={setDraggingTaskId}
+      onDragEnd={endDrag}
+      context={context}
+      {...rangeStepsProps(data, context)}
+    />
+  );
+
+  const weekendItems = (date: string) => {
+    const singles = singlesByDate.get(date) ?? [];
+    const ranges = weekendRanges.filter((task) => {
+      const raw = rawById.get(task.id);
+      const start = etDate(raw?.start_at ?? null);
+      const due = etDate(raw?.due_at ?? null);
+      return Boolean(start && due && start <= date && due >= date);
+    });
+    const continuing = laneCards.filter(({ placement: item }) => item.endsAfterFriday && item.dueDate >= date);
+    return { singles, ranges, continuing, done: doneByDate.get(date) ?? [] };
+  };
+
+  const renderWeekendDay = (date: string, name: string) => {
+    const items = weekendItems(date);
+    return (
+      <div {...dropProps(date, date >= todayDate)}>
+        <h3>
+          {name} {Number(date.slice(8, 10))}
+        </h3>
+        {items.continuing.map(({ data }) => (
+          <button key={`cont-${data.id}`} type="button" className="tb-wk-it" data-range="" data-task-open={data.id} data-open={openTaskId === data.id ? "" : undefined} onClick={() => handleOpenTask(data.id)}>
+            {data.squareInput ? <ProjectSquare {...data.squareInput} editable={false} /> : null}
+            <span>{data.title}, cont.</span>
+          </button>
+        ))}
+        {[...items.ranges, ...items.singles].map((data) => (
+          <button
+            key={data.id}
+            type="button"
+            className="tb-wk-it"
+            data-range={data.range?.isRange ? "" : undefined}
+            data-task-open={data.id}
+            data-open={openTaskId === data.id ? "" : undefined}
+            onClick={() => handleOpenTask(data.id)}
+          >
+            {data.squareInput ? <ProjectSquare {...data.squareInput} editable={false} /> : null}
+            <span>{data.title}</span>
+          </button>
+        ))}
+        {items.done.map((data) => (
+          <button key={`done-${data.id}`} type="button" className="tb-wk-it" data-task-open={data.id} onClick={() => handleOpenTask(data.id)} aria-label={`${data.title} (done)`}>
+            <span className="tb-ck" aria-hidden="true">
+              ✓
+            </span>
+            <span className="line-through">{data.title}</span>
+          </button>
+        ))}
+        {date >= todayDate ? (
+          <button type="button" className="tb-wk-add" onClick={() => openCreate(date)} aria-label={`Add a task due ${name} ${formatDateOnlyLabel(date)}`}>
+            + add
+          </button>
+        ) : null}
+      </div>
+    );
+  };
+
+  const overdueCount = split.overdue.length;
+  const waitingCount = split.waiting.length;
+
+  return (
+    <div
+      className="tb"
+      data-panel={panelOpen ? "open" : "closed"}
+      style={{
+        ["--tb-days" as string]: gridTracks(columns.map((column) => column.weight)),
+        ["--tb-days-open" as string]: gridTracks(columns.map((column) => column.weightOpen)),
+      }}
+    >
+      <TodayStrip
+        todayDate={todayDate}
+        events={meetings}
+        meetingsFailed={meetingsFailed}
+        workCalendarNote={mode === "personal"}
+        chips={chips}
+        legendInputs={legendInputs}
+      />
+
+      <h1 className="sr-only">Today</h1>
+      <div className="tb-head">
+        <h2>Week {isoWeekNumber(selectedWeekStart)}</h2>
+        <span className="tb-wk">{weekRangeLabel(selectedWeekStart)}</span>
+        <div className="tb-pager" role="group" aria-label="Week">
+          <button type="button" onClick={() => goToWeek(weekOffset - 1)} aria-label="Previous week">
+            ‹
+          </button>
+          <button type="button" onClick={() => goToWeek(0)} aria-pressed={isCurrentWeek}>
+            This week
+          </button>
+          <button type="button" onClick={() => goToWeek(weekOffset + 1)} aria-label="Next week">
+            ›
+          </button>
+        </div>
+        {laneCards.length > 0 ? (
+          <div className="tb-rangelegend" aria-hidden="true">
+            <span>
+              <i className="tb-sw" />
+              steps
+            </span>
+            <span>
+              <i className="tb-dm" />
+              time gone
+            </span>
+          </div>
+        ) : null}
+      </div>
+
+      {error ? (
+        <p className="tb-note" data-tone="warn" role="alert">
+          {error}
+        </p>
+      ) : null}
+      {hasError ? (
+        <p className="tb-note" data-tone="warn">
+          Part of the board didn&apos;t refresh (updated {new Date(updatedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: TIME_ZONE })}). Showing what loaded.
+        </p>
+      ) : null}
+      {weekLoading && !isCurrentWeek ? (
+        <p className="tb-note" role="status">
+          Loading {weekRangeLabel(selectedWeekStart)}…
+        </p>
+      ) : null}
+
+      <div className="tb-board">
+        {/* Panel open (desktop): the rail folds into two side tabs with counts. */}
+        <nav className="tb-tabs" aria-label="Overdue and Waiting">
           <button
             type="button"
-            onClick={handleOpenOverdueQueue}
-            disabled={overdueCount === 0}
-            aria-controls="overdue-queue"
-            aria-expanded={showOverdueQueue}
-            className={`rounded-xl border px-3 py-2 text-left shadow-sm transition ${
-              overdueCount > 0
-                ? "border-red-500/30 bg-red-500/10 hover:bg-red-500/15"
-                : "cursor-default border-red-500/20 bg-red-500/5 opacity-70"
-            }`}
+            className="tb-tab"
+            data-rail-tab="overdue"
+            data-late={overdueCount > 0 ? "" : undefined}
+            aria-expanded={activeFlyout === "overdue"}
+            aria-controls="today-rail"
+            onClick={() => setFlyout((current) => (current === "overdue" ? null : "overdue"))}
           >
-            <p className="text-xs font-bold uppercase tracking-[0.12em] text-red-300">Overdue</p>
-            <p className="mt-0.5 text-sm font-semibold text-red-200">
-              {overdueCount} {overdueCount === 1 ? "task needs" : "tasks need"} attention
-            </p>
-            <p className="mt-1 text-xs font-medium text-red-100/80">
-              {overdueCount > 0 ? "Open overdue queue" : "Nothing overdue"}
-            </p>
+            <b>{overdueCount}</b>
+            <span>Overdue</span>
           </button>
-          <article className="rounded-xl border border-accent/40 bg-accent-soft px-3 py-2 shadow-sm">
-            <p className="text-xs font-bold uppercase tracking-[0.12em] text-red-200">
-              {isCurrentWeek ? "Due Today" : "Viewing"}
-            </p>
-            <p className="mt-0.5 text-sm font-semibold text-foreground">
-              {isCurrentWeek
-                ? `${todayDueCount} ${todayDueCount === 1 ? "task" : "tasks"} due today`
-                : selectedWeekLabel}
-            </p>
-          </article>
-          {laneCards.length > 0 ? (
-            <article className="rounded-xl border border-range-border bg-range-soft px-3 py-2 shadow-sm">
-              <p className="text-xs font-bold uppercase tracking-[0.12em] text-range-text">Multi-day</p>
-              <p className="mt-0.5 text-sm font-semibold text-foreground">
-                {multiDayInProgress.length} in progress{" "}
-                <span className="font-medium text-muted-foreground">
-                  · {multiDayBehind > 0 ? `${multiDayBehind} behind pace` : "all on pace"}
-                </span>
-              </p>
-            </article>
-          ) : null}
-        </div>
+          <button
+            type="button"
+            className="tb-tab"
+            data-rail-tab="waiting"
+            aria-expanded={activeFlyout === "waiting"}
+            aria-controls="today-rail"
+            onClick={() => setFlyout((current) => (current === "waiting" ? null : "waiting"))}
+          >
+            <b>{waitingCount}</b>
+            <span>Waiting</span>
+          </button>
+        </nav>
 
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <h2 className="text-lg font-semibold text-foreground">Weekly Board</h2>
-            <p className="text-xs text-muted-foreground">
-              {selectedWeekLabel} · Updated {formatUpdatedTime(updatedAt, TIME_ZONE)}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setWeekOffset((current) => current - 1)}
-              aria-label="View previous week"
-            >
-              ← Previous
-            </Button>
-            {!isCurrentWeek ? (
-              <Button variant="primary" size="sm" onClick={() => setWeekOffset(0)}>
-                Current week
-              </Button>
+        <aside
+          id="today-rail"
+          ref={railRef}
+          className="tb-rail"
+          data-flyout={activeFlyout ?? undefined}
+          role={activeFlyout ? "dialog" : undefined}
+          aria-modal={activeFlyout ? "false" : undefined}
+          aria-label={activeFlyout ? (activeFlyout === "overdue" ? "Overdue" : "Waiting") : "Overdue and Waiting"}
+        >
+          <section data-rail="overdue" data-task-list="overdue" aria-labelledby="today-overdue-h">
+            <div className="tb-rh">
+              <h3 id="today-overdue-h">Overdue</h3>
+              <span className="tb-n" data-late={overdueCount > 0 ? "" : undefined}>
+                {overdueCount}
+              </span>
+              <em>oldest first</em>
+            </div>
+            {overdueCount === 0 ? <p className="tb-empty">Nothing overdue.</p> : null}
+            {overdueQueue.shown.map((data) =>
+              renderCard(data, "overdue", "overdue", { text: overdueLabel(data.dueAt, todayDate), late: true })
+            )}
+            {overdueQueue.hidden > 0 || overdueExpanded ? (
+              <button type="button" className="tb-linkbtn" aria-expanded={overdueExpanded} onClick={() => setOverdueExpanded((value) => !value)}>
+                {overdueExpanded ? "Show fewer" : `Show ${overdueQueue.hidden} more`}
+              </button>
             ) : null}
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setWeekOffset((current) => current + 1)}
-              aria-label="View next week"
-            >
-              Next →
-            </Button>
-          </div>
-        </div>
+          </section>
 
-        <div className="flex flex-wrap gap-2 text-xs font-semibold">
-          <span className="rounded-full border border-red-500/30 bg-red-500/10 px-2 py-1 text-red-300">Red queue = overdue</span>
-          <span className="rounded-full border border-accent/40 bg-accent-soft px-2 py-1 text-red-100">Accent = due today</span>
-          <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-200">Amber = blocked / waiting / review</span>
-          {laneCards.length > 0 ? (
-            <>
-              <span className="rounded-full border border-range-border bg-range-soft px-2 py-1 text-range-text">Violet = multi-day, inside its dates</span>
-              <span className="rounded-full border border-success-border bg-success-soft px-2 py-1 text-success">Green fill = steps done</span>
-              <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-200">Dashed mark = time gone (amber = behind pace)</span>
-            </>
-          ) : null}
-        </div>
-
-        {hasError ? (
-          <p className="rounded-md border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-            Weekly board refresh failed. Showing available data.
-          </p>
-        ) : null}
-
-        {weekLoading ? (
-          <p className="rounded-md border border-stroke bg-panel-muted px-3 py-2 text-xs text-muted-foreground" role="status">
-            Loading {selectedWeekLabel}…
-          </p>
-        ) : null}
-
-        {laneCards.length > 0 ? (
-          <>
-            {/* Desktop: each multi-day task spans the day columns it covers. */}
-            <section aria-label="Multi-day tasks this week" className="hidden xl:block">
-              <h3 className="mb-2 px-1 text-xs font-bold uppercase tracking-[0.12em] text-range-text">Multi-day</h3>
-              <div className="grid grid-flow-row-dense grid-cols-5 gap-x-4 gap-y-2">
-                {laneCards.map(({ placement: item, data }) => {
-                  const continues = laneContinuesText(item, selectedWeekStart);
-                  const started = laneStartedText(item);
-                  return (
-                    <div
-                      key={data.id}
-                      data-lane-span={`${item.startCol}-${item.endCol}`}
-                      style={{ gridColumn: `${item.startCol + 1} / ${item.endCol + 2}` }}
-                    >
-                      <WeeklyTaskCard
-                        task={data}
-                        completing={completingIds.has(data.id)}
-                        pinning={pinningIds.has(data.id)}
-                        moving={movingIds.has(data.id)}
-                        dragging={draggingTaskId === data.id}
-                        onOpen={() => handleOpenTask(data.id)}
-                        onDone={() => handleQuickComplete(data.id)}
-                        onTogglePinned={handleTogglePinned}
-                        onDragStart={setDraggingTaskId}
-                        onDragEnd={() => {
-                          setDraggingTaskId(null);
-                          setDropTargetKey(null);
-                        }}
-                        footer={
-                          continues || started ? (
-                            <p className="mt-1 text-xs font-bold text-range-text">
-                              {[started, continues].filter(Boolean).join(" · ")}
-                            </p>
-                          ) : null
-                        }
-                        {...rangeCardProps(data, "lane")}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
-
-            {/* Phone and tablet: the multi-day tasks stacked, each with an M–S strip. */}
-            <section
-              aria-label="Multi-day tasks this week"
-              className="rounded-card border border-range-border bg-violet-500/5 p-3 xl:hidden"
-            >
-              <h3 className="mb-3 flex items-center justify-between text-sm font-semibold text-foreground">
-                Multi-day this week
-                <span className="rounded-full border border-stroke bg-panel px-2 py-0.5 text-xs font-bold text-foreground">
-                  {laneCards.length}
+          <section data-rail="waiting" data-task-list="waiting" aria-labelledby="today-waiting-h">
+            <div className="tb-rh">
+              <h3 id="today-waiting-h">Waiting</h3>
+              <span className="tb-n">{waitingCount}</span>
+              <em>on someone else</em>
+            </div>
+            {waitingCount === 0 && needsReviewCount === 0 ? <p className="tb-empty">Nothing waiting.</p> : null}
+            {waitingQueue.shown.map((task) => (
+              <button
+                key={task.id}
+                type="button"
+                className="tb-wrow"
+                data-task-open={task.id}
+                aria-current={openTaskId === task.id ? "true" : undefined}
+                onClick={() => openTask(task)}
+              >
+                <b>{task.title}</b>
+                <span>
+                  {/* Inside the row's button, so the square is a plain mark here. */}
+                  <ProjectTag {...squareInputOf(task)} editable={false} />
+                  {waitingLine(task)}
                 </span>
-              </h3>
-              <div className="space-y-3">
-                {laneCards.map(({ placement: item, data }) => (
-                  <WeeklyTaskCard
-                    key={data.id}
-                    task={data}
-                    completing={completingIds.has(data.id)}
-                    pinning={pinningIds.has(data.id)}
-                    moving={movingIds.has(data.id)}
-                    dragging={draggingTaskId === data.id}
-                    onOpen={() => handleOpenTask(data.id)}
-                    onDone={() => handleQuickComplete(data.id)}
-                    onTogglePinned={handleTogglePinned}
-                    onDragStart={setDraggingTaskId}
-                    onDragEnd={() => {
-                      setDraggingTaskId(null);
-                      setDropTargetKey(null);
-                    }}
-                    footer={<DayStrip cells={dayStrip(item.startDate, item.dueDate, selectedWeekStart, todayDate)} />}
-                    {...rangeCardProps(data, "phone")}
-                  />
-                ))}
-              </div>
+              </button>
+            ))}
+            {waitingQueue.hidden > 0 || waitingExpanded ? (
+              <button type="button" className="tb-linkbtn" aria-expanded={waitingExpanded} onClick={() => setWaitingExpanded((value) => !value)}>
+                {waitingExpanded ? "Show fewer" : `Show ${waitingQueue.hidden} more`}
+              </button>
+            ) : null}
+            {needsReviewCount > 0 ? (
+              <Link href="/backlog?review=needs_review" className="tb-linkbtn">
+                {needsReviewCount} {needsReviewCount === 1 ? "task needs" : "tasks need"} review →
+              </Link>
+            ) : null}
+          </section>
+        </aside>
+
+        <div className="tb-boardlist" data-task-list="board">
+          {laneCards.length > 0 ? (
+            <section className="tb-lane" aria-label="Multi-day tasks this week">
+              <h3 className="tb-lt">Runs several days</h3>
+              {laneCards.map(({ placement: item, data, view }: { placement: LanePlacement<TaskWithImplementation>; data: WeekBoardTaskData; view: RangeCardView }) => (
+                <LaneBar
+                  key={data.id}
+                  task={data}
+                  view={view}
+                  open={openTaskId === data.id}
+                  late={view.tone === "late"}
+                  startCol={item.startCol}
+                  endCol={item.endCol}
+                  startedText={laneStartedText(item)}
+                  continuesText={laneContinuesText(item, selectedWeekStart)?.replace(/^continues /, "") ?? null}
+                  completing={completingIds.has(data.id)}
+                  moving={movingIds.has(data.id)}
+                  onOpen={() => handleOpenTask(data.id)}
+                  onDone={() => void handleQuickComplete(data.id)}
+                  move={moveFor(data.id)}
+                  {...(() => {
+                    const props = rangeStepsProps(data, "lane");
+                    return { stepsOpen: Boolean(props.stepsOpen), onToggleSteps: props.onToggleSteps, steps: props.steps };
+                  })()}
+                  dayStrip={<DayStrip cells={dayStrip(item.startDate, item.dueDate, selectedWeekStart, todayDate)} />}
+                />
+              ))}
             </section>
-          </>
-        ) : null}
-
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-          {weekdayColumns.map((column) => (
-            <WeeklyBoardColumn
-              key={column.key}
-              column={column}
-              completingIds={completingIds}
-              pinningIds={pinningIds}
-              movingIds={movingIds}
-              draggingTaskId={draggingTaskId}
-              dropTargetKey={dropTargetKey}
-              onOpenTask={handleOpenTask}
-              onDoneTask={handleQuickComplete}
-              onTogglePinned={handleTogglePinned}
-              onDragStartTask={setDraggingTaskId}
-              onDragEndTask={() => {
-                setDraggingTaskId(null);
-                setDropTargetKey(null);
-              }}
-              onDropTask={handleMoveTask}
-              onDropTargetChange={setDropTargetKey}
-              onCreateTask={setCreateDueDate}
-              rangeCardProps={rangeCardProps}
-            />
-          ))}
-        </div>
-
-        {showOverdueQueue && overdueTasks.length > 0 ? (
-          <OverdueQueueSection
-            tasks={overdueTasks}
-            updatedAt={updatedAt}
-            hasError={hasError}
-            completingIds={completingIds}
-            pinningIds={pinningIds}
-            movingIds={movingIds}
-            draggingTaskId={draggingTaskId}
-            onOpenTask={handleOpenTask}
-            onDoneTask={handleQuickComplete}
-            onTogglePinned={handleTogglePinned}
-            onDragStartTask={setDraggingTaskId}
-            onDragEndTask={() => {
-              setDraggingTaskId(null);
-              setDropTargetKey(null);
-            }}
-            onHide={() => setShowOverdueQueue(false)}
-            sectionRef={overdueQueueRef}
-            rangeCardProps={rangeCardProps}
-          />
-        ) : null}
-
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
-          {weekendColumn ? (
-            <WeeklyBoardColumn
-              column={weekendColumn}
-              completingIds={completingIds}
-              pinningIds={pinningIds}
-              movingIds={movingIds}
-              draggingTaskId={draggingTaskId}
-              dropTargetKey={dropTargetKey}
-              onOpenTask={handleOpenTask}
-              onDoneTask={handleQuickComplete}
-              onTogglePinned={handleTogglePinned}
-              onDragStartTask={setDraggingTaskId}
-              onDragEndTask={() => {
-                setDraggingTaskId(null);
-                setDropTargetKey(null);
-              }}
-              onDropTask={handleMoveTask}
-              onDropTargetChange={setDropTargetKey}
-              rangeCardProps={rangeCardProps}
-            />
           ) : null}
-          <WaitingReviewColumn
-            waitingOn={waitingOn}
-            needsReviewCount={needsReviewCount}
-            updatedAt={updatedAt}
-            hasError={hasError}
-            onOpenTask={handleOpenTask}
-          />
+
+          {columns.map((column, index) => {
+            const singles = singlesByDate.get(column.date) ?? [];
+            const doneRows = doneByDate.get(column.date) ?? [];
+            const canAdd = column.tense !== "past";
+            return (
+              <div key={column.date} className="tb-day" data-tense={column.tense} style={{ ["--c" as string]: String(index + 2) }}>
+                <div className="tb-dh">
+                  <h3>{column.name}</h3>
+                  <span className="tb-dn-num">{column.day}</span>
+                  {column.tense === "today" ? <span className="tb-tdy">TODAY</span> : null}
+                  {column.count ? <em>{column.count}</em> : null}
+                </div>
+                <div className="tb-col" {...dropProps(column.date, column.tense !== "past")}>
+                  {/* Folded (panel open, or a phone): one "n done" line with the project squares. */}
+                  <div className="tb-fold">
+                    {doneRows.length > 0 ? (
+                      <span className="tb-ck" aria-hidden="true">
+                        ✓
+                      </span>
+                    ) : null}
+                    <span>{foldedDayText(doneRows.length)}</span>
+                    <span className="tb-sqs" aria-hidden="true">
+                      {doneRows.slice(0, 6).map((data) =>
+                        data.squareInput ? <ProjectSquare key={data.id} {...data.squareInput} editable={false} /> : null
+                      )}
+                    </span>
+                  </div>
+                  <div className="tb-full">
+                    {doneRows.map((data) => (
+                      <DoneRow key={data.id} task={data} onOpen={() => handleOpenTask(data.id)} />
+                    ))}
+                    {singles.map((data) => renderCard(data, `col-${column.date}`, column.tense, cardDueText(data.dueAt, todayDate, now)))}
+                    {singles.length === 0 && doneRows.length === 0 && column.tense !== "past" ? (
+                      <p className="tb-empty">Nothing due.</p>
+                    ) : null}
+                    {canAdd ? (
+                      <button
+                        type="button"
+                        className="tb-addrow"
+                        onClick={() => openCreate(column.date)}
+                        aria-label={`Add a task due ${column.name} ${formatDateOnlyLabel(column.date)}`}
+                      >
+                        + add to {column.name}
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+
+          <section className="tb-wknd" aria-label="Weekend">
+            {renderWeekendDay(saturday, "Sat")}
+            {renderWeekendDay(sunday, "Sun")}
+          </section>
         </div>
-      </section>
+      </div>
 
       <Modal
         open={createDueDate !== null}
         onClose={() => setCreateDueDate(null)}
-        title={createDueDate ? `New Task · Due ${formatDateOnlyLabel(createDueDate, true)}` : "New Task"}
+        title={createDueDate ? `New Task · Due ${formatDateOnlyLabel(createDueDate)}` : "New Task"}
         size="wide"
       >
         {implementationsLoading ? (
@@ -1322,7 +922,11 @@ export function WeekBoard({
             <p>{implementationsError}</p>
             <button
               type="button"
-              onClick={() => setImplementationsLoadRequest((current) => current + 1)}
+              onClick={() => {
+                setImplementationsLoading(true);
+                setImplementationsError(null);
+                setImplementationsLoadRequest((current) => current + 1);
+              }}
               className="mt-2 rounded-md border border-amber-400/30 bg-panel px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-panel-muted"
             >
               Retry

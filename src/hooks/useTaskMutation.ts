@@ -126,5 +126,56 @@ export function useTaskMutation() {
     [router, toast]
   );
 
-  return { completeTask, updateTask };
+  /**
+   * An edit with an Undo in its toast (Today's "Move to…" Backlog / Park):
+   * optimistic, rolled back on failure, `undoUpdates` puts the old values back.
+   */
+  const updateTaskWithUndo = useCallback(
+    async (
+      taskId: string,
+      updates: TaskUpdatePayload,
+      undoUpdates: TaskUpdatePayload,
+      handlers: LocalStateHandlers & { message: string; failureMessage?: string }
+    ): Promise<boolean> => {
+      handlers.onOptimistic?.();
+
+      try {
+        await patchTask(taskId, updates);
+      } catch (error) {
+        handlers.onRollback?.();
+        toast({
+          tone: "danger",
+          message: error instanceof Error ? error.message : handlers.failureMessage ?? "Couldn't update the task.",
+        });
+        return false;
+      }
+
+      toast({
+        tone: "success",
+        message: handlers.message,
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            handlers.onUndo?.();
+            try {
+              await patchTask(taskId, undoUpdates);
+            } catch (error) {
+              toast({
+                tone: "danger",
+                message: error instanceof Error ? error.message : "Couldn't undo the move.",
+              });
+            } finally {
+              router.refresh();
+            }
+          },
+        },
+      });
+
+      router.refresh();
+      return true;
+    },
+    [router, toast]
+  );
+
+  return { completeTask, updateTask, updateTaskWithUndo };
 }

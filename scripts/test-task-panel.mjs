@@ -296,9 +296,9 @@ await test("Esc with the colour editor (aria-modal=false) open closes only the e
 });
 
 const ENTRY_POINTS = [
-  ["Today: Now panel", "src/components/today/sections/NowPanel.tsx", /useTaskPanel\(\)[\s\S]*onOpen=\{\(\) => openTask\(task\)\}/],
-  ["Today: week board", "src/components/today/sections/WeekBoard.tsx", /useTaskPanel\(\)[\s\S]*openTask\(raw\)/],
-  ["Today: Blocked / Waiting strip", "src/components/today/sections/WaitingStrip.tsx", /useTaskPanel\(\)[\s\S]*onClick=\{\(\) => openTask\(task\)\}/],
+  // Redesign S4: Now and the Blocked / Waiting strip folded into the board (one line; the Waiting rail).
+  ["Today: week board, Overdue queue, lane, weekend, done lines", "src/components/today/sections/WeekBoard.tsx", /useTaskPanel\(\)[\s\S]*openTask\(raw\)/],
+  ["Today: Waiting rail", "src/components/today/sections/WeekBoard.tsx", /data-task-list="waiting"[\s\S]*onClick=\{\(\) => openTask\(task\)\}/],
   ["Tasks, project and application grids (TaskGrid)", "src/components/tasks/TaskGrid.tsx", /useTaskPanel\(\)[\s\S]*onClick=\{\(\) => openTask\(task\)\}/],
   ["Portfolio: Assigned to you / Coming to you later", "src/components/portfolio/PortfolioTasks.tsx", /useTaskPanel\(\)[\s\S]*onOpen=\{\(\) => void open\(task\.id\)\}/],
   ["Record page: Edit", "src/components/portfolio/PortfolioTasks.tsx", /export function TaskEditButton[\s\S]*onClick=\{\(\) => openTask\(taskId\)\}/],
@@ -317,10 +317,8 @@ await test("search and the record page link to ?task (the old ?expand link still
 
 await test("cards and rows say which task they open, so ↑ / ↓ follow the page's own order", () => {
   for (const file of [
-    "src/components/today/cards/NowTaskCard.tsx",
     "src/components/today/cards/BoardTaskCard.tsx",
     "src/components/today/sections/WeekBoard.tsx",
-    "src/components/today/sections/WaitingStrip.tsx",
     "src/components/tasks/TaskGrid.tsx",
     "src/components/portfolio/PortfolioTasks.tsx",
   ]) {
@@ -328,9 +326,9 @@ await test("cards and rows say which task they open, so ↑ / ↓ follow the pag
   }
   assert.match(read("src/components/tasks/TaskGrid.tsx"), /taskList = "grid"/, "a grid is its own list unless the page marks one");
   for (const [file, list] of [
-    ["src/components/today/sections/NowPanel.tsx", "now"],
     ["src/components/today/sections/WeekBoard.tsx", "board"],
-    ["src/components/today/sections/WaitingStrip.tsx", "waiting"],
+    ["src/components/today/sections/WeekBoard.tsx", "overdue"],
+    ["src/components/today/sections/WeekBoard.tsx", "waiting"],
     ["src/components/projects/ProjectTaskSectionsPanel.tsx", "project"],
     ["src/components/portfolio/PortfolioTasks.tsx", "assigned"],
   ]) {

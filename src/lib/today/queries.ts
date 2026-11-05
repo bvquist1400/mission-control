@@ -207,6 +207,41 @@ export async function queryWeeklyBoardTasks(
 }
 
 /**
+ * Today's board (redesign S4): Done tasks due in the shown week (`weekStart` to
+ * `weekEnd`, both instants), for the struck-through lines on their day and the
+ * folded "n done" line. Read-only and Today-only (no `/api/tasks` view uses it);
+ * the weekly board read above stays exactly as it was.
+ */
+export async function queryWeekDoneTasks(
+  supabase: SupabaseClient,
+  userId: string,
+  weekStart: Date,
+  weekEnd: Date,
+  scope: TaskScope = 'all',
+  limit = 200
+): Promise<TaskWithImplementation[]> {
+  const { data, error } = await supabase
+    .from('tasks')
+    .select(TASK_WITH_RELATIONS_SELECT)
+    .eq('user_id', userId)
+    .eq('status', 'Done')
+    .gte('due_at', weekStart.toISOString())
+    .lte('due_at', weekEnd.toISOString())
+    .order('due_at', { ascending: true })
+    .order('id', { ascending: true })
+    .limit(scope === 'all' ? limit : 1000);
+
+  if (error) {
+    throw error;
+  }
+
+  return filterTasksByScope(
+    normalizeTaskWithRelationsList((data || []) as Array<Record<string, unknown>>),
+    scope
+  ).slice(0, limit);
+}
+
+/**
  * Blocked/Waiting tasks enriched with unresolved-dependency summaries.
  * Mirrors the `view=waiting_summary` branch.
  */

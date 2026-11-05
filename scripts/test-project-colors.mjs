@@ -525,11 +525,13 @@ await test("account menu: \"Project colours…\" opens the editor (no more place
 
 await test("surfaces: Today cards, week board, waiting strip, Tasks rows, Portfolio, project page and list, Applications draw squares", () => {
   const surfaces = {
-    "src/components/today/cards/NowTaskCard.tsx": /<ProjectTag \{\.\.\.squareInputOf\(task\)\}/,
+    // Redesign S4: board cards, lane bars, done lines, the weekend strip, the Waiting rail and the strip's colour key.
     "src/components/today/cards/BoardTaskCard.tsx": /<ProjectTag \{\.\.\.task\.squareInput\}/,
+    "src/components/today/cards/BoardTaskCard.tsx#lane": /<ProjectSquare \{\.\.\.task\.squareInput\} editable=\{false\} \/>/,
     "src/components/today/sections/WeekBoard.tsx": /squareInput: squareInputOf\(task\)/,
-    "src/components/today/sections/WeekBoard.tsx#waiting": /<ProjectTag \{\.\.\.item\.squareInput\} editable=\{false\}/,
-    "src/components/today/sections/WaitingStrip.tsx": /<ProjectSquare \{\.\.\.squareInputOf\(task\)\} editable=\{false\}/,
+    "src/components/today/sections/WeekBoard.tsx#waiting": /<ProjectTag \{\.\.\.squareInputOf\(task\)\} editable=\{false\}/,
+    "src/components/today/sections/WeekBoard.tsx#weekend": /<ProjectSquare \{\.\.\.data\.squareInput\} editable=\{false\}/,
+    "src/components/today/sections/TodayStrip.tsx": /colors\.openEditor\(entry\.id\)[\s\S]*colors\.openEditor\(\)/,
     "src/components/tasks/TaskGrid.tsx": /<ProjectTag \{\.\.\.squareInputOf\(task\)\}/,
     "src/components/portfolio/PortfolioPage.tsx": /<LaneSquare app=\{app\} \/>/,
     "src/components/portfolio/PortfolioTasks.tsx": /<TaskSquare task=\{task\} \/>/,

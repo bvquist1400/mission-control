@@ -143,8 +143,9 @@ for (const gone of [
 // Anything that imports a deleted module would break `tsc`/`next build`; also pin the two Today edits.
 const today = read("src/app/page.tsx");
 assert.doesNotMatch(today, /FocusStatusBar/, "Today has no Focus bar");
-const nowPanel = read("src/components/today/sections/NowPanel.tsx") + read("src/components/today/sections/NowPanelSection.tsx");
-assert.doesNotMatch(nowPanel, /Not synced today|syncNote|queryLatestSyncEvent/, "Today has no sync line");
+// Redesign S4: the Now panel became the one-line strip (TodayStrip); still no sync line.
+const todayBoard = read("src/components/today/sections/TodayStrip.tsx") + read("src/components/today/sections/WeekBoard.tsx");
+assert.doesNotMatch(todayBoard, /Not synced today|syncNote/, "Today has no sync line");
 checks += 2;
 
 for (const kept of [

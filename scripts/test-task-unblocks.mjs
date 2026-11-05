@@ -53,7 +53,6 @@ const taskPage = await import(src("lib/task-page.ts"));
 const { buildRecurringDueAt } = await import(src("lib/recurrence.ts"));
 const { createElement: h } = await import("react");
 const { renderToStaticMarkup } = await import("react-dom/server");
-const { NowTaskCard } = await import(src("components/today/cards/NowTaskCard.tsx"));
 const { WeeklyTaskCard } = await import(src("components/today/cards/BoardTaskCard.tsx"));
 const { TaskCard } = await import(src("components/tasks/TaskCard.tsx"));
 
@@ -507,14 +506,20 @@ const task = {
 };
 const PILL = new RegExp(`data-now-unblocked=""[^>]*>[\\s\\S]*?${NOW_UNBLOCKED_LABEL}</span>`);
 
-await test("Now card: the green pill with its hover text; none without unblocked_at", () => {
-  const html = renderToStaticMarkup(h(NowTaskCard, { task, nowMs: NOW.getTime(), completing: false, onOpen: noop, onDone: noop }));
+await test("Today board card (redesign S4; the Now card went with the Now panel): the green pill with its hover text; none without unblocked_at or once Done", () => {
+  const data = {
+    id: task.id, title: task.title, estimatedMinutes: 30, dueAt: task.due_at, status: task.status, blocker: false, pinned: false,
+    tags: [], dependencyBlocked: false, updatedAt: task.updated_at, unblockedAt: AT,
+    range: null, priorityScore: 50, projectName: null, waitingOn: null, followUpAt: null, isPersonal: false, needsReview: false,
+  };
+  const props = { completing: false, moving: false, onOpen: noop, onDone: noop };
+  const html = renderToStaticMarkup(h(WeeklyTaskCard, { ...props, task: data }));
   assert.match(html, PILL);
   assert.match(html, /border-success-border bg-success-soft text-success/);
   assert.match(html, /title="Everything it waited on is done \(since/);
-  const plain = renderToStaticMarkup(h(NowTaskCard, { task: { ...task, unblocked_at: null }, nowMs: NOW.getTime(), completing: false, onOpen: noop, onDone: noop }));
+  const plain = renderToStaticMarkup(h(WeeklyTaskCard, { ...props, task: { ...data, unblockedAt: null } }));
   assert.doesNotMatch(plain, /Now unblocked/);
-  const done = renderToStaticMarkup(h(NowTaskCard, { task: { ...task, status: "Done" }, nowMs: NOW.getTime(), completing: false, onOpen: noop, onDone: noop }));
+  const done = renderToStaticMarkup(h(WeeklyTaskCard, { ...props, task: { ...data, status: "Done" } }));
   assert.doesNotMatch(done, /Now unblocked/);
 });
 

@@ -13,8 +13,9 @@
 //   same request, ranges overlapping the week included, a range that hasn't
 //   started kept out of Top priorities.
 // - The cards rendered to HTML (react-dom/server, TSX transpiled here): a task
-//   without a start date renders byte-for-byte as before (snapshot), a ranged
-//   task gets the chip, fill, mark, steps pill and label.
+//   without a start date has no range parts (snapshot of the S4 board card; the
+//   Now card went with the Now panel in redesign S4), a ranged task gets the
+//   chip, fill, mark, steps pill and label.
 //
 // Offline: no database, no network, no browser.
 //
@@ -56,8 +57,7 @@ const board = await import(src("lib/today/multi-day-board.ts"));
 const queries = await import(src("lib/today/queries.ts"));
 const { createElement: h } = await import("react");
 const { renderToStaticMarkup } = await import("react-dom/server");
-const { NowTaskCard } = await import(src("components/today/cards/NowTaskCard.tsx"));
-const { WeeklyTaskCard } = await import(src("components/today/cards/BoardTaskCard.tsx"));
+const { WeeklyTaskCard, LaneBar } = await import(src("components/today/cards/BoardTaskCard.tsx"));
 
 let passed = 0;
 const failures = [];
@@ -396,58 +396,65 @@ const boardData = (task, rangeView) => ({
   isPersonal: false,
   range: rangeView,
 });
-const boardProps = { completing: false, pinning: false, moving: false, dragging: false, onOpen: noop, onDone: noop, onTogglePinned: noop, onDragStart: noop, onDragEnd: noop };
+const boardProps = { completing: false, moving: false, dragging: false, onOpen: noop, onDone: noop, onDragStart: noop, onDragEnd: noop };
 
 function plainMarkup() {
-  const now = renderToStaticMarkup(h(NowTaskCard, { task: baseTask, nowMs: NOW_MS, completing: false, onOpen: noop, onDone: noop, range: view.buildRangeCardView(baseTask, baseTask.checklist_rows, new Date(NOW_MS)) }));
-  const overdue = renderToStaticMarkup(h(NowTaskCard, { task: { ...baseTask, due_at: endOf("2026-10-27") }, nowMs: NOW_MS, completing: false, onOpen: noop, onDone: noop }));
-  const boardCard = renderToStaticMarkup(h(WeeklyTaskCard, { ...boardProps, task: boardData(baseTask, null) }));
-  const personal = renderToStaticMarkup(h(WeeklyTaskCard, { ...boardProps, task: { ...boardData(baseTask, null), isPersonal: true, dueState: "Overdue" } }));
-  return [now, overdue, boardCard, personal].join("\n") + "\n";
+  // Redesign S4: the Now card is gone (Now became one line); the board card is the S4 card.
+  const boardCard = renderToStaticMarkup(h(WeeklyTaskCard, { ...boardProps, task: boardData(baseTask, null), canDrag: true, tense: "today", dueText: "due today", move: { choices: [], input: baseTask, onPick: noop } }));
+  const personal = renderToStaticMarkup(h(WeeklyTaskCard, { ...boardProps, task: { ...boardData(baseTask, null), isPersonal: true, squareInput: undefined, dueState: "Overdue" }, tense: "overdue", dueText: "was due Tue" }));
+  return [boardCard, personal].join("\n") + "\n";
 }
 
-await test("rendered: a task without a start date (even with a checklist) renders exactly as before S2 (snapshot)", () => {
+await test("rendered: a task without a start date (even with a checklist) has no range parts (snapshot of the S4 card)", () => {
   const markup = plainMarkup();
   if (process.env.UPDATE_SNAPSHOT === "1") writeFileSync(SNAPSHOT, markup);
   assert.equal(markup, readFileSync(SNAPSHOT, "utf8"));
   assert.doesNotMatch(markup, /data-range|bg-progress-fill|steps|sr-only|range/);
 });
 
-await test("rendered: a ranged Now card has the violet chip, 20% fill, amber mark at 60%, steps pill and a label", () => {
+await test("rendered: a ranged lane bar has the Day chip, 20% fill, amber mark at 60%, steps pill and a label", () => {
   const task = { ...baseTask, title: "ORIEN Wave 3", start_at: startOf("2026-10-26"), checklist_rows: rows(1, 5) };
   const rangeView = view.buildRangeCardView(task, task.checklist_rows, new Date(NOW_MS));
-  const html = renderToStaticMarkup(h(NowTaskCard, { task, nowMs: NOW_MS, completing: false, onOpen: noop, onDone: noop, range: rangeView, onToggleSteps: noop }));
+  const html = renderToStaticMarkup(
+    h(LaneBar, {
+      task: boardData(task, rangeView), view: rangeView, open: false, late: false, startCol: 0, endCol: 4,
+      startedText: null, continuesText: null, completing: false, moving: false, onOpen: noop, onDone: noop,
+      stepsOpen: false, onToggleSteps: noop,
+    })
+  );
   assert.match(html, /data-range-card="in_range"/);
-  assert.match(html, /border-l-range/);
-  assert.match(html, /data-range-chip="range"[^>]*>Mon–Fri · Day 4 of 5</);
+  assert.match(html, /data-lane-span="0-4"/);
+  assert.match(html, /class="tb-chip">Day 4 of 5</);
   assert.match(html, /data-range-fill="20"[^>]*style="width:20%"/);
   assert.match(html, /data-range-elapsed="60"[^>]*class="[^"]*border-amber-400\/85[^"]*" style="left:60%"/);
   assert.match(html, /aria-hidden="true" data-range-fill/);
   assert.match(html, /<span class="sr-only">Multi-day task, Mon–Fri · Day 4 of 5\. 1 of 5 steps done, 20%\. Behind pace: about 60% of the time is gone\.<\/span>/);
-  assert.match(html, /aria-expanded="false" aria-controls="now-steps-11111111-1111-4111-8111-111111111111" aria-label="1 of 5 steps done, 20%, behind pace\. Show steps"/);
-  assert.match(html, />1\/5 steps · behind pace</);
-  assert.doesNotMatch(html, /Overdue|Due soon/);
+  assert.match(html, /aria-expanded="false" aria-controls="board-steps-lane-11111111-1111-4111-8111-111111111111" aria-label="1 of 5 steps done, 20%, behind pace\. Show steps"/);
   assert.doesNotMatch(html, /border-success bg-success-soft-hover/, "Done isn't lit before every step is ticked");
 });
 
 await test("rendered: all steps ticked lights the Done button (still a button Brent presses)", () => {
   const task = { ...baseTask, start_at: startOf("2026-10-26"), checklist_rows: rows(5, 5) };
   const rangeView = view.buildRangeCardView(task, task.checklist_rows, new Date(NOW_MS));
-  const nowHtml = renderToStaticMarkup(h(NowTaskCard, { task, nowMs: NOW_MS, completing: false, onOpen: noop, onDone: noop, range: rangeView, onToggleSteps: noop }));
-  assert.match(nowHtml, /border-success bg-success-soft-hover[^"]*"[^>]*aria-label="Mark task complete \(all steps done\)"/);
-  assert.match(nowHtml, /class="pointer-events-none absolute inset-y-0 left-0 transition-\[width\] duration-500 bg-progress-fill-full" style="width:100%"/);
+  const laneHtml = renderToStaticMarkup(
+    h(LaneBar, {
+      task: boardData(task, rangeView), view: rangeView, open: false, late: false, startCol: 0, endCol: 4,
+      startedText: null, continuesText: null, completing: false, moving: false, onOpen: noop, onDone: noop, stepsOpen: false,
+    })
+  );
+  assert.match(laneHtml, /border-success bg-success-soft-hover[^"]*"[^>]*aria-label="Mark “Plain task” complete \(all steps done\)"/);
+  assert.match(laneHtml, /class="pointer-events-none absolute inset-y-0 left-0 transition-\[width\] duration-500 bg-progress-fill-full" style="width:100%"/);
   const boardHtml = renderToStaticMarkup(h(WeeklyTaskCard, { ...boardProps, task: boardData(task, rangeView), canDrag: false, onToggleSteps: noop }));
   assert.match(boardHtml, /aria-label="Mark task complete \(all steps done\)"/);
   assert.match(boardHtml, /draggable="false"/);
-  assert.match(boardHtml, /Change a multi-day task&#x27;s dates in the task window\./);
 });
 
-await test("rendered: a late range is red on the board and keeps its fill; it can still be dragged from the Overdue queue", () => {
+await test("rendered: a late range is red in the Overdue queue and keeps its fill; it can still be dragged from there", () => {
   const task = { ...baseTask, start_at: startOf("2026-10-26"), due_at: endOf("2026-10-28"), checklist_rows: rows(2, 5) };
   const rangeView = view.buildRangeCardView(task, task.checklist_rows, new Date(NOW_MS));
-  const html = renderToStaticMarkup(h(WeeklyTaskCard, { ...boardProps, task: { ...boardData(task, rangeView), dueState: "Overdue" }, canDrag: true }));
-  assert.match(html, /border-l-red-400/);
-  assert.match(html, /data-range-chip="late"[^>]*>Overdue · Mon–Wed ended Wed</);
+  const html = renderToStaticMarkup(h(WeeklyTaskCard, { ...boardProps, task: { ...boardData(task, rangeView), dueState: "Overdue" }, tense: "overdue", canDrag: true }));
+  assert.match(html, /data-late=""/);
+  assert.match(html, /class="tb-chip" data-tone="late">Overdue · Mon–Wed ended Wed</);
   assert.match(html, /data-range-fill="40"/);
   assert.doesNotMatch(html, /data-range-elapsed/);
   assert.match(html, /draggable="true"/);

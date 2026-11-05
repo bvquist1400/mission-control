@@ -1,27 +1,20 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
-import { PageHeader } from "@/components/layout/PageHeader";
-import { MeetingsSection } from "@/components/today/sections/MeetingsSection";
-import { NowPanelSection } from "@/components/today/sections/NowPanelSection";
 import { WeekBoardSection } from "@/components/today/sections/WeekBoardSection";
-import { WaitingStripSection } from "@/components/today/sections/WaitingStripSection";
 import { TodayHeaderChips } from "@/components/today/sections/TodayHeaderChips";
 import { SectionSkeleton } from "@/components/today/sections/SectionSkeleton";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
 import { normalizeTaskScope } from "@/lib/personal-exclusion";
 
 export const dynamic = "force-dynamic";
 
-function HeaderChipsFallback() {
-  return (
-    <span
-      aria-hidden="true"
-      className="h-8 w-28 animate-pulse rounded-full bg-panel-muted"
-    />
-  );
-}
-
+/**
+ * Today, board first (redesign S4; Brent 11/5: "I do use the weekly board a
+ * lot. I dont really utalize the "todays meetings" or "now" section."): one
+ * line under the menu (date, next meeting, colour key), then the week board
+ * with Overdue and Waiting in a side rail. Tasks open in the app-wide task
+ * panel (S3, TaskPanelProvider in AppShell); the board narrows beside it.
+ */
 export default async function TodayPage({
   searchParams,
 }: {
@@ -41,48 +34,17 @@ export default async function TodayPage({
     redirect("/login");
   }
 
-  const today = new Intl.DateTimeFormat("en-US", {
-    timeZone: DEFAULT_WORKDAY_CONFIG.timezone,
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  }).format(new Date());
-
   return (
-    <div className="space-y-8">
-      <PageHeader
-        title="Today"
-        description="Quick-view dashboard for meetings, priorities, and near-term execution risk."
-        actions={
-          <div className="flex items-center gap-3">
-            <Suspense fallback={<HeaderChipsFallback />}>
-              <TodayHeaderChips userId={user.id} mode={mode} />
-            </Suspense>
-            <p className="rounded-full bg-panel-muted px-3 py-1.5 text-sm font-medium text-muted-foreground">
-              {today}
-            </p>
-          </div>
+    <Suspense fallback={<SectionSkeleton label="weekly board" />}>
+      <WeekBoardSection
+        userId={user.id}
+        mode={mode}
+        chips={
+          <Suspense fallback={null}>
+            <TodayHeaderChips userId={user.id} mode={mode} />
+          </Suspense>
         }
       />
-
-      {/* Tasks open in the app-wide task panel (redesign S3, TaskPanelProvider in AppShell). */}
-      <section className="grid gap-4 xl:grid-cols-[2fr_1fr]">
-        <Suspense fallback={<SectionSkeleton label="now panel" />}>
-          <NowPanelSection userId={user.id} mode={mode} />
-        </Suspense>
-        <Suspense fallback={<SectionSkeleton label="today's meetings" />}>
-          <MeetingsSection userId={user.id} mode={mode} />
-        </Suspense>
-      </section>
-
-      <Suspense fallback={<SectionSkeleton label="weekly board" />}>
-        <WeekBoardSection userId={user.id} mode={mode} />
-      </Suspense>
-
-      <Suspense fallback={null}>
-        <WaitingStripSection userId={user.id} mode={mode} />
-      </Suspense>
-    </div>
+    </Suspense>
   );
 }
