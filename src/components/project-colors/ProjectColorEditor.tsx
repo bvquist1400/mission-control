@@ -5,13 +5,13 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Field";
 import { useToast } from "@/components/ui/Toast";
 import {
-  PROJECT_COLOR_PATTERN,
   PROJECT_COLOR_PRESETS,
   THEME_BACKGROUNDS,
   checkColorForEditor,
   colorPairCss,
+  customColorEntry,
+  customEntryBlocksDone,
   formatRatio,
-  normalizeHex,
   resolveSquare,
   type ColorPair,
 } from "@/lib/project-colors";
@@ -26,6 +26,8 @@ import { savedColorsOf } from "@/components/project-colors/ProjectColorsProvider
  * shows straight away; Done saves them (PATCH /api/applications/[id] and
  * /api/projects/[id]); Esc or × closes without saving. Reset puts the selected
  * row back to its default. Yellow is never offered (kept for "needs you").
+ * While the Custom field holds a partial or refused hex, Done waits: it would
+ * otherwise save the row's earlier pick behind a red check line.
  *
  * It is a non-modal panel on the right (desktop) so the board stays visible
  * behind it, and a full-screen sheet on a phone.
@@ -162,7 +164,9 @@ export function ProjectColorEditor({
 
   function select(row: Row) {
     if (selectedId === row.id) {
+      // Closing the row drops whatever the Custom field held; its square shows the pick that stays.
       setSelectedId(null);
+      setCustom("");
       return;
     }
     setSelectedId(row.id);
@@ -182,11 +186,16 @@ export function ProjectColorEditor({
   function onCustomChange(value: string) {
     setCustom(value);
     if (!selected) return;
-    const typed = value.trim().startsWith("#") ? value.trim() : `#${value.trim()}`;
-    if (PROJECT_COLOR_PATTERN.test(typed) && checkColorForEditor(typed).ok) pick(selected.id, normalizeHex(typed));
+    const entry = customColorEntry(value);
+    if (entry.state === "ok") pick(selected.id, entry.hex);
   }
 
+  // A partial or refused hex in the open row's Custom field holds Done (and save) back.
+  const customEntry = selected ? customColorEntry(custom) : ({ state: "empty" } as const);
+  const customBlocked = customEntryBlocksDone(customEntry);
+
   async function save() {
+    if (customBlocked) return;
     if (changed.length === 0) {
       onClose();
       return;
@@ -236,7 +245,7 @@ export function ProjectColorEditor({
     onClose();
   }
 
-  const check = selected && custom.trim() ? checkColorForEditor(custom.trim().startsWith("#") ? custom.trim() : `#${custom.trim()}`) : null;
+  const check = customEntry.state === "empty" ? null : checkColorForEditor(custom.trim().startsWith("#") ? custom.trim() : `#${custom.trim()}`);
 
   return (
     <div
@@ -376,8 +385,14 @@ export function ProjectColorEditor({
         {error ? <p className="mb-2 text-sm text-danger" role="alert">{error}</p> : null}
         <div className="flex flex-wrap items-center gap-2">
           <p className="min-w-0 flex-1 font-mono text-xs leading-snug text-muted-foreground">
-            Yellow is kept for &ldquo;needs you&rdquo;, so it isn&apos;t offered.
-            {changed.length > 0 ? ` ${changed.length} not saved yet.` : ""}
+            {customBlocked ? (
+              <span className="text-danger">Fix the custom colour or pick a preset before Done.</span>
+            ) : (
+              <>
+                Yellow is kept for &ldquo;needs you&rdquo;, so it isn&apos;t offered.
+                {changed.length > 0 ? ` ${changed.length} not saved yet.` : ""}
+              </>
+            )}
           </p>
           {selected ? (
             <Button
@@ -392,7 +407,7 @@ export function ProjectColorEditor({
               Reset {selected.name.replace(/^personal\s*[—–-]\s*/i, "").slice(0, 24)}
             </Button>
           ) : null}
-          <Button variant="primary" size="sm" disabled={saving || (!catalog.available && changed.length > 0)} onClick={save}>
+          <Button variant="primary" size="sm" disabled={saving || customBlocked || (!catalog.available && changed.length > 0)} onClick={save}>
             {saving ? "Saving…" : "Done"}
           </Button>
         </div>
