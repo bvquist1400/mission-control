@@ -160,9 +160,11 @@ function buildBrowserHref(result: MissionControlSearchResult, entity: BrowserSea
     case 'project':
       return recordId ? `/projects/${encodeURIComponent(recordId.rawId)}` : toRelativeHref(result.url);
     case 'sprint':
-      return recordId ? `/sprints/${encodeURIComponent(recordId.rawId)}` : toRelativeHref(result.url);
+      // Sprint is a Backlog filter now (the sprint pages were removed in redesign S0).
+      return recordId ? `/backlog?sprint=${encodeURIComponent(recordId.rawId)}` : toRelativeHref(result.url);
     case 'stakeholder':
-      return recordId ? `/stakeholders/${encodeURIComponent(recordId.rawId)}` : toRelativeHref(result.url);
+      // No stakeholder screen any more; the record page shows the person and commitments.
+      return recordId ? `/r/stakeholder/${encodeURIComponent(recordId.rawId)}` : toRelativeHref(result.url);
     case 'commitment':
       return toRelativeHref(result.url);
     case 'email':

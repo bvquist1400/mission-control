@@ -1,7 +1,6 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { FocusStatusBar } from "@/components/today/FocusStatusBar";
 import { TodayModalProvider } from "@/components/today/TodayModalProvider";
 import { MeetingsSection } from "@/components/today/sections/MeetingsSection";
 import { NowPanelSection } from "@/components/today/sections/NowPanelSection";
@@ -70,8 +69,6 @@ export default async function TodayPage({
       />
 
       <TodayModeToggle mode={mode} />
-
-      <FocusStatusBar />
 
       <TodayModalProvider key={mode}>
         <section className="grid gap-4 xl:grid-cols-[2fr_1fr]">

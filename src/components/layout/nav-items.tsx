@@ -51,12 +51,6 @@ export const NAV_GROUPS: NavGroup[] = [
         hint: "All tasks with filters and edits",
         icon: <Icon><path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01" /></Icon>,
       },
-      {
-        href: "/sprints",
-        label: "Sprints",
-        hint: "Week-level planning and sprint snapshots",
-        icon: <Icon><path d="M5 21V4m0 0 9 2.5L5 9" /><path d="M5 9h9l5 4-5 4H5" /></Icon>,
-      },
     ],
   },
   {
@@ -86,23 +80,11 @@ export const NAV_GROUPS: NavGroup[] = [
         hint: "Track work within applications",
         icon: <Icon><path d="M3 7a2 2 0 0 1 2-2h3.5l2 2.5H19a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /></Icon>,
       },
-      {
-        href: "/stakeholders",
-        label: "Stakeholders",
-        hint: "People and commitments",
-        icon: <Icon><circle cx="9" cy="8" r="3" /><path d="M3 20a6 6 0 0 1 12 0" /><path d="M16 5.5a3 3 0 0 1 0 5.8M17.5 20a5.5 5.5 0 0 0-2-4.3" /></Icon>,
-      },
     ],
   },
   {
     label: "Review",
     items: [
-      {
-        href: "/weekly-review",
-        label: "Weekly Review",
-        hint: "What shipped, what stalled, what needs attention",
-        icon: <Icon><path d="M4 19V5" /><path d="M4 19h16" /><path d="m7.5 15 3.5-4 3 2.5L20 7" /></Icon>,
-      },
       {
         href: "/calendar",
         label: "Calendar",

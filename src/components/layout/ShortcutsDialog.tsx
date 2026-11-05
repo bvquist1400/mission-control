@@ -6,11 +6,8 @@ import { NAV_GROUPS } from "@/components/layout/nav-items";
 export const GO_TO_KEYS: Record<string, string> = {
   t: "/",
   b: "/backlog",
-  s: "/sprints",
   a: "/applications",
   p: "/projects",
-  k: "/stakeholders",
-  w: "/weekly-review",
   c: "/calendar",
 };
 

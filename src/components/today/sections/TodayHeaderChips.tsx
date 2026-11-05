@@ -27,7 +27,7 @@ function ArtifactInboxChip({ count }: { count: number }) {
 function SprintChip({ sprint }: { sprint: CurrentSprintChip }) {
   return (
     <Link
-      href={`/sprints/${sprint.id}`}
+      href={`/backlog?sprint=${encodeURIComponent(sprint.id)}`}
       className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
         sprint.onTrack
           ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/15"

@@ -461,15 +461,10 @@ await test("wiring: the swapped date boxes use the shared field; the ones left a
   const swapped = {
     "src/components/tasks/TaskMetaEditor.tsx": 3,
     "src/app/applications/page.tsx": 1,
-    "src/app/stakeholders/[id]/page.tsx": 1,
-    "src/app/weekly-review/page.tsx": 1,
     "src/components/notes/CreateTaskFromNoteDialog.tsx": 1,
     "src/components/notes/CreateDecisionFromNoteDialog.tsx": 1,
-    "src/components/sprints/SprintsList.tsx": 2,
-    "src/components/sprints/SprintDetail.tsx": 2,
     "src/components/projects/ProjectsList.tsx": 1,
     "src/components/projects/ProjectTemplateCatalogModal.tsx": 1,
-    "src/components/today/PlannerCard.tsx": 1,
   };
   for (const [file, count] of Object.entries(swapped)) {
     const source = read(file);

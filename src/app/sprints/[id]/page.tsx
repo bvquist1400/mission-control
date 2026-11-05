@@ -1,30 +1,11 @@
-import Link from "next/link";
-import { PageHeader } from "@/components/layout/PageHeader";
-import { SprintDetail } from "@/components/sprints/SprintDetail";
+import { redirect } from "next/navigation";
+import { legacyRedirectTarget } from "@/lib/legacy-redirects";
 
-interface SprintDetailPageProps {
+interface LegacySprintDetailPageProps {
   params: Promise<{ id: string }>;
 }
 
-export default async function SprintDetailPage({ params }: SprintDetailPageProps) {
+export default async function LegacySprintDetailPage({ params }: LegacySprintDetailPageProps) {
   const { id } = await params;
-
-  return (
-    <div className="space-y-6">
-      <PageHeader
-        title="Sprint Detail"
-        description="Review sprint scope, completion progress, and task status distribution."
-        actions={
-          <Link
-            href="/sprints"
-            className="rounded-lg border border-stroke bg-panel px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-panel-muted"
-          >
-            Back to Sprints
-          </Link>
-        }
-      />
-
-      <SprintDetail id={id} />
-    </div>
-  );
+  redirect(legacyRedirectTarget("sprint-detail", id));
 }

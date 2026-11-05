@@ -25,7 +25,6 @@ export interface NowPanelMeeting {
 interface NowPanelProps {
   topTasks: TaskWithImplementation[];
   nextMeeting: NowPanelMeeting | null;
-  syncNote: string;
 }
 
 function formatTimeRange(start: string, end: string): string {
@@ -63,7 +62,7 @@ function formatCountdown(meeting: NowPanelMeeting, nowMs: number): string {
   return mins > 0 ? `in ${hours}h ${mins}m` : `in ${hours}h`;
 }
 
-export function NowPanel({ topTasks, nextMeeting, syncNote }: NowPanelProps) {
+export function NowPanel({ topTasks, nextMeeting }: NowPanelProps) {
   const router = useRouter();
   const { openTask, registerTasks } = useTodayModal();
   const { completeTask } = useTaskMutation();
@@ -201,8 +200,6 @@ export function NowPanel({ topTasks, nextMeeting, syncNote }: NowPanelProps) {
           </ul>
         )}
       </div>
-
-      <p className="mt-5 text-xs text-muted-foreground">{syncNote}</p>
     </section>
   );
 }

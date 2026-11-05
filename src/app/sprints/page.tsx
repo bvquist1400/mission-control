@@ -1,15 +1,6 @@
-import { PageHeader } from "@/components/layout/PageHeader";
-import { SprintsList } from "@/components/sprints/SprintsList";
+import { redirect } from "next/navigation";
+import { legacyRedirectTarget } from "@/lib/legacy-redirects";
 
-export default function SprintsPage() {
-  return (
-    <div className="space-y-6">
-      <PageHeader
-        title="Sprints"
-        description="Create sprint windows, review current scope, and jump straight into the filtered backlog."
-      />
-
-      <SprintsList />
-    </div>
-  );
+export default function LegacySprintsPage() {
+  redirect(legacyRedirectTarget("sprints"));
 }

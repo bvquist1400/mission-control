@@ -1,9 +1,7 @@
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import {
-  queryLatestSyncEvent,
   queryTodayCalendar,
   queryTopThreeTasks,
-  type LatestSyncSummary,
   type TodayCalendarEvent,
 } from "@/lib/today/queries";
 import { NowPanel, type NowPanelMeeting } from "@/components/today/sections/NowPanel";
@@ -12,10 +10,6 @@ import { DEFAULT_WORKDAY_CONFIG } from "@/lib/workday";
 import type { TaskScope } from "@/lib/personal-exclusion";
 
 const TIME_ZONE = DEFAULT_WORKDAY_CONFIG.timezone;
-
-function getEtDay(date: Date): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: TIME_ZONE }).format(date);
-}
 
 function pickNextMeeting(events: TodayCalendarEvent[], nowMs: number): NowPanelMeeting | null {
   const upcoming = events
@@ -30,25 +24,6 @@ function pickNextMeeting(events: TodayCalendarEvent[], nowMs: number): NowPanelM
     return null;
   }
   return { title: next.title, start: next.start, end: next.end, location: next.location };
-}
-
-function buildSyncNote(sync: LatestSyncSummary | null, now: Date): string {
-  if (!sync) {
-    return "Not synced today.";
-  }
-
-  const syncedDate = new Date(sync.synced_at);
-  if (Number.isNaN(syncedDate.getTime()) || getEtDay(syncedDate) !== getEtDay(now)) {
-    return "Not synced today.";
-  }
-
-  const time = new Intl.DateTimeFormat("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    timeZone: TIME_ZONE,
-  }).format(syncedDate);
-
-  return `Synced today at ${time} · ${sync.promoted} promoted`;
 }
 
 export async function NowPanelSection({ userId, mode }: { userId: string; mode: TaskScope }) {
@@ -71,17 +46,5 @@ export async function NowPanelSection({ userId, mode }: { userId: string; mode: 
     console.error("Failed to load next meeting:", error);
   }
 
-  let syncNote = mode === "personal"
-    ? "Personal tasks are not included in automated Today sync."
-    : "Not synced today.";
-  if (mode !== "personal") {
-    try {
-      const sync = await queryLatestSyncEvent(supabase, userId);
-      syncNote = buildSyncNote(sync, now);
-    } catch (error) {
-      console.error("Failed to load sync summary:", error);
-    }
-  }
-
-  return <NowPanel topTasks={topTasks} nextMeeting={nextMeeting} syncNote={syncNote} />;
+  return <NowPanel topTasks={topTasks} nextMeeting={nextMeeting} />;
 }
