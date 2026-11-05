@@ -8,8 +8,12 @@
 //   COLORS_TEST_SERVICE_ROLE_KEY=$STACK_SERVICE_ROLE_KEY COLORS_TEST_DB_CONTAINER=$STACK_DB_CONTAINER \
 //   npm run test:project-colors-db
 //
-// 1. 069: rollback / re-apply twice each; no existing row changes (a before/after
-//    hash of every other column); the CHECK refuses a bad shape (23514), as SQL.
+// 1. 069 + 070: rollback / re-apply twice each; no existing row changes (a
+//    before/after hash of every other column) and no table is rewritten (same
+//    relfilenode); 069 leaves the CHECKs NOT VALID, 070 validates them; the CHECK
+//    refuses a bad shape (23514), as SQL. While the transaction that validates
+//    holds its locks, other sessions can still read and write both tables
+//    (S2 fix round 1: validating in 069's own transaction held ACCESS EXCLUSIVE).
 // 2. The real routes (PATCH /api/applications/[id], PATCH /api/projects/[id],
 //    POST /api/projects, GET /api/project-colors) save, normalise, refuse and
 //    clear a colour on the real database.
@@ -18,10 +22,10 @@
 //    internal fetches go to the route handlers in-process.
 // 4. RLS: another user can't colour this user's rows. Before 069 the colour
 //    list falls back to defaults instead of failing.
-// A throwaway user is created and deleted. 069 is left applied.
+// A throwaway user is created and deleted. 069 and 070 are left applied.
 
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
@@ -40,8 +44,14 @@ if (!["127.0.0.1", "localhost", "[::1]"].includes(new URL(url).hostname)) {
   process.exit(2);
 }
 
-const MIGRATION = readFileSync(new URL("../supabase/migrations/069_project_colors.sql", import.meta.url), "utf8");
-const ROLLBACK = readFileSync(new URL("../supabase/rollbacks/069_project_colors.down.sql", import.meta.url), "utf8");
+const MIGRATION_069 = readFileSync(new URL("../supabase/migrations/069_project_colors.sql", import.meta.url), "utf8");
+const ROLLBACK_069 = readFileSync(new URL("../supabase/rollbacks/069_project_colors.down.sql", import.meta.url), "utf8");
+const MIGRATION_070 = readFileSync(new URL("../supabase/migrations/070_project_colors_validate.sql", import.meta.url), "utf8");
+const ROLLBACK_070 = readFileSync(new URL("../supabase/rollbacks/070_project_colors_validate.down.sql", import.meta.url), "utf8");
+/** Applied in order; rolled back in reverse. */
+const MIGRATIONS = [MIGRATION_069, MIGRATION_070];
+const MIGRATION = MIGRATIONS.join("\n");
+const ROLLBACK = [ROLLBACK_070, ROLLBACK_069].join("\n");
 
 function psql(sql) {
   return execFileSync(
@@ -49,6 +59,18 @@ function psql(sql) {
     ["exec", "-i", dbContainer, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"],
     { input: sql, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }
   ).trim();
+}
+/** A second session that runs `sql` in the background (for lock tests). */
+function psqlAsync(sql) {
+  return new Promise((resolve) => {
+    const child = spawn("docker", ["exec", "-i", dbContainer, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"]);
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("close", (code) => resolve({ code, stdout, stderr }));
+    child.stdin.end(sql);
+  });
 }
 function psqlError(sql) {
   try {
@@ -161,6 +183,11 @@ const colorState = () =>
   psql(`SELECT string_agg(table_name || '.' || column_name || ':' || data_type || ':' || is_nullable || ':' || COALESCE(column_default, '<none>'), ',' ORDER BY table_name) FROM information_schema.columns WHERE table_schema = 'public' AND column_name = 'color' AND table_name IN ('implementations', 'projects');`);
 const checkState = () =>
   psql(`SELECT string_agg(conname || ':' || convalidated || ':' || pg_get_constraintdef(oid), ',' ORDER BY conname) FROM pg_constraint WHERE conname IN ('implementations_color_hex_check', 'projects_color_hex_check');`);
+const validated = () =>
+  psql(`SELECT string_agg(conname || ':' || convalidated, ',' ORDER BY conname) FROM pg_constraint WHERE conname IN ('implementations_color_hex_check', 'projects_color_hex_check');`);
+/** The tables' storage files: a rewrite (e.g. ADD COLUMN with a default) would change them. */
+const fileNodes = () => psql(`SELECT string_agg(relname || ':' || relfilenode, ',' ORDER BY relname) FROM pg_class WHERE oid IN ('public.implementations'::regclass, 'public.projects'::regclass);`);
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let passed = 0;
 async function test(name, fn) {
@@ -182,7 +209,7 @@ try {
   const linkedId = linked.data.id;
 
   // ── 1. the migration ────────────────────────────────────────────────────
-  await test("069 applied: nullable TEXT, no default, both CHECKs validated with the exact pattern", () => {
+  await test("069 + 070 applied: nullable TEXT, no default, both CHECKs validated with the exact pattern", () => {
     assert.equal(colorState(), "implementations.color:text:YES:<none>,projects.color:text:YES:<none>");
     assert.equal(
       checkState(),
@@ -190,17 +217,31 @@ try {
     );
   });
 
-  await test("069: rollback twice, re-apply twice; no existing row changes and every row reads NULL", async () => {
+  await test("069 + 070: rollback twice each, re-apply twice each; NOT VALID after 069, validated after 070; no row changes, no table rewritten", async () => {
     psql(`UPDATE projects SET color = '#3B5BA5' WHERE id = '${projectId}';`);
-    psql(ROLLBACK);
+    const nodesBefore = fileNodes();
+    psql(ROLLBACK_070);
+    assert.equal(validated(), "implementations_color_hex_check:false,projects_color_hex_check:false", "070's rollback: back to NOT VALID");
+    psql(ROLLBACK_070); // twice is fine
+    assert.equal(psql(`SELECT color FROM projects WHERE id = '${projectId}';`), "#3B5BA5", "070's rollback keeps the data");
+    assert.match(psqlError(`UPDATE projects SET color = 'red' WHERE id = '${projectId}';`) ?? "", /projects_color_hex_check/, "a NOT VALID check still applies to new writes");
+    psql(ROLLBACK_069);
     assert.equal(colorState(), "", "both columns gone");
     assert.equal(checkState(), "", "both checks gone");
-    psql(ROLLBACK); // twice is fine
+    psql(ROLLBACK_069); // twice is fine
+    psql(ROLLBACK_070); // a no-op once 069 is rolled back
     const appsBefore = rowHash("implementations");
     const projectsBefore = rowHash("projects");
     const tasksBefore = psql(`SELECT count(*) FROM tasks WHERE user_id = '${userId}';`);
-    psql(MIGRATION);
-    psql(MIGRATION); // twice is fine
+    psql(MIGRATION_069);
+    psql(MIGRATION_069); // twice is fine
+    assert.equal(validated(), "implementations_color_hex_check:false,projects_color_hex_check:false", "069 adds the checks NOT VALID");
+    psql(MIGRATION_070);
+    psql(MIGRATION_070); // twice is fine
+    assert.equal(validated(), "implementations_color_hex_check:true,projects_color_hex_check:true", "070 validates them");
+    psql(MIGRATION_069); // 069 again after 070 leaves them validated
+    assert.equal(validated(), "implementations_color_hex_check:true,projects_color_hex_check:true");
+    assert.equal(fileNodes(), nodesBefore, "no table was rewritten by either migration or rollback");
     assert.equal(rowHash("implementations"), appsBefore, "no application row changed (updated_at included)");
     assert.equal(rowHash("projects"), projectsBefore, "no project row changed (updated_at included)");
     assert.equal(psql(`SELECT count(*) FROM tasks WHERE user_id = '${userId}';`), tasksBefore);
@@ -208,6 +249,55 @@ try {
     assert.equal(psql(`SELECT count(*) FROM implementations WHERE user_id = '${userId}' AND color IS NOT NULL;`), "0");
     assert.equal(colorState(), "implementations.color:text:YES:<none>,projects.color:text:YES:<none>");
     assert.match(checkState(), /implementations_color_hex_check:true:.*projects_color_hex_check:true:/);
+    await waitForColumn(true);
+  });
+
+  await test("070 needs 069: run alone on a database without the columns it fails with a plain message and changes nothing", () => {
+    psql(ROLLBACK);
+    assert.match(psqlError(MIGRATION_070) ?? "", /070 needs 069/);
+    assert.equal(colorState(), "");
+    psql(MIGRATION);
+  });
+
+  await test("locks: while the transaction that VALIDATEs holds its locks, other sessions still read and write both tables", async () => {
+    // From scratch: no columns. Each file runs in turn; the one that validates is held open for 4s before its COMMIT.
+    psql(ROLLBACK);
+    const holding = MIGRATIONS.find((sql) => /VALIDATE CONSTRAINT/.test(sql.replace(/^\s*--.*$/gm, "")));
+    assert.ok(holding, "a migration validates the checks");
+    let background = null;
+    for (const sql of MIGRATIONS) {
+      if (sql !== holding) {
+        psql(sql);
+        continue;
+      }
+      const held = `SET application_name = 's2fr1-validate';\n${sql.replace(/^COMMIT;$/m, "SELECT pg_sleep(4);\nCOMMIT;")}`;
+      background = psqlAsync(held);
+      // Wait until it sleeps inside the transaction, its locks taken.
+      let state = "";
+      for (let i = 0; i < 100 && !/pg_sleep/.test(state); i += 1) {
+        await sleep(50);
+        state = psql(`SELECT COALESCE(string_agg(query, ' '), '') FROM pg_stat_activity WHERE application_name = 's2fr1-validate' AND state = 'active';`);
+      }
+      assert.match(state, /pg_sleep/, "the validating transaction is open");
+      const held_locks = psql(`SELECT string_agg(DISTINCT c.relname || ':' || l.mode, ',' ORDER BY c.relname || ':' || l.mode) FROM pg_locks l JOIN pg_class c ON c.oid = l.relation JOIN pg_stat_activity a ON a.pid = l.pid WHERE a.application_name = 's2fr1-validate' AND l.granted AND c.relname IN ('implementations', 'projects');`);
+      console.log(`  locks held while validating: ${held_locks}`);
+      const started = Date.now();
+      const other = psqlError(`BEGIN; SET LOCAL lock_timeout = '1500ms';
+        SELECT count(*) FROM projects WHERE user_id = '${userId}';
+        SELECT count(*) FROM implementations WHERE user_id = '${userId}';
+        UPDATE projects SET name = name WHERE id = '${projectId}';
+        UPDATE implementations SET name = name WHERE id = '${appId}';
+        INSERT INTO projects (user_id, name) VALUES ('${userId}', 'lock probe');
+        ROLLBACK;`);
+      const waited = Date.now() - started;
+      assert.equal(other, null, `another session was blocked while validating (${held_locks}): ${other}`);
+      assert.ok(waited < 1500, `reads and writes went straight through (${waited} ms)`);
+      assert.doesNotMatch(held_locks, /AccessExclusiveLock/, "no ACCESS EXCLUSIVE held while validating");
+      assert.match(held_locks, /projects:ShareUpdateExclusiveLock/);
+    }
+    const result = await background;
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(validated(), "implementations_color_hex_check:true,projects_color_hex_check:true");
     await waitForColumn(true);
   });
 
@@ -229,7 +319,7 @@ try {
     assert.equal(reply.status, 200, JSON.stringify(reply.body));
     assert.equal(reply.body.color, "#6E4F9C");
     assert.equal((await api("GET", `/api/applications/${appId}`)).body.color, "#6E4F9C");
-    for (const bad of ["#F2B230", "#FFE14D", "#EEEEEE", "#FFF", 7]) {
+    for (const bad of ["#F2B230", "#FFE14D", "#EEEEEE", "#FFF", 7, "#8C4D00", "#0B0C00"]) {
       reply = await api("PATCH", `/api/applications/${appId}`, { color: bad });
       assert.equal(reply.status, 400, String(bad));
     }
@@ -304,6 +394,8 @@ try {
     assert.equal(result.data.color, null);
     result = await callTool("update_project", { project_id: newId, color: "not a colour" });
     assert.equal(result.isError, true);
+    result = await callTool("update_project", { project_id: newId, color: "#8C4D00" });
+    assert.equal(result.isError, true, "an exact 33° yellow is refused through MCP (FR1)");
 
     result = await callTool("create_project", { name: "Pale", color: "#EEEEEE" });
     assert.equal(result.isError, true);

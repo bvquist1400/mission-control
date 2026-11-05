@@ -18,19 +18,27 @@
 --
 -- Additive only, NO BACKFILL: two nullable columns with no default, so ADD
 -- COLUMN is catalog-only (no table rewrite) and every existing row reads NULL
--- (= its default colour, exactly what the app showed before). The CHECKs are
--- added NOT VALID and then validated, so the check of existing rows (all NULL)
--- only takes a SHARE UPDATE EXCLUSIVE lock. Re-running is safe.
+-- (= its default colour, exactly what the app showed before). Re-running is safe.
+--
+-- Locks (S2 fix round 1): ADD COLUMN and ADD CONSTRAINT take ACCESS EXCLUSIVE
+-- on each table, held until COMMIT, so this transaction does only catalog work
+-- (no scan of existing rows) and commits straight away. The CHECKs are added
+-- NOT VALID: they apply to every new or changed row from this commit on. The
+-- scan that marks them valid for the existing rows is 070_project_colors_validate.sql,
+-- in its OWN transaction, where VALIDATE CONSTRAINT only takes SHARE UPDATE
+-- EXCLUSIVE (readers and writers carry on). Validating here, in the same
+-- transaction, would scan while still holding ACCESS EXCLUSIVE.
 --
 -- Rollback: supabase/rollbacks/069_project_colors.down.sql (drops both columns
--- and their checks; chosen colours are lost, nothing else changes).
+-- and their checks, validated or not, so it works with or without 070 applied;
+-- chosen colours are lost, nothing else changes).
 --
--- Deploy order: 069 BEFORE the app (the app reads the column; without it the
--- colour list falls back to defaults but saves fail). Rolling back needs the
--- app rolled back first.
+-- Deploy order: 069, then 070, BEFORE the app (the app reads the column;
+-- without it the colour list falls back to defaults but saves fail). The app
+-- works the same before or after 070. Rolling back needs the app rolled back first.
 --
 -- This number was earlier pencilled in for the grants-revoke migration; that
--- one moves to 070.
+-- one moves to 071 (070 is the validation step).
 
 BEGIN;
 
@@ -66,9 +74,6 @@ BEGIN
   END IF;
 END;
 $$;
-
-ALTER TABLE implementations VALIDATE CONSTRAINT implementations_color_hex_check;
-ALTER TABLE projects VALIDATE CONSTRAINT projects_color_hex_check;
 
 COMMENT ON COLUMN implementations.color IS
   'Project square colour (069), "#RRGGBB". NULL = the theme default for this application (src/lib/project-colors.ts).';

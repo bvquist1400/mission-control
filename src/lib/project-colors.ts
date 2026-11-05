@@ -145,13 +145,37 @@ function fromHsl(h: number, s: number, l: number): string {
 }
 
 /**
- * Yellow, gold and amber (hue 33°–65°, unless nearly grey) read as the "needs
- * you" marigold in one theme or the other, so they are never a project colour.
- * Lightness is not an escape: a dark ochre turns gold once lightened for dark.
+ * Yellow, gold and amber (hue 33°–65°, unless nearly grey: saturation under 0.3)
+ * read as the "needs you" marigold in one theme or the other, so they are never a
+ * project colour. Lightness is not an escape: a dark ochre turns gold once
+ * lightened for dark.
+ *
+ * Both edges are inclusive and tested on the integer channels, not on a floating
+ * hue: #8C4D00 is exactly 33° (float maths gives 32.999…) and #0B0C00 exactly 65°
+ * (float gives 65.000…01), and both are in the band. With max/min/d the channel
+ * maximum, minimum and range (0–255):
+ * - hue = 60° × H / d, where H is the usual sextant numerator (an integer), so
+ *   33 ≤ hue ≤ 65 ⇔ 33·d ≤ 60·H ≤ 65·d;
+ * - saturation = d / (255 − |max + min − 255|), so s ≥ 0.3 ⇔ 10·d ≥ 3·(255 − |max + min − 255|).
  */
 export function isNeedsYouHue(hex: string): boolean {
-  const { h, s } = toHsl(hex);
-  return s >= 0.3 && h >= 33 && h <= 65;
+  const [r, g, b] = channels(hex);
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const d = max - min;
+  if (d === 0) return false;
+  if (10 * d < 3 * (255 - Math.abs(max + min - 255))) return false;
+  let sextant: number;
+  if (max === r) sextant = g - b;
+  else if (max === g) sextant = b - r + 2 * d;
+  else sextant = r - g + 4 * d;
+  if (sextant < 0) sextant += 6 * d;
+  return 60 * sextant >= 33 * d && 60 * sextant <= 65 * d;
+}
+
+/** A colour a square may show on the dark paper and sheet: 3:1 on both, and not yellow. */
+function isSafeDark(hex: string): boolean {
+  return PROJECT_COLOR_PATTERN.test(hex) && !isNeedsYouHue(hex) && themeContrast(hex, "dark") >= MIN_SQUARE_CONTRAST;
 }
 
 // ── input rules (API, MCP, editor) ───────────────────────────────────────────
@@ -169,6 +193,9 @@ export function projectColorProblem(hex: string): ProjectColorProblem | null {
   if (!PROJECT_COLOR_PATTERN.test(hex)) return "format";
   if (isNeedsYouHue(hex)) return "needs_you";
   if (themeContrast(hex, "light") < MIN_SQUARE_CONTRAST) return "contrast";
+  // The colour dark mode will actually paint must follow the same rule. darkVariant
+  // never returns yellow, so this only guards against a future change to it.
+  if (!isSafeDark(darkVariant(hex))) return "needs_you";
   return null;
 }
 
@@ -204,20 +231,65 @@ export function usableStoredColor(value: string | null | undefined): string | nu
 
 // ── display ──────────────────────────────────────────────────────────────────
 
+/** Hue nudges (degrees, away from the yellow band) and saturation scales tried when rounding lands a lightened colour in the band. */
+const HUE_NUDGES = [0, 0.5, 1, 1.5, 2, 3, 4, 6] as const;
+const SATURATION_SCALES = [1, 0.97, 0.94, 0.9, 0.85] as const;
+
+const darkVariantCache = new Map<string, string>();
+
+function circularDistance(a: number, b: number): number {
+  const d = Math.abs(a - b) % 360;
+  return Math.min(d, 360 - d);
+}
+
 /**
  * The colour a stored light-theme value shows as in dark: the preset's own dark
  * pair, else the same hue lightened in 1% steps until it reaches 3:1 on the dark
  * paper and sheet.
+ *
+ * Every result is checked as the final rounded hex, not as the HSL it came from:
+ * it must reach 3:1 on the dark paper and sheet AND stay out of the yellow band.
+ * Rounding to whole channels can move a hue by under a degree, so a colour just
+ * outside the band (#171902 at 65.2°) can land inside it (#6D7609 at 64.95°).
+ * When that happens the same lightness step is retried with the hue nudged away
+ * from the band (and, for a greyish colour, a little less saturation); if
+ * nothing fits, a neutral grey of the first lightness that reaches 3:1 is shown.
+ * So no stored colour can ever paint a yellow square in dark.
  */
 export function darkVariant(hex: string): string {
   const upper = normalizeHex(hex);
+  const cached = darkVariantCache.get(upper);
+  if (cached) return cached;
+  const result = computeDarkVariant(upper);
+  if (darkVariantCache.size >= 2048) darkVariantCache.clear();
+  darkVariantCache.set(upper, result);
+  return result;
+}
+
+function computeDarkVariant(upper: string): string {
   const preset = PROJECT_COLOR_PRESETS.find((entry) => entry.light === upper);
   if (preset) return preset.dark;
-  if (themeContrast(upper, "dark") >= MIN_SQUARE_CONTRAST) return upper;
+  if (isSafeDark(upper)) return upper;
   const { h, s, l } = toHsl(upper);
-  for (let next = Math.round(l * 100) + 1; next <= 100; next += 1) {
-    const candidate = fromHsl(h, s, next / 100);
-    if (themeContrast(candidate, "dark") >= MIN_SQUARE_CONTRAST) return candidate;
+  // Away from the band: down from 33°, up from 65° (whichever edge is nearer round the circle).
+  const direction = circularDistance(h, 33) <= circularDistance(h, 65) ? -1 : 1;
+  const start = Math.round(l * 100) + 1;
+  for (let next = start; next <= 100; next += 1) {
+    const plain = fromHsl(h, s, next / 100);
+    if (themeContrast(plain, "dark") < MIN_SQUARE_CONTRAST) continue;
+    if (!isNeedsYouHue(plain)) return plain;
+    // Bright enough but rounded into the band: smallest nudge at this lightness.
+    for (const scale of SATURATION_SCALES) {
+      for (const nudge of HUE_NUDGES) {
+        const hue = (((h + direction * nudge) % 360) + 360) % 360;
+        const candidate = fromHsl(hue, s * scale, next / 100);
+        if (isSafeDark(candidate)) return candidate;
+      }
+    }
+  }
+  for (let next = start; next <= 100; next += 1) {
+    const grey = fromHsl(0, 0, next / 100);
+    if (isSafeDark(grey)) return grey;
   }
   return "#FFFFFF";
 }
@@ -225,6 +297,21 @@ export function darkVariant(hex: string): string {
 export function pairForStoredColor(hex: string): ColorPair {
   const upper = normalizeHex(hex);
   return { light: upper, dark: darkVariant(upper) };
+}
+
+/**
+ * A pair a square may paint: the light colour passes every input rule (shape, not
+ * yellow, 3:1 on the light paper) and the dark one is 3:1 on the dark paper and
+ * sheet and not yellow. The renderer checks the final pair, not just the stored
+ * value, and falls back to the default when it fails.
+ */
+export function isPaintablePair(pair: ColorPair): boolean {
+  return (
+    PROJECT_COLOR_PATTERN.test(pair.light) &&
+    !isNeedsYouHue(pair.light) &&
+    themeContrast(pair.light, "light") >= MIN_SQUARE_CONTRAST &&
+    isSafeDark(pair.dark)
+  );
 }
 
 /** CSS value that follows the page's light/dark choice (S1 sets color-scheme on <html>). */
@@ -286,9 +373,13 @@ export interface ResolvedSquare extends ColorPair {
 /** Colour overrides by id (the editor's live preview and saved values), applied over embedded rows. */
 export type ColorOverrides = ReadonlyMap<string, string | null>;
 
-function colorOf(entity: ColorEntity, overrides?: ColorOverrides): string | null {
+/** The pair a stored (or draft) colour paints, or null when the value or its final pair breaks a rule (the default shows instead). */
+function pairOf(entity: ColorEntity, overrides?: ColorOverrides): ColorPair | null {
   const raw = overrides?.has(entity.id) ? overrides.get(entity.id) : entity.color;
-  return usableStoredColor(raw ?? null);
+  const usable = usableStoredColor(raw ?? null);
+  if (!usable) return null;
+  const pair = pairForStoredColor(usable);
+  return isPaintablePair(pair) ? pair : null;
 }
 
 /**
@@ -302,14 +393,14 @@ export function resolveSquare(
 ): ResolvedSquare | null {
   const { app, project } = input;
   if (project) {
-    const own = colorOf(project, overrides);
-    if (own) return { ...pairForStoredColor(own), owner: { kind: "project", id: project.id, name: project.name }, source: "project" };
+    const own = pairOf(project, overrides);
+    if (own) return { ...own, owner: { kind: "project", id: project.id, name: project.name }, source: "project" };
   }
   if (app) {
     // The square belongs to whoever gives it its colour: clicking it opens the application.
-    const appColor = colorOf(app, overrides);
+    const appPair = pairOf(app, overrides);
     const owner = { kind: "app" as const, id: app.id, name: app.name };
-    if (appColor) return { ...pairForStoredColor(appColor), owner, source: "app" };
+    if (appPair) return { ...appPair, owner, source: "app" };
     return { ...defaultColorPair("app", app), owner, source: "default" };
   }
   if (project) {
@@ -341,6 +432,33 @@ export function checkColorForEditor(hex: string): ColorCheck {
     light: { color: upper, ratio: themeContrast(upper, "light") },
     dark: { color: dark, ratio: themeContrast(dark, "dark"), adjusted: dark !== upper && !PROJECT_COLOR_PRESETS.some((p) => p.light === upper) },
   };
+}
+
+/**
+ * What the editor's Custom field holds: nothing, a hex still being typed
+ * ("partial"), a full hex the rules refuse, or a colour that can be picked. A
+ * missing "#" is added. While it is partial or refused, Done must not save:
+ * the row's earlier pick would be saved behind a red check line.
+ */
+export type CustomColorEntry =
+  | { state: "empty" }
+  | { state: "partial" }
+  | { state: "refused"; hex: string; problem: Exclude<ProjectColorProblem, "format"> }
+  | { state: "ok"; hex: string };
+
+export function customColorEntry(text: string): CustomColorEntry {
+  const trimmed = text.trim();
+  if (!trimmed) return { state: "empty" };
+  const typed = trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
+  const problem = projectColorProblem(typed);
+  if (problem === "format") return { state: "partial" };
+  if (problem) return { state: "refused", hex: normalizeHex(typed), problem };
+  return { state: "ok", hex: normalizeHex(typed) };
+}
+
+/** Done waits while the Custom field holds something it can't save (see `customColorEntry`). */
+export function customEntryBlocksDone(entry: CustomColorEntry): boolean {
+  return entry.state === "partial" || entry.state === "refused";
 }
 
 export function formatRatio(ratio: number): string {

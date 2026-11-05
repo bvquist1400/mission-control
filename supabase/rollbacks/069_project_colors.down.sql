@@ -1,6 +1,7 @@
 -- Rollback for 069_project_colors.sql: drops implementations.color and
 -- projects.color with their CHECK constraints (implementations_color_hex_check,
--- projects_color_hex_check).
+-- projects_color_hex_check), whether or not 070 has validated them, so it
+-- works with or without 070 applied (070's rollback is not needed first).
 --
 -- ORDER: roll the app back to a build without project colours FIRST (an app
 -- that writes color fails against a database without the column), then run this.

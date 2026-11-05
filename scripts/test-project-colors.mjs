@@ -13,7 +13,7 @@
 //   account menu opens the editor; every surface the plan names draws squares.
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -76,7 +76,7 @@ const colors = await import(src("lib/project-colors.ts"));
 
 // ── 069 ───────────────────────────────────────────────────────────────────────
 
-await test("069: two nullable TEXT columns, no default, exact CHECK, NOT VALID then VALIDATE, no row written", () => {
+await test("069: two nullable TEXT columns, no default, exact CHECK added NOT VALID, no row written, no VALIDATE (that's 070)", () => {
   const sql = read("supabase/migrations/069_project_colors.sql");
   const body = sql.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
   assert.match(body, /ALTER TABLE implementations\s+ADD COLUMN IF NOT EXISTS color TEXT;/);
@@ -86,12 +86,40 @@ await test("069: two nullable TEXT columns, no default, exact CHECK, NOT VALID t
   assert.doesNotMatch(body, /\b(UPDATE|INSERT|DELETE)\s+(INTO\s+|FROM\s+)?(implementations|projects)\b/i, "no existing row is rewritten");
   const checks = body.match(/CHECK \(color IS NULL OR color ~ '\^#\[0-9A-Fa-f\]\{6\}\$'\) NOT VALID/g) ?? [];
   assert.equal(checks.length, 2);
-  assert.match(body, /VALIDATE CONSTRAINT implementations_color_hex_check/);
-  assert.match(body, /VALIDATE CONSTRAINT projects_color_hex_check/);
+  // FR1 (Codex): ADD COLUMN / ADD CONSTRAINT hold ACCESS EXCLUSIVE to COMMIT, so the scan must not be in this transaction.
+  assert.doesNotMatch(body, /VALIDATE CONSTRAINT/, "069 commits its catalog-only phase; validating is 070, in its own transaction");
   assert.match(body, /lock_timeout = '10s'/);
   assert.match(body, /NOTIFY pgrst, 'reload schema'/);
   // The app's pattern is the same as the database's.
   assert.equal(colors.PROJECT_COLOR_PATTERN.source, "^#[0-9A-Fa-f]{6}$");
+});
+
+await test("070: validates both CHECKs in its own transaction (its own file), lock_timeout, needs 069, nothing else", () => {
+  const sql = read("supabase/migrations/070_project_colors_validate.sql");
+  const body = sql.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
+  assert.equal((body.match(/^BEGIN;$/gm) ?? []).length, 1);
+  assert.equal((body.match(/^COMMIT;$/gm) ?? []).length, 1);
+  const inside = body.slice(body.indexOf("BEGIN;"), body.indexOf("COMMIT;"));
+  assert.match(inside, /SET LOCAL lock_timeout = '10s';/);
+  assert.match(inside, /ALTER TABLE implementations VALIDATE CONSTRAINT implementations_color_hex_check;/);
+  assert.match(inside, /ALTER TABLE projects VALIDATE CONSTRAINT projects_color_hex_check;/);
+  assert.match(inside, /RAISE EXCEPTION '070 needs 069/);
+  const statements = body.split("\n").filter((line) => /^\s*(ALTER|DROP|CREATE|UPDATE|DELETE|INSERT)/.test(line));
+  assert.deepEqual(statements.map((line) => line.trim()), [
+    "ALTER TABLE implementations VALIDATE CONSTRAINT implementations_color_hex_check;",
+    "ALTER TABLE projects VALIDATE CONSTRAINT projects_color_hex_check;",
+  ], "no column, no data, no lock-heavy statement");
+  const files = readdirSync(path.join(ROOT, "supabase/migrations")).filter((name) => /^07\d_/.test(name));
+  assert.deepEqual(files, ["070_project_colors_validate.sql"], "070 is the validation step; the grants-revoke migration moves to 071");
+});
+
+await test("070 rollback: back to NOT VALID (drop + re-add NOT VALID) only where validated, nothing else", () => {
+  const sql = read("supabase/rollbacks/070_project_colors_validate.down.sql");
+  const body = sql.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
+  assert.equal((body.match(/AND convalidated/g) ?? []).length, 2, "only when validated (re-runnable, a no-op after 069's rollback)");
+  assert.equal((body.match(/CHECK \(color IS NULL OR color ~ '\^#\[0-9A-Fa-f\]\{6\}\$'\) NOT VALID/g) ?? []).length, 2);
+  assert.match(body, /SET LOCAL lock_timeout = '10s';/);
+  assert.doesNotMatch(body, /DROP COLUMN|\b(UPDATE|INSERT|DELETE)\b/);
 });
 
 await test("069 rollback: drops both checks and columns, IF EXISTS (re-runnable), nothing else", () => {
@@ -140,6 +168,73 @@ await test("marigold is \"needs you\" only: it, yellow, gold and dark ochre are 
   }
   for (const fine of ["#5B6B2C", "#96592A", "#B1435C", "#7C7E74", "#6B4E3D", "#6E6E6A"]) {
     assert.equal(colors.projectColorProblem(fine), null, fine);
+  }
+});
+
+// FR1 (Codex HIGH): the band's edges are exact and inclusive, on the integer channels.
+/** Independent oracle: float HSL with a tolerance far below the smallest hue step between 8-bit colours (~0.0009°). */
+function oracleYellow(hex) {
+  const { h, s } = colors.toHsl(hex);
+  return s >= 0.3 - 1e-9 && h >= 33 - 1e-6 && h <= 65 + 1e-6;
+}
+
+await test("yellow band edges are exact and inclusive: #8C4D00 (exactly 33°) and #0B0C00 / #191A0E (exactly 65°, s exactly 0.3) are refused", () => {
+  // Float maths gives 32.999… and 65.000…01 for these; the band includes both edges.
+  for (const edge of ["#8C4D00", "#0B0C00", "#191A0E", "#161800"]) {
+    assert.equal(oracleYellow(edge), true, `${edge} is on an edge of the band`);
+    assert.equal(colors.isNeedsYouHue(edge), true, edge);
+    assert.equal(colors.parseProjectColorInput(edge).ok, false, edge);
+    assert.equal(colors.projectColorProblem(edge), "needs_you", edge);
+  }
+  // Just outside: 32.5°, 65.4°, 65.2° (s .85), and inside the hue band but saturation under 0.3.
+  for (const outside of ["#34291C", "#5B6400", "#171902", "#33291C"]) {
+    assert.equal(colors.isNeedsYouHue(outside), false, outside);
+    assert.equal(oracleYellow(outside), false, outside);
+  }
+  // Every colour within a degree of each edge, at a spread of lightness and saturation, agrees with the oracle.
+  let checked = 0;
+  for (let r = 0; r < 256; r += 3) for (let g = 0; g < 256; g += 3) for (let b = 0; b < 256; b += 5) {
+    const hex = `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, "0").toUpperCase()}`;
+    const { h } = colors.toHsl(hex);
+    if (Math.abs(h - 33) > 1 && Math.abs(h - 65) > 1) continue;
+    checked += 1;
+    assert.equal(colors.isNeedsYouHue(hex), oracleYellow(hex), hex);
+  }
+  assert.ok(checked > 1000, `checked ${checked} near-edge colours`);
+});
+
+await test("#171902 (65.2°, accepted) paints a dark variant outside the band: rounding no longer lands it on #6D7609", () => {
+  assert.equal(colors.parseProjectColorInput("#171902").ok, true);
+  assert.equal(colors.isNeedsYouHue("#6D7609"), true, "the old dark variant is in the band");
+  const square = colors.resolveSquare({ app: { id: "fixture", name: "Baseline", color: "#171902" } });
+  assert.equal(square.source, "app");
+  assert.notEqual(square.dark, "#6D7609");
+  assert.equal(colors.isNeedsYouHue(square.dark), false, `dark ${square.dark}`);
+  assert.equal(oracleYellow(square.dark), false, `dark ${square.dark}`);
+  assert.ok(colors.themeContrast(square.dark, "dark") >= 3);
+  // The editor's check line shows the same, safe colour.
+  const check = colors.checkColorForEditor("#171902");
+  assert.equal(check.ok, true);
+  assert.equal(check.dark.color, square.dark);
+  // Codex's other examples at the 65° edge are now refused outright.
+  for (const hex of ["#0C0D01", "#0D0E02", "#0F1004", "#141509", "#18190D", "#181A02"]) {
+    assert.equal(colors.projectColorProblem(hex), "needs_you", hex);
+  }
+});
+
+await test("renderer: a final light/dark pair that breaks a rule is never painted (isPaintablePair); presets and defaults all pass", () => {
+  assert.equal(colors.isPaintablePair({ light: "#3B5BA5", dark: "#8FA6EB" }), true);
+  assert.equal(colors.isPaintablePair({ light: "#171902", dark: "#6D7609" }), false, "yellow dark");
+  assert.equal(colors.isPaintablePair({ light: "#8C4D00", dark: "#4A5A9A" }), false, "yellow light");
+  assert.equal(colors.isPaintablePair({ light: "#3B5BA5", dark: "#20304F" }), false, "dark under 3:1");
+  assert.equal(colors.isPaintablePair({ light: "#9FC5E8", dark: "#9FC5E8" }), false, "light under 3:1");
+  assert.equal(colors.isPaintablePair({ light: "nonsense", dark: "#8FA6EB" }), false);
+  for (const preset of colors.PROJECT_COLOR_PRESETS) assert.equal(colors.isPaintablePair(preset), true, preset.label);
+  // A stored value whose final pair would break the rules (here: an exact-edge yellow) shows the default.
+  for (const stored of ["#8C4D00", "#0B0C00", "#0C0D01"]) {
+    const square = colors.resolveSquare({ project: { id: "p", name: "Home", tags: ["personal"], color: stored } });
+    assert.equal(square.source, "default", stored);
+    assert.equal(square.light, "#2B8780", stored);
   }
 });
 
@@ -271,6 +366,30 @@ await test("editor check line: ratios for both themes, adjusted dark shown, prob
   assert.equal(colors.checkColorForEditor("#E0E0E0").problem, "contrast");
 });
 
+await test("editor Custom field: partial or refused text holds Done back (customColorEntry), so an earlier pick is never saved behind it", () => {
+  assert.deepEqual(colors.customColorEntry(""), { state: "empty" });
+  assert.deepEqual(colors.customColorEntry("   "), { state: "empty" });
+  assert.deepEqual(colors.customColorEntry("#3B5"), { state: "partial" });
+  assert.deepEqual(colors.customColorEntry("zz"), { state: "partial" });
+  assert.deepEqual(colors.customColorEntry("2255aa"), { state: "ok", hex: "#2255AA" });
+  assert.deepEqual(colors.customColorEntry(" #3b5ba5 "), { state: "ok", hex: "#3B5BA5" });
+  assert.deepEqual(colors.customColorEntry("#F2B230"), { state: "refused", hex: "#F2B230", problem: "needs_you" });
+  assert.deepEqual(colors.customColorEntry("#8c4d00"), { state: "refused", hex: "#8C4D00", problem: "needs_you" });
+  assert.deepEqual(colors.customColorEntry("#EEEEEE"), { state: "refused", hex: "#EEEEEE", problem: "contrast" });
+  for (const text of ["#F2B230", "#3B5", "#EEEEEE", "#8C4D00"]) assert.equal(colors.customEntryBlocksDone(colors.customColorEntry(text)), true, text);
+  for (const text of ["", "#3B5BA5", "2255aa"]) assert.equal(colors.customEntryBlocksDone(colors.customColorEntry(text)), false, text);
+
+  // The editor uses it: a valid entry picks, a blocked one disables Done and makes save() a no-op, closing the row clears the field.
+  const editor = read("src/components/project-colors/ProjectColorEditor.tsx");
+  assert.match(editor, /const customEntry = selected \? customColorEntry\(custom\)/);
+  assert.match(editor, /const customBlocked = customEntryBlocksDone\(customEntry\);/);
+  assert.match(editor, /async function save\(\) \{\n\s+if \(customBlocked\) return;/);
+  assert.match(editor, /disabled=\{saving \|\| customBlocked \|\|/);
+  assert.match(editor, /if \(entry\.state === "ok"\) pick\(selected\.id, entry\.hex\);/);
+  assert.match(editor, /setSelectedId\(null\);\n\s+setCustom\(""\);/);
+  assert.match(editor, /Fix the custom colour or pick a preset before Done\./);
+});
+
 // ── API: refusals happen before any database call ─────────────────────────────
 
 const { NextRequest } = await import("next/server.js");
@@ -287,7 +406,7 @@ async function call(handler, method, url, body, withParams = true) {
 }
 
 await test("PATCH /api/applications/[id], PATCH /api/projects/[id], POST /api/projects: a bad colour is a plain 400 before the database", async () => {
-  for (const [color, problem] of [["#F2B230", /needs you/], ["#ffe14d", /needs you/], ["#EEEEEE", /too pale/], ["#FFF", /hex colour/], [42, /hex colour/]]) {
+  for (const [color, problem] of [["#F2B230", /needs you/], ["#ffe14d", /needs you/], ["#8C4D00", /needs you/], ["#0b0c00", /needs you/], ["#EEEEEE", /too pale/], ["#FFF", /hex colour/], [42, /hex colour/]]) {
     const app = await call(appRoute.PATCH, "PATCH", `/api/applications/${ID}`, { color });
     assert.equal(app.status, 400, `app ${color}`);
     assert.match(app.body.error, problem);
