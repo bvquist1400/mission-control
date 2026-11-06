@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { cookies } from "next/headers";
-import { IBM_Plex_Mono, IBM_Plex_Sans, IBM_Plex_Sans_Condensed } from "next/font/google";
+import localFont from "next/font/local";
 import { AppShell } from "@/components/layout/AppShell";
 import { TopBar } from "@/components/layout/TopBar";
 import { PageViewAnalytics } from "@/components/analytics/PageViewAnalytics";
@@ -17,22 +17,38 @@ import { readPanelWidths } from "@/lib/task-panel";
 import "./globals.css";
 
 // IBM Plex (redesign S1): Sans for body text, Condensed for titles, tabs and
-// buttons, Mono for dates, tags and numbers. Self-hosted by next/font at build.
-const plexSans = IBM_Plex_Sans({
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
+// buttons, Mono for dates, tags and numbers. The latin woff2 files are committed
+// in src/fonts/plex (SIL OFL 1.1, OFL.txt there), byte-identical to the files
+// the Google Fonts loader fetched for these weights, so a build never fetches
+// Google: on 11/6 Vercel's build failed because Google answered with URLs
+// Turbopack could not parse. Plex Sans is one variable file for 400/500/600,
+// as Google served it. Same CSS variables, weights, display and Arial-based
+// size-adjusted fallback as before.
+const plexSans = localFont({
+  src: [
+    { path: "../fonts/plex/IBMPlexSans-Variable-latin.woff2", weight: "400", style: "normal" },
+    { path: "../fonts/plex/IBMPlexSans-Variable-latin.woff2", weight: "500", style: "normal" },
+    { path: "../fonts/plex/IBMPlexSans-Variable-latin.woff2", weight: "600", style: "normal" },
+  ],
   variable: "--font-plex-sans",
   display: "swap",
 });
-const plexCond = IBM_Plex_Sans_Condensed({
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
+const plexCond = localFont({
+  src: [
+    { path: "../fonts/plex/IBMPlexSansCondensed-Regular-latin.woff2", weight: "400", style: "normal" },
+    { path: "../fonts/plex/IBMPlexSansCondensed-Medium-latin.woff2", weight: "500", style: "normal" },
+    { path: "../fonts/plex/IBMPlexSansCondensed-SemiBold-latin.woff2", weight: "600", style: "normal" },
+    { path: "../fonts/plex/IBMPlexSansCondensed-Bold-latin.woff2", weight: "700", style: "normal" },
+  ],
   variable: "--font-plex-cond",
   display: "swap",
 });
-const plexMono = IBM_Plex_Mono({
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
+const plexMono = localFont({
+  src: [
+    { path: "../fonts/plex/IBMPlexMono-Regular-latin.woff2", weight: "400", style: "normal" },
+    { path: "../fonts/plex/IBMPlexMono-Medium-latin.woff2", weight: "500", style: "normal" },
+    { path: "../fonts/plex/IBMPlexMono-SemiBold-latin.woff2", weight: "600", style: "normal" },
+  ],
   variable: "--font-plex-mono",
   display: "swap",
 });

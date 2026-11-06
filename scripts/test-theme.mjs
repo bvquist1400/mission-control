@@ -206,6 +206,40 @@ await test("no flash: the v5 brief/Portfolio/record CSS reads the app tokens (on
   assert.ok(!exists("src/components/briefs/fonts.ts"), "the Geist font module is removed");
 });
 
+await test("fonts: Plex is self-hosted (next/font/local), so a build never fetches Google Fonts", async () => {
+  // 11/6: Vercel's build failed in next/font/google because Google answered with
+  // /l/font?kit=…&skey=… URLs Turbopack could not parse. The files now live in the repo.
+  const { createHash } = await import("node:crypto");
+  const layout = read("src/app/layout.tsx");
+  assert.match(layout, /from "next\/font\/local"/, "layout must load Plex with next/font/local");
+  const walk = (dir) => fs.readdirSync(path.join(root, dir), { withFileTypes: true }).flatMap((d) => (d.isDirectory() ? walk(`${dir}/${d.name}`) : [`${dir}/${d.name}`]));
+  const google = walk("src").filter((rel) => /\.(tsx?|jsx?|mjs|css)$/.test(rel) && /next\/font\/google|fonts\.(googleapis|gstatic)\.com/.test(read(rel)));
+  assert.deepEqual(google, [], "nothing in src may load fonts from Google");
+  const pinned = {
+    "IBMPlexSans-Variable-latin.woff2": "056e4e2459f57a0033c8c9c844ff19d6e42ac8602027803d4345823bcc939818",
+    "IBMPlexSansCondensed-Regular-latin.woff2": "9427f9b040d9de071b50641d90d1ac4ce5d2a09a39f210652a57b7e7c7c47f49",
+    "IBMPlexSansCondensed-Medium-latin.woff2": "98ee889126fecbce6d97f156ad4fbff1806be7bcc8afa4c688848738ec121d0a",
+    "IBMPlexSansCondensed-SemiBold-latin.woff2": "63e486a9c9ec9fb7459a4239d1e538c87239a261b26444ca8ae8017f52c5e282",
+    "IBMPlexSansCondensed-Bold-latin.woff2": "308af9f2ec9f6477d59b588b6c01fab214775b65bcf9ba2c1122149308dad9b4",
+    "IBMPlexMono-Regular-latin.woff2": "c36f509c0a8f9f85f29cb44bc8701d8a9e0b14c499e77a884f789ead7093a7ac",
+    "IBMPlexMono-Medium-latin.woff2": "a76f53ca6612e7b3828eec2311098675b7f9849ae4169a8bcef6302aec02a6c0",
+    "IBMPlexMono-SemiBold-latin.woff2": "ad4580d8cb4b5f627c2d18457656732f7f7b070f7837fbc380e08054157e6f6c",
+  };
+  const used = [...layout.matchAll(/path:\s*"\.\.\/fonts\/plex\/([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual([...new Set(used)].sort(), Object.keys(pinned).sort(), "layout must use exactly the eight committed files");
+  for (const [file, sha] of Object.entries(pinned)) {
+    const bytes = fs.readFileSync(path.join(root, "src/fonts/plex", file));
+    assert.equal(createHash("sha256").update(bytes).digest("hex"), sha, `${file} changed`);
+  }
+  assert.match(read("src/fonts/plex/OFL.txt"), /SIL OPEN FONT LICENSE Version 1\.1/, "the OFL licence sits beside the files");
+  for (const [variable, weights] of [["--font-plex-sans", ["400", "500", "600"]], ["--font-plex-cond", ["400", "500", "600", "700"]], ["--font-plex-mono", ["400", "500", "600"]]]) {
+    const call = layout.slice(0, layout.indexOf(`variable: "${variable}"`));
+    const block = call.slice(call.lastIndexOf("localFont({"));
+    assert.deepEqual([...block.matchAll(/weight:\s*"(\d+)"/g)].map((m) => m[1]), weights, `${variable} weights`);
+    assert.match(layout.slice(layout.indexOf(`variable: "${variable}"`)), /^variable: "[^"]+",\s*display: "swap",/, `${variable} keeps display swap`);
+  }
+});
+
 // ── 3. light mode can read the old palette ───────────────────────────────
 
 await test("palette: every 100-400 shade used in src reads as a darker shade in light", () => {
