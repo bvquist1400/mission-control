@@ -194,12 +194,14 @@ export function resolveSessionTiming(input: SessionTimingInput, now: Date = new 
   date = date ?? etDateOf(now);
 
   const latest = now.getTime() + FUTURE_SLACK_MINUTES * 60000;
-  let timing = timingOnDate(input, date);
-  // No date given and the start is later than now: the sitting started on the day before.
-  if (defaulted && timing.ok && timing.value.started_at && Date.parse(timing.value.started_at) > latest) {
-    const dayBefore = timingOnDate(input, addDateDays(date, -1));
-    if (dayBefore.ok) timing = dayBefore;
+  // No date given and the start is later than now: the sitting started on the day before. Decided from
+  // the start alone, BEFORE the end, the length and the minutes are checked against a day (fix round 2:
+  // on a DST night today's date gives the wrong length, so a check first could refuse a real sitting).
+  if (defaulted && input.start) {
+    const startToday = parseSessionInstant(input.start, date);
+    if (startToday.ok && Date.parse(startToday.value) > latest) date = addDateDays(date, -1);
   }
+  const timing = timingOnDate(input, date);
   if (!timing.ok) return timing;
   const today = etDateOf(latest);
   if (timing.value.session_date > today) {

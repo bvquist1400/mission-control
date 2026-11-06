@@ -357,7 +357,7 @@ function LogForm({ data, actions, onDone, onCancel }: { data: PacePanelData; act
         <Button variant="secondary" size="sm" onClick={onCancel} disabled={saving}>
           Cancel
         </Button>
-        <span className="pace-hint">Times are Eastern; an end after midnight is the next day, and a start later than now is last night. Minutes can be less than start to end (breaks taken off).</span>
+        <span className="pace-hint">Times are Eastern; an end after midnight is the next day. Leave the date as today and a start later than now counts as last night; a date you pick is kept, so a future start on it is refused. Minutes can be less than start to end (breaks taken off).</span>
       </div>
     </form>
   );

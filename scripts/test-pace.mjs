@@ -1360,5 +1360,41 @@ test("F0 r1 P3: the note cut never splits an emoji; two same-numbered steps insi
   assert.equal(view.rowsProblemFrom(twoRows, "10-11", "project").message, "Rows 10–11 are in more than one task; pick the task above, or save without rows.", "project words unchanged");
 });
 
+// ── F0 fix round 2: the start's day is found BEFORE the length and minutes are checked (Codex 70189643 P2) ──
+
+test("F0 r2: fall back, no date, logged at 3:20 AM EST: 23:30–02:15 with 200 minutes is an Oct 31 sitting of 225 real minutes", () => {
+  const now = new Date("2026-11-01T08:20:00Z"); // Sun Nov 1, 03:20 EST
+  const night = parse.resolveSessionTiming({ start: "23:30", end: "02:15", minutes: 200 }, now);
+  assert.equal(night.ok, true, night.error);
+  assert.deepEqual(night.value, { session_date: "2026-10-31", started_at: "2026-11-01T03:30:00.000Z", ended_at: "2026-11-01T07:15:00.000Z", minutes: 200 });
+  // The form path: the untouched prefill (today) is left out, so the server takes the same route.
+  const form = { task_id: "t1", date: "2026-11-01", date_touched: false, start: "23:30", end: "02:15", minutes: "200", rows: "", note: "", exclude_from_stats: false, idempotency_key: "k2" };
+  const body = view.buildLogSittingBody(form, "p1", now);
+  assert.equal("date" in body, false);
+  const viaForm = parse.resolveSessionTiming({ date: body.date, start: body.start, end: body.end, minutes: body.minutes }, now);
+  assert.deepEqual([viaForm.ok, viaForm.value?.session_date, viaForm.value?.minutes], [true, "2026-10-31", 200]);
+  // Without minutes: the real length.
+  assert.equal(parse.resolveSessionTiming({ start: "23:30", end: "02:15" }, now).value?.minutes, 225);
+  // More minutes than the real 225 is still refused, against the right night.
+  assert.match(parse.resolveSessionTiming({ start: "23:30", end: "02:15", minutes: 230 }, now).error, /are more than start–end \(225 min\)/);
+});
+
+test("F0 r2: spring forward, no date, logged at 5:20 AM EDT: 16:30–05:00 is a Mar 13 sitting of 690 real minutes", () => {
+  const now = new Date("2027-03-14T09:20:00Z"); // Sun Mar 14, 05:20 EDT
+  const night = parse.resolveSessionTiming({ start: "16:30", end: "05:00" }, now);
+  assert.equal(night.ok, true, night.error);
+  assert.deepEqual(night.value, { session_date: "2027-03-13", started_at: "2027-03-13T21:30:00.000Z", ended_at: "2027-03-14T09:00:00.000Z", minutes: 690 });
+  const explicit = parse.resolveSessionTiming({ date: "2027-03-13", start: "16:30", end: "05:00" }, now);
+  assert.deepEqual(explicit.value, night.value, "the same as with the date given");
+  // A start already past today still stays today, and a typo is still refused on today's date.
+  assert.equal(parse.resolveSessionTiming({ start: "04:00", end: "05:00" }, now).value?.session_date, "2027-03-14");
+  assert.equal(parse.resolveSessionTiming({ start: "05:00", end: "04:00" }, now).ok, false);
+});
+
+test("F0 r2 P3: the form hint says the last-night rule only holds with today's date left as is", () => {
+  const panel = fs.readFileSync(new URL("../src/components/projects/pace/PacePanel.tsx", import.meta.url), "utf8");
+  assert.match(panel, /Leave the date as today and a start later than now counts as last night; a date you pick is kept, so a future start on it is refused\./);
+});
+
 console.log(`\n${passed} passed${failures.length ? `, ${failures.length} failed` : ""}`);
 if (failures.length) process.exit(1);
