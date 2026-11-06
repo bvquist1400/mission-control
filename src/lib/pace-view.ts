@@ -606,3 +606,64 @@ export function defaultSittingTask(tasks: PaceTaskLite[], items: PaceItemLite[])
   }
   return best?.task_id ?? null;
 }
+
+// ── F0: "Save without rows" on the Log-a-sitting form ───────────────────────
+
+export const SAVE_WITHOUT_ROWS_LABEL = "Save without rows";
+const NOTE_MAX = 2000;
+
+/** What the form shows when the rows it sent can't be ticked: the plain-words reason and the offer. */
+export interface RowsProblem {
+  message: string;
+  offer: string;
+}
+
+function rowsSentence(rows: number[]): string {
+  const text = formatRowNumbers(rows);
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function missingSentence(missing: number[], where: string): string {
+  if (missing.length === 1) return `This ${where} has no step named "Row ${missing[0]}" yet, so that row can't be ticked off.`;
+  if (missing.length <= 3) {
+    const names = missing.map((row) => `"Row ${row}"`);
+    return `This ${where} has no step named ${names.slice(0, -1).join(", ")} or ${names[names.length - 1]} yet, so those rows can't be ticked off.`;
+  }
+  return `This ${where} has no steps for ${formatRowNumbers(missing)} yet, so those rows can't be ticked off.`;
+}
+
+/**
+ * Reads a `POST /api/work-sessions` 400 body (F0): rows that match no "Row N" step, rows in more than one
+ * task, or rows text that isn't a row number. Anything else is not a rows problem (null). `scope` is "task"
+ * when the form named a task, "project" for a sitting across several tasks.
+ */
+export function rowsProblemFrom(body: unknown, rowsText: string, scope: "task" | "project"): RowsProblem | null {
+  const typed = rowsText.trim();
+  if (!typed || !body || typeof body !== "object") return null;
+  const details = (body as { details?: unknown }).details;
+  if (!details || typeof details !== "object") return null;
+  const d = details as { missing_rows?: unknown; ambiguous_rows?: unknown; row_items_in_scope?: unknown; rows_unreadable?: unknown };
+  const offer = `${SAVE_WITHOUT_ROWS_LABEL} keeps the time and puts "Rows: ${typed}" in the note.`;
+  if (d.rows_unreadable === true) return { message: `"${typed}" isn't a row number or range (e.g. 84–96, or 96).`, offer };
+  const missing = Array.isArray(d.missing_rows) ? d.missing_rows.filter((row): row is number => typeof row === "number") : [];
+  const ambiguous = Array.isArray(d.ambiguous_rows)
+    ? d.ambiguous_rows.map((entry) => (entry as { row?: unknown })?.row).filter((row): row is number => typeof row === "number")
+    : [];
+  if (missing.length === 0 && ambiguous.length === 0) return null;
+  if (d.row_items_in_scope === 0) {
+    return { message: `This ${scope} has no checklist steps named "Row N", so rows can't be ticked off here.`, offer };
+  }
+  const parts: string[] = [];
+  if (missing.length > 0) parts.push(missingSentence(missing, scope));
+  if (ambiguous.length > 0) {
+    parts.push(`${rowsSentence(ambiguous)} ${ambiguous.length === 1 ? "is" : "are"} in more than one task; pick the task above, or save without rows.`);
+  }
+  return { message: parts.join(" "), offer };
+}
+
+/** The note a "Save without rows" resend carries: what was typed, then "Rows: …", within the 2,000-character limit. */
+export function noteWithRows(note: string, rowsText: string): string {
+  const rows = `Rows: ${rowsText.trim()}`.slice(0, NOTE_MAX);
+  const kept = note.trim().slice(0, Math.max(0, NOTE_MAX - rows.length - 3)).trimEnd();
+  return kept ? `${kept} · ${rows}` : rows;
+}

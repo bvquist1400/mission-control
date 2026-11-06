@@ -526,14 +526,20 @@ async function resolveItemIds(
   if (hasRows) {
     if (typeof rowsInput !== "string") bad("rows must be a string like \"11-15\", \"11, 12\" or \"row 10\"");
     const parsed = parseRowsSpec(rowsInput as string);
-    if (!parsed.ok) bad(parsed.error);
+    // `rows_unreadable` lets the form offer "Save without rows" (F0) instead of losing the sitting.
+    if (!parsed.ok) bad(parsed.error, { rows_unreadable: true });
     const match = matchRows(parsed.value, items);
     if (match.missing.length > 0 || match.ambiguous.length > 0) {
       bad(
         `Couldn't match every row${match.missing.length ? `; no item starting "Row N" for: ${match.missing.join(", ")}` : ""}${
           match.ambiguous.length ? `; more than one item for: ${match.ambiguous.map((entry) => entry.row).join(", ")} (give task_id or item_ids)` : ""
         }`,
-        { missing_rows: match.missing, ambiguous_rows: match.ambiguous }
+        {
+          missing_rows: match.missing,
+          ambiguous_rows: match.ambiguous,
+          // 0 = the scope has no "Row N" steps at all (e.g. a scarf planned by inches), so no rows can ever match.
+          row_items_in_scope: items.filter((item) => itemRowNumber(item.text) !== null).length,
+        }
       );
     }
     for (const id of match.item_ids) ids.add(id);
@@ -836,14 +842,16 @@ export async function updateWorkSession(
     const newDate = "date" in body ? (body.date === null ? null : String(body.date)) : current.session_date;
     if (!newDate || !isDateOnly(newDate)) bad("date must be YYYY-MM-DD (ET)");
     // A new date with no new start/end (minutes or not): move the stored times to that day. The start
-    // keeps its ET clock time and the end = start + the minutes (the new ones when given), so a DST
-    // night keeps its length instead of the two clock times disagreeing with the minutes.
+    // keeps its ET clock time and the end = start + the new minutes when given, else + the stored
+    // start–end length, so a DST night keeps its length and a sitting with breaks taken off (minutes
+    // shorter than start–end) keeps its real end.
     const dateMoved = !("start" in body) && !("end" in body) && newDate !== current.session_date;
     const moved = dateMoved
       ? reanchorSession(
-          { ...current, minutes: "minutes" in body && typeof body.minutes === "number" ? body.minutes : current.minutes },
+          current,
           current.session_date,
-          newDate as string
+          newDate as string,
+          "minutes" in body && typeof body.minutes === "number" ? body.minutes : null
         )
       : null;
     const moveStored = (stored: string | null) =>

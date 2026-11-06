@@ -4,12 +4,15 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/Button";
 import { Input, Select } from "@/components/ui/Field";
 import {
+  SAVE_WITHOUT_ROWS_LABEL,
   buildFitView,
   buildSourceLine,
   buildSpeedRows,
   buildTiles,
+  noteWithRows,
   paceChip,
   type FitView,
+  type RowsProblem,
   type SessionRow,
   type SourceLabel,
 } from "@/lib/pace-view";
@@ -41,7 +44,8 @@ export interface LogSittingInput {
   idempotency_key: string;
 }
 
-export type ActionResult = { ok: true } | { ok: false; error: string };
+/** `rowsProblem`: the rows sent can't be ticked (F0), so the form offers "Save without rows". */
+export type ActionResult = { ok: true } | { ok: false; error: string; rowsProblem?: RowsProblem };
 
 export interface PacePanelActions {
   logSitting: (input: LogSittingInput) => Promise<ActionResult>;
@@ -242,12 +246,34 @@ function LogForm({ data, actions, onDone, onCancel }: { data: PacePanelData; act
   const [form, setForm] = useState<LogSittingInput>(() => emptyForm(data));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [rowsProblem, setRowsProblem] = useState<RowsProblem | null>(null);
   const ids = useId();
   const set = <K extends keyof LogSittingInput>(key: K, value: LogSittingInput[K]) => setForm((current) => ({ ...current, [key]: value }));
+
+  async function send(input: LogSittingInput) {
+    setSaving(true);
+    const result = await actions.logSitting(input);
+    setSaving(false);
+    if (result.ok) onDone();
+    else {
+      setError(result.error);
+      setRowsProblem(result.rowsProblem ?? null);
+    }
+  }
+
+  /** F0: a sitting is never lost because its rows don't match: resend without rows, the rows text in the note. */
+  async function saveWithoutRows() {
+    const next: LogSittingInput = { ...form, rows: "", note: noteWithRows(form.note, form.rows) };
+    setForm(next);
+    setError(null);
+    setRowsProblem(null);
+    await send(next);
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError(null);
+    setRowsProblem(null);
     const hasTimes = Boolean(form.start && form.end);
     if (!form.minutes.trim() && !hasTimes) {
       setError("Give the minutes, or both a start and an end time.");
@@ -261,11 +287,7 @@ function LogForm({ data, actions, onDone, onCancel }: { data: PacePanelData; act
       setError("A start time needs an end time (or give just the minutes).");
       return;
     }
-    setSaving(true);
-    const result = await actions.logSitting(form);
-    setSaving(false);
-    if (result.ok) onDone();
-    else setError(result.error);
+    await send(form);
   }
 
   return (
@@ -317,7 +339,15 @@ function LogForm({ data, actions, onDone, onCancel }: { data: PacePanelData; act
         />
         Don&apos;t count toward speed
       </label>
-      {error ? (
+      {rowsProblem ? (
+        <div className="pace-error" role="alert">
+          <p>{rowsProblem.message}</p>
+          <p>{rowsProblem.offer}</p>
+          <Button variant="secondary" size="sm" onClick={() => void saveWithoutRows()} disabled={saving}>
+            {SAVE_WITHOUT_ROWS_LABEL}
+          </Button>
+        </div>
+      ) : error ? (
         <p className="pace-error" role="alert">
           {error}
         </p>
@@ -329,7 +359,7 @@ function LogForm({ data, actions, onDone, onCancel }: { data: PacePanelData; act
         <Button variant="secondary" size="sm" onClick={onCancel} disabled={saving}>
           Cancel
         </Button>
-        <span className="pace-hint">Same service as the log_work_session tool. Times are Eastern.</span>
+        <span className="pace-hint">Times are Eastern; an end after midnight is the next day. Minutes can be less than start to end (breaks taken off).</span>
       </div>
     </form>
   );

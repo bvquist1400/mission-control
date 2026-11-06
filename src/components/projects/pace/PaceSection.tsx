@@ -3,10 +3,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useToast } from "@/components/ui/Toast";
 import { PacePanel, type ActionResult, type LogSittingInput, type PacePanelActions, type PacePanelData } from "@/components/projects/pace/PacePanel";
+import { rowsProblemFrom } from "@/lib/pace-view";
+
+async function errorBodyFrom(res: Response, fallback: string): Promise<{ error: string; body: unknown }> {
+  const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
+  return { error: typeof body?.error === "string" ? body.error : fallback, body };
+}
 
 async function errorFrom(res: Response, fallback: string): Promise<string> {
-  const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
-  return typeof body?.error === "string" ? body.error : fallback;
+  return (await errorBodyFrom(res, fallback)).error;
 }
 
 /**
@@ -61,7 +66,12 @@ export function PaceSection({ projectId }: { projectId: string }) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body),
           });
-          if (!res.ok) return { ok: false, error: await errorFrom(res, "Couldn't save the sitting") };
+          if (!res.ok) {
+            // Rows that can't be ticked (F0): the form says why in plain words and offers "Save without rows".
+            const { error: message, body: errorBody } = await errorBodyFrom(res, "Couldn't save the sitting");
+            const rowsProblem = res.status === 400 ? rowsProblemFrom(errorBody, input.rows, input.task_id ? "task" : "project") : null;
+            return { ok: false, error: message, ...(rowsProblem ? { rowsProblem } : {}) };
+          }
           const result = (await res.json()) as { forecast_line?: string };
           toast({ message: result.forecast_line ? `Sitting saved. ${result.forecast_line}` : "Sitting saved.", tone: "success" });
           await load();

@@ -601,9 +601,10 @@ try {
     const missing = await callTool("log_work_session", { task_id: swatch.id, minutes: 10, rows: "16-18" });
     assert.equal(missing.isError, true);
     assert.deepEqual(missing.data.details.missing_rows, [17, 18]);
-    const disagree = await callTool("log_work_session", { task_id: swatch.id, start: "13:00", end: "14:00", minutes: 20 });
+    // F0: fewer minutes than start–end are breaks taken off (allowed, below); more is still refused.
+    const disagree = await callTool("log_work_session", { task_id: swatch.id, start: "13:00", end: "14:00", minutes: 75 });
     assert.equal(disagree.isError, true);
-    assert.match(disagree.data.error, /disagree/);
+    assert.match(disagree.data.error, /are more than start–end \(60 min\)/);
     const wrongProject = await callTool("log_work_session", { task_id: swatch.id, project_id: otherProject.id, minutes: 10 });
     assert.equal(wrongProject.isError, true);
     const otherTask = await makeTask(userA, otherProject.id, "Elsewhere");
@@ -615,6 +616,50 @@ try {
     assert.equal(none.isError, true);
     const { count } = await admin.from("work_sessions").select("id", { count: "exact", head: true }).eq("project_id", paceProject.id).gte("created_at", new Date(Date.now() - 60_000).toISOString()).neq("id", loggedId);
     assert.equal(count, 0, "no failed call left a session behind");
+  });
+
+  await test("F0: an inch-step task (no \"Row N\" steps) says so; a sitting past midnight and one with breaks taken off both save", async () => {
+    // Its own project, so the sittings below can't move the paceProject forecast numbers later tests pin.
+    const scarfProject = await makeProject(userA, "F0 scarf project", { target_date: "2026-12-18", unit_label: "rows" });
+    const scarf = await makeTask(userA, scarfProject.id, "F0 scarf: knit to 12 inches", { status: "In Progress" });
+    await makeItem(userA, scarf.id, "Knit to 11 inches");
+    await makeItem(userA, scarf.id, "Knit to 12 inches");
+    const noRows = await callTool("log_work_session", { task_id: scarf.id, date: "2026-11-05", minutes: 25, rows: "84-96" });
+    assert.equal(noRows.isError, true);
+    assert.match(noRows.data.error, /^Couldn't match every row/, "the API text is unchanged");
+    assert.equal(noRows.data.details.row_items_in_scope, 0, "the scope has no Row N steps");
+    assert.deepEqual(noRows.data.details.missing_rows.slice(0, 2), [84, 85]);
+    const unreadable = await callTool("log_work_session", { task_id: scarf.id, date: "2026-11-05", minutes: 25, rows: "up to 96" });
+    assert.equal(unreadable.isError, true);
+    assert.equal(unreadable.data.details.rows_unreadable, true);
+    const withRowSteps = await callTool("log_work_session", { task_id: swatch.id, date: "2026-11-05", minutes: 5, rows: "16-99" });
+    assert.ok(withRowSteps.data.details.row_items_in_scope > 0, "a task with Row N steps reports how many");
+    // "Save without rows": the same sitting, rows text in the note, saves with no rows linked.
+    const saved = await callTool("log_work_session", { task_id: scarf.id, date: "2026-11-05", minutes: 25, note: "Rows: 84-96" });
+    assert.equal(saved.isError, false, JSON.stringify(saved.data));
+    assert.deepEqual([saved.data.session.note, saved.data.session.item_ids], ["Rows: 84-96", []]);
+    // 11:30 PM to 12:15 AM: the end is the next morning; the start sets the date.
+    const night = await callTool("log_work_session", { task_id: scarf.id, date: "2026-11-05", start: "23:30", end: "00:15" });
+    assert.equal(night.isError, false, JSON.stringify(night.data));
+    assert.deepEqual(
+      [night.data.session.session_date, new Date(night.data.session.started_at).toISOString(), new Date(night.data.session.ended_at).toISOString(), night.data.session.minutes],
+      ["2026-11-05", "2026-11-06T04:30:00.000Z", "2026-11-06T05:15:00.000Z", 45]
+    );
+    // update_work_session changing only the end to a clock time after midnight.
+    const lateEnd = await callTool("update_work_session", { session_id: night.data.session.id, end: "00:40" });
+    assert.equal(lateEnd.isError, false, JSON.stringify(lateEnd.data));
+    assert.deepEqual([new Date(lateEnd.data.session.ended_at).toISOString(), lateEnd.data.session.minutes], ["2026-11-06T05:40:00.000Z", 70]);
+    // 7 to 8 PM with 15 minutes of breaks taken off; a date-only move keeps 7–8 PM and the 45 minutes.
+    const breaks = await callTool("log_work_session", { task_id: scarf.id, date: "2026-11-05", start: "19:00", end: "20:00", minutes: 45 });
+    assert.equal(breaks.isError, false, JSON.stringify(breaks.data));
+    assert.equal(breaks.data.session.minutes, 45);
+    const moved = await callTool("update_work_session", { session_id: breaks.data.session.id, date: "2026-11-04" });
+    assert.equal(moved.isError, false, JSON.stringify(moved.data));
+    assert.deepEqual(
+      [moved.data.session.session_date, new Date(moved.data.session.started_at).toISOString(), new Date(moved.data.session.ended_at).toISOString(), moved.data.session.minutes],
+      ["2026-11-04", "2026-11-05T00:00:00.000Z", "2026-11-05T01:00:00.000Z", 45]
+    );
+    assert.equal(await actualMinutes(scarf.id), 25 + 70 + 45);
   });
 
   await test("MCP log_work_session: a project-level excluded sitting rolls up to no task; counts for cadence, not speed", async () => {
@@ -839,8 +884,8 @@ try {
       "a new date and new minutes: start at the same ET clock time (00:30 EST), end = start + 90"
     );
     // Explicit start/end in the body still win and must agree with the minutes.
-    const clash = await callTool("update_work_session", { session_id: night2.data.session.id, date: "2026-11-03", start: "01:00", minutes: 30, end: "03:00" });
-    assert.equal(clash.isError, true, "start–end 120 min vs minutes 30 still disagree");
+    const clash = await callTool("update_work_session", { session_id: night2.data.session.id, date: "2026-11-03", start: "01:00", minutes: 150, end: "03:00" });
+    assert.equal(clash.isError, true, "minutes 150 are more than start–end 120 min (F0: fewer would be breaks, allowed)");
     const badStart = await callTool("update_work_session", { session_id: s.id, start: "2026-10-05T17:00:00Z" });
     assert.equal(badStart.isError, true, "an ISO start on another day than the stored date");
   });

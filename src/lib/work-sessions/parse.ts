@@ -72,20 +72,28 @@ export function reanchorInstant(iso: string, fromDate: string, toDate: string): 
 
 /**
  * Moves a stored sitting to another date when only the date changes: the start
- * keeps its ET clock time and the end follows the start by the stored minutes
- * (so a night that crosses a DST change keeps its length). With no start, the
- * end keeps its clock time.
+ * keeps its ET clock time and the end follows the start by the stored start–end
+ * length (so a night that crosses a DST change keeps its length, and a sitting
+ * with breaks taken off keeps its real end), or by `newMinutes` when the change
+ * also sets minutes. With no start, the end keeps its clock time.
  */
 export function reanchorSession(
   stored: { started_at: string | null; ended_at: string | null; minutes: number },
   fromDate: string,
-  toDate: string
+  toDate: string,
+  newMinutes?: number | null
 ): { started_at: string | null; ended_at: string | null } {
   if (stored.started_at) {
     const start = reanchorInstant(stored.started_at, fromDate, toDate);
+    const length =
+      typeof newMinutes === "number"
+        ? newMinutes * 60000
+        : stored.ended_at
+          ? Date.parse(stored.ended_at) - Date.parse(stored.started_at)
+          : 0;
     return {
       started_at: start,
-      ended_at: stored.ended_at ? new Date(Date.parse(start) + stored.minutes * 60000).toISOString() : null,
+      ended_at: stored.ended_at ? new Date(Date.parse(start) + length).toISOString() : null,
     };
   }
   return { started_at: null, ended_at: stored.ended_at ? reanchorInstant(stored.ended_at, fromDate, toDate) : null };
@@ -150,9 +158,15 @@ export interface SessionTiming {
   minutes: number;
 }
 
+/** The longest sitting an end past midnight may make (F0: 11:30 PM–12:15 AM yes, 2 PM–1 PM no). */
+export const MAX_OVERNIGHT_MINUTES = 12 * 60;
+
 /**
  * Date defaults to today (ET). Minutes are required unless both start and end
- * are given; when all three are given they must agree within 1 minute.
+ * are given. A clock-time end at or before the start is the next day (a sitting
+ * past midnight), up to 12 hours after the start. When all three are given,
+ * minutes may be less than start–end (breaks taken off) but not more than it
+ * by over 1 minute.
  */
 export function resolveSessionTiming(input: SessionTimingInput, now: Date = new Date()): Parsed<SessionTiming> {
   let date = input.date?.trim() || null;
@@ -174,9 +188,20 @@ export function resolveSessionTiming(input: SessionTimingInput, now: Date = new 
     const parsed = parseSessionInstant(input.end, date);
     if (!parsed.ok) return { ok: false, error: `end: ${parsed.error}` };
     endedAt = parsed.value;
+    // A clock-time end at or before the start is the next morning (Brent knits at night). An ISO end
+    // names its own instant and is never moved.
+    if (startedAt && Date.parse(endedAt) <= Date.parse(startedAt) && !ISO_INSTANT.test(input.end.trim())) {
+      const nextDay = parseSessionInstant(input.end, addDateDays(date, 1));
+      if (nextDay.ok && Date.parse(nextDay.value) - Date.parse(startedAt) <= MAX_OVERNIGHT_MINUTES * 60000) {
+        endedAt = nextDay.value;
+      }
+    }
   }
   if (startedAt && endedAt && Date.parse(endedAt) <= Date.parse(startedAt)) {
-    return { ok: false, error: "end must be after start" };
+    return {
+      ok: false,
+      error: "end must be after start (an end after midnight counts as the next day, up to 12 hours after the start)",
+    };
   }
   // A full timestamp must fall on the session's ET date: the start (an end may
   // run past midnight), or the end when there is no start.
@@ -195,10 +220,11 @@ export function resolveSessionTiming(input: SessionTimingInput, now: Date = new 
       return { ok: false, error: "minutes must be a whole number" };
     }
     minutes = input.minutes;
-    if (span !== null && Math.abs(span - input.minutes) > 1) {
+    // Fewer minutes than start–end is a sitting with breaks taken off; more can't be right.
+    if (span !== null && input.minutes - span > 1) {
       return {
         ok: false,
-        error: `minutes (${input.minutes}) and start–end (${Math.round(span)} min) disagree by more than 1 minute; give one or fix them`,
+        error: `minutes (${input.minutes}) are more than start–end (${Math.round(span)} min); minutes can be less (breaks taken off) but not more`,
       };
     }
   } else if (span !== null) {

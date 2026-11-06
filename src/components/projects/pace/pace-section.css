@@ -112,6 +112,13 @@
   padding: 8px 10px;
 }
 
+/* F0: a rows problem with its "Save without rows" offer. */
+div.pace-error {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+}
+
 /* Four stat tiles */
 .pace-tiles {
   display: grid;

@@ -542,7 +542,7 @@ test("row matching: 'Row N' prefix only, never guesses (missing and ambiguous ar
   assert.deepEqual(match.ambiguous.map((entry) => [entry.row, entry.items.map((i) => i.id)]), [[3, ["c", "d"]]]);
 });
 
-test("times: ET clock times convert to UTC across DST; minutes and start–end must agree within 1 minute", () => {
+test("times: ET clock times convert to UTC across DST; minutes may not exceed start–end by more than 1 minute", () => {
   assert.equal(parse.parseClockTime("13:38"), 818);
   assert.equal(parse.parseClockTime("1:38 PM"), 818);
   assert.equal(parse.parseClockTime("12:05 am"), 5);
@@ -552,7 +552,8 @@ test("times: ET clock times convert to UTC across DST; minutes and start–end m
   const timing = parse.resolveSessionTiming({ date: "2026-10-04", start: "13:38", end: "2:39 PM" });
   assert.deepEqual(timing.value, { session_date: "2026-10-04", started_at: "2026-10-04T17:38:00.000Z", ended_at: "2026-10-04T18:39:00.000Z", minutes: 61 });
   assert.equal(parse.resolveSessionTiming({ date: "2026-10-04", start: "13:38", end: "14:39", minutes: 62 }).ok, true, "within 1");
-  assert.equal(parse.resolveSessionTiming({ date: "2026-10-04", start: "13:38", end: "14:39", minutes: 50 }).ok, false);
+  assert.equal(parse.resolveSessionTiming({ date: "2026-10-04", start: "13:38", end: "14:39", minutes: 50 }).ok, true, "F0: fewer minutes = breaks taken off");
+  assert.equal(parse.resolveSessionTiming({ date: "2026-10-04", start: "13:38", end: "14:39", minutes: 63 }).ok, false, "more than start–end + 1");
   assert.equal(parse.resolveSessionTiming({ date: "2026-10-04", start: "14:00", end: "13:00" }).ok, false);
   assert.equal(parse.resolveSessionTiming({ date: "2026-10-04" }).ok, false, "minutes or start+end");
   const defaulted = parse.resolveSessionTiming({ minutes: 20 }, new Date("2026-10-05T02:30:00Z"));
@@ -1170,6 +1171,110 @@ test("the Pace section's source line: sittings, counted, minutes in the last 14 
   assert.match(line(stubForecast({ work_types: types("plan_x_ratio", "plan") }), 5), /no speeds measured yet \(plan times\)$/);
   assert.equal(line(stubForecast({ counted_sessions: 0, excluded_sessions: 0, minutes_in_cadence_window: 0, work_types: types("plan") }), 0), "No sittings logged yet");
   assert.match(line(stubForecast({ counted_sessions: 1, excluded_sessions: 0, work_types: types("measured") }), 1), /^1 sitting logged \(1 counted\) · /);
+});
+
+// ── F0: the "Log a sitting" form on the scarf (Baseline 852b2b02) ───────────
+// The knitting chat: "Baseline's log-a-sitting form errored for this project". Three ways the form could
+// refuse a real sitting: rows that match no "Row N" step, an end after midnight, and minutes with breaks
+// taken off. Each is pinned here; the form's own wiring is read from its source.
+
+test("F0 midnight: a clock-time end at or before the start is the next morning (DST-correct); over 12 hours is still refused", () => {
+  const late = parse.resolveSessionTiming({ date: "2026-11-05", start: "23:30", end: "00:15" });
+  assert.equal(late.ok, true, late.error);
+  assert.deepEqual(late.value, { session_date: "2026-11-05", started_at: "2026-11-06T04:30:00.000Z", ended_at: "2026-11-06T05:15:00.000Z", minutes: 45 });
+  const pm = parse.resolveSessionTiming({ date: "2026-11-05", start: "10:45 PM", end: "1:05 am" });
+  assert.deepEqual([pm.ok, pm.value?.minutes, pm.value?.session_date], [true, 140, "2026-11-05"], "am/pm spelling, the start sets the date");
+  // Oct 31 → Nov 1 2026 is the DST change (2 AM EDT → 1 AM EST): 11 PM EDT to 2 AM EST is 4 real hours.
+  const dst = parse.resolveSessionTiming({ date: "2026-10-31", start: "23:00", end: "02:00" });
+  assert.deepEqual([dst.value?.started_at, dst.value?.ended_at, dst.value?.minutes], ["2026-11-01T03:00:00.000Z", "2026-11-01T07:00:00.000Z", 240]);
+  // An ISO start (the stored one, when update_work_session changes only the end) with a clock-time end.
+  const isoStart = parse.resolveSessionTiming({ date: "2026-11-05", start: "2026-11-06T04:30:00.000Z", end: "00:15" });
+  assert.deepEqual([isoStart.ok, isoStart.value?.ended_at, isoStart.value?.minutes], [true, "2026-11-06T05:15:00.000Z", 45]);
+  const withMinutes = parse.resolveSessionTiming({ date: "2026-11-05", start: "23:30", end: "00:15", minutes: 40 });
+  assert.deepEqual([withMinutes.ok, withMinutes.value?.minutes], [true, 40]);
+  // Typos stay errors: a daytime end before the start would be a 23-hour sitting; an end equal to the start is 24 hours.
+  for (const [start, end] of [["14:00", "13:00"], ["21:00", "21:00"], ["08:00", "07:59"]]) {
+    const refused = parse.resolveSessionTiming({ date: "2026-11-05", start, end });
+    assert.equal(refused.ok, false, `${start}–${end}`);
+    assert.match(refused.error, /^end must be after start/);
+    assert.match(refused.error, /next day/, "the error says an end after midnight is allowed");
+  }
+  const twelve = parse.resolveSessionTiming({ date: "2026-11-05", start: "20:00", end: "08:00" });
+  assert.deepEqual([twelve.ok, twelve.value?.minutes], [true, 720], "exactly 12 hours past midnight is allowed");
+  // An ISO end before the start is never moved: it names its own instant.
+  const isoEnd = parse.resolveSessionTiming({ date: "2026-11-05", start: "23:30", end: "2026-11-05T05:00:00Z" });
+  assert.equal(isoEnd.ok, false);
+});
+
+test("F0 breaks: minutes may be less than start–end (breaks taken off); more than start–end + 1 is refused", () => {
+  const breaks = parse.resolveSessionTiming({ date: "2026-11-05", start: "19:00", end: "20:00", minutes: 45 });
+  assert.equal(breaks.ok, true, breaks.error);
+  assert.deepEqual(breaks.value, { session_date: "2026-11-05", started_at: "2026-11-06T00:00:00.000Z", ended_at: "2026-11-06T01:00:00.000Z", minutes: 45 });
+  assert.equal(parse.resolveSessionTiming({ date: "2026-11-05", start: "19:00", end: "20:00", minutes: 1 }).ok, true, "a long break");
+  assert.equal(parse.resolveSessionTiming({ date: "2026-11-05", start: "19:00", end: "20:00", minutes: 61 }).ok, true, "rounding: 1 minute over");
+  const over = parse.resolveSessionTiming({ date: "2026-11-05", start: "19:00", end: "20:00", minutes: 62 });
+  assert.equal(over.ok, false);
+  assert.equal(over.error, "minutes (62) are more than start–end (60 min); minutes can be less (breaks taken off) but not more");
+});
+
+test("F0 breaks: a date-only move keeps a short sitting's real start and end (not start + minutes)", () => {
+  // 7–8 PM with 15 minutes of breaks taken off, moved to the day before.
+  assert.deepEqual(
+    parse.reanchorSession({ started_at: "2026-11-06T00:00:00.000Z", ended_at: "2026-11-06T01:00:00.000Z", minutes: 45 }, "2026-11-05", "2026-11-04"),
+    { started_at: "2026-11-05T00:00:00.000Z", ended_at: "2026-11-05T01:00:00.000Z" }
+  );
+  // New minutes with the date: end = start + those minutes, as before (pinned in test:pace-db too).
+  assert.deepEqual(
+    parse.reanchorSession({ started_at: "2026-10-31T04:30:00.000Z", ended_at: "2026-10-31T07:30:00.000Z", minutes: 180 }, "2026-10-31", "2026-11-02", 90),
+    { started_at: "2026-11-02T05:30:00.000Z", ended_at: "2026-11-02T07:00:00.000Z" }
+  );
+});
+
+test("F0 rows: a rows mismatch becomes plain words and a Save without rows offer; the rows text goes into the note", () => {
+  const noRowSteps = { error: "Couldn't match every row; no item starting \"Row N\" for: 84, 85", details: { missing_rows: [84, 85, 86], ambiguous_rows: [], row_items_in_scope: 0 } };
+  assert.deepEqual(view.rowsProblemFrom(noRowSteps, "84–86", "task"), {
+    message: "This task has no checklist steps named \"Row N\", so rows can't be ticked off here.",
+    offer: "Save without rows keeps the time and puts \"Rows: 84–86\" in the note.",
+  });
+  assert.match(view.rowsProblemFrom(noRowSteps, "84-86", "project").message, /^This project has no checklist steps named "Row N"/);
+  const someMissing = { error: "x", details: { missing_rows: [97, 98], ambiguous_rows: [], row_items_in_scope: 96 } };
+  assert.equal(view.rowsProblemFrom(someMissing, "96-98", "task").message, "This task has no step named \"Row 97\" or \"Row 98\" yet, so those rows can't be ticked off.");
+  const one = { error: "x", details: { missing_rows: [97], ambiguous_rows: [], row_items_in_scope: 96 } };
+  assert.equal(view.rowsProblemFrom(one, "97", "task").message, "This task has no step named \"Row 97\" yet, so that row can't be ticked off.");
+  const many = { error: "x", details: { missing_rows: [97, 98, 99, 100], ambiguous_rows: [], row_items_in_scope: 96 } };
+  assert.equal(view.rowsProblemFrom(many, "97-100", "project").message, "This project has no steps for rows 97–100 yet, so those rows can't be ticked off.");
+  const mixed = { error: "x", details: { missing_rows: [12], ambiguous_rows: [{ row: 10, items: [] }], row_items_in_scope: 40 } };
+  assert.equal(view.rowsProblemFrom(mixed, "10, 12", "project").message, "This project has no step named \"Row 12\" yet, so that row can't be ticked off. Row 10 is in more than one task; pick the task above, or save without rows.");
+  const ambiguous = { error: "x", details: { missing_rows: [], ambiguous_rows: [{ row: 10, items: [] }, { row: 11, items: [] }] } };
+  assert.equal(view.rowsProblemFrom(ambiguous, "10-11", "project").message, "Rows 10–11 are in more than one task; pick the task above, or save without rows.");
+  const unreadable = { error: "rows \"up to 96\" is not a row number or range (e.g. \"11-15\", \"11, 12\", \"row 10\")", details: { rows_unreadable: true } };
+  assert.equal(view.rowsProblemFrom(unreadable, "up to 96", "task").message, "\"up to 96\" isn't a row number or range (e.g. 84–96, or 96).");
+  assert.equal(view.rowsProblemFrom({ error: "end must be after start" }, "84", "task"), null, "other errors are not a rows problem");
+  assert.equal(view.rowsProblemFrom(null, "84", "task"), null);
+  assert.equal(view.rowsProblemFrom(noRowSteps, "", "task"), null, "no rows typed, nothing to offer");
+  // The note keeps what was typed, then the rows; never over the 2,000-character note limit.
+  assert.equal(view.noteWithRows("", " 84–96 "), "Rows: 84–96");
+  assert.equal(view.noteWithRows("stitch count 30", "84–96"), "stitch count 30 · Rows: 84–96");
+  const long = view.noteWithRows("x".repeat(1995), "84–96");
+  assert.deepEqual([long.length, long.endsWith(" · Rows: 84–96")], [2000, true], "the note is cut, the rows are kept");
+  assert.equal(view.SAVE_WITHOUT_ROWS_LABEL, "Save without rows");
+});
+
+const fs = await import("node:fs");
+test("F0 wiring: the form offers Save without rows where the error shows, resending without rows and with them in the note", () => {
+  const panel = fs.readFileSync(new URL("../src/components/projects/pace/PacePanel.tsx", import.meta.url), "utf8");
+  const section = fs.readFileSync(new URL("../src/components/projects/pace/PaceSection.tsx", import.meta.url), "utf8");
+  const service = fs.readFileSync(new URL("../src/lib/work-sessions/service.ts", import.meta.url), "utf8");
+  assert.match(section, /rowsProblemFrom\(/, "the section turns the 400 into a rows problem");
+  assert.match(panel, /SAVE_WITHOUT_ROWS_LABEL/);
+  assert.match(panel, /noteWithRows\(form\.note, form\.rows\)/);
+  assert.match(panel, /rows: ""/, "the resend leaves the rows out");
+  // The offer sits inside the same alert as the error, before the Save button.
+  const alertAt = panel.indexOf('className="pace-error" role="alert"');
+  const offerAt = panel.indexOf("SAVE_WITHOUT_ROWS_LABEL}", alertAt);
+  assert.ok(alertAt > 0 && offerAt > alertAt && offerAt < panel.indexOf('type="submit"', alertAt), "offer inside the error block");
+  assert.match(service, /row_items_in_scope/, "the 400 says how many \"Row N\" steps the scope has");
+  assert.match(service, /rows_unreadable: true/);
 });
 
 console.log(`\n${passed} passed${failures.length ? `, ${failures.length} failed` : ""}`);
