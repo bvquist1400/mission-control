@@ -414,6 +414,40 @@ await test("rendered: rows in one data-task-list, grouped, each with Done box (n
 
 // ── 7. Wiring: writes go through the existing paths ──────────────────────
 
+await test("done below open: the day list (and the phone's today list) draws Due and Running before Done, rows and ↑ / ↓ alike", () => {
+  const { DayList } = need(DayListMod, "DayList");
+  const tabs = need(day, "today-day").dayTabs(WEEK, TODAY, () => 1, () => 1);
+  const html = renderToStaticMarkup(
+    h(DayList, {
+      day: fri,
+      todayDate: TODAY,
+      // Handed in done first on purpose: the list's own order must still put it last.
+      rows: { done: [model("d", "done", { status: "Done" })], running: [model("r", "running")], due: [model("a", "due")] },
+      tabs,
+      openTaskId: null,
+      completingIds: new Set(),
+      movingIds: new Set(),
+      loading: false,
+      motion: "in",
+      motionKey: 1,
+      railTabs: null,
+      rail: null,
+      onWeek: noop,
+      onDay: noop,
+      onOpen: noop,
+      onDone: noop,
+      onStatus: noop,
+      onAdd: noop,
+    })
+  );
+  const groups = [...html.matchAll(/class="td-group" data-group="([a-z]+)"/g)].map((match) => match[1]);
+  assert.deepEqual(groups, ["due", "running", "done"]);
+  const rows = [...new Set([...html.matchAll(/data-task-open="([^"]+)"/g)].map((match) => match[1]))];
+  assert.deepEqual(rows, ["a", "r", "d"], "open rows, then the done row");
+  const { groupDayList } = need(day, "today-day");
+  assert.deepEqual(Object.keys(groupDayList({ board: [], overdue: [], done: [], day: fri })), ["due", "running", "done"]);
+});
+
 await test("wiring: day headers are buttons into the day list (history entry from the week, replace between days); Back / ← Week / Esc return", () => {
   const src = read("src/components/today/sections/WeekBoard.tsx");
   assert.match(src, /className="tb-dh-btn"\s+onClick=\{\(\) => goToDay\(column\.date, null\)\}/);
