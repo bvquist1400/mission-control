@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/Button";
 import { squareInputOf } from "@/lib/project-colors";
 import { moveToChoices, type MoveChoice } from "@/lib/today/today-board";
 import { STATUS_LABELS, TASK_STATUS_ORDER, ownerText, taskCardDue, type ListClock, type ListTaskStatus } from "@/lib/tasks-list";
+import { estimateText } from "@/lib/task-fields";
 import type { TaskWithImplementation } from "@/types/database";
 
 /**
@@ -46,6 +47,7 @@ export function TaskCardRow({
   onDone,
   onReopen,
   onMove,
+  showEstimate = false,
 }: {
   task: TaskWithImplementation;
   clock: ListClock;
@@ -58,6 +60,8 @@ export function TaskCardRow({
   onDone: () => void;
   onReopen: () => void;
   onMove: (choice: MoveChoice) => void;
+  /** Sorted by estimate: the minutes show in the meta line. */
+  showEstimate?: boolean;
 }) {
   const due = taskCardDue(task, clock);
   const owner = ownerText(task);
@@ -109,6 +113,7 @@ export function TaskCardRow({
           )}
           {task.section_name ? <span>{task.section_name}</span> : null}
           {task.sprint?.name ? <span>{task.sprint.name}</span> : null}
+          {showEstimate ? <span className="tl-est">{estimateText(task.estimated_minutes)}</span> : null}
           {task.needs_review ? <span className="tl-flag">needs review</span> : null}
           {task.blocker ? <span className="tl-flag" data-tone="late">blocker</span> : null}
           <NowUnblockedPill task={task} />

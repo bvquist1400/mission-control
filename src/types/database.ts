@@ -437,6 +437,8 @@ export interface TaskUpdatePayload {
   status?: TaskStatus;
   task_type?: TaskType;
   estimated_minutes?: number;
+  /** Sets base_priority (0-100); the stored priority_score is recomputed with its boosts server-side. */
+  priority_score?: number;
   actual_minutes?: number | null;
   estimate_source?: EstimateSource;
   start_at?: string | null;

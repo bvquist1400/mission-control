@@ -14,6 +14,7 @@ import { RECURRENCE_FREQUENCIES } from "@/lib/recurrence";
 import { mergeTaskTags } from "@/lib/task-tags";
 import { hasPersonalTag, setPersonalTag } from "@/lib/personal-exclusion";
 import { followHint } from "@/lib/date-cascade-view";
+import { estimateText, fieldDraftsOf, fieldUpdates, priorityHint, type FieldDrafts } from "@/lib/task-fields";
 import type { TaskBlocksLink } from "@/lib/task-detail";
 import type {
   TaskRecurrenceFrequency,
@@ -118,6 +119,8 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
   const [titleDraft, setTitleDraft] = useState(task.title);
   const [descriptionDraft, setDescriptionDraft] = useState(task.description ?? "");
   const [taskTypeDraft, setTaskTypeDraft] = useState<TaskType>(task.task_type);
+  // Estimate, Priority (the base; boosts are added on top) and Blocker (S5 fix round 1: the old Tasks table had them).
+  const [fieldDrafts, setFieldDrafts] = useState<FieldDrafts>(() => fieldDraftsOf(task));
   const [waitingOnDraft, setWaitingOnDraft] = useState(task.waiting_on ?? "");
   const [implementationIdDraft, setImplementationIdDraft] = useState(task.implementation_id ?? "");
   const [projectIdDraft, setProjectIdDraft] = useState(task.project_id ?? "");
@@ -165,6 +168,7 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
     setTitleDraft(task.title);
     setDescriptionDraft(task.description ?? "");
     setTaskTypeDraft(task.task_type);
+    setFieldDrafts(fieldDraftsOf(task));
     setWaitingOnDraft(task.waiting_on ?? "");
     setImplementationIdDraft(task.implementation_id ?? "");
     setProjectIdDraft(task.project_id ?? "");
@@ -336,8 +340,10 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
   const recurrenceDayOfMonthValid = !recurrenceNeedsDayOfMonth
     || (Number.isInteger(recurrenceDayOfMonth) && recurrenceDayOfMonth >= 1 && recurrenceDayOfMonth <= 31);
 
+  const fieldPlan = fieldUpdates(task, fieldDrafts);
   const hasChanges =
-    normalizedTitle !== task.title
+    fieldPlan.changed
+    || normalizedTitle !== task.title
     || taskTypeDraft !== task.task_type
     || nextWaitingOn !== task.waiting_on
     || nextDescription !== task.description
@@ -353,7 +359,9 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
     && !isMutating
     && dueDateResolution.error === null
     && startDateResolution.error === null
-    && rangeError === null;
+    && rangeError === null
+    && !fieldPlan.errors.estimate
+    && !fieldPlan.errors.priority;
 
   const recurrenceHasChanges = recurrenceEnabledDraft !== Boolean(editableRecurrence)
     || (recurrenceEnabledDraft && (
@@ -402,7 +410,7 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
       return;
     }
 
-    const updates: TaskUpdatePayload = {};
+    const updates: TaskUpdatePayload = { ...fieldPlan.updates };
     const normalizedTags = nextTags;
     if (normalizedTitle !== task.title) {
       updates.title = normalizedTitle;
@@ -551,6 +559,42 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
               </option>
             ))}
           </Select>
+        </label>
+
+        <label className="space-y-1">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Estimate</span>
+          <Input
+            size="sm"
+            inputMode="numeric"
+            aria-describedby={`task-estimate-hint-${task.id}`}
+            aria-invalid={fieldPlan.errors.estimate ? true : undefined}
+            value={fieldDrafts.estimate}
+            onChange={(event) => setFieldDrafts((current) => ({ ...current, estimate: event.target.value }))}
+            onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); saveEdits(); } }}
+            disabled={isMutating}
+            placeholder="Minutes, e.g. 45 or 1h 30m"
+          />
+          <span id={`task-estimate-hint-${task.id}`} className={`block text-xs ${fieldPlan.errors.estimate ? "text-danger" : "text-muted-foreground"}`}>
+            {fieldPlan.errors.estimate ?? `Now ${estimateText(task.estimated_minutes)}${task.estimate_source && task.estimate_source !== "manual" ? ` (${task.estimate_source === "llm" ? "suggested" : "default"})` : ""}.`}
+          </span>
+        </label>
+
+        <label className="space-y-1">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Priority</span>
+          <Input
+            size="sm"
+            inputMode="numeric"
+            aria-describedby={`task-priority-hint-${task.id}`}
+            aria-invalid={fieldPlan.errors.priority ? true : undefined}
+            value={fieldDrafts.priority}
+            onChange={(event) => setFieldDrafts((current) => ({ ...current, priority: event.target.value }))}
+            onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); saveEdits(); } }}
+            disabled={isMutating}
+            placeholder="0 to 100"
+          />
+          <span id={`task-priority-hint-${task.id}`} className={`block text-xs ${fieldPlan.errors.priority ? "text-danger" : "text-muted-foreground"}`}>
+            {fieldPlan.errors.priority ?? priorityHint(task)}
+          </span>
         </label>
 
         <div className="space-y-1">
@@ -713,6 +757,20 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
               </option>
             ))}
           </Select>
+        </label>
+
+        <label className="flex items-start gap-2 self-end pb-2 text-sm text-foreground pointer-coarse:min-h-11">
+          <input
+            type="checkbox"
+            checked={fieldDrafts.blocker}
+            onChange={(event) => setFieldDrafts((current) => ({ ...current, blocker: event.target.checked }))}
+            disabled={isMutating}
+            className="mt-0.5 h-4 w-4 accent-accent"
+          />
+          <span>
+            <span className="font-medium">Blocker</span>
+            <span className="block text-xs text-muted-foreground">Holds up other work (shows a Blocker flag).</span>
+          </span>
         </label>
       </div>
 

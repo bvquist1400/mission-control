@@ -50,7 +50,7 @@ export const STATUS_LABELS: Record<ListTaskStatus, string> = {
 /** "open" = everything not Done or Missed (the old default list); "all" adds Done. */
 export type StatusFilterValue = 'open' | 'all' | ListTaskStatus;
 export type DueFilterValue = 'late' | 'today' | 'week' | 'none' | 'dated';
-export type SortValue = 'due' | 'priority' | 'title' | 'updated';
+export type SortValue = 'due' | 'priority' | 'estimate' | 'title' | 'updated';
 export type ReviewFilterValue = 'needs_review' | 'ready';
 
 export const DUE_LABELS: Record<DueFilterValue, string> = {
@@ -64,6 +64,7 @@ export const DUE_LABELS: Record<DueFilterValue, string> = {
 export const SORT_LABELS: Record<SortValue, string> = {
   due: 'Due date',
   priority: 'Priority',
+  estimate: 'Estimate (shortest first)',
   title: 'Title',
   updated: 'Recently changed',
 };
@@ -83,6 +84,7 @@ export interface TaskListFilters {
   due: DueFilterValue | null;
   review: ReviewFilterValue | null;
   q: string;
+  /** due (default), priority, estimate (shortest first), title, updated. */
   sort: SortValue;
 }
 
@@ -237,6 +239,7 @@ export interface ListTask {
   status_line?: string | null;
   needs_review?: boolean | null;
   priority_score?: number | null;
+  estimated_minutes?: number | null;
   updated_at?: string | null;
   tags?: string[] | null;
   project?: unknown;
@@ -342,6 +345,12 @@ export function compareTasks(a: ListTask, b: ListTask, sort: SortValue): number 
   }
   if (sort === 'priority') {
     if (pa !== pb) return pb - pa;
+  }
+  if (sort === 'estimate') {
+    // Shortest first (quick wins); a task without an estimate last; then by due date.
+    const ea = typeof a.estimated_minutes === 'number' && a.estimated_minutes > 0 ? a.estimated_minutes : Number.POSITIVE_INFINITY;
+    const eb = typeof b.estimated_minutes === 'number' && b.estimated_minutes > 0 ? b.estimated_minutes : Number.POSITIVE_INFINITY;
+    if (ea !== eb) return ea < eb ? -1 : 1;
   }
   // Due date: soonest first (late ones on top), undated last.
   const da = dueMs(a);

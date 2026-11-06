@@ -147,6 +147,35 @@ export function hrefWithTask(pathname: string, search: string, taskId: string | 
   return `${pathname || "/"}${query ? `?${query}` : ""}${hash}`;
 }
 
+/**
+ * The page's own query (everything but the panel's `task` / `expand`), with the
+ * params sorted, so two URLs that show the same page compare equal.
+ */
+export function pageQueryKey(search: string): string {
+  const params = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
+  params.delete(TASK_PARAM);
+  params.delete(LEGACY_EXPAND_PARAM);
+  return [...params.entries()]
+    .sort(([a, av], [b, bv]) => (a === b ? (av < bv ? -1 : av > bv ? 1 : 0) : a < b ? -1 : 1))
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join("&");
+}
+
+/**
+ * How closing the panel leaves the URL (S5 fix round 1). A panel this page
+ * pushed steps "back" (Back closed it before, and still does) ONLY while the
+ * page's own query is what it was when the panel opened. If the page changed
+ * it meanwhile (Tasks filters, search or scope picked with the panel open,
+ * written with replaceState onto the panel's entry), stepping back would land
+ * on the entry before and throw those choices away: "replace" drops only
+ * `task` from the current URL instead. A panel that came from a link (not
+ * pushed here) always replaces.
+ */
+export function panelCloseMode(openSearch: string | null, currentSearch: string, pushed: boolean): "back" | "replace" {
+  if (!pushed || openSearch === null) return "replace";
+  return pageQueryKey(openSearch) === pageQueryKey(currentSearch) ? "back" : "replace";
+}
+
 // ── ↑ / ↓ and the keyboard ────────────────────────────────────────────────
 
 /** Ids in the order shown, each once (a task can show twice, e.g. on Now and on the board). */

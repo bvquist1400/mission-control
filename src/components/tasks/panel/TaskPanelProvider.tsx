@@ -17,6 +17,7 @@ import {
   LEGACY_EXPAND_PARAM,
   TASK_PARAM,
   hrefWithTask,
+  panelCloseMode,
   panelScreenForPath,
   taskIdFromParams,
   type PanelWidths,
@@ -103,6 +104,8 @@ export function TaskPanelProvider({ widths, children }: { widths: PanelWidths; c
   const listeners = useRef(new Set<TaskPanelEvents>());
   /** The open panel's history entry is ours (pushed when it opened), so closing can step back. */
   const pushedRef = useRef(false);
+  /** The page's query when this panel's history entry was pushed (to tell whether the page changed it since). */
+  const openSearchRef = useRef<string | null>(null);
   const changedRef = useRef(false);
   const refreshTimer = useRef<number | null>(null);
   const commitmentsRef = useRef<Promise<CommitmentSummary[]> | null>(null);
@@ -152,6 +155,7 @@ export function TaskPanelProvider({ widths, children }: { widths: PanelWidths; c
     } else {
       window.history.pushState(null, "", href);
       pushedRef.current = true;
+      openSearchRef.current = here.search;
     }
   }, []);
 
@@ -159,8 +163,12 @@ export function TaskPanelProvider({ widths, children }: { widths: PanelWidths; c
     const here = currentLocation();
     const params = new URLSearchParams(here.search);
     if (!params.has(TASK_PARAM) && !params.has(LEGACY_EXPAND_PARAM)) return;
-    if (pushedRef.current) {
-      pushedRef.current = false;
+    // Back only when the page's own query is unchanged since the push; filters picked while the
+    // panel was open (Tasks writes them onto the panel's entry) would otherwise be lost.
+    const mode = panelCloseMode(openSearchRef.current, here.search, pushedRef.current);
+    pushedRef.current = false;
+    openSearchRef.current = null;
+    if (mode === "back") {
       window.history.back();
     } else {
       window.history.replaceState(null, "", hrefWithTask(here.pathname, here.search, null, here.hash));

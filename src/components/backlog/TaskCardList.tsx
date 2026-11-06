@@ -379,6 +379,7 @@ export function TaskCardList({
                   onDone={() => void handleDone(task)}
                   onReopen={() => void handleReopen(task)}
                   onMove={(choice) => void handleMove(task, choice)}
+                  showEstimate={filters.sort === "estimate"}
                 />
               ))}
             </ol>

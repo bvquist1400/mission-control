@@ -176,6 +176,32 @@ await test("opening and closing change only ?task (the page's own params and has
   assert.equal(hrefWithTask("/portfolio", "?scope=all", null, "#later"), "/portfolio?scope=all#later");
 });
 
+await test("closing keeps what the page changed while the panel was open (S5 fix round 1: Tasks filters were lost on Esc)", () => {
+  const { panelCloseMode, pageQueryKey } = need();
+  assert.equal(typeof panelCloseMode, "function", "panelCloseMode exists");
+  // The page's own query, order-free, without task / expand.
+  assert.equal(pageQueryKey(`?status=planned&owner=me&task=${ID}`), pageQueryKey(`owner=me&status=planned`));
+  assert.equal(pageQueryKey(`?expand=${ID}`), "");
+  assert.notEqual(pageQueryKey("?owner=me"), pageQueryKey("?owner=me&status=planned"));
+  // Pushed here and nothing changed: Back closes it (as before; Today, Portfolio, Tasks without a filter change).
+  assert.equal(panelCloseMode("?owner=me", `?owner=me&task=${ID}`, true), "back");
+  assert.equal(panelCloseMode("", `?task=${ID}`, true), "back");
+  assert.equal(panelCloseMode("?mode=all", `?mode=all&task=${ID2}`, true), "back", "↑ / ↓ swap the task only: still back");
+  assert.equal(panelCloseMode("?status=planned&owner=me", `?owner=me&status=planned&task=${ID}`, true), "back", "same filters in another order");
+  // The page changed its query while the panel was open (a filter, the search, the scope): replace, keep it.
+  assert.equal(panelCloseMode("?owner=me", `?owner=me&status=planned&task=${ID}`, true), "replace");
+  assert.equal(panelCloseMode("", `?q=badge&task=${ID}`, true), "replace");
+  assert.equal(panelCloseMode("?scope=work", `?task=${ID}`, true), "replace", "a filter cleared counts too");
+  // A panel from a link (not pushed here) always replaces.
+  assert.equal(panelCloseMode(null, `?task=${ID}`, false), "replace");
+  assert.equal(panelCloseMode("?owner=me", `?owner=me&task=${ID}`, false), "replace");
+  // The provider uses the rule: the query is remembered when the entry is pushed, and closing asks the rule.
+  const provider = read("src/components/tasks/panel/TaskPanelProvider.tsx");
+  assert.match(provider, /window\.history\.pushState\(null, "", href\);\s*pushedRef\.current = true;\s*openSearchRef\.current = here\.search;/);
+  assert.match(provider, /const mode = panelCloseMode\(openSearchRef\.current, here\.search, pushedRef\.current\);/);
+  assert.match(provider, /if \(mode === "back"\) \{\s*window\.history\.back\(\);\s*\} else \{\s*window\.history\.replaceState\(null, "", hrefWithTask\(here\.pathname, here\.search, null, here\.hash\)\);/);
+});
+
 await test("↑ / ↓ move through the list in the order shown, each task once, no wrap", () => {
   const { neighbourTaskId, uniqueIds } = need();
   const order = uniqueIds(["a", "b", "b", "c", "", "a"]);
