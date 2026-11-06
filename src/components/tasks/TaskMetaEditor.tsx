@@ -672,6 +672,7 @@ export function TaskMetaEditor({ task, isSaving, onUpdate, onReplaceTask, blocks
           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Waiting On</span>
           <Input
             size="sm"
+            data-field="waiting_on"
             value={waitingOnDraft}
             onChange={(event) => setWaitingOnDraft(event.target.value)}
             onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); saveEdits(); } }}

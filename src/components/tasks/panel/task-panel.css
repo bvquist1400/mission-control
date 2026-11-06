@@ -381,6 +381,29 @@ html.tp-resizing .tp-reflow {
 .tp-details > section {
   margin-bottom: 12px;
 }
+/* "All fields" sits at the top, open (Brent 11/6): a rule under it too, so "Where this stands" reads as the next part. */
+.tp-fields[open] {
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 14px;
+}
+/* "Waiting on you · answer below": the marigold "needs you" mark (marigold means only that), a jump to Who has it at the bottom. */
+.tp-you {
+  align-self: flex-start;
+  font: 600 13px/1 var(--font-cond);
+  color: var(--hi-ink);
+  background: var(--hi);
+  border: 1px solid var(--hi);
+  padding: 7px 10px;
+  cursor: pointer;
+}
+.tp-you:hover {
+  text-decoration: underline;
+}
+@media (pointer: coarse) {
+  .tp-you {
+    min-height: 44px;
+  }
+}
 .tp-danger {
   display: flex;
   flex-wrap: wrap;

@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useCallback, useEffect, useMemo, useState, type ReactNode, type RefObject } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Markdown } from "@/components/markdown/Markdown";
 import { Button } from "@/components/ui/Button";
 import { StatusSelector } from "@/components/ui/StatusSelector";
@@ -72,8 +72,14 @@ function DueFact({ task, disabled, onSave }: { task: TaskWithImplementation; dis
  * owner, checklist with progress, comment gists, links), built from the same
  * model (`buildTaskPageView`), with everything the old pop-up editor could
  * change: status, due, owner and hand-back, checklist, steps and Break into
- * tasks, comments, dependencies, notes, every field (Details), park, done and
+ * tasks, comments, what it waits on, notes, every field, park, done and
  * delete.
+ *
+ * Order (Brent 11/6, Baseline 2da37187): header, then "All fields" OPEN at the
+ * top, where this stands, steps, checklist, description, activity, "Waiting
+ * on", Notes, and "Who has it" last (above the sticky Mark done / Park). When
+ * the task is Brent's, a "Waiting on you" link under the header jumps to his
+ * answer box at the bottom.
  */
 export const TaskPanelBody = memo(function TaskPanelBody({
   taskId,
@@ -91,6 +97,10 @@ export const TaskPanelBody = memo(function TaskPanelBody({
   const [commitments, setCommitments] = useState<CommitmentSummary[]>([]);
   const [actionError, setActionError] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  // "All fields" starts open (the body is keyed by task, so every task opens with it open).
+  const [fieldsOpen, setFieldsOpen] = useState(true);
+  const fieldsRef = useRef<HTMLDetailsElement>(null);
+  const ownerRef = useRef<HTMLDivElement>(null);
 
   // Always read the task fresh: a seed from the page may be a lighter row.
   useEffect(() => {
@@ -191,6 +201,27 @@ export const TaskPanelBody = memo(function TaskPanelBody({
     if (result.commentError) setActionError(result.commentError);
     else onClose();
     return true;
+  }
+
+  /** "Edit" on the Waiting on note: open All fields and put the cursor in its Waiting On box. */
+  function editWaitingOn() {
+    setFieldsOpen(true);
+    const details = fieldsRef.current;
+    if (details) details.open = true;
+    window.requestAnimationFrame(() => {
+      const input = fieldsRef.current?.querySelector<HTMLInputElement>('[data-field="waiting_on"]');
+      input?.scrollIntoView({ block: "center" });
+      input?.focus();
+    });
+  }
+
+  /** "Waiting on you": scroll to Who has it at the bottom and into the answer box when it's open. */
+  function jumpToAnswer() {
+    const section = ownerRef.current;
+    if (!section) return;
+    section.scrollIntoView({ block: "center" });
+    const box = section.querySelector<HTMLTextAreaElement>("[data-hand-back-note]");
+    if (box) box.focus({ preventScroll: true });
   }
 
   async function handleDone() {
@@ -300,15 +331,41 @@ export const TaskPanelBody = memo(function TaskPanelBody({
         </p>
       ) : null}
 
+      {mine ? (
+        <button type="button" className="tp-you" onClick={jumpToAnswer}>
+          Waiting on you · answer below <span aria-hidden="true">↓</span>
+        </button>
+      ) : null}
+
+      {/* All fields at the top, open (Brent 11/6). */}
+      <details
+        ref={fieldsRef}
+        className="tp-details tp-fields"
+        open={fieldsOpen}
+        onToggle={(event) => setFieldsOpen(event.currentTarget.open)}
+      >
+        <summary>All fields</summary>
+        <TaskMetaEditor
+          task={task}
+          isSaving={busy}
+          onUpdate={handleMetaUpdate}
+          onReplaceTask={(updated) => onTaskUpdated(updated.id, updated as unknown as TaskUpdatePayload)}
+          blocks={detail.blocks}
+        />
+        <div className="tp-danger">
+          <span>Deleting a task can&apos;t be undone.</span>
+          <Button variant="danger" size="sm" onClick={() => void handleDelete()} disabled={busy}>
+            {isDeleting ? "Deleting..." : "Delete task"}
+          </Button>
+        </div>
+      </details>
+
       <Section title="Where this stands">
         <p className="tp-stands">
           <span>{view.stand}</span>
         </p>
         {view.blocked && view.waits.length > 0 ? <p className="tp-waits">{view.waits.join(" · ")}</p> : null}
       </Section>
-
-      {/* "Who has it": owner, agent, where it stands, and Brent's answer box (open when it's his). */}
-      <TaskOwnerSection key={task.id} task={task} disabled={busy} onSave={save} onHandBack={handleHandBack} />
 
       {steps.part_of || isUmbrella ? (
         <Section title="Steps">
@@ -376,11 +433,13 @@ export const TaskPanelBody = memo(function TaskPanelBody({
         />
       </Section>
 
-      {/* Links: what it waits on and what waits on it (TaskDependencies draws its own headings). */}
+      {/* "Waiting on": the note and the linked tasks; "Tasks waiting on this" only when some do (TaskDependencies draws its own headings). */}
       <div className="tp-sec">
         <TaskDependencies
           taskId={task.id}
           dependencies={detail.dependencies}
+          waitingOn={task.waiting_on}
+          onEditWaitingOn={editWaitingOn}
           blocks={detail.blocks}
           availableTasks={getSeedList()}
           availableCommitments={commitments}
@@ -400,22 +459,10 @@ export const TaskPanelBody = memo(function TaskPanelBody({
         <TaskNotesPanel taskId={task.id} />
       </details>
 
-      <details className="tp-details">
-        <summary>All fields</summary>
-        <TaskMetaEditor
-          task={task}
-          isSaving={busy}
-          onUpdate={handleMetaUpdate}
-          onReplaceTask={(updated) => onTaskUpdated(updated.id, updated as unknown as TaskUpdatePayload)}
-          blocks={detail.blocks}
-        />
-        <div className="tp-danger">
-          <span>Deleting a task can&apos;t be undone.</span>
-          <Button variant="danger" size="sm" onClick={() => void handleDelete()} disabled={busy}>
-            {isDeleting ? "Deleting..." : "Delete task"}
-          </Button>
-        </div>
-      </details>
+      {/* "Who has it" last: owner, agent, where it stands, and Brent's answer box (open when it's his). */}
+      <div ref={ownerRef} className="tp-owner" data-panel-owner="">
+        <TaskOwnerSection key={task.id} task={task} disabled={busy} onSave={save} onHandBack={handleHandBack} />
+      </div>
 
       <div className="tp-acts">
         <Button

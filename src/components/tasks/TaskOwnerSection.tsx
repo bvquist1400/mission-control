@@ -139,6 +139,7 @@ export function TaskOwnerSection({ task, disabled, onSave, onHandBack }: TaskOwn
             <Textarea
               size="sm"
               rows={3}
+              data-hand-back-note=""
               value={note}
               maxLength={HAND_BACK_NOTE_MAX_LENGTH}
               onChange={(event) => {
