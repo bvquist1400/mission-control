@@ -13,11 +13,16 @@ import { Input, Select } from "@/components/ui/Field";
 import { formatDay } from "@/lib/date-cascade-view";
 import { dependencyTaskCandidates, fetchOpenTasksForPicker, pickerHint } from "@/lib/dependency-picker";
 import type { TaskBlocksLink } from "@/lib/task-detail";
+import { waitingOnView } from "@/lib/task-panel";
 
 interface TaskDependenciesProps {
   taskId: string;
   dependencies: TaskDependencySummary[];
-  /** Tasks that wait on this one (cascade S2 "Blocks" list); null = couldn't be read; omitted = not shown. */
+  /** The task's own "waiting on" note (All fields), shown first under "Waiting on". */
+  waitingOn?: string | null;
+  /** Edit the note where it lives (the panel focuses the All fields "Waiting On" box). */
+  onEditWaitingOn?: () => void;
+  /** Tasks that wait on this one ("Tasks waiting on this", hidden when none); null = couldn't be read; omitted = not shown. */
   blocks?: TaskBlocksLink[] | null;
   /** The page's tasks; the picker also loads every open task itself (src/lib/dependency-picker.ts). */
   availableTasks?: TaskWithImplementation[];
@@ -65,9 +70,16 @@ function getDependencyOptionLabel(
   return `${commitment.title}${stakeholderName}`;
 }
 
+/**
+ * "Waiting on" (Brent 11/6, Baseline 2da37187; was "Dependencies" + "Blocks"):
+ * the task's own note and the tasks or commitments it is linked to wait on,
+ * then "Tasks waiting on this" only when some do (rules: `waitingOnView`).
+ */
 export function TaskDependencies({
   taskId,
   dependencies,
+  waitingOn,
+  onEditWaitingOn,
   blocks,
   availableTasks = [],
   availableCommitments = [],
@@ -80,7 +92,7 @@ export function TaskDependencies({
   const [selectedId, setSelectedId] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Every open task, loaded once per window on "+ Add dependency" (the page
+  // Every open task, loaded once per window on "+ Link a task" (the page
   // may know only the opened task). null = not loaded yet.
   const [loadedTasks, setLoadedTasks] = useState<TaskWithImplementation[] | null>(null);
   const [loadingTasks, setLoadingTasks] = useState(false);
@@ -109,6 +121,8 @@ export function TaskDependencies({
         if (!controller.signal.aborted) setLoadingTasks(false);
       });
   }, [loadedTasks]);
+
+  const view = waitingOnView({ waitingOn, linkCount: dependencies.length, blocks });
 
   const unresolvedDependencies = useMemo(
     () => dependencies.filter((dependency) => dependency.unresolved),
@@ -189,8 +203,8 @@ export function TaskDependencies({
       });
 
       if (!response.ok) {
-        const data = await response.json().catch(() => ({ error: "Failed to add dependency" }));
-        throw new Error(typeof data.error === "string" ? data.error : "Failed to add dependency");
+        const data = await response.json().catch(() => ({ error: "Couldn't link it" }));
+        throw new Error(typeof data.error === "string" ? data.error : "Couldn't link it");
       }
 
       const dependency = (await response.json()) as TaskDependencySummary;
@@ -199,7 +213,7 @@ export function TaskDependencies({
       setSearchQuery("");
       setIsAdding(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to add dependency");
+      setError(err instanceof Error ? err.message : "Couldn't link it");
     } finally {
       setIsSubmitting(false);
     }
@@ -215,24 +229,22 @@ export function TaskDependencies({
         });
 
         if (!response.ok) {
-          const data = await response.json().catch(() => ({ error: "Failed to remove dependency" }));
-          throw new Error(typeof data.error === "string" ? data.error : "Failed to remove dependency");
+          const data = await response.json().catch(() => ({ error: "Couldn't remove the link" }));
+          throw new Error(typeof data.error === "string" ? data.error : "Couldn't remove the link");
         }
 
         onDependencyRemoved?.(dependencyId);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to remove dependency");
+        setError(err instanceof Error ? err.message : "Couldn't remove the link");
       }
     },
     [onDependencyRemoved, taskId]
   );
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" data-waiting-on="">
       <div className="flex items-center justify-between">
-        <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Dependencies ({dependencies.length})
-        </h4>
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Waiting on</h4>
         {!isAdding && (
           <button
             type="button"
@@ -245,10 +257,26 @@ export function TaskDependencies({
             }}
             className="rounded-lg px-2 py-1 text-xs font-semibold text-accent-text transition hover:bg-accent/10"
           >
-            + Add dependency
+            + Link a task
           </button>
         )}
       </div>
+
+      {view.note ? (
+        <div className="flex items-start justify-between gap-2 rounded-lg border border-stroke bg-panel p-2.5" data-waiting-note="">
+          <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm text-foreground">{view.note}</p>
+          {onEditWaitingOn ? (
+            <button
+              type="button"
+              onClick={onEditWaitingOn}
+              className="shrink-0 rounded px-2 py-1 text-xs font-semibold text-accent-text transition hover:bg-accent/10"
+              aria-label="Edit what this is waiting on"
+            >
+              Edit
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       {dependencies.length > 0 ? (
         <ul className="space-y-2">
@@ -275,7 +303,8 @@ export function TaskDependencies({
                   type="button"
                   onClick={() => void handleRemove(dependency.id)}
                   className="shrink-0 rounded p-1.5 text-muted-foreground transition hover:bg-danger-soft hover:text-danger"
-                  title="Remove dependency"
+                  title="Remove this link"
+                  aria-label={`Remove the link to ${dependency.title}`}
                 >
                   <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -285,13 +314,13 @@ export function TaskDependencies({
             </li>
           ))}
         </ul>
-      ) : (
-        <p className="text-xs italic text-muted-foreground">No dependencies linked yet</p>
-      )}
+      ) : null}
+
+      {view.empty ? <p className="text-xs italic text-muted-foreground">Not waiting on anything.</p> : null}
 
       {dependencies.length > 0 && unresolvedDependencies.length === 0 && (
         <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-300">
-          Dependencies cleared — ready to activate?
+          Everything linked here is done. Ready to start?
         </p>
       )}
 
@@ -329,8 +358,8 @@ export function TaskDependencies({
           >
             <option value="">
               {dependencyType === "task"
-                ? "Select a task dependency..."
-                : "Select a commitment dependency..."}
+                ? "Pick the task it waits on..."
+                : "Pick the commitment it waits on..."}
             </option>
             {selectableItems.map((item) => (
               <option key={item.id} value={item.id}>
@@ -373,7 +402,7 @@ export function TaskDependencies({
         </p>
       )}
 
-      {blocks !== undefined ? <BlocksList blocks={blocks} /> : null}
+      {view.waitingOnThis !== "hidden" && blocks !== undefined ? <BlocksList blocks={blocks} /> : null}
     </div>
   );
 }
@@ -382,7 +411,8 @@ export function TaskDependencies({
 const FOLLOWS = new Set(["Backlog", "Planned", "In Progress", "Blocked/Waiting"]);
 
 /**
- * Cascade S2 panel 9: the tasks that wait on this one, each with its date. Done
+ * "Tasks waiting on this" (cascade S2 panel 9's "Blocks"; only drawn when some
+ * do, or when they couldn't be read): the tasks that wait on this one, each with its date. Done
  * tasks are dimmed (they won't move); Parked or undated ones stay put too, but
  * the tasks after them can still move.
  */
@@ -390,12 +420,10 @@ function BlocksList({ blocks }: { blocks: TaskBlocksLink[] | null }) {
   return (
     <div className="mt-4 space-y-2 border-t border-stroke pt-3.5">
       <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        Blocks{blocks ? ` (${blocks.length})` : ""}
+        Tasks waiting on this{blocks ? ` (${blocks.length})` : ""}
       </h4>
       {blocks === null ? (
         <p className="text-xs text-muted-foreground">Couldn’t load the tasks that wait on this one.</p>
-      ) : blocks.length === 0 ? (
-        <p className="text-xs italic text-muted-foreground">Nothing waits on this task</p>
       ) : (
         <>
           <p className="text-xs text-muted-foreground">These wait on this task. If its date moves later, the ones that can move will follow.</p>

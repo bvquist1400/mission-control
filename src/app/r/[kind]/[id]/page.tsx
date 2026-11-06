@@ -8,6 +8,7 @@ import { getCanonicalAppUrl } from '@/lib/mcp/config';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { buildTaskPageView } from '@/lib/task-page';
 import { loadTaskPageInput } from '@/lib/task-page-queries';
+import { fullPageBackLink } from '@/lib/task-panel';
 import '@/components/briefs/brief-page.css';
 import '@/components/markdown/markdown.css';
 import '@/components/portfolio/portfolio.css';
@@ -19,6 +20,8 @@ interface ReaderPageProps {
     kind: string;
     id: string;
   }>;
+  /** `from` names where "Open full page" was pressed (allow-list in src/lib/task-panel.ts). */
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
 
 const KIND_LABELS: Record<string, string> = {
@@ -41,8 +44,10 @@ function humanizeKey(key: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
-export default async function ReaderPage({ params }: ReaderPageProps) {
+export default async function ReaderPage({ params, searchParams }: ReaderPageProps) {
   const { kind, id } = await params;
+  // Back to where Brent came from (Baseline 2da37187); unknown or missing = Today.
+  const back = fullPageBackLink((await searchParams).from);
 
   if (kind === 'calendar') {
     redirect(`/calendar/events/${encodeURIComponent(id)}`);
@@ -129,8 +134,8 @@ export default async function ReaderPage({ params }: ReaderPageProps) {
     <div className="brief-page pf">
       <div className={`page pf-record${taskInput ? ' pf-task' : ''}`}>
         <nav className="pf-top" aria-label="Baseline">
-          <Link href="/portfolio" className="pf-back">
-            <span aria-hidden="true">←</span> Portfolio
+          <Link href={back.href} className="pf-back">
+            <span aria-hidden="true">←</span> {back.label}
           </Link>
         </nav>
 

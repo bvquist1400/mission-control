@@ -126,7 +126,7 @@ await test("A failed load throws (the picker keeps the page's tasks and says som
   assert.equal(picker.pickerHint("commitment", { loading: true, failed: false, count: 0 }), "No matching commitments available.", "commitments are unchanged");
 });
 
-await test("Wiring: TaskDependencies loads the open tasks once per window, on '+ Add dependency', and uses the shared candidate rules and hint", () => {
+await test("Wiring: TaskDependencies loads the open tasks once per window, on '+ Link a task', and uses the shared candidate rules and hint", () => {
   const source = readFileSync(new URL("../src/components/tasks/TaskDependencies.tsx", import.meta.url), "utf8");
   assert.match(source, /from "@\/lib\/dependency-picker"/);
   assert.match(source, /fetchOpenTasksForPicker\(/);
@@ -134,7 +134,7 @@ await test("Wiring: TaskDependencies loads the open tasks once per window, on '+
   assert.match(source, /pickerHint\(/);
   assert.doesNotMatch(source, /No matching \{dependencyType\}s available/, "the old fixed line is gone");
   // Loaded on the Add click (not on every keystroke or render), at most once per window unless a load failed.
-  const addAt = source.lastIndexOf("+ Add dependency");
+  const addAt = source.lastIndexOf("+ Link a task");
   const addHandler = source.slice(addAt - 600, addAt);
   assert.match(addHandler, /loadOpenTasks\(\)/, "the Add button starts the load");
   assert.match(source, /if \(loadedTasks \|\| loadingRef\.current\) return;/, "no second load while one is running or after one succeeded");

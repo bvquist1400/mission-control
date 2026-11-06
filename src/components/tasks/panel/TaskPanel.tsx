@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useTaskPanel } from "@/components/tasks/panel/TaskPanelProvider";
 import { TaskPanelBody } from "@/components/tasks/panel/TaskPanelBody";
 import {
@@ -10,6 +10,8 @@ import {
   PANEL_DOCK_MIN_WINDOW,
   PANEL_MIN_WIDTH,
   clampPanelWidth,
+  fullPageFromFor,
+  fullPageHref,
   listOrder,
   neighbourTaskId,
   nudgePanelWidth,
@@ -69,6 +71,7 @@ export function TaskPanel({
 }) {
   const { openTask, closeTask, getOpenContext, openedHere } = useTaskPanel();
   const pathname = usePathname() ?? "/";
+  const searchParams = useSearchParams();
   const [width, setWidth] = useState(initialWidth);
   const [dragging, setDragging] = useState(false);
   // Opened by a click here: slide in and take focus. In the first HTML (a link, a reload): neither.
@@ -227,6 +230,8 @@ export function TaskPanel({
   const prevId = index > 0 ? order[index - 1] : null;
   const nextId = index >= 0 && index < order.length - 1 ? order[index + 1] : null;
   const onFullPage = pathname === `/r/task/${taskId}`;
+  // The full page's back link returns here (Today, Tasks, Portfolio, a project…; allow-list in task-panel.ts).
+  const fullHref = fullPageHref(taskId, fullPageFromFor(pathname, searchParams?.toString() ?? ""));
   const css = panelCssWidth(width);
 
   return (
@@ -283,7 +288,7 @@ export function TaskPanel({
             </button>
           </div>
           {onFullPage ? null : (
-            <Link href={`/r/task/${taskId}`} className="tp-full">
+            <Link href={fullHref} className="tp-full">
               Open full page
             </Link>
           )}

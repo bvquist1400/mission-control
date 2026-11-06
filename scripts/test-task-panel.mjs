@@ -14,18 +14,61 @@
 //      entry point (Today's Now / board / waiting, Tasks rows, project and app
 //      grids, Portfolio, the record page's Edit, search) opens the panel; the
 //      panel keeps everything the old editor could do; the ? dialog lists the keys.
+//   5. Panel tidy (Brent 11/6, Baseline 2da37187): the body's order (All fields
+//      open at the top, Who has it last, a "Waiting on you" jump), the
+//      "Waiting on" section (note only / links only / both / neither, rendered),
+//      "Tasks waiting on this" hidden when none, and the full page's back link
+//      (`?from=`, an allow-list: never an arbitrary URL).
 // With TASK_PANEL_TEST_BASE_URL (a running local server on fixture data) and
 // TASK_PANEL_TEST_COOKIE (its sign-in cookie) it also fetches pages and checks
 // the server-rendered panel width (no jump) and the reflow.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { registerHooks } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import ts from "typescript";
 
 const root = path.resolve(process.env.TASK_PANEL_TEST_ROOT || process.cwd());
 const read = (rel) => fs.readFileSync(path.join(root, rel), "utf8");
 const exists = (rel) => fs.existsSync(path.join(root, rel));
 const readIf = (rel) => (exists(rel) ? read(rel) : "");
+
+// Section 5 renders TaskDependencies with react-dom/server: "@/…" resolves to
+// <root>/src, and .tsx is transpiled on load (the test runs without a loader).
+function aliasPath(target) {
+  for (const candidate of [target, `${target}.ts`, `${target}.tsx`, path.join(target, "index.ts"), path.join(target, "index.tsx")]) {
+    try {
+      if (fs.statSync(candidate).isFile()) return candidate;
+    } catch {
+      // try the next spelling
+    }
+  }
+  return null;
+}
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.startsWith("@/")) {
+      const hit = aliasPath(path.join(root, "src", specifier.slice(2)));
+      if (hit) return { url: pathToFileURL(hit).href, shortCircuit: true };
+    }
+    if ((specifier.startsWith("./") || specifier.startsWith("../")) && context.parentURL?.startsWith("file:")) {
+      const hit = aliasPath(path.resolve(path.dirname(fileURLToPath(context.parentURL)), specifier));
+      if (hit) return { url: pathToFileURL(hit).href, shortCircuit: true };
+    }
+    return nextResolve(specifier, context);
+  },
+  load(url, context, nextLoad) {
+    if (url.startsWith("file:") && url.endsWith(".tsx")) {
+      const output = ts.transpileModule(fs.readFileSync(fileURLToPath(url), "utf8"), {
+        compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, verbatimModuleSyntax: false },
+        fileName: fileURLToPath(url),
+      });
+      return { format: "module", source: output.outputText, shortCircuit: true };
+    }
+    return nextLoad(url, context);
+  },
+});
 
 let passed = 0;
 let failed = 0;
@@ -385,7 +428,8 @@ await test("the panel keeps everything the old editor could do", () => {
     assert.match(body, piece, String(piece));
   }
   const frame = readIf("src/components/tasks/panel/TaskPanel.tsx");
-  assert.match(frame, /href=\{`\/r\/task\/\$\{taskId\}`\}[\s\S]*Open full page/);
+  assert.match(frame, /const fullHref = fullPageHref\(taskId, fullPageFromFor\(pathname, searchParams/);
+  assert.match(frame, /href=\{fullHref\}[\s\S]*Open full page/);
   assert.match(frame, /aria-label="Close the task \(Esc\)"/);
   assert.match(body, /data-project-square-slot[\s\S]*<ProjectSquare/, "S2's project colour square in the panel header");
 });
@@ -400,6 +444,191 @@ await test("user-facing text in the panel never names the AI product", () => {
   for (const file of ["src/components/tasks/panel/TaskPanel.tsx", "src/components/tasks/panel/TaskPanelBody.tsx", "src/components/tasks/TaskComments.tsx"]) {
     assert.doesNotMatch(readIf(file), /Claude|Anthropic/, file);
   }
+});
+
+// ── 5. panel tidy (Brent 11/6, Baseline 2da37187) ──────────────────────
+const TID = "0d127adc-0000-4000-8000-000000000001";
+const PROJECT = "a0000000-0000-4000-8000-0000000000aa";
+
+await test("the body's order: All fields (open) at the top, Who has it last, just above Mark done / Park", () => {
+  const body = readIf("src/components/tasks/panel/TaskPanelBody.tsx");
+  const at = (pattern) => {
+    const index = body.search(pattern);
+    assert.ok(index >= 0, `found ${pattern}`);
+    return index;
+  };
+  const order = [
+    ["title", /className="tp-title">\s*\{view\.title\}/],
+    ["facts", /className="tp-facts"/],
+    ["Waiting on you", /className="tp-you"/],
+    ["All fields", /<summary>All fields<\/summary>/],
+    ["Where this stands", /<Section title="Where this stands">/],
+    ["Steps", /<Section title="Steps">/],
+    ["Checklist", /<ChecklistSection/],
+    ["Description", /<summary>Description<\/summary>/],
+    ["Activity", /<Section title="Activity"/],
+    ["Waiting on", /<TaskDependencies/],
+    ["Notes", /<summary>Notes<\/summary>/],
+    ["Who has it", /<TaskOwnerSection key=\{task\.id\}/],
+    ["Mark done", /className="tp-acts"/],
+  ].map(([name, pattern]) => [name, at(pattern)]);
+  for (let i = 1; i < order.length; i += 1) {
+    assert.ok(order[i - 1][1] < order[i][1], `${order[i - 1][0]} comes before ${order[i][0]}`);
+  }
+  assert.equal(body.match(/<TaskOwnerSection /g)?.length, 1, "Who has it is drawn once");
+  assert.equal(body.match(/<TaskMetaEditor/g)?.length, 1, "All fields is drawn once");
+  assert.match(body, /const \[fieldsOpen, setFieldsOpen\] = useState\(true\)/, "All fields starts open");
+  assert.match(body, /<details\s+ref=\{fieldsRef\}\s+className="tp-details tp-fields"\s+open=\{fieldsOpen\}/);
+  assert.match(body, /onToggle=\{\(event\) => setFieldsOpen\(event\.currentTarget\.open\)\}/, "closing it by hand sticks while the task is open");
+  // The Notes fold stays a closed <details>.
+  assert.match(body, /<details className="tp-details">\s*<summary>Notes<\/summary>/);
+});
+
+await test("owner = brent: a 'Waiting on you' jump near the top reaches his answer box at the bottom", () => {
+  const body = readIf("src/components/tasks/panel/TaskPanelBody.tsx");
+  assert.match(body, /\{mine \? \(\s*<button type="button" className="tp-you" onClick=\{jumpToAnswer\}>\s*Waiting on you · answer below/);
+  assert.match(body, /<div ref=\{ownerRef\} className="tp-owner" data-panel-owner="">\s*<TaskOwnerSection/);
+  assert.match(body, /function jumpToAnswer\(\)[\s\S]*?scrollIntoView[\s\S]*?querySelector<HTMLTextAreaElement>\("\[data-hand-back-note\]"\)[\s\S]*?focus\(/);
+  const owner = read("src/components/tasks/TaskOwnerSection.tsx");
+  assert.match(owner, /useState\(task\.owner === "brent"\)/, "his answer box still starts open");
+  assert.match(owner, /data-hand-back-note=""/, "the answer box is the one the jump focuses");
+  const css = read("src/components/tasks/panel/task-panel.css");
+  assert.match(css, /\.tp-you \{[^}]*background: var\(--hi\)/, "marigold = needs you");
+  assert.match(css, /@media \(pointer: coarse\) \{\s*\.tp-you \{\s*min-height: 44px;/, "44 px on a touch screen");
+});
+
+await test("Waiting on: note only / links only / both / neither (waitingOnView)", () => {
+  const { waitingOnView } = need();
+  assert.deepEqual(waitingOnView({ waitingOn: "New time to meet with larger group", linkCount: 0, blocks: [] }), {
+    note: "New time to meet with larger group",
+    linkCount: 0,
+    empty: false,
+    waitingOnThis: "hidden",
+  });
+  assert.deepEqual(waitingOnView({ waitingOn: null, linkCount: 2, blocks: [] }), { note: null, linkCount: 2, empty: false, waitingOnThis: "hidden" });
+  assert.deepEqual(waitingOnView({ waitingOn: "  Ana's OK  ", linkCount: 1, blocks: [{}] }), { note: "Ana's OK", linkCount: 1, empty: false, waitingOnThis: "list" });
+  assert.deepEqual(waitingOnView({ waitingOn: "   ", linkCount: 0, blocks: undefined }), { note: null, linkCount: 0, empty: true, waitingOnThis: "hidden" });
+  assert.equal(waitingOnView({ waitingOn: "", linkCount: 0, blocks: null }).waitingOnThis, "unreadable", "a failed read still says so");
+});
+
+const { createElement: h } = await import("react");
+const { renderToStaticMarkup } = await import("react-dom/server");
+let DepsMod = null;
+try {
+  DepsMod = await import(pathToFileURL(path.join(root, "src/components/tasks/TaskDependencies.tsx")).href);
+} catch (error) {
+  console.log(`(TaskDependencies.tsx did not load: ${String(error?.message ?? error).split("\n")[0]})`);
+}
+const link = (id, title, status = "Planned") => ({
+  id,
+  task_id: TID,
+  type: "task",
+  depends_on_task_id: `${id}-task`,
+  depends_on_commitment_id: null,
+  title,
+  status,
+  due_at: null,
+  unresolved: status !== "Done",
+});
+function renderDeps(props) {
+  assert.ok(DepsMod?.TaskDependencies, "TaskDependencies loads");
+  return renderToStaticMarkup(h(DepsMod.TaskDependencies, { taskId: TID, dependencies: [], blocks: [], onEditWaitingOn: () => {}, ...props }));
+}
+const text = (html) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;|&#39;/g, "'").replace(/\s+/g, " ").trim();
+
+await test("rendered: the confusing case (a note, no links) reads 'Waiting on: <note>', nothing about Blocks or Dependencies", () => {
+  const html = renderDeps({ waitingOn: "New time to meet with larger group" });
+  const words = text(html);
+  assert.match(words, /^Waiting on \+ Link a task New time to meet with larger group Edit$/);
+  assert.match(html, /aria-label="Edit what this is waiting on"/);
+  assert.doesNotMatch(words, /Dependencies|Blocks|Tasks waiting on this|Not waiting on anything|\(0\)/);
+});
+
+await test("rendered: links only, both, neither", () => {
+  const linksOnly = text(renderDeps({ waitingOn: null, dependencies: [link("l1", "Get the venue list"), link("l2", "Send the invite", "Done")] }));
+  assert.match(linksOnly, /^Waiting on \+ Link a task Get the venue list Task Planned Send the invite Task Done Resolved$/);
+  const both = text(renderDeps({ waitingOn: "Ana's OK", dependencies: [link("l1", "Get the venue list")] }));
+  assert.match(both, /^Waiting on \+ Link a task Ana's OK Edit Get the venue list Task Planned$/, "the note first, then the linked tasks");
+  const neither = text(renderDeps({ waitingOn: "  " }));
+  assert.equal(neither, "Waiting on + Link a task Not waiting on anything.");
+  const allDone = text(renderDeps({ dependencies: [link("l2", "Send the invite", "Done")] }));
+  assert.match(allDone, /Everything linked here is done\. Ready to start\?/);
+});
+
+await test("rendered: 'Tasks waiting on this' hidden at 0, listed when some, and a failed read still says so", () => {
+  assert.doesNotMatch(renderDeps({ blocks: [] }), /Tasks waiting on this|Nothing waits/);
+  assert.doesNotMatch(renderDeps({ blocks: undefined }), /Tasks waiting on this/);
+  const some = text(renderDeps({ blocks: [{ dependency_id: "b1", id: "t9", title: "Book the room", status: "Planned", due_at: null }] }));
+  assert.match(some, /Tasks waiting on this \(1\) These wait on this task\. .* Book the room Task Planned No due date · stays put/);
+  const failed = text(renderDeps({ blocks: null }));
+  assert.match(failed, /Tasks waiting on this Couldn’t load the tasks that wait on this one\./);
+});
+
+await test("the panel passes the task's waiting-on note and an Edit that focuses All fields → Waiting On", () => {
+  const body = readIf("src/components/tasks/panel/TaskPanelBody.tsx");
+  assert.match(body, /<TaskDependencies[\s\S]*?waitingOn=\{task\.waiting_on\}[\s\S]*?onEditWaitingOn=\{editWaitingOn\}/);
+  assert.match(body, /function editWaitingOn\(\)[\s\S]*?setFieldsOpen\(true\)[\s\S]*?querySelector<HTMLInputElement>\('\[data-field="waiting_on"\]'\)[\s\S]*?focus\(\)/);
+  assert.match(read("src/components/tasks/TaskMetaEditor.tsx"), /data-field="waiting_on"\s+value=\{waitingOnDraft\}/);
+  const deps = read("src/components/tasks/TaskDependencies.tsx");
+  assert.doesNotMatch(deps, /Dependencies \(|>\s*Blocks|Add dependency|No dependencies linked yet|Nothing waits on this task/, "the old words are gone");
+});
+
+await test("Open full page says where it was opened (an allow-list)", () => {
+  const { fullPageFromFor, fullPageHref } = need();
+  assert.equal(fullPageFromFor("/", ""), "today");
+  assert.equal(fullPageFromFor("/", `?task=${ID}&mode=personal`), "today");
+  assert.equal(fullPageFromFor("/", `?day=2026-11-05&task=${ID}`), "today:2026-11-05", "a day list is kept");
+  assert.equal(fullPageFromFor("/", "?day=2026-02-30"), "today", "not a real day");
+  assert.equal(fullPageFromFor("/", "?day=2026-11-05&day=2026-11-06"), "today", "two days");
+  assert.equal(fullPageFromFor("/backlog", "?status=waiting"), "tasks");
+  assert.equal(fullPageFromFor("/portfolio", "?scope=work"), "portfolio");
+  assert.equal(fullPageFromFor(`/projects/${PROJECT.toUpperCase()}`, ""), `project:${PROJECT}`);
+  assert.equal(fullPageFromFor(`/applications/${PROJECT}`, ""), `application:${PROJECT}`);
+  assert.equal(fullPageFromFor("/projects/templates", ""), null);
+  assert.equal(fullPageFromFor("/calendar", ""), null);
+  assert.equal(fullPageFromFor("/briefs/AM-1106", ""), null);
+  assert.equal(fullPageFromFor(`/r/task/${ID2}`, "?from=tasks"), "tasks", "a step opened on a full page keeps where Brent started");
+  assert.equal(fullPageFromFor(`/r/task/${ID2}`, "?from=https%3A%2F%2Fevil.example"), null);
+  assert.equal(fullPageHref(ID, "today:2026-11-05"), `/r/task/${ID}?from=today%3A2026-11-05`);
+  assert.equal(fullPageHref(ID, null), `/r/task/${ID}`);
+});
+
+await test("the full page's back link: Today by default, the allowed places only, never an arbitrary URL", () => {
+  const { fullPageBackLink } = need();
+  assert.deepEqual(fullPageBackLink(undefined), { label: "Today", href: "/" });
+  assert.deepEqual(fullPageBackLink("today"), { label: "Today", href: "/" });
+  assert.deepEqual(fullPageBackLink("today:2026-11-05"), { label: "Today", href: "/?day=2026-11-05" });
+  assert.deepEqual(fullPageBackLink("tasks"), { label: "Tasks", href: "/backlog" });
+  assert.deepEqual(fullPageBackLink("portfolio"), { label: "Portfolio", href: "/portfolio" });
+  assert.deepEqual(fullPageBackLink(`project:${PROJECT}`), { label: "Project", href: `/projects/${PROJECT}` });
+  assert.deepEqual(fullPageBackLink(`application:${PROJECT}`), { label: "Application", href: `/applications/${PROJECT}` });
+  for (const junk of [
+    "",
+    "Today",
+    "https://evil.example",
+    "//evil.example",
+    "/\\evil.example",
+    "javascript:alert(1)",
+    "/portfolio",
+    "today:2026-02-30",
+    "today:1999-01-01",
+    "today:2026-11-05:x",
+    "project:not-a-uuid",
+    `project:${PROJECT.toUpperCase()}`,
+    `project:${PROJECT}/../../x`,
+    "calendar",
+    ["tasks", "portfolio"],
+    ["tasks"],
+  ]) {
+    assert.deepEqual(fullPageBackLink(junk), { label: "Today", href: "/" }, JSON.stringify(junk));
+  }
+});
+
+await test("the full page reads ?from for its back link (no fixed ← Portfolio)", () => {
+  const page = read("src/app/r/[kind]/[id]/page.tsx");
+  assert.match(page, /const back = fullPageBackLink\(\(await searchParams\)\.from\)/);
+  assert.match(page, /<Link href=\{back\.href\} className="pf-back">\s*<span aria-hidden="true">←<\/span> \{back\.label\}/);
+  assert.doesNotMatch(page, /href="\/portfolio" className="pf-back"/);
 });
 
 // ── 4. server render (optional) ──────────────────────────────────────────

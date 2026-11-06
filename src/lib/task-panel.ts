@@ -258,3 +258,125 @@ export function panelKeyAction(
       return null;
   }
 }
+
+// ── "Open full page" and the full page's way back ─────────────────────────
+//
+// Brent 11/6 (Baseline 2da37187): the full task page's top-left button said
+// "← Portfolio" whatever page he came from. "Open full page" now tells the
+// page where it was opened (`?from=`), and the page turns that into its back
+// link. Only these places, spelled exactly, are understood; the href is built
+// here from the value, never taken from the URL, so `from` can't send anyone
+// off the site (no open redirect). Anything else goes back to Today.
+
+/** The full page's query parameter naming where it was opened. */
+export const FULL_PAGE_FROM_PARAM = "from";
+
+export interface FullPageBackLink {
+  label: string;
+  href: string;
+}
+
+/** Where the full page goes back to when `from` is missing or not understood. */
+export const DEFAULT_BACK_LINK: FullPageBackLink = { label: "Today", href: "/" };
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const DAY_PATTERN = /^(20\d\d)-(\d\d)-(\d\d)$/;
+
+/** A real calendar day, years 2000–2099 (Today's `?day=` rule). */
+function isRealDay(value: string): boolean {
+  const match = DAY_PATTERN.exec(value);
+  if (!match) return false;
+  const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])];
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+/**
+ * The `from` value for a panel open on this page, or null for a page the full
+ * page has no way back to (it then goes back to Today). Today keeps a day list
+ * (`?day=`); a project or application page keeps its id. On a record page the
+ * page's own valid `from` is passed on, so a step opened there still goes back
+ * to where Brent started.
+ */
+export function fullPageFromFor(pathname: string | null | undefined, search: string | null | undefined): string | null {
+  const path = ((pathname ?? "").split(/[?#]/)[0] || "/").replace(/\/+$/, "") || "/";
+  const params = new URLSearchParams((search ?? "").startsWith("?") ? (search ?? "").slice(1) : search ?? "");
+  if (path === "/") {
+    const day = params.getAll("day");
+    return day.length === 1 && isRealDay(day[0]) ? `today:${day[0]}` : "today";
+  }
+  if (path === "/backlog") return "tasks";
+  if (path === "/portfolio") return "portfolio";
+  const record = /^\/(projects|applications)\/([^/]+)$/.exec(path);
+  if (record) {
+    const id = record[2].toLowerCase();
+    if (!UUID_PATTERN.test(id)) return null;
+    return `${record[1] === "projects" ? "project" : "application"}:${id}`;
+  }
+  if (path.startsWith("/r/")) {
+    const from = params.getAll(FULL_PAGE_FROM_PARAM);
+    return from.length === 1 && backLinkForFrom(from[0]) !== null ? from[0] : null;
+  }
+  return null;
+}
+
+/** The "Open full page" link: `/r/task/<id>`, plus `?from=` when the page is one it can go back to. */
+export function fullPageHref(taskId: string, from: string | null): string {
+  const base = `/r/task/${encodeURIComponent(taskId)}`;
+  return from ? `${base}?${FULL_PAGE_FROM_PARAM}=${encodeURIComponent(from)}` : base;
+}
+
+/** The back link one `from` value means, or null when it isn't one of the allowed places. */
+function backLinkForFrom(from: string): FullPageBackLink | null {
+  if (from === "today") return { label: "Today", href: "/" };
+  if (from === "tasks") return { label: "Tasks", href: "/backlog" };
+  if (from === "portfolio") return { label: "Portfolio", href: "/portfolio" };
+  const [kind, value, ...rest] = from.split(":");
+  if (rest.length > 0 || value === undefined) return null;
+  if (kind === "today" && isRealDay(value)) return { label: "Today", href: `/?day=${value}` };
+  if (kind === "project" && UUID_PATTERN.test(value)) return { label: "Project", href: `/projects/${value}` };
+  if (kind === "application" && UUID_PATTERN.test(value)) return { label: "Application", href: `/applications/${value}` };
+  return null;
+}
+
+/**
+ * The full page's top-left link from its `from` search param (as Next hands it
+ * over: a string, several, or none). One allowed value gives its place; none,
+ * several or anything else gives "← Today".
+ */
+export function fullPageBackLink(from: string | string[] | null | undefined): FullPageBackLink {
+  if (typeof from !== "string") return DEFAULT_BACK_LINK;
+  return backLinkForFrom(from) ?? DEFAULT_BACK_LINK;
+}
+
+// ── The "Waiting on" section ──────────────────────────────────────────────
+//
+// Brent 11/6 (Baseline 2da37187): he typed a "waiting on" note and the panel
+// showed "Dependencies (0)" and "Blocks (0)". The section is now "Waiting on":
+// the task's own note (the All fields "Waiting On" text) and the tasks or
+// commitments it is linked to wait on, together. The tasks that wait on this
+// one are "Tasks waiting on this", shown only when there are some (or when
+// they couldn't be read, so a failed read never looks like "none").
+
+export interface WaitingOnView {
+  /** The task's free-text waiting-on note, trimmed; null when there is none. */
+  note: string | null;
+  /** How many tasks / commitments it is linked to wait on. */
+  linkCount: number;
+  /** Neither a note nor a link: the section says so in one line. */
+  empty: boolean;
+  /** "Tasks waiting on this": hidden (none, or not asked for), unreadable, or a list. */
+  waitingOnThis: "hidden" | "unreadable" | "list";
+}
+
+export function waitingOnView(input: {
+  waitingOn: string | null | undefined;
+  linkCount: number;
+  /** undefined = not shown here; null = couldn't be read; [] = nothing waits on it. */
+  blocks: readonly unknown[] | null | undefined;
+}): WaitingOnView {
+  const note = typeof input.waitingOn === "string" && input.waitingOn.trim() ? input.waitingOn.trim() : null;
+  const linkCount = Math.max(0, input.linkCount | 0);
+  const waitingOnThis = input.blocks === undefined ? "hidden" : input.blocks === null ? "unreadable" : input.blocks.length > 0 ? "list" : "hidden";
+  return { note, linkCount, empty: note === null && linkCount === 0, waitingOnThis };
+}
