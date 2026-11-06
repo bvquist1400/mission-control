@@ -234,16 +234,29 @@ export function dayTense(date: string, todayDate: string): DayTense {
   return 'future';
 }
 
-/** Column weights (mockup: closed 1 / 1.55 / 1.25, open .6 / 1.65 / 1.3; a week without today is even). */
-export function dayWeights(tense: DayTense, weekHasToday: boolean): { weight: number; weightOpen: number } {
+/** An earlier day's column while its done tasks are hidden (Today v2): narrower, so today and the days ahead get the room. */
+export const PAST_WEIGHT_DONE_HIDDEN = 0.75;
+
+/**
+ * Column weights (mockup: closed 1 / 1.55 / 1.25, open .6 / 1.65 / 1.3; a week
+ * without today is even). Today v2: with earlier done tasks hidden (the
+ * default), an earlier day is narrower with the panel closed too (.75).
+ */
+export function dayWeights(tense: DayTense, weekHasToday: boolean, doneHidden = false): { weight: number; weightOpen: number } {
   if (!weekHasToday) return { weight: 1, weightOpen: 1 };
-  if (tense === 'past') return { weight: 1, weightOpen: 0.6 };
+  if (tense === 'past') return { weight: doneHidden ? PAST_WEIGHT_DONE_HIDDEN : 1, weightOpen: 0.6 };
   if (tense === 'today') return { weight: 1.55, weightOpen: 1.65 };
   return { weight: 1.25, weightOpen: 1.3 };
 }
 
 /** The Mon–Fri columns of the week starting `weekStart`, with `open[i]` / `done[i]` task counts. */
-export function dayColumns(weekStart: string, todayDate: string, open: ReadonlyArray<number>, done: ReadonlyArray<number>): DayColumnModel[] {
+export function dayColumns(
+  weekStart: string,
+  todayDate: string,
+  open: ReadonlyArray<number>,
+  done: ReadonlyArray<number>,
+  options: { doneHidden?: boolean } = {}
+): DayColumnModel[] {
   const weekEnd = addDateOnlyDays(weekStart, 6);
   const weekHasToday = todayDate >= weekStart && todayDate <= weekEnd;
   return [0, 1, 2, 3, 4].map((index) => {
@@ -259,7 +272,7 @@ export function dayColumns(weekStart: string, todayDate: string, open: ReadonlyA
       name: WEEKDAY_SHORT[weekdayOf(date)],
       day: Number(date.slice(8, 10)),
       tense,
-      ...dayWeights(tense, weekHasToday),
+      ...dayWeights(tense, weekHasToday, Boolean(options.doneHidden)),
       count,
       folds: tense === 'past',
     };
@@ -269,6 +282,20 @@ export function dayColumns(weekStart: string, todayDate: string, open: ReadonlyA
 /** CSS grid track list for the weights, e.g. "minmax(0,1fr) minmax(0,1.55fr) …". */
 export function gridTracks(weights: ReadonlyArray<number>): string {
   return weights.map((weight) => `minmax(0,${Number(weight.toFixed(2))}fr)`).join(' ');
+}
+
+/**
+ * Today v2: an earlier day's done tasks are hidden unless "Show done" is on
+ * (it always starts off: Brent 11/6, "Always start hidden"). Today's own done
+ * tasks and the days ahead are never hidden.
+ */
+export function hidesDone(tense: DayTense, showDone: boolean): boolean {
+  return tense === 'past' && !showDone;
+}
+
+/** "Show done · 5": how many done tasks the earlier days of the shown week hold. */
+export function earlierDoneCount(columns: ReadonlyArray<{ tense: DayTense }>, done: ReadonlyArray<number>): number {
+  return columns.reduce((sum, column, index) => sum + (column.tense === 'past' ? done[index] ?? 0 : 0), 0);
 }
 
 /** The folded line: "2 done" (a past day with nothing done: "nothing done"). */

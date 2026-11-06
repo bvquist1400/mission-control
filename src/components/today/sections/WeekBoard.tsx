@@ -2,7 +2,7 @@
 
 import { squareInputOf } from "@/lib/project-colors";
 import { ProjectSquare, ProjectTag } from "@/components/project-colors/ProjectSquare";
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Modal } from "@/components/ui/Modal";
@@ -19,7 +19,8 @@ import { addDateOnlyDays, getDisplayedWeekRange, isDueAtInWeekStarting } from "@
 import { etDate, isPastDue } from "@/lib/task-range";
 import { buildRangeCardView, type RangeCardView } from "@/lib/task-range-view";
 import { progressRowsFor } from "@/lib/break-into-tasks";
-import { taskIdFromParams } from "@/lib/task-panel";
+import { isTypingTarget, taskIdFromParams } from "@/lib/task-panel";
+import type { TaskStatus } from "@/types/database";
 import {
   dayStrip,
   laneContinuesText,
@@ -33,7 +34,9 @@ import {
   cardDueText,
   dayColumns,
   dueAtForBoardDay,
+  earlierDoneCount,
   foldedDayText,
+  hidesDone,
   gridTracks,
   isoWeekNumber,
   moveToChoices,
@@ -47,6 +50,29 @@ import {
   type MoveChoice,
 } from "@/lib/today/today-board";
 import {
+  DAY_PARAM,
+  dayKeyAction,
+  dayMonthLabel,
+  dayRowDue,
+  dayTabs,
+  groupDayList,
+  hrefWithDay,
+  longDayName,
+  mondayOf,
+  nextRowIndex,
+  parseDayParam,
+  rangeDayOn,
+  rowSteps,
+  statusChange,
+  statusOptions,
+  statusToastText,
+  stepDay,
+  viewedDay,
+  weekOffsetOf,
+  type DayGroupKind,
+} from "@/lib/today/today-day";
+import { DayList, type DayRowModel } from "@/components/today/sections/DayList";
+import {
   boardStepsId,
   DoneRow,
   LaneBar,
@@ -59,9 +85,22 @@ import { InlineSteps } from "@/components/tasks/InlineSteps";
 import { TodayStrip, type StripEvent } from "@/components/today/sections/TodayStrip";
 import "@/components/today/today-board.css";
 import "@/components/today/move-to-menu.css";
+import "@/components/today/today-day.css";
 
 const TIME_ZONE = DEFAULT_WORKDAY_CONFIG.timezone;
 const WAITING_RAIL_LIMIT = 8;
+const PHONE_QUERY = "(max-width: 767px)";
+
+/** Any layer that owns its own Esc / arrows (same set as the task panel's anyDialogOpen). */
+function anyOverlayOpen(): boolean {
+  return Boolean(document.querySelector('[role="dialog"][aria-modal="true"], [role="dialog"][aria-modal="false"], header [aria-expanded="true"]'));
+}
+
+function subscribePhone(onChange: () => void): () => void {
+  const query = window.matchMedia(PHONE_QUERY);
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
+}
 
 type ChecklistRows = NonNullable<TaskWithImplementation["checklist_rows"]>;
 
@@ -88,6 +127,8 @@ interface WeekBoardProps {
   meetingsFailed: boolean;
   /** Server-rendered chips for the strip (Artifact Inbox, sprint). */
   chips?: ReactNode;
+  /** The server saw a phone's browser: Today opens straight into today's list (Today v2), no flash of the week. */
+  phoneHint?: boolean;
 }
 
 function getDateInTimeZone(date: Date, timeZone: string): string {
@@ -184,10 +225,18 @@ export function WeekBoard({
   meetings,
   meetingsFailed,
   chips,
+  phoneHint = false,
 }: WeekBoardProps) {
   const router = useRouter();
   const params = useSearchParams();
   const openTaskId = taskIdFromParams(params, "/");
+  // Today v2: `?day=YYYY-MM-DD` shows that day as a list (a bad date shows the week).
+  const dayParam = parseDayParam(params.get(DAY_PARAM));
+  const isPhone = useSyncExternalStore(
+    subscribePhone,
+    () => window.matchMedia(PHONE_QUERY).matches,
+    () => phoneHint
+  );
   const { openTask, seedTasks: registerTasks } = useTaskPanel();
   const { sprints } = useSprints();
   const { completeTask, updateTaskWithUndo } = useTaskMutation();
@@ -202,7 +251,14 @@ export function WeekBoard({
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [weekOffset, setWeekOffset] = useState(0);
-  const [weekLoading, setWeekLoading] = useState(false);
+  const [loadedWeek, setLoadedWeek] = useState<string | null>(null);
+  // Done tasks from earlier days start hidden on every visit (Brent 11/6: "Always start hidden"; never remembered).
+  const [showDone, setShowDone] = useState(false);
+  // Phone: "← Week" from today's list shows the week until the next visit.
+  const [phoneWeek, setPhoneWeek] = useState(false);
+  const [motion, setMotion] = useState<"in" | "prev" | "next" | "back" | null>(null);
+  const [motionKey, setMotionKey] = useState(0);
+  const pushedDayRef = useRef(false);
   const [createDueDate, setCreateDueDate] = useState<string | null>(null);
   const [implementations, setImplementations] = useState<ImplementationSummary[]>([]);
   const [implementationsLoading, setImplementationsLoading] = useState(false);
@@ -250,12 +306,19 @@ export function WeekBoard({
     registerTasks([...tasks, ...waiting, ...done]);
   }, [tasks, waiting, done, registerTasks]);
 
-  // The fly-out only lives while the panel is open; Esc or a click elsewhere closes it.
-  const activeFlyout = openTaskId ? flyout : null;
+  const now = new Date(nowMs);
+  const currentWeekRange = getDisplayedWeekRange(now, TIME_ZONE);
+  const todayDate = getDateInTimeZone(now, TIME_ZONE);
+  const viewDay = viewedDay({ dayParam, phone: isPhone, phoneWeek, todayDate });
+
+  // The fly-out lives while the rail is folded into tabs (panel open, or a day list); Esc or a click elsewhere closes it.
+  const activeFlyout = openTaskId || viewDay ? flyout : null;
   useEffect(() => {
     if (!activeFlyout) return;
     function onKey(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
+      // A Move to… menu opened from the fly-out takes this Esc itself (S4 review F1).
+      if (document.querySelector(".tb-move")) return;
       event.preventDefault();
       event.stopPropagation();
       const which = activeFlyout;
@@ -276,12 +339,11 @@ export function WeekBoard({
   }, [activeFlyout]);
 
   const syncedSet = useMemo(() => new Set(syncedTaskIds), [syncedTaskIds]);
-  const now = new Date(nowMs);
-  const currentWeekRange = getDisplayedWeekRange(now, TIME_ZONE);
-  const selectedWeekStart = addDateOnlyDays(currentWeekRange.start, weekOffset * 7);
+  // A day list shows the week that day is in; otherwise the week the pager picked.
+  const selectedWeekStart = viewDay ? mondayOf(viewDay) : addDateOnlyDays(currentWeekRange.start, weekOffset * 7);
   const selectedWeekEnd = addDateOnlyDays(selectedWeekStart, 6);
-  const todayDate = getDateInTimeZone(now, TIME_ZONE);
-  const isCurrentWeek = weekOffset === 0;
+  const isCurrentWeek = selectedWeekStart === currentWeekRange.start;
+  const weekLoading = !isCurrentWeek && loadedWeek !== selectedWeekStart;
 
   const toData = useCallback(
     (task: TaskWithImplementation): WeekBoardTaskData => {
@@ -319,12 +381,15 @@ export function WeekBoard({
     if (date && doneByDate.has(date)) doneByDate.get(date)!.push(toData(task));
   }
 
+  const columnDone = weekDates.slice(0, 5).map((date) => doneByDate.get(date)?.length ?? 0);
   const columns = dayColumns(
     selectedWeekStart,
     todayDate,
     weekDates.slice(0, 5).map((date) => singlesByDate.get(date)?.length ?? 0),
-    weekDates.slice(0, 5).map((date) => doneByDate.get(date)?.length ?? 0)
+    columnDone,
+    { doneHidden: !showDone }
   );
+  const hiddenDoneCount = earlierDoneCount(columns, columnDone);
   const saturday = weekDates[5];
   const sunday = weekDates[6];
   const weekendRanges = placement.weekendRanges.map((task) => dataById.get(task.id)).filter((task): task is WeekBoardTaskData => Boolean(task));
@@ -381,6 +446,7 @@ export function WeekBoard({
         return response.json() as Promise<TaskWithImplementation[]>;
       })
       .then((selectedTasks) => {
+        setLoadedWeek(selectedWeekStart);
         setTasks((current) =>
           mergeTasksById(
             current.filter(
@@ -392,11 +458,9 @@ export function WeekBoard({
       })
       .catch((loadError: unknown) => {
         if ((loadError as { name?: string }).name !== "AbortError") {
+          setLoadedWeek(selectedWeekStart);
           setError(loadError instanceof Error ? loadError.message : "Failed to load the selected week");
         }
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setWeekLoading(false);
       });
     return () => controller.abort();
   }, [isCurrentWeek, mode, selectedWeekEnd, selectedWeekStart]);
@@ -431,8 +495,59 @@ export function WeekBoard({
   /** Another week: its tasks load on demand (the streamed props hold this week). */
   function goToWeek(offset: number) {
     setWeekOffset(offset);
-    setWeekLoading(offset !== 0);
     setError(null);
+  }
+
+  // ── Today v2: a day as a list ────────────────────────────────────────────
+
+  /** Open a day: from the week a new history entry (Back returns to the week); between days the same entry. */
+  function goToDay(date: string, direction: "prev" | "next" | null) {
+    const here = window.location;
+    const href = hrefWithDay(here.pathname, here.search, date, here.hash);
+    if (!viewDay) {
+      window.history.pushState(null, "", href);
+      pushedDayRef.current = true;
+      setMotion("in");
+    } else {
+      window.history.replaceState(null, "", href);
+      setMotion(direction);
+    }
+    setMotionKey((key) => key + 1);
+    setFlyout(null);
+    setError(null);
+  }
+
+  /** Back to the week the day is in (← Week, Esc): steps back when the day was opened from the week here. */
+  function backToWeek(offset?: number) {
+    if (viewDay) setWeekOffset(offset ?? weekOffsetOf(viewDay, currentWeekRange.start));
+    if (isPhone) setPhoneWeek(true);
+    setFlyout(null);
+    setMotion("back");
+    setMotionKey((key) => key + 1);
+    if (!dayParam) return;
+    const here = window.location;
+    const panelShowing = new URLSearchParams(here.search).has("task");
+    if (pushedDayRef.current && !panelShowing && offset === undefined) {
+      pushedDayRef.current = false;
+      window.history.back();
+    } else {
+      pushedDayRef.current = false;
+      window.history.replaceState(null, "", hrefWithDay(here.pathname, here.search, null, here.hash));
+    }
+  }
+
+  const goToDayRef = useRef(goToDay);
+  const backToWeekRef = useRef(() => backToWeek());
+  useEffect(() => {
+    goToDayRef.current = goToDay;
+    backToWeekRef.current = () => backToWeek();
+  });
+
+  /** "Show next week" in the cascade toast: the week view of that week. */
+  function showWeekAfter() {
+    const offset = weekOffsetOf(selectedWeekStart, currentWeekRange.start) + 1;
+    if (viewDay) backToWeek(offset);
+    else goToWeek(offset);
   }
 
   function openCreate(date: string) {
@@ -509,7 +624,7 @@ export function WeekBoard({
           const byId = new Map(changes.map((change) => [change.task_id, change.due_at]));
           setTasks((prev) => prev.map((item) => (byId.has(item.id) ? { ...item, due_at: byId.get(item.id) ?? null } : item)));
         },
-        week: { weekStart: selectedWeekStart, showNextWeek: () => goToWeek(weekOffset + 1) },
+        week: { weekStart: selectedWeekStart, showNextWeek: showWeekAfter },
       });
     }
 
@@ -549,6 +664,60 @@ export function WeekBoard({
       },
     };
   }
+
+  /** The day list's status drop-down: a status PATCH with Undo, or Backlog / Park exactly as Move to… does them. */
+  async function handleStatus(taskId: string, value: string) {
+    if (movingIds.has(taskId)) return;
+    const task = tasks.find((item) => item.id === taskId);
+    if (!task) return;
+    const change = statusChange(task, value);
+    if (change.kind === "none") return;
+    if (change.kind === "move") {
+      await handleMoveUndated(task, change.choice);
+      return;
+    }
+    const before = task.status;
+    const apply = (status: TaskStatus) => setTasks((prev) => prev.map((item) => (item.id === taskId ? { ...item, status } : item)));
+    markBusy(setMovingIds, taskId, true);
+    setError(null);
+    await updateTaskWithUndo(taskId, { status: change.updates.status as TaskStatus }, { status: change.undo.status as TaskStatus }, {
+      message: statusToastText(task.title, value),
+      onOptimistic: () => apply(change.updates.status as TaskStatus),
+      onRollback: () => apply(before),
+      onUndo: () => apply(before),
+      failureMessage: "Couldn't change the status.",
+    });
+    markBusy(setMovingIds, taskId, false);
+  }
+
+  // Day list keys: ← / → the day before / after, Esc back to the week (after the panel), ↑ / ↓ between rows.
+  useEffect(() => {
+    if (!viewDay) return;
+    const day = viewDay;
+    function onKey(event: KeyboardEvent) {
+      const action = dayKeyAction(event, { typing: isTypingTarget(event.target), dialogOpen: anyOverlayOpen(), panelOpen: Boolean(openTaskId) });
+      if (!action) return;
+      if (action === "prev" || action === "next") {
+        event.preventDefault();
+        goToDayRef.current(stepDay(day, action), action);
+        return;
+      }
+      if (action === "week") {
+        event.preventDefault();
+        backToWeekRef.current();
+        return;
+      }
+      const titles = Array.from(document.querySelectorAll<HTMLElement>(".td-list [data-day-row] .td-title")).filter((el) => el.getClientRects().length > 0);
+      const current = titles.findIndex((el) => el.closest("[data-day-row]")?.contains(document.activeElement));
+      const index = nextRowIndex(titles.length, current, action);
+      if (index === null) return;
+      event.preventDefault();
+      titles[index].focus();
+      titles[index].scrollIntoView({ block: "nearest" });
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [viewDay, openTaskId]);
 
   function handleTaskCreated(task: TaskWithImplementation) {
     setTasks((current) => [task, ...current.filter((item) => item.id !== task.id)]);
@@ -619,10 +788,19 @@ export function WeekBoard({
 
   const renderWeekendDay = (date: string, name: string) => {
     const items = weekendItems(date);
+    const doneShown = hidesDone(date < todayDate ? "past" : date === todayDate ? "today" : "future", showDone) ? [] : items.done;
     return (
       <div {...dropProps(date, date >= todayDate)}>
         <h3>
-          {name} {Number(date.slice(8, 10))}
+          <button
+            type="button"
+            className="tb-wk-h"
+            onClick={() => goToDay(date, null)}
+            aria-label={`Open ${longDayName(date)} ${dayMonthLabel(date)} as a list`}
+            title={`See ${name} as a list`}
+          >
+            {name} {Number(date.slice(8, 10))}
+          </button>
         </h3>
         {items.continuing.map(({ data }) => (
           <button key={`cont-${data.id}`} type="button" className="tb-wk-it" data-range="" data-task-open={data.id} data-open={openTaskId === data.id ? "" : undefined} onClick={() => handleOpenTask(data.id)}>
@@ -644,7 +822,7 @@ export function WeekBoard({
             <span>{data.title}</span>
           </button>
         ))}
-        {items.done.map((data) => (
+        {doneShown.map((data) => (
           <button key={`done-${data.id}`} type="button" className="tb-wk-it" data-task-open={data.id} onClick={() => handleOpenTask(data.id)} aria-label={`${data.title} (done)`}>
             <span className="tb-ck" aria-hidden="true">
               ✓
@@ -652,6 +830,11 @@ export function WeekBoard({
             <span className="line-through">{data.title}</span>
           </button>
         ))}
+        {doneShown.length < items.done.length ? (
+          <button type="button" className="tb-fold-show" onClick={() => goToDay(date, null)}>
+            ✓ {foldedDayText(items.done.length)} · show
+          </button>
+        ) : null}
         {date >= todayDate ? (
           <button type="button" className="tb-wk-add" onClick={() => openCreate(date)} aria-label={`Add a task due ${name} ${formatDateOnlyLabel(date)}`}>
             + add
@@ -664,10 +847,170 @@ export function WeekBoard({
   const overdueCount = split.overdue.length;
   const waitingCount = split.waiting.length;
 
+  // ── The rail: one copy, used by the week and the day list ───────────────
+  const railTabs = (
+    <nav className="tb-tabs" aria-label="Overdue and Waiting">
+      <button
+        type="button"
+        className="tb-tab"
+        data-rail-tab="overdue"
+        data-late={overdueCount > 0 ? "" : undefined}
+        aria-expanded={activeFlyout === "overdue"}
+        aria-controls="today-rail"
+        onClick={() => setFlyout((current) => (current === "overdue" ? null : "overdue"))}
+      >
+        <b>{overdueCount}</b>
+        <span>Overdue</span>
+      </button>
+      <button
+        type="button"
+        className="tb-tab"
+        data-rail-tab="waiting"
+        aria-expanded={activeFlyout === "waiting"}
+        aria-controls="today-rail"
+        onClick={() => setFlyout((current) => (current === "waiting" ? null : "waiting"))}
+      >
+        <b>{waitingCount}</b>
+        <span>Waiting</span>
+      </button>
+    </nav>
+  );
+
+  const rail = (
+    <aside
+      id="today-rail"
+      ref={railRef}
+      className="tb-rail"
+      data-flyout={activeFlyout ?? undefined}
+      role={activeFlyout ? "dialog" : undefined}
+      aria-modal={activeFlyout ? "false" : undefined}
+      aria-label={activeFlyout ? (activeFlyout === "overdue" ? "Overdue" : "Waiting") : "Overdue and Waiting"}
+    >
+      {activeFlyout ? (
+        <button
+          type="button"
+          className="tb-rail-close"
+          onClick={() => {
+            const which = activeFlyout;
+            setFlyout(null);
+            document.querySelector<HTMLElement>(`[data-rail-tab="${which}"]`)?.focus({ preventScroll: true });
+          }}
+        >
+          Close
+        </button>
+      ) : null}
+      <section data-rail="overdue" data-task-list="overdue" aria-labelledby="today-overdue-h">
+        <div className="tb-rh">
+          <h3 id="today-overdue-h">Overdue</h3>
+          <span className="tb-n" data-late={overdueCount > 0 ? "" : undefined}>
+            {overdueCount}
+          </span>
+          <em>oldest first</em>
+        </div>
+        {overdueCount === 0 ? <p className="tb-empty">Nothing overdue.</p> : null}
+        {overdueQueue.shown.map((data) =>
+          renderCard(data, "overdue", "overdue", { text: overdueLabel(data.dueAt, todayDate), late: true })
+        )}
+        {overdueQueue.hidden > 0 || overdueExpanded ? (
+          <button type="button" className="tb-linkbtn" aria-expanded={overdueExpanded} onClick={() => setOverdueExpanded((value) => !value)}>
+            {overdueExpanded ? "Show fewer" : `Show ${overdueQueue.hidden} more`}
+          </button>
+        ) : null}
+      </section>
+
+      <section data-rail="waiting" data-task-list="waiting" aria-labelledby="today-waiting-h">
+        <div className="tb-rh">
+          <h3 id="today-waiting-h">Waiting</h3>
+          <span className="tb-n">{waitingCount}</span>
+          <em>on someone else</em>
+        </div>
+        {waitingCount === 0 && needsReviewCount === 0 ? <p className="tb-empty">Nothing waiting.</p> : null}
+        {waitingQueue.shown.map((task) => (
+          <button
+            key={task.id}
+            type="button"
+            className="tb-wrow"
+            data-task-open={task.id}
+            aria-current={openTaskId === task.id ? "true" : undefined}
+            onClick={() => openTask(task)}
+          >
+            <b>{task.title}</b>
+            <span>
+              {/* Inside the row's button, so the square is a plain mark here. */}
+              <ProjectTag {...squareInputOf(task)} editable={false} />
+              {waitingLine(task)}
+            </span>
+          </button>
+        ))}
+        {waitingQueue.hidden > 0 || waitingExpanded ? (
+          <button type="button" className="tb-linkbtn" aria-expanded={waitingExpanded} onClick={() => setWaitingExpanded((value) => !value)}>
+            {waitingExpanded ? "Show fewer" : `Show ${waitingQueue.hidden} more`}
+          </button>
+        ) : null}
+        {needsReviewCount > 0 ? (
+          <Link href="/backlog?review=needs_review" className="tb-linkbtn">
+            {needsReviewCount} {needsReviewCount === 1 ? "task needs" : "tasks need"} review →
+          </Link>
+        ) : null}
+      </section>
+    </aside>
+  );
+
+  // ── The day list's rows ─────────────────────────────────────────────────
+  const dayRowsFor = (day: string) => groupDayList({ board: split.board, overdue: split.overdue, done, day });
+  const dayView = viewDay
+    ? (() => {
+        const groups = dayRowsFor(viewDay);
+        const model = (task: TaskWithImplementation, group: DayGroupKind): DayRowModel => ({
+          group,
+          data: dataById.get(task.id) ?? toData(task),
+          due: dayRowDue(task, group, viewDay, todayDate, now),
+          rangeDay: group === "running" ? rangeDayOn(task, viewDay) : null,
+          steps: rowSteps(progressRowsFor(task).rows),
+          statusOptions: statusOptions(task),
+          move: group === "done" ? undefined : moveFor(task.id),
+        });
+        const tabs = dayTabs(
+          selectedWeekStart,
+          todayDate,
+          (date) => dayRowsFor(date).due.length,
+          (date) => (doneByDate.get(date) ?? []).length
+        );
+        return (
+          <DayList
+            day={viewDay}
+            todayDate={todayDate}
+            rows={{
+              due: groups.due.map((task) => model(task, "due")),
+              running: groups.running.map((task) => model(task, "running")),
+              done: groups.done.map((task) => model(task, "done")),
+            }}
+            tabs={tabs}
+            openTaskId={openTaskId}
+            completingIds={completingIds}
+            movingIds={movingIds}
+            loading={weekLoading}
+            motion={motion === "back" ? null : motion}
+            motionKey={motionKey}
+            railTabs={railTabs}
+            rail={rail}
+            onWeek={() => backToWeek()}
+            onDay={goToDay}
+            onOpen={handleOpenTask}
+            onDone={(taskId) => void handleQuickComplete(taskId)}
+            onStatus={(taskId, value) => void handleStatus(taskId, value)}
+            onAdd={viewDay >= todayDate ? () => openCreate(viewDay) : undefined}
+          />
+        );
+      })()
+    : null;
+
   return (
     <div
       className="tb"
       data-panel={panelOpen ? "open" : "closed"}
+      data-view={viewDay ? "day" : "week"}
+      data-done={showDone ? "shown" : "hidden"}
       style={{
         ["--tb-days" as string]: gridTracks(columns.map((column) => column.weight)),
         ["--tb-days-open" as string]: gridTracks(columns.map((column) => column.weightOpen)),
@@ -683,6 +1026,20 @@ export function WeekBoard({
       />
 
       <h1 className="sr-only">Today</h1>
+
+      {error ? (
+        <p className="tb-note" data-tone="warn" role="alert">
+          {error}
+        </p>
+      ) : null}
+      {hasError ? (
+        <p className="tb-note" data-tone="warn">
+          Part of the board didn&apos;t refresh (updated {new Date(updatedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: TIME_ZONE })}). Showing what loaded.
+        </p>
+      ) : null}
+
+      {dayView ?? (
+      <div className="tb-week" data-motion={motion === "back" ? "back" : undefined} key={`week-${motion === "back" ? motionKey : 0}`}>
       <div className="tb-head">
         <h2>Week {isoWeekNumber(selectedWeekStart)}</h2>
         <span className="tb-wk">{weekRangeLabel(selectedWeekStart)}</span>
@@ -697,6 +1054,14 @@ export function WeekBoard({
             ›
           </button>
         </div>
+        {hiddenDoneCount > 0 ? (
+          <button type="button" className="tb-showdone" aria-pressed={showDone} onClick={() => setShowDone((value) => !value)}>
+            <span className="tb-showdone-box" aria-hidden="true">
+              {showDone ? "✓" : ""}
+            </span>
+            Show done <span className="tb-showdone-n">{hiddenDoneCount}</span>
+          </button>
+        ) : null}
         {laneCards.length > 0 ? (
           <div className="tb-rangelegend" aria-hidden="true">
             <span>
@@ -711,17 +1076,7 @@ export function WeekBoard({
         ) : null}
       </div>
 
-      {error ? (
-        <p className="tb-note" data-tone="warn" role="alert">
-          {error}
-        </p>
-      ) : null}
-      {hasError ? (
-        <p className="tb-note" data-tone="warn">
-          Part of the board didn&apos;t refresh (updated {new Date(updatedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: TIME_ZONE })}). Showing what loaded.
-        </p>
-      ) : null}
-      {weekLoading && !isCurrentWeek ? (
+      {weekLoading ? (
         <p className="tb-note" role="status">
           Loading {weekRangeLabel(selectedWeekStart)}…
         </p>
@@ -729,96 +1084,8 @@ export function WeekBoard({
 
       <div className="tb-board">
         {/* Panel open (desktop): the rail folds into two side tabs with counts. */}
-        <nav className="tb-tabs" aria-label="Overdue and Waiting">
-          <button
-            type="button"
-            className="tb-tab"
-            data-rail-tab="overdue"
-            data-late={overdueCount > 0 ? "" : undefined}
-            aria-expanded={activeFlyout === "overdue"}
-            aria-controls="today-rail"
-            onClick={() => setFlyout((current) => (current === "overdue" ? null : "overdue"))}
-          >
-            <b>{overdueCount}</b>
-            <span>Overdue</span>
-          </button>
-          <button
-            type="button"
-            className="tb-tab"
-            data-rail-tab="waiting"
-            aria-expanded={activeFlyout === "waiting"}
-            aria-controls="today-rail"
-            onClick={() => setFlyout((current) => (current === "waiting" ? null : "waiting"))}
-          >
-            <b>{waitingCount}</b>
-            <span>Waiting</span>
-          </button>
-        </nav>
-
-        <aside
-          id="today-rail"
-          ref={railRef}
-          className="tb-rail"
-          data-flyout={activeFlyout ?? undefined}
-          role={activeFlyout ? "dialog" : undefined}
-          aria-modal={activeFlyout ? "false" : undefined}
-          aria-label={activeFlyout ? (activeFlyout === "overdue" ? "Overdue" : "Waiting") : "Overdue and Waiting"}
-        >
-          <section data-rail="overdue" data-task-list="overdue" aria-labelledby="today-overdue-h">
-            <div className="tb-rh">
-              <h3 id="today-overdue-h">Overdue</h3>
-              <span className="tb-n" data-late={overdueCount > 0 ? "" : undefined}>
-                {overdueCount}
-              </span>
-              <em>oldest first</em>
-            </div>
-            {overdueCount === 0 ? <p className="tb-empty">Nothing overdue.</p> : null}
-            {overdueQueue.shown.map((data) =>
-              renderCard(data, "overdue", "overdue", { text: overdueLabel(data.dueAt, todayDate), late: true })
-            )}
-            {overdueQueue.hidden > 0 || overdueExpanded ? (
-              <button type="button" className="tb-linkbtn" aria-expanded={overdueExpanded} onClick={() => setOverdueExpanded((value) => !value)}>
-                {overdueExpanded ? "Show fewer" : `Show ${overdueQueue.hidden} more`}
-              </button>
-            ) : null}
-          </section>
-
-          <section data-rail="waiting" data-task-list="waiting" aria-labelledby="today-waiting-h">
-            <div className="tb-rh">
-              <h3 id="today-waiting-h">Waiting</h3>
-              <span className="tb-n">{waitingCount}</span>
-              <em>on someone else</em>
-            </div>
-            {waitingCount === 0 && needsReviewCount === 0 ? <p className="tb-empty">Nothing waiting.</p> : null}
-            {waitingQueue.shown.map((task) => (
-              <button
-                key={task.id}
-                type="button"
-                className="tb-wrow"
-                data-task-open={task.id}
-                aria-current={openTaskId === task.id ? "true" : undefined}
-                onClick={() => openTask(task)}
-              >
-                <b>{task.title}</b>
-                <span>
-                  {/* Inside the row's button, so the square is a plain mark here. */}
-                  <ProjectTag {...squareInputOf(task)} editable={false} />
-                  {waitingLine(task)}
-                </span>
-              </button>
-            ))}
-            {waitingQueue.hidden > 0 || waitingExpanded ? (
-              <button type="button" className="tb-linkbtn" aria-expanded={waitingExpanded} onClick={() => setWaitingExpanded((value) => !value)}>
-                {waitingExpanded ? "Show fewer" : `Show ${waitingQueue.hidden} more`}
-              </button>
-            ) : null}
-            {needsReviewCount > 0 ? (
-              <Link href="/backlog?review=needs_review" className="tb-linkbtn">
-                {needsReviewCount} {needsReviewCount === 1 ? "task needs" : "tasks need"} review →
-              </Link>
-            ) : null}
-          </section>
-        </aside>
+        {railTabs}
+        {rail}
 
         <div className="tb-boardlist" data-task-list="board">
           {laneCards.length > 0 ? (
@@ -854,16 +1121,31 @@ export function WeekBoard({
             const singles = singlesByDate.get(column.date) ?? [];
             const doneRows = doneByDate.get(column.date) ?? [];
             const canAdd = column.tense !== "past";
+            const doneHidden = hidesDone(column.tense, showDone);
             return (
               <div key={column.date} className="tb-day" data-tense={column.tense} style={{ ["--c" as string]: String(index + 2) }}>
                 <div className="tb-dh">
-                  <h3>{column.name}</h3>
-                  <span className="tb-dn-num">{column.day}</span>
-                  {column.tense === "today" ? <span className="tb-tdy">TODAY</span> : null}
-                  {column.count ? <em>{column.count}</em> : null}
+                  {/* Today v2: every day header opens that day as a list. */}
+                  <h3>
+                    <button
+                      type="button"
+                      className="tb-dh-btn"
+                      onClick={() => goToDay(column.date, null)}
+                      aria-label={`Open ${longDayName(column.date)} ${dayMonthLabel(column.date)} as a list${column.count ? ` (${column.count})` : ""}`}
+                      title={`See ${column.name} as a list`}
+                    >
+                      <span className="tb-dh-name">{column.name}</span>
+                      <span className="tb-dn-num">{column.day}</span>
+                      {column.tense === "today" ? <span className="tb-tdy">TODAY</span> : null}
+                      {column.count ? <em>{column.count}</em> : null}
+                      <span className="tb-dh-go" aria-hidden="true">
+                        open day →
+                      </span>
+                    </button>
+                  </h3>
                 </div>
                 <div className="tb-col" {...dropProps(column.date, column.tense !== "past")}>
-                  {/* Folded (panel open, or a phone): one "n done" line with the project squares. */}
+                  {/* Folded (earlier done hidden, panel open, or a phone): one "n done · show" line with the project squares. */}
                   <div className="tb-fold">
                     {doneRows.length > 0 ? (
                       <span className="tb-ck" aria-hidden="true">
@@ -876,8 +1158,18 @@ export function WeekBoard({
                         data.squareInput ? <ProjectSquare key={data.id} {...data.squareInput} editable={false} /> : null
                       )}
                     </span>
+                    {doneRows.length > 0 ? (
+                      <button
+                        type="button"
+                        className="tb-fold-show"
+                        onClick={() => goToDay(column.date, null)}
+                        aria-label={`Show ${column.name}'s ${doneRows.length} done ${doneRows.length === 1 ? "task" : "tasks"} (opens ${column.name} as a list)`}
+                      >
+                        show
+                      </button>
+                    ) : null}
                   </div>
-                  <div className="tb-full">
+                  <div className="tb-full" data-done-hidden={doneHidden ? "" : undefined}>
                     {doneRows.map((data) => (
                       <DoneRow key={data.id} task={data} onOpen={() => handleOpenTask(data.id)} />
                     ))}
@@ -907,7 +1199,8 @@ export function WeekBoard({
           </section>
         </div>
       </div>
-
+      </div>
+      )}
       <Modal
         open={createDueDate !== null}
         onClose={() => setCreateDueDate(null)}

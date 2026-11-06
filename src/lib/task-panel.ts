@@ -190,6 +190,19 @@ export function uniqueIds(ids: Iterable<string>): string[] {
   return out;
 }
 
+/**
+ * The order ↑ / ↓ walk: the cards of the list that are shown, in page order.
+ * When the open task has no shown copy in its list (Today's Overdue / Waiting
+ * rail folded into side tabs while the panel is docked; S4 review F2), the
+ * whole list counts, hidden or not, so ↑ / ↓ still walk the queue it came from.
+ */
+export function listOrder(items: ReadonlyArray<{ id: string; shown: boolean }>, taskId: string): string[] {
+  const shown = uniqueIds(items.filter((item) => item.shown).map((item) => item.id));
+  if (shown.includes(taskId)) return shown;
+  const all = uniqueIds(items.map((item) => item.id));
+  return all.includes(taskId) ? all : shown;
+}
+
 /** The previous / next task in the list, or null at either end (no wrap) or when it isn't in the list. */
 export function neighbourTaskId(order: readonly string[], currentId: string | null, direction: "up" | "down"): string | null {
   if (!currentId) return null;

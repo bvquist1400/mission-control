@@ -30,7 +30,18 @@ function currentWeekBounds(now: Date): { start: Date; end: Date } {
  * Today (redesign S4): the one-line strip and the week board stream together.
  * Reads run in parallel and each one fails on its own (the board shows what loaded).
  */
-export async function WeekBoardSection({ userId, mode, chips }: { userId: string; mode: TaskScope; chips?: ReactNode }) {
+export async function WeekBoardSection({
+  userId,
+  mode,
+  chips,
+  phoneHint = false,
+}: {
+  userId: string;
+  mode: TaskScope;
+  chips?: ReactNode;
+  /** Today v2: the request came from a phone's browser (Today opens into today's list). */
+  phoneHint?: boolean;
+}) {
   const supabase = await createSupabaseServerClient();
   const now = new Date();
   const week = currentWeekBounds(now);
@@ -81,6 +92,7 @@ export async function WeekBoardSection({ userId, mode, chips }: { userId: string
       meetings={meetings}
       meetingsFailed={calendarRes.status === "rejected"}
       chips={chips}
+      phoneHint={phoneHint}
     />
   );
 }

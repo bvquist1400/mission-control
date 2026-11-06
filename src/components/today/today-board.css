@@ -197,6 +197,39 @@
     height: 44px;
   }
 }
+.tb-showdone {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--rule);
+  background: var(--sheet);
+  font: 500 12px/1 var(--font-mono);
+  color: var(--ink);
+}
+.tb-showdone:hover {
+  background: var(--panel-muted);
+}
+.tb-showdone[aria-pressed="true"] {
+  border-color: var(--ink);
+}
+.tb-showdone-box {
+  width: 14px;
+  height: 14px;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid var(--ink-2);
+  font: 700 12px/1 var(--font-sans);
+}
+.tb-showdone[aria-pressed="true"] .tb-showdone-box {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--brand-ink);
+}
+.tb-showdone-n {
+  color: var(--ink-3);
+}
 .tb-rangelegend {
   margin-left: auto;
   display: flex;
@@ -405,6 +438,24 @@
   }
 }
 
+/* Close on a fly-out / sheet (Esc and a click outside close it too). */
+.tb-rail-close {
+  align-self: flex-end;
+  font: 500 12px/1 var(--font-mono);
+  padding: 6px 10px;
+  border: 1px solid var(--rule);
+  background: var(--sheet);
+  color: var(--ink);
+}
+.tb-rail-close:hover {
+  background: var(--panel-muted);
+}
+@media (pointer: coarse) {
+  .tb-rail-close {
+    min-height: 44px;
+  }
+}
+
 /* The two side tabs (panel open, desktop only). */
 .tb-tabs {
   display: none;
@@ -487,7 +538,56 @@
   min-width: 0;
 }
 .tb-dh h3 {
+  flex: 1;
+  min-width: 0;
   font: 700 15px/1 var(--font-cond);
+}
+/* Today v2: the whole header is a button that opens the day as a list. It
+   wraps instead of running into the next day's header (S4 review F4). */
+.tb-dh-btn {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+.tb-dh-btn .tb-dh-go {
+  display: none;
+  margin-left: auto;
+  font: 500 12px/1 var(--font-mono);
+  color: var(--ink);
+  white-space: nowrap;
+}
+@media (hover: hover) {
+  .tb-dh-btn:hover .tb-dh-name {
+    text-decoration: underline;
+    text-decoration-color: var(--ink-2);
+    text-underline-offset: 3px;
+  }
+  .tb-dh-btn:hover em {
+    display: none;
+  }
+  .tb-dh-btn:hover .tb-dh-go {
+    display: inline;
+  }
+}
+.tb-dh-btn:focus-visible em {
+  display: none;
+}
+.tb-dh-btn:focus-visible .tb-dh-go {
+  display: inline;
+}
+@media (pointer: coarse) {
+  .tb-dh-btn,
+  .tb-wk-h,
+  .tb-fold-show,
+  .tb-showdone {
+    min-height: 44px;
+  }
 }
 .tb-dh .tb-dn-num {
   font: 400 12px/1 var(--font-mono);
@@ -551,6 +651,13 @@
   color: var(--ink-2);
   min-width: 0;
 }
+.tb-fold {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+.tb-fold > span:nth-child(2) {
+  white-space: nowrap;
+}
 .tb-fold .tb-ck {
   flex: none;
 }
@@ -559,6 +666,31 @@
   gap: 2px;
   margin-left: auto;
   flex-wrap: wrap;
+}
+/* "show": opens that day as a list (Today v2). */
+.tb-fold-show {
+  flex: none;
+  font: 500 12px/1 var(--font-mono);
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-decoration-color: var(--rule);
+  text-underline-offset: 3px;
+  padding: 2px 0 2px 4px;
+}
+.tb-fold-show:hover {
+  color: var(--ink);
+}
+.tb-wknd .tb-fold-show {
+  padding: 5px 4px;
+}
+/* Today v2: done tasks from earlier days start hidden (the "Show done" button
+   in the week header brings them back); each earlier day folds to one
+   "✓ n done ■■ · show" line. Today's own done tasks are never folded. */
+.tb[data-done="hidden"] .tb-day[data-tense="past"] .tb-full {
+  display: none;
+}
+.tb[data-done="hidden"] .tb-day[data-tense="past"] .tb-fold {
+  display: flex;
 }
 @media (max-width: 767px) {
   .tb-day[data-tense="past"] .tb-full {
@@ -576,6 +708,10 @@
     display: flex;
   }
   .tb[data-panel="open"] .tb-st {
+    display: none;
+  }
+  /* Narrow folded columns beside the panel: the day header opens the day; no room for "show". */
+  .tb[data-panel="open"] .tb-day .tb-fold-show {
     display: none;
   }
 }
@@ -931,6 +1067,16 @@
   width: 62px;
   flex: none;
 }
+.tb-wk-h {
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
+.tb-wk-h:hover {
+  text-decoration: underline;
+  text-decoration-color: var(--ink-2);
+  text-underline-offset: 3px;
+}
 .tb-wk-it {
   display: inline-flex;
   align-items: center;
@@ -975,7 +1121,23 @@
 
 /* The Move to… menu lives in move-to-menu.css (Today and Tasks both use it; redesign S5). */
 
+/* Back from a day list: the week slides in from the left (~220 ms, transform + opacity only). */
+@keyframes tb-week-back {
+  from {
+    transform: translateX(-48px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+.tb-week[data-motion="back"] {
+  animation: tb-week-back 220ms ease-out both;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .tb-week,
   .tb * {
     transition: none !important;
     animation: none !important;

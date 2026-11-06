@@ -1,10 +1,12 @@
 import { Suspense } from "react";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { WeekBoardSection } from "@/components/today/sections/WeekBoardSection";
 import { TodayHeaderChips } from "@/components/today/sections/TodayHeaderChips";
 import { SectionSkeleton } from "@/components/today/sections/SectionSkeleton";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { normalizeTaskScope } from "@/lib/personal-exclusion";
+import { isPhoneUserAgent } from "@/lib/today/today-day";
 
 export const dynamic = "force-dynamic";
 
@@ -34,11 +36,17 @@ export default async function TodayPage({
     redirect("/login");
   }
 
+  // Today v2: on a phone Today opens straight into today's list. The browser
+  // says so on the first request, so the server draws the list (no flash of
+  // the week); the client re-checks the screen width after it loads.
+  const phoneHint = isPhoneUserAgent((await headers()).get("user-agent"));
+
   return (
     <Suspense fallback={<SectionSkeleton label="weekly board" />}>
       <WeekBoardSection
         userId={user.id}
         mode={mode}
+        phoneHint={phoneHint}
         chips={
           <Suspense fallback={null}>
             <TodayHeaderChips userId={user.id} mode={mode} />

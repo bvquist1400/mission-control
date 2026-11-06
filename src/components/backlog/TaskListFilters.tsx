@@ -14,6 +14,7 @@ import {
   activeViewId,
   addSavedView,
   filtersForView,
+  pickedAfterTap,
   readSavedViews,
   removeSavedView,
   writeSavedViews,
@@ -285,8 +286,11 @@ function SavedViews({ filters, onChange, countFor }: { filters: TaskListFilters;
     if (naming) nameRef.current?.focus();
   }, [naming]);
 
+  // The view tapped last: it stays lit while the filters are still that view, even when a
+  // built-in view has the same filters (Brent 11/6: "only the original one lights up").
+  const [pickedId, setPickedId] = useState<string | null>(null);
   const all = [...BUILT_IN_VIEWS, ...userViews];
-  const active = activeViewId(filters, all);
+  const active = activeViewId(filters, all, pickedId);
 
   function save() {
     const result = addSavedView(userViews, name, filters, newViewId);
@@ -296,6 +300,8 @@ function SavedViews({ filters, onChange, countFor }: { filters: TaskListFilters;
     }
     const stored = writeSavedViews(storage(), result.views);
     setUserViews(result.views);
+    // The view just saved is the current filters: it is the one lit now.
+    setPickedId(result.view.id);
     setNaming(false);
     setName("");
     setMessage(stored ? null : "Saved for now, but this browser won't keep it (private window or storage off).");
@@ -317,7 +323,14 @@ function SavedViews({ filters, onChange, countFor }: { filters: TaskListFilters;
           const isActive = view.id === active;
           return (
             <li key={view.id} className="tl-view" data-active={isActive || undefined}>
-              <button type="button" aria-pressed={isActive} onClick={() => onChange(filtersForView(view, filters))}>
+              <button
+                type="button"
+                aria-pressed={isActive}
+                onClick={() => {
+                  setPickedId(pickedAfterTap(view, filters, active));
+                  onChange(filtersForView(view, filters, active));
+                }}
+              >
                 {view.name} <span className="tl-view-n">{countFor(view.query)}</span>
               </button>
               {view.builtIn ? null : (

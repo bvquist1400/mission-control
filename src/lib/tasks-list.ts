@@ -519,20 +519,45 @@ export function removeSavedView(views: ReadonlyArray<SavedView>, id: string): Sa
   return views.filter((view) => view.id !== id);
 }
 
-/** The view the current filters are exactly (highlighted); null for none. */
-export function activeViewId(filters: TaskListFilters, views: ReadonlyArray<SavedView>): string | null {
+/**
+ * The view that is lit (marigold); null for none. The view the user picked
+ * wins while the filters are still exactly that view, so a saved view whose
+ * filters equal a built-in one ("Mine now test" = "Mine now") lights up when
+ * it is the one tapped (Brent 11/6, S5 live check step 4). Otherwise (a link,
+ * a reload, filters picked by hand) the first view the filters exactly match.
+ */
+export function activeViewId(filters: TaskListFilters, views: ReadonlyArray<SavedView>, pickedId: string | null = null): string | null {
   const current = filtersQuery(filters, { includeSort: false });
   if (!current) return null;
+  if (pickedId) {
+    const picked = views.find((view) => view.id === pickedId);
+    if (picked && canonicalViewQuery(picked.query) === current) return picked.id;
+  }
   return views.find((view) => canonicalViewQuery(view.query) === current)?.id ?? null;
 }
 
-/** Filters for a view (the sort the user picked stays). Picking the active view again clears it. */
-export function filtersForView(view: SavedView, current: TaskListFilters): TaskListFilters {
+/**
+ * Filters for a view (the sort the user picked stays). Picking the LIT view
+ * again clears the filters; picking another view with the same filters just
+ * lights that one (pass the lit view's id as `activeId`).
+ */
+export function filtersForView(view: SavedView, current: TaskListFilters, activeId?: string | null): TaskListFilters {
   const viewFilters = parseTaskListFilters(view.query);
-  if (filtersQuery(current, { includeSort: false }) === canonicalViewQuery(view.query)) {
+  const sameFilters = filtersQuery(current, { includeSort: false }) === canonicalViewQuery(view.query);
+  const isLit = activeId === undefined ? sameFilters : activeId === view.id;
+  if (sameFilters && isLit) {
     return { ...DEFAULT_TASK_LIST_FILTERS, sort: current.sort };
   }
   return { ...viewFilters, sort: current.sort };
+}
+
+/**
+ * The picked view after a tap (null once it clears the filters). The bar keeps
+ * it so `activeViewId` can light the view that was tapped.
+ */
+export function pickedAfterTap(view: SavedView, current: TaskListFilters, activeId: string | null): string | null {
+  const next = filtersForView(view, current, activeId);
+  return filtersQuery(next, { includeSort: false }) ? view.id : null;
 }
 
 // ── Bulk edit ─────────────────────────────────────────────────────────────

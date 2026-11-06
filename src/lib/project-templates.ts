@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ProjectStage, RagStatus, TaskStatus, TaskType } from '@/types/database';
+import { dueAtForBoardDay } from '@/lib/today/today-board';
 
 export interface ProjectTemplateRecord {
   id: string;
@@ -84,8 +85,9 @@ export function resolveDueFromKickoff(kickoffDate: string, relativeDueDays: numb
 
   return {
     due_date: dueDate,
-    // Store due dates near end-of-day UTC so local date rendering does not slip to the prior day.
-    due_at: `${dueDate}T23:59:59.999Z`,
+    // The END of that day in New York, like every other day picked in the app
+    // (dueAtForBoardDay; S4 review F6). `<day>T23:59:59.999Z` was 7 PM ET.
+    due_at: dueAtForBoardDay(dueDate),
   };
 }
 

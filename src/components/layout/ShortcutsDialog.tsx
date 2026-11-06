@@ -2,6 +2,7 @@
 
 import { Modal } from "@/components/ui/Modal";
 import { NAV_ITEMS } from "@/components/layout/nav-items";
+import { TODAY_DAY_KEYS } from "@/lib/today/today-day";
 
 /** `g` then a key. Every target is a top-bar or More item (nav-items.tsx). */
 export const GO_TO_KEYS: Record<string, string> = {
@@ -71,6 +72,17 @@ export function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () 
           <div className="divide-y divide-stroke">
             {TASK_PANEL_KEYS.map((row) => (
               <Row key={row.label} keys={row.keys} label={row.label} />
+            ))}
+          </div>
+        </section>
+
+        <section>
+          <h3 className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+            Today: a day as a list
+          </h3>
+          <div className="divide-y divide-stroke">
+            {TODAY_DAY_KEYS.map((row) => (
+              <Row key={row.label} keys={row.keys} label={row.label.replace(/^Day list: /, "")} />
             ))}
           </div>
         </section>

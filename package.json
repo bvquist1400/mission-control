@@ -40,6 +40,7 @@
     "test:today-sprint": "node --experimental-strip-types scripts/test-today-sprint-progress.mjs",
     "test:week-board": "node --experimental-strip-types scripts/test-week-board.mjs",
     "test:today-board": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-today-board.mjs",
+    "test:today-v2": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-today-v2.mjs",
     "test:tasks-list": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-tasks-list.mjs",
     "test:task-fields": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-task-fields.mjs",
     "test:launch-metrics-apple-setup": "node --test scripts/test-launch-metrics-apple-setup.mjs",

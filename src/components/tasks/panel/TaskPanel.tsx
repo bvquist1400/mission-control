@@ -10,13 +10,13 @@ import {
   PANEL_DOCK_MIN_WINDOW,
   PANEL_MIN_WIDTH,
   clampPanelWidth,
+  listOrder,
   neighbourTaskId,
   nudgePanelWidth,
   panelCookie,
   panelCssWidth,
   panelKeyAction,
   panelMaxWidth,
-  uniqueIds,
   widthFromPointer,
   type PanelScreen,
 } from "@/lib/task-panel";
@@ -36,9 +36,12 @@ function taskOrder(taskId: string, listRoot: Element | null): string[] {
   const page = document.querySelector<HTMLElement>(".tp-reflow");
   const pageHidden = page ? getComputedStyle(page).display === "none" : false;
   if (page && pageHidden) page.style.display = "block";
-  const shown = Array.from(root.querySelectorAll("[data-task-open]")).filter((el) => el.getClientRects().length > 0);
+  const items = Array.from(root.querySelectorAll("[data-task-open]")).map((el) => ({
+    id: el.getAttribute("data-task-open") ?? "",
+    shown: el.getClientRects().length > 0,
+  }));
   if (page && pageHidden) page.style.display = "";
-  return uniqueIds(shown.map((el) => el.getAttribute("data-task-open") ?? ""));
+  return listOrder(items, taskId);
 }
 
 /**
