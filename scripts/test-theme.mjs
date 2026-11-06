@@ -274,7 +274,7 @@ await test("shell: the brief button's phone/desktop visibility lives on wrappers
   }
 });
 
-await test("scope switch: Today uses ?mode (default work), Portfolio ?scope (default personal), other pages have none", async () => {
+await test("scope switch: Today uses ?mode (default work), Portfolio ?scope (default personal), Tasks ?scope (default all), other pages have none", async () => {
   const { scopeSwitchFor } = await load("src/lib/scope-switch.ts");
   const today = scopeSwitchFor("/", "");
   assert.equal(today.current, "work");
@@ -287,7 +287,11 @@ await test("scope switch: Today uses ?mode (default work), Portfolio ?scope (def
   assert.equal(portfolio.current, "work");
   assert.deepEqual(portfolio.options.map((o) => o.href), ["/portfolio?scope=work", "/portfolio", "/portfolio?scope=all"]);
   assert.equal(scopeSwitchFor("/portfolio", "scope=bogus").current, "personal");
-  for (const other of ["/backlog", "/launch", "/projects", "/briefs/AM-1105", "/r/task/x"]) {
+  // Redesign S5: Tasks has a scope too (?scope, default all).
+  const tasks = scopeSwitchFor("/backlog", "owner=me");
+  assert.equal(tasks.current, "all");
+  assert.deepEqual(tasks.options.map((o) => o.href), ["/backlog?owner=me&scope=work", "/backlog?owner=me&scope=personal", "/backlog?owner=me"]);
+  for (const other of ["/launch", "/projects", "/briefs/AM-1105", "/r/task/x"]) {
     assert.equal(scopeSwitchFor(other, ""), null, other);
   }
 });

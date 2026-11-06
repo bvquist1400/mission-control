@@ -973,96 +973,10 @@
   }
 }
 
-/* ── Move to… menu (a fixed pop-up; a bottom sheet on a phone) ──────────── */
-
-.tb-move {
-  position: fixed;
-  z-index: 50;
-  width: 264px;
-  max-height: min(70vh, 520px);
-  overflow: auto;
-  border: 1.5px solid var(--ink);
-  background: var(--sheet);
-  color: var(--ink);
-  box-shadow: 6px 6px 0 var(--rule-2);
-  padding: 6px 0;
-}
-@media (max-width: 639px) {
-  .tb-move {
-    left: 0 !important;
-    right: 0;
-    top: auto !important;
-    bottom: 0;
-    width: auto;
-    max-height: 75vh;
-    border-width: 1.5px 0 0;
-    padding-bottom: calc(8px + env(safe-area-inset-bottom));
-  }
-}
-.tb-move h4 {
-  padding: 6px 12px 8px;
-  font: 600 12px/1.2 var(--font-mono);
-  color: var(--ink-3);
-  border-bottom: 1px solid var(--rule-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.tb-move ul {
-  list-style: none;
-}
-.tb-move li + li.tb-move-sep {
-  margin-top: 4px;
-  border-top: 1px solid var(--rule-2);
-  padding-top: 4px;
-}
-.tb-move-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-height: 34px;
-  padding: 6px 12px;
-  text-align: left;
-  font: 500 14px/1.2 var(--font-cond);
-  color: var(--ink);
-}
-.tb-move-item:hover:not(:disabled) {
-  background: var(--panel-muted);
-}
-.tb-move-item:disabled {
-  color: var(--ink-3);
-  cursor: default;
-}
-.tb-move-item em {
-  margin-left: auto;
-  font: 400 12px/1 var(--font-mono);
-  font-style: normal;
-  color: var(--ink-3);
-}
-@media (pointer: coarse) {
-  .tb-move-item {
-    min-height: 44px;
-  }
-}
-.tb-move-pick {
-  padding: 8px 12px 6px;
-  border-top: 1px solid var(--rule-2);
-  margin-top: 4px;
-  display: grid;
-  gap: 6px;
-}
-.tb-move-pick p {
-  font: 400 12px/1.3 var(--font-mono);
-  color: var(--ink-3);
-}
-.tb-move-pick p[data-tone="warn"] {
-  color: var(--warning);
-}
+/* The Move to… menu lives in move-to-menu.css (Today and Tasks both use it; redesign S5). */
 
 @media (prefers-reduced-motion: reduce) {
-  .tb *,
-  .tb-move {
+  .tb * {
     transition: none !important;
     animation: none !important;
   }

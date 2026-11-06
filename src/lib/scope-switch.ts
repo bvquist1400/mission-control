@@ -6,6 +6,7 @@
 // bookmark keeps working exactly as before:
 //   Today       /?mode=work|personal|all          (default work)
 //   Portfolio   /portfolio?scope=work|personal|all (default personal)
+//   Tasks       /backlog?scope=work|personal|all   (default all; redesign S5)
 // On any other page there is nothing to switch, so the bar leaves it out.
 
 import { TASK_SCOPE_VALUES, normalizeTaskScope, type TaskScope } from "@/lib/personal-exclusion";
@@ -26,6 +27,7 @@ interface ScopedPage {
 const SCOPED_PAGES: ScopedPage[] = [
   { path: "/", param: "mode", fallback: "work", label: "Show on Today" },
   { path: "/portfolio", param: "scope", fallback: "personal", label: "Show on Portfolio" },
+  { path: "/backlog", param: "scope", fallback: "all", label: "Show on Tasks" },
 ];
 
 export interface ScopeSwitchOption {

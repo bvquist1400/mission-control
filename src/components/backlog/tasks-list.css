@@ -1,0 +1,922 @@
+/*
+ * Tasks as card rows (redesign S5). Look: d2-schemes.html / d3-olive.html
+ * Tasks frames ("filt", "views", "grp", "row" rules; renders d2-s2-tasks.png,
+ * d3-night-tasks.png) on the app's olive tokens from globals.css, so it follows
+ * System / Light / Dark. `tl-` classes.
+ *
+ * The list is a size container: where it is narrow (a phone, or the task panel
+ * docked beside it; S3's .tp-reflow pads the page) the filter menus fold into
+ * a "Filters" sheet and each card puts its owner / due line under the title.
+ *
+ * Layer order (CLAUDE.md "Task panel"): the filter sheet (desktop drop-down)
+ * and the sticky bulk bar sit at 20 / 10, under the docked panel (25) and the
+ * header (30); on a phone the filter sheet and the bulk bar are fixed above the
+ * tab bar at 38 (under the More sheet 39 and the tab bar 40; the phone task
+ * sheet 45 covers them). Move to… is S4's pop-up at 50.
+ */
+
+.tl {
+  container-type: inline-size;
+  container-name: tl;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--ink);
+}
+
+/* ── Header: "Tasks  12 match · 48 open in all"  + New task ─────────────── */
+
+.tl-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 14px;
+  padding-bottom: 4px;
+}
+.tl-head h1 {
+  font: 700 26px/1 var(--font-cond);
+  letter-spacing: -0.01em;
+}
+.tl-count {
+  font: 400 13px/1.3 var(--font-mono);
+  color: var(--ink-2);
+}
+.tl-count b {
+  color: var(--ink);
+  font-weight: 600;
+}
+.tl-head-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.tl-switch {
+  font: 500 13px/1.3 var(--font-mono);
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-decoration-color: var(--rule);
+  text-underline-offset: 3px;
+}
+.tl-switch:hover {
+  color: var(--ink);
+}
+.tl-create {
+  border: 1px solid var(--rule);
+  background: var(--sheet);
+  padding: 14px;
+}
+
+/* ── The filter row ─────────────────────────────────────────────────────── */
+
+.tl-filters {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tl-frow {
+  display: flex;
+  align-items: stretch;
+  border: 1.5px solid var(--ink);
+  background: var(--sheet);
+  min-height: 40px;
+}
+.tl-fmenus {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.tl-f {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border-right: 1px solid var(--rule);
+  font: 400 13px/1.2 var(--font-sans);
+  color: var(--ink-2);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tl-f:hover {
+  background: var(--panel-muted);
+}
+.tl-f-label {
+  color: var(--ink-2);
+}
+.tl-f select {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23767b69' stroke-width='1.4'/%3E%3C/svg%3E") no-repeat right center / 9px 6px;
+  border: 0;
+  padding: 6px 16px 6px 0;
+  max-width: 13em;
+  font: 600 13px/1.2 var(--font-sans);
+  color: var(--ink);
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.tl-f select option {
+  background: var(--sheet);
+  color: var(--ink);
+}
+.tl-f[data-active] {
+  background: var(--brand-wash);
+}
+.tl-f[data-active] .tl-f-label {
+  color: var(--ink);
+}
+.tl-fbtn {
+  display: none;
+  align-items: center;
+  gap: 4px;
+  padding: 0 12px;
+  border-right: 1px solid var(--rule);
+  font: 600 13px/1.2 var(--font-cond);
+  color: var(--ink);
+  white-space: nowrap;
+}
+.tl-fbtn[aria-expanded="true"] {
+  background: var(--panel-muted);
+}
+.tl-search {
+  flex: 1 1 160px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  min-width: 0;
+  color: var(--ink-3);
+}
+.tl-search svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+.tl-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  font: 400 13px/1.2 var(--font-sans);
+  color: var(--ink);
+  padding: 8px 0;
+}
+.tl-search input::placeholder {
+  color: var(--ink-3);
+}
+.tl-clear {
+  padding: 0 12px;
+  border-left: 1px solid var(--rule);
+  font: 500 13px/1.2 var(--font-mono);
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.tl-clear:hover {
+  color: var(--ink);
+}
+
+/* The folded filters: a drop-down under the row (desktop), a bottom sheet (phone). */
+.tl-sheet {
+  position: absolute;
+  z-index: 20;
+  top: 46px;
+  left: 0;
+  width: min(360px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  background: var(--sheet);
+  border: 1.5px solid var(--ink);
+  box-shadow: 4px 4px 0 var(--rule-2);
+}
+.tl-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.tl-sheet-head h2 {
+  font: 700 18px/1 var(--font-cond);
+}
+.tl-sheet-menus {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--rule);
+}
+.tl-sheet-menus .tl-f {
+  justify-content: space-between;
+  min-height: 44px;
+  border-right: 0;
+  border-bottom: 1px solid var(--rule);
+}
+.tl-sheet-menus .tl-f:last-child {
+  border-bottom: 0;
+}
+.tl-sheet-menus .tl-f select {
+  max-width: 60%;
+  text-align: right;
+}
+
+/* ── Saved views + sort ─────────────────────────────────────────────────── */
+
+.tl-views {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.tl-views-label {
+  font: 400 13px/1 var(--font-sans);
+  color: var(--ink-3);
+}
+.tl-views-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.tl-view {
+  display: flex;
+  border: 1px solid var(--rule);
+  background: var(--sheet);
+}
+.tl-view > button:first-child {
+  padding: 5px 10px;
+  font: 500 13px/1.2 var(--font-sans);
+  color: var(--ink);
+}
+.tl-view > button:first-child:hover {
+  background: var(--panel-muted);
+}
+.tl-view-n {
+  margin-left: 2px;
+  font: 400 12px/1 var(--font-mono);
+  color: var(--ink-3);
+}
+/* "Needs you" marigold marks the active view (mockup). */
+.tl-view[data-active] {
+  border-color: var(--hi);
+  background: var(--hi);
+}
+.tl-view[data-active] > button:first-child,
+.tl-view[data-active] .tl-view-n,
+.tl-view[data-active] .tl-view-x {
+  color: var(--hi-ink);
+}
+.tl-view[data-active] > button:first-child:hover {
+  background: transparent;
+}
+.tl-view-x {
+  padding: 0 8px;
+  border-left: 1px solid var(--rule);
+  font: 500 14px/1 var(--font-sans);
+  color: var(--ink-3);
+}
+.tl-view-x:hover {
+  color: var(--danger);
+}
+.tl-view-add {
+  padding: 5px 10px;
+  border: 1px dashed var(--rule);
+  font: 500 13px/1.2 var(--font-sans);
+  color: var(--ink-2);
+}
+.tl-view-add:hover {
+  color: var(--ink);
+  border-color: var(--ink-2);
+}
+.tl-view-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tl-view-form input {
+  width: 13em;
+  padding: 4px 8px;
+  border: 1px solid var(--ink);
+  background: var(--sheet);
+  font: 400 13px/1.2 var(--font-sans);
+  color: var(--ink);
+}
+.tl-sort {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 400 13px/1 var(--font-sans);
+  color: var(--ink-3);
+}
+.tl-sort select {
+  border: 1px solid var(--rule);
+  background: var(--sheet);
+  padding: 4px 6px;
+  font: 500 13px/1.2 var(--font-sans);
+  color: var(--ink);
+}
+.tl-views-msg {
+  flex-basis: 100%;
+  font: 400 13px/1.3 var(--font-sans);
+  color: var(--ink-2);
+}
+
+/* ── The list ───────────────────────────────────────────────────────────── */
+
+.tl-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tl-listhead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  font: 400 13px/1.2 var(--font-sans);
+  color: var(--ink-2);
+}
+.tl-hint {
+  font: 400 12px/1.2 var(--font-mono);
+  color: var(--ink-3);
+}
+.tl-error {
+  border: 1px solid var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger);
+  padding: 8px 12px;
+  font-size: 14px;
+}
+.tl-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.tl-gh {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding-bottom: 5px;
+  margin-bottom: 8px;
+  border-bottom: 1.5px solid var(--ink);
+  font: 700 15px/1.1 var(--font-cond);
+  color: var(--ink);
+}
+.tl-gh span {
+  font: 400 12px/1 var(--font-mono);
+  color: var(--ink-3);
+}
+.tl-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* One card row: the box · title / meta / where it stands · owner, due, status. */
+.tl-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 9px 12px 9px 8px;
+  border: 1px solid var(--rule);
+  background: var(--sheet);
+  cursor: pointer;
+}
+.tl-card:hover {
+  border-color: var(--ink-2);
+  background: color-mix(in srgb, var(--panel-muted) 55%, var(--sheet));
+}
+.tl-card[data-selected] {
+  border-color: var(--ink);
+  background: var(--brand-wash);
+}
+.tl-card[data-busy] {
+  opacity: 0.6;
+}
+.tl-card[data-late] {
+  background:
+    linear-gradient(var(--danger-soft), var(--danger-soft)) left / 3px 100% no-repeat,
+    var(--sheet);
+}
+.tl-card[data-status="done"] .tl-title,
+.tl-card[data-status="missed"] .tl-title {
+  text-decoration: line-through;
+  text-decoration-color: var(--ink-3);
+  color: var(--ink-2);
+}
+/* The card open in the panel: 2 px brand outline, the tag and a notch toward the panel. */
+.tl-card[data-open] {
+  border: 2px solid var(--brand);
+  padding: 8px 11px 8px 7px;
+}
+/* The panel's own <style> also outlines the open card in ink; the brand border is the mark here. */
+.tl .tl-card[data-open] {
+  outline: none;
+}
+.tl-openmark {
+  display: none;
+  position: absolute;
+  top: -9px;
+  right: 10px;
+  font: 600 12px/1 var(--font-mono);
+  padding: 3px 6px;
+  background: var(--brand);
+  color: var(--brand-ink);
+}
+.tl-card[data-open] .tl-openmark {
+  display: inline-block;
+}
+@media (min-width: 1024px) {
+  .tl[data-panel="open"] .tl-card[data-open]::after {
+    content: "";
+    position: absolute;
+    right: -15px;
+    top: 50%;
+    margin-top: -7px;
+    border: 7px solid transparent;
+    border-left-color: var(--brand);
+  }
+}
+
+.tl-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  align-self: stretch;
+  min-width: 28px;
+  cursor: pointer;
+}
+.tl-check input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--brand);
+  cursor: pointer;
+}
+.tl-all {
+  justify-content: flex-start;
+  gap: 8px;
+  padding-left: 6px;
+  align-self: auto;
+}
+
+.tl-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.tl-title {
+  text-align: left;
+  font: 600 15px/1.25 var(--font-cond);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.tl-title:hover {
+  text-decoration: underline;
+  text-decoration-color: var(--rule);
+  text-underline-offset: 3px;
+}
+.tl-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  font: 400 12px/1.3 var(--font-mono);
+  color: var(--ink-2);
+  min-width: 0;
+}
+.tl-meta > span + span::before {
+  content: "·";
+  margin-right: 8px;
+  color: var(--ink-3);
+}
+.tl-where {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.tl-none {
+  color: var(--ink-3);
+}
+.tl-flag {
+  color: var(--warning);
+}
+.tl-flag[data-tone="late"] {
+  color: var(--danger);
+}
+.tl-wait {
+  font: 400 12px/1.3 var(--font-mono);
+  color: var(--warning);
+  overflow-wrap: anywhere;
+}
+.tl-gist {
+  font: 400 13px/1.35 var(--font-sans);
+  color: var(--ink-2);
+  border-left: 1px solid var(--rule);
+  padding-left: 8px;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.tl-side {
+  display: grid;
+  grid-template-columns: auto 7.5em;
+  grid-template-rows: auto auto;
+  align-items: center;
+  justify-items: end;
+  gap: 2px 12px;
+  min-width: 0;
+}
+.tl-own {
+  grid-row: 1 / span 2;
+  font: 500 12px/1 var(--font-mono);
+  padding: 3px 5px;
+  border: 1px solid var(--ink);
+  color: var(--ink);
+  white-space: nowrap;
+  max-width: 14em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tl-own[data-owner="brent"] {
+  background: var(--ink);
+  color: var(--on-ink);
+}
+.tl-own[data-owner="agent"] {
+  border-style: dashed;
+  border-color: var(--ink-2);
+  color: var(--ink-2);
+}
+.tl-due {
+  grid-column: 2;
+  font: 400 13px/1.2 var(--font-mono);
+  color: var(--ink);
+  white-space: nowrap;
+}
+.tl-due[data-late] {
+  color: var(--danger);
+  font-weight: 600;
+}
+.tl-status {
+  grid-column: 2;
+  font: 400 12px/1.2 var(--font-mono);
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+/* Done and Move to…: shown over the right side on hover / keyboard focus (a mouse or trackpad). */
+.tl-acts {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  gap: 6px;
+  padding-left: 12px;
+  background: linear-gradient(to right, transparent, var(--sheet) 12px);
+  /* Transparent, not hidden: the buttons stay in the Tab order, and focusing one shows them. */
+  opacity: 0;
+  pointer-events: none;
+}
+/* Keyboard: tabbing into a card shows them (hidden buttons can't take focus); an open Move menu keeps them. */
+.tl-card:hover .tl-acts,
+.tl-card:has(:focus-visible) .tl-acts,
+.tl-card:has([aria-expanded="true"]) .tl-acts {
+  opacity: 1;
+  pointer-events: auto;
+}
+.tl-card:hover .tl-side,
+.tl-card:has(:focus-visible) .tl-side,
+.tl-card:has([aria-expanded="true"]) .tl-side {
+  visibility: hidden;
+}
+.tl-card[data-selected] .tl-acts {
+  background: linear-gradient(to right, transparent, var(--brand-wash) 12px);
+}
+
+.tl-more {
+  align-self: flex-start;
+  margin-top: 8px;
+  padding: 6px 10px;
+  border: 1px dashed var(--rule);
+  font: 500 13px/1.2 var(--font-mono);
+  color: var(--ink-2);
+}
+.tl-more:hover {
+  color: var(--ink);
+  border-color: var(--ink-2);
+}
+.tl-empty {
+  border: 1px dashed var(--rule);
+  background: var(--sheet);
+  padding: 48px 16px;
+  text-align: center;
+  font: 400 14px/1.4 var(--font-sans);
+  color: var(--ink-2);
+}
+.tl-empty-title {
+  font: 600 18px/1.2 var(--font-cond);
+  color: var(--ink);
+}
+.tl-empty-act {
+  margin-top: 14px;
+}
+.tl-card-skel {
+  height: 58px;
+  cursor: default;
+}
+.tl-card-skel span {
+  display: block;
+  height: 12px;
+  background: var(--panel-muted);
+}
+.tl-card-skel span:first-child {
+  grid-column: 2;
+  width: 40%;
+}
+.tl-card-skel span:last-child {
+  grid-column: 3;
+  width: 80px;
+}
+
+/* ── Bulk edit bar ──────────────────────────────────────────────────────── */
+
+.tl-bulk {
+  position: sticky;
+  z-index: 10;
+  bottom: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 4px;
+  padding: 10px 12px;
+  border: 1.5px solid var(--ink);
+  background: var(--sheet);
+  box-shadow: 4px 4px 0 var(--rule-2);
+}
+.tl-bulk-n {
+  font: 400 14px/1.2 var(--font-sans);
+  color: var(--ink-2);
+}
+.tl-bulk-n b {
+  font: 700 16px/1 var(--font-cond);
+  color: var(--ink);
+}
+.tl-bulk-edit {
+  display: none;
+  padding: 6px 12px;
+  border: 1px solid var(--ink);
+  font: 600 13px/1.2 var(--font-cond);
+}
+.tl-bulk-menus {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+}
+.tl-bf {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 400 12px/1 var(--font-mono);
+  color: var(--ink-3);
+}
+.tl-bf select,
+.tl-bdate input {
+  border: 1px solid var(--rule);
+  background: var(--sheet);
+  padding: 5px 6px;
+  font: 500 13px/1.2 var(--font-sans);
+  color: var(--ink);
+}
+.tl-bulk-note {
+  font: 400 12px/1.2 var(--font-mono);
+  color: var(--ink-3);
+}
+
+/* ── Narrow list: a phone, or the docked panel beside it ───────────────── */
+
+@container tl (max-width: 899px) {
+  .tl-fmenus {
+    display: none;
+  }
+  .tl-fbtn {
+    display: inline-flex;
+  }
+}
+
+@container tl (max-width: 619px) {
+  .tl-card {
+    grid-template-columns: 28px minmax(0, 1fr);
+    align-items: start;
+  }
+  .tl-check {
+    grid-row: 1 / span 2;
+  }
+  .tl-side {
+    grid-column: 2;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 4px 10px;
+  }
+  .tl-own {
+    order: 3;
+  }
+  .tl-status {
+    display: none;
+  }
+  /* The buttons get their own line, folded to no height until hover / focus (still in the Tab order). */
+  .tl-acts {
+    position: static;
+    grid-column: 2;
+    transform: none;
+    padding: 0;
+    background: none;
+    max-height: 0;
+    overflow: hidden;
+  }
+  .tl-card[data-selected] .tl-acts {
+    background: none;
+  }
+  .tl-card:hover .tl-acts,
+  .tl-card:has(:focus-visible) .tl-acts,
+  .tl-card:has([aria-expanded="true"]) .tl-acts {
+    max-height: 60px;
+    overflow: visible;
+  }
+  /* Narrow: the buttons sit on their own line, so the due words stay. */
+  .tl-card:hover .tl-side,
+  .tl-card:has(:focus-visible) .tl-side,
+  .tl-card:has([aria-expanded="true"]) .tl-side {
+    visibility: visible;
+  }
+  .tl-hint {
+    display: none;
+  }
+  /* One line of views that scrolls inside itself (the page never scrolls sideways). */
+  .tl-views-label {
+    display: none;
+  }
+  .tl-views-list {
+    flex: 1 1 0;
+    flex-wrap: nowrap;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .tl-views-list > li {
+    flex: none;
+  }
+  .tl-view > button:first-child,
+  .tl-view-add {
+    white-space: nowrap;
+  }
+  .tl-sort > span {
+    display: none;
+  }
+  .tl-sort {
+    flex: none;
+  }
+  .tl-sort select {
+    max-width: 8.5em;
+  }
+}
+
+/* Phone: the filter sheet and the bulk bar sit above the tab bar. */
+@media (max-width: 1023px) {
+  .tl-sheet {
+    position: fixed;
+    z-index: 38;
+    left: 0;
+    right: 0;
+    top: auto;
+    bottom: calc(3.5rem + env(safe-area-inset-bottom));
+    width: auto;
+    max-height: 75vh;
+    overflow-y: auto;
+    border-width: 1.5px 0 0;
+    box-shadow: 0 -4px 0 var(--rule-2);
+  }
+  .tl-bulk {
+    position: fixed;
+    z-index: 38;
+    left: 0;
+    right: 0;
+    bottom: calc(3.5rem + env(safe-area-inset-bottom));
+    margin: 0;
+    border-width: 1.5px 0 0;
+    box-shadow: 0 -4px 0 var(--rule-2);
+  }
+  .tl-bulk-edit {
+    display: inline-flex;
+    align-items: center;
+  }
+  .tl-bulk-menus {
+    display: none;
+    order: 5;
+    flex-basis: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .tl-bulk[data-expanded] .tl-bulk-menus {
+    display: flex;
+  }
+  .tl-bf {
+    justify-content: space-between;
+  }
+  .tl-bf select {
+    flex: 1 1 auto;
+    max-width: 70%;
+  }
+  /* Room under the last card for the bar. */
+  .tl-list[data-selecting] {
+    padding-bottom: 72px;
+  }
+}
+
+/* Touch: 44 px targets (fields are 16 px from globals.css). */
+@media (pointer: coarse) {
+  .tl-f,
+  .tl-fbtn,
+  .tl-clear,
+  .tl-search,
+  .tl-view > button,
+  .tl-view-add,
+  .tl-more,
+  .tl-bulk-edit,
+  .tl-switch,
+  .tl-sort select,
+  .tl-bf select,
+  .tl-bdate input,
+  .tl-view-form input {
+    min-height: 44px;
+  }
+  .tl-switch {
+    display: inline-flex;
+    align-items: center;
+  }
+  /* iOS zooms into a field under 16 px (globals.css sets this, but the rules above name a size). */
+  .tl input:not([type="checkbox"]),
+  .tl select {
+    font-size: 16px;
+  }
+  .tl-search input {
+    min-height: 44px;
+  }
+  .tl-view-x {
+    min-width: 44px;
+  }
+  .tl-check {
+    min-width: 44px;
+    margin: -9px 0 -9px -8px;
+  }
+  .tl-card {
+    grid-template-columns: 44px minmax(0, 1fr) auto;
+  }
+  .tl-all {
+    min-height: 44px;
+  }
+  .tl-title {
+    min-height: 24px;
+  }
+}
+@container tl (max-width: 619px) {
+  @media (pointer: coarse) {
+    .tl-card {
+      grid-template-columns: 44px minmax(0, 1fr);
+    }
+  }
+}
+
+/* Last, so it wins over the hover rules (a tap counts as hover): on a touch screen the task panel has Done / Move. */
+@media (pointer: coarse) {
+  .tl .tl-card .tl-acts {
+    display: none;
+  }
+  .tl .tl-card .tl-side {
+    visibility: visible;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tl *,
+  .tl *::before,
+  .tl *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}

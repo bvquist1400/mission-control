@@ -4,17 +4,11 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { useSearchParams } from "next/navigation";
 import { IntelligenceArtifactInbox } from "@/components/backlog/IntelligenceArtifactInbox";
+import { TaskListFilterBar } from "@/components/backlog/TaskListFilters";
+import { TaskCardList, TaskCardListSkeleton } from "@/components/backlog/TaskCardList";
 import { useSprints } from "@/hooks/useSprints";
 import { TaskCreateForm } from "@/components/tasks/TaskCreateForm";
-import { TaskGrid, TaskGridLoadingSkeleton } from "@/components/tasks/TaskGrid";
-import type {
-  CommitmentSummary,
-  ImplementationSummary,
-  TaskStatus,
-  TaskWithImplementation,
-} from "@/types/database";
-import { Input, Select } from "@/components/ui/Field";
-import { cardClasses } from "@/components/ui/Card";
+import type { ImplementationSummary, TaskWithImplementation } from "@/types/database";
 import { Button } from "@/components/ui/Button";
 import {
   attachRefreshOnReturn,
@@ -24,38 +18,29 @@ import {
   reuseUnchangedRows,
   withMissedRows,
 } from "@/lib/backlog/task-loader";
+import { filterTasksByScope, normalizeTaskScope } from "@/lib/personal-exclusion";
+import {
+  BUILT_IN_VIEWS,
+  DEFAULT_TASK_LIST_FILTERS,
+  filtersNeedDone,
+  listClock,
+  matchesTaskListFilters,
+  parseTaskListFilters,
+  statusForLoader,
+  taskListHref,
+  type TaskListFilters,
+} from "@/lib/tasks-list";
+import { taskIdFromParams } from "@/lib/task-panel";
+import "@/components/backlog/tasks-list.css";
+// The cards' Move to… menu (S4) brings no CSS of its own (TaskCardRow stays importable in the offline test).
+import "@/components/today/move-to-menu.css";
 
-type StatusFilter = "All" | TaskStatus;
-type ReviewFilter = "All" | "Needs review" | "Ready";
-type ImplementationFilter = "All" | "Unassigned" | string;
-type ProjectFilter = "All" | "Unassigned" | string;
-type SprintFilter = "All" | "Unassigned" | string;
-
-const STATUS_FILTER_OPTIONS: StatusFilter[] = ["All", "Backlog", "Planned", "In Progress", "Blocked/Waiting", "Parked", "Missed", "Done"];
-const REVIEW_FILTER_OPTIONS: ReviewFilter[] = ["All", "Needs review", "Ready"];
-
-function reviewFilterFromParam(value: string | null): ReviewFilter {
-  if (value === "needs_review") {
-    return "Needs review";
-  }
-
-  if (value === "ready") {
-    return "Ready";
-  }
-
-  return "All";
-}
-
-function sprintFilterFromParam(value: string | null): SprintFilter {
-  if (value === "unassigned") {
-    return "Unassigned";
-  }
-
-  if (typeof value === "string" && value.trim().length > 0) {
-    return value;
-  }
-
-  return "All";
+/** Projects as the filter and bulk edit need them (GET /api/projects returns whole rows). */
+export interface ListProject {
+  id: string;
+  name: string;
+  implementation_id?: string | null;
+  tags?: string[] | null;
 }
 
 async function fetchTaskPage(params: Record<string, string>): Promise<TaskWithImplementation[]> {
@@ -87,7 +72,7 @@ async function fetchImplementations(): Promise<ImplementationSummary[]> {
   return response.json();
 }
 
-async function fetchProjects(): Promise<{ id: string; name: string }[]> {
+async function fetchProjects(): Promise<ListProject[]> {
   const response = await fetch("/api/projects", { cache: "no-store" });
 
   if (response.status === 401) {
@@ -101,43 +86,37 @@ async function fetchProjects(): Promise<{ id: string; name: string }[]> {
   return response.json();
 }
 
-async function fetchCommitments(): Promise<CommitmentSummary[]> {
-  const response = await fetch("/api/commitments?include_done=true", { cache: "no-store" });
-
-  if (response.status === 401) {
-    throw new Error("Authentication required. Sign in at /login.");
-  }
-
-  if (!response.ok) {
-    throw new Error("Failed to fetch commitments");
-  }
-
-  return response.json();
-}
-
+/**
+ * The Tasks page (redesign S5; plan row S5, NOTES.md "Tasks rows as cards"):
+ * one filter row and saved views over card rows grouped by status, the S3
+ * task panel on click, bulk edit on the selected cards. The URL holds the
+ * filters (`parseTaskListFilters` / `taskListHref` in src/lib/tasks-list.ts),
+ * so a link reproduces the view; the top bar's Work / Personal / All writes
+ * `?scope`. Loading is unchanged (src/lib/backlog/task-loader.ts).
+ */
 export function BacklogList() {
   const searchParams = useSearchParams();
   const reviewParam = searchParams.get("review");
   // ?task=<id> (and the old ?expand=<id>) open the app-wide task panel, not a row here (redesign S3).
-  const sprintParam = searchParams.get("sprint");
-  const { sprints, loading: sprintsLoading } = useSprints();
+  // Every filter (status, app, project, ?sprint=, owner, due, review, q, sort) is read from the URL.
+  const filters = useMemo(() => parseTaskListFilters(searchParams), [searchParams]);
+  const scope = normalizeTaskScope(searchParams.get("scope"), "all");
+  const openTaskId = taskIdFromParams(searchParams, "/backlog");
+  const { sprints } = useSprints();
 
   const [tasks, setTasksState] = useState<TaskWithImplementation[]>([]);
   // Whether `tasks` holds the Missed rows (fetched only for the "Missed" filter).
   const [tasksIncludeMissed, setTasksIncludeMissed] = useState(false);
   const [implementations, setImplementations] = useState<ImplementationSummary[]>([]);
-  const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
-  const [commitments, setCommitments] = useState<CommitmentSummary[]>([]);
+  const [projects, setProjects] = useState<ListProject[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
-  const [includeCompleted, setIncludeCompleted] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
-  const [implementationFilter, setImplementationFilter] = useState<ImplementationFilter>("All");
-  const [projectFilter, setProjectFilter] = useState<ProjectFilter>("All");
-  const [sprintFilter, setSprintFilter] = useState<SprintFilter>(() => sprintFilterFromParam(sprintParam));
-  const [reviewFilter, setReviewFilter] = useState<ReviewFilter>(() => reviewFilterFromParam(reviewParam));
+  // Done rows are loaded only when the Status filter asks for them ("All" or "Done").
+  const includeCompleted = filtersNeedDone(filters);
+  const statusFilter = statusForLoader(filters);
   const isArtifactInboxView = reviewParam === "intelligence";
 
   // Loads read the current filters through refs, so the listeners never go stale.
@@ -146,7 +125,7 @@ export function BacklogList() {
   const mountedRef = useRef(true);
   // Bumped by every full load: an older load's result is dropped.
   const loadSeqRef = useRef(0);
-  // Bumped by every local change (grid edit, new task): a background refresh
+  // Bumped by every local change (card edit, bulk edit, new task): a background refresh
   // that started before one is dropped rather than overwriting it.
   const localEditSeqRef = useRef(0);
   const [refreshGate] = useState(() =>
@@ -170,45 +149,21 @@ export function BacklogList() {
     };
   }, []);
 
-  const hasActiveFilters =
-    searchQuery.trim() !== "" ||
-    statusFilter !== "All" ||
-    implementationFilter !== "All" ||
-    projectFilter !== "All" ||
-    sprintFilter !== "All" ||
-    reviewFilter !== "All";
+  /** Filters live in the URL: replaced in place (no history entry per pick; the open task stays). */
+  const setFilters = useCallback((next: TaskListFilters) => {
+    const href = taskListHref(window.location.pathname, window.location.search, next);
+    window.history.replaceState(null, "", `${href}${window.location.hash}`);
+  }, []);
 
-  function clearFilters() {
-    setSearchQuery("");
-    setStatusFilter("All");
-    setImplementationFilter("All");
-    setProjectFilter("All");
-    setSprintFilter("All");
-    setReviewFilter("All");
-  }
-
-  const backlogHref = useMemo(() => {
-    const params = new URLSearchParams(searchParams.toString());
-    params.delete("review");
-    params.delete("expand");
-    const query = params.toString();
-    return query ? `/backlog?${query}` : "/backlog";
-  }, [searchParams]);
+  const clearFilters = useCallback(() => setFilters({ ...DEFAULT_TASK_LIST_FILTERS, sort: filters.sort }), [filters.sort, setFilters]);
 
   const artifactInboxHref = useMemo(() => {
     const params = new URLSearchParams(searchParams.toString());
     params.set("review", "intelligence");
     params.delete("expand");
+    params.delete("task");
     return `/backlog?${params.toString()}`;
   }, [searchParams]);
-
-  useEffect(() => {
-    setReviewFilter(reviewFilterFromParam(reviewParam));
-  }, [reviewParam]);
-
-  useEffect(() => {
-    setSprintFilter(sprintFilterFromParam(sprintParam));
-  }, [sprintParam]);
 
   useEffect(() => {
     if (isArtifactInboxView) {
@@ -227,14 +182,14 @@ export function BacklogList() {
       const includeMissed = backlogNeedsMissed(statusFilterRef.current);
 
       try {
-        const [taskData, implementationData, projectData, commitmentData] = await Promise.all([
+        // Commitments are no longer read here: the task panel loads its own (S3).
+        const [taskData, implementationData, projectData] = await Promise.all([
           fetchAllBacklogTaskPages(fetchTaskPage, {
             includeCompleted,
             missed: includeMissed ? "include" : "exclude",
           }),
           fetchImplementations(),
           fetchProjects(),
-          fetchCommitments(),
         ]);
 
         if (!isCurrent()) {
@@ -243,15 +198,15 @@ export function BacklogList() {
 
         setTasksState(taskData);
         setTasksIncludeMissed(includeMissed);
+        setNowMs(Date.now());
         setImplementations(implementationData);
         setProjects(projectData);
-        setCommitments(commitmentData);
       } catch (loadError) {
         if (!isCurrent()) {
           return;
         }
 
-        setError(loadError instanceof Error ? loadError.message : "Failed to load backlog data");
+        setError(loadError instanceof Error ? loadError.message : "Failed to load tasks");
       } finally {
         if (isCurrent()) {
           setLoading(false);
@@ -308,13 +263,10 @@ export function BacklogList() {
       const includeMissed = backlogNeedsMissed(statusFilterRef.current);
 
       try {
-        const [taskData, commitmentData] = await Promise.all([
-          fetchAllBacklogTaskPages(fetchTaskPage, {
-            includeCompleted: includeCompletedRef.current,
-            missed: includeMissed ? "include" : "exclude",
-          }),
-          fetchCommitments(),
-        ]);
+        const taskData = await fetchAllBacklogTaskPages(fetchTaskPage, {
+          includeCompleted: includeCompletedRef.current,
+          missed: includeMissed ? "include" : "exclude",
+        });
 
         if (!mountedRef.current || loadSeqRef.current !== seq) {
           return;
@@ -325,13 +277,14 @@ export function BacklogList() {
           setTasksState((current) => reuseUnchangedRows(current, taskData));
           setTasksIncludeMissed(includeMissed);
         }
-        setCommitments((current) => reuseUnchangedRows(current, commitmentData));
       } catch {
         // Non-blocking refresh.
       }
     }
 
     return attachRefreshOnReturn(document, window, () => {
+      // Late / today / this week follow the clock when you come back to the tab (no timer).
+      setNowMs(Date.now());
       if (refreshGate.decide() === "go") {
         void refreshGate.track(refreshData());
       }
@@ -343,213 +296,98 @@ export function BacklogList() {
     setError(null);
   }
 
-  const filteredTasks = useMemo(() => {
-    const normalizedSearch = searchQuery.trim().toLowerCase();
+  const clock = useMemo(() => listClock(new Date(nowMs)), [nowMs]);
+  // The top bar's Work / Personal / All (default All: the list has always shown everything).
+  const scopedTasks = useMemo(() => filterTasksByScope(tasks, scope), [tasks, scope]);
+  const matchingTasks = useMemo(
+    () => scopedTasks.filter((task) => matchesTaskListFilters(task, filters, clock)),
+    [scopedTasks, filters, clock]
+  );
+  const openCount = useMemo(() => scopedTasks.filter((task) => task.status !== "Done" && task.status !== "Missed").length, [scopedTasks]);
+  const ownerLabels = useMemo(() => {
+    const labels = new Map<string, string>();
+    for (const task of tasks) {
+      const label = task.owner === "agent" ? task.owner_label?.trim() : "";
+      if (label && !labels.has(label.toLowerCase())) labels.set(label.toLowerCase(), label);
+    }
+    return [...labels.values()].sort((a, b) => a.localeCompare(b));
+  }, [tasks]);
+  const viewCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const view of BUILT_IN_VIEWS) {
+      const viewFilters = parseTaskListFilters(view.query);
+      counts[view.query] = scopedTasks.filter((task) => matchesTaskListFilters(task, viewFilters, clock)).length;
+    }
+    return counts;
+  }, [scopedTasks, clock]);
+  const countFor = useCallback(
+    (query: string) => viewCounts[query] ?? scopedTasks.filter((task) => matchesTaskListFilters(task, parseTaskListFilters(query), clock)).length,
+    [viewCounts, scopedTasks, clock]
+  );
 
-    return tasks.filter((task) => {
-      if (statusFilter === "All" && task.status === "Missed") {
-        return false;
-      }
+  if (isArtifactInboxView) {
+    return (
+      <div className="tl">
+        <header className="tl-head">
+          <h1>Artifact Inbox</h1>
+          <Link href={`/backlog${scope === "all" ? "" : `?scope=${scope}`}`} className="tl-switch">
+            ← Back to Tasks
+          </Link>
+        </header>
+        <IntelligenceArtifactInbox />
+      </div>
+    );
+  }
 
-      if (
-        normalizedSearch
-        && !task.title.toLowerCase().includes(normalizedSearch)
-        && !(task.description ?? "").toLowerCase().includes(normalizedSearch)
-      ) {
-        return false;
-      }
-
-      if (statusFilter !== "All" && task.status !== statusFilter) {
-        return false;
-      }
-
-      if (implementationFilter === "Unassigned" && task.implementation_id !== null) {
-        return false;
-      }
-
-      if (
-        implementationFilter !== "All"
-        && implementationFilter !== "Unassigned"
-        && task.implementation_id !== implementationFilter
-      ) {
-        return false;
-      }
-
-      if (projectFilter === "Unassigned" && task.project_id !== null) {
-        return false;
-      }
-
-      if (projectFilter !== "All" && projectFilter !== "Unassigned" && task.project_id !== projectFilter) {
-        return false;
-      }
-
-      if (sprintFilter === "Unassigned" && task.sprint_id !== null) {
-        return false;
-      }
-
-      if (sprintFilter !== "All" && sprintFilter !== "Unassigned" && task.sprint_id !== sprintFilter) {
-        return false;
-      }
-
-      if (reviewFilter === "Needs review" && !task.needs_review) {
-        return false;
-      }
-
-      if (reviewFilter === "Ready" && task.needs_review) {
-        return false;
-      }
-
-      return true;
-    });
-  }, [implementationFilter, projectFilter, reviewFilter, searchQuery, sprintFilter, statusFilter, tasks]);
+  const listReady = !loading && !(awaitingMissed && !error);
 
   return (
-    <div className="space-y-4">
-      <section className={cardClasses({ padding: "sm" })}>
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <h2 className="text-lg font-semibold text-foreground">Review Surface</h2>
-            <p className="text-sm text-muted-foreground">
-              Switch between the task backlog and the artifact inbox without mixing artifact state into task-level review flags.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Link
-              href={backlogHref}
-              className={`rounded-lg border px-3 py-2 text-sm font-semibold transition ${
-                isArtifactInboxView
-                  ? "border-stroke bg-panel text-foreground hover:bg-panel-muted"
-                  : "border-accent bg-accent text-on-accent hover:opacity-90"
-              }`}
-            >
-              Task Backlog
-            </Link>
-            <Link
-              href={artifactInboxHref}
-              className={`rounded-lg border px-3 py-2 text-sm font-semibold transition ${
-                isArtifactInboxView
-                  ? "border-accent bg-accent text-on-accent hover:opacity-90"
-                  : "border-stroke bg-panel text-foreground hover:bg-panel-muted"
-              }`}
-            >
-              Artifact Inbox
-            </Link>
-          </div>
+    <div className="tl" data-panel={openTaskId ? "open" : undefined}>
+      <header className="tl-head">
+        <h1>Tasks</h1>
+        <p className="tl-count" aria-live="polite">
+          {listReady ? (
+            <>
+              <b>{matchingTasks.length}</b> match · {openCount} open in all
+            </>
+          ) : (
+            "Loading…"
+          )}
+        </p>
+        <div className="tl-head-right">
+          <Link href={artifactInboxHref} className="tl-switch">
+            Artifact Inbox
+          </Link>
+          <Button variant="primary" size="sm" aria-expanded={creating} onClick={() => setCreating((open) => !open)}>
+            {creating ? "Close" : "+ New task"}
+          </Button>
         </div>
-      </section>
+      </header>
 
-      {isArtifactInboxView ? (
-        <IntelligenceArtifactInbox />
-      ) : (
-        <>
+      {creating ? (
+        <section className="tl-create" aria-label="New task">
           <TaskCreateForm
             implementations={implementations}
             sprints={sprints}
             onTaskCreated={handleTaskCreated}
             defaultNeedsReview={false}
+            initiallyOpen
+            hideLauncher
+            onRequestClose={() => setCreating(false)}
           />
+        </section>
+      ) : null}
 
-          <section className={cardClasses({ padding: "sm" })}>
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
-              <label className="space-y-1 xl:col-span-2">
-                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Search</span>
-                <Input
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="Search title or description"
-                />
-              </label>
-
-              <label className="space-y-1">
-                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</span>
-                <Select
-                  value={statusFilter}
-                  onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
-                >
-                  {STATUS_FILTER_OPTIONS.map((status) => (
-                    <option key={status} value={status}>
-                      {status}
-                    </option>
-                  ))}
-                </Select>
-              </label>
-
-              <label className="space-y-1">
-                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Application</span>
-                <Select
-                  value={implementationFilter}
-                  onChange={(event) => setImplementationFilter(event.target.value as ImplementationFilter)}
-                >
-                  <option value="All">All</option>
-                  <option value="Unassigned">Unassigned</option>
-                  {implementations.map((implementation) => (
-                    <option key={implementation.id} value={implementation.id}>
-                      {implementation.name}
-                    </option>
-                  ))}
-                </Select>
-              </label>
-
-              <label className="space-y-1">
-                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Project</span>
-                <Select
-                  value={projectFilter}
-                  onChange={(event) => setProjectFilter(event.target.value as ProjectFilter)}
-                >
-                  <option value="All">All</option>
-                  <option value="Unassigned">Unassigned</option>
-                  {projects.map((project) => (
-                    <option key={project.id} value={project.id}>
-                      {project.name}
-                    </option>
-                  ))}
-                </Select>
-              </label>
-
-              <label className="space-y-1">
-                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Sprint</span>
-                <Select
-                  value={sprintFilter}
-                  onChange={(event) => setSprintFilter(event.target.value as SprintFilter)}
-                >
-                  <option value="All">All</option>
-                  <option value="Unassigned">Unassigned</option>
-                  {sprintsLoading && sprints.length === 0 ? <option value="All">Loading...</option> : null}
-                  {sprints.map((sprint) => (
-                    <option key={sprint.id} value={sprint.id}>
-                      {sprint.name}
-                    </option>
-                  ))}
-                </Select>
-              </label>
-
-              <label className="space-y-1">
-                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Review</span>
-                <Select
-                  value={reviewFilter}
-                  onChange={(event) => setReviewFilter(event.target.value as ReviewFilter)}
-                >
-                  {REVIEW_FILTER_OPTIONS.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </Select>
-              </label>
-            </div>
-
-            <label className="mt-3 inline-flex items-center gap-2 rounded-lg border border-stroke bg-panel px-3 py-2 text-sm text-foreground">
-              <input
-                type="checkbox"
-                checked={includeCompleted}
-                onChange={(event) => setIncludeCompleted(event.target.checked)}
-                className="h-4 w-4 accent-accent"
-              />
-              Include completed tasks
-            </label>
-          </section>
-        </>
-      )}
+      <TaskListFilterBar
+        filters={filters}
+        onChange={setFilters}
+        onClear={clearFilters}
+        implementations={implementations}
+        projects={projects}
+        sprints={sprints}
+        ownerLabels={ownerLabels}
+        countFor={countFor}
+      />
 
       {error ? (
         <p className="rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
@@ -557,34 +395,27 @@ export function BacklogList() {
         </p>
       ) : null}
 
-      {!isArtifactInboxView ? (
-        loading || (awaitingMissed && !error) ? (
-          <TaskGridLoadingSkeleton />
-        ) : (
-          <TaskGrid
-            tasks={tasks}
-            visibleTasks={filteredTasks}
-            setTasks={setTasks}
-            implementations={implementations}
-            sprints={sprints}
-            commitments={commitments}
-            scopeMode="global"
-            emptyStateTitle={hasActiveFilters ? "No tasks match these filters" : "No tasks yet"}
-            emptyStateBody={
-              hasActiveFilters
-                ? "Nothing in the backlog matches the current filter set."
-                : "Add your first task with the New Task button above."
-            }
-            emptyStateAction={
-              hasActiveFilters ? (
-                <Button variant="secondary" size="sm" onClick={clearFilters}>
-                  Clear filters
-                </Button>
-              ) : undefined
-            }
-          />
-        )
-      ) : null}
+      {listReady ? (
+        <TaskCardList
+          tasks={tasks}
+          matchingTasks={matchingTasks}
+          setTasks={setTasks}
+          filters={filters}
+          clock={clock}
+          openTaskId={openTaskId}
+          implementations={implementations}
+          projects={projects}
+          sprints={sprints}
+          ownerLabels={ownerLabels}
+          emptyAction={
+            <Button variant="secondary" size="sm" onClick={clearFilters}>
+              Clear filters
+            </Button>
+          }
+        />
+      ) : (
+        <TaskCardListSkeleton />
+      )}
     </div>
   );
 }

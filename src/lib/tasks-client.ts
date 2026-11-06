@@ -21,6 +21,8 @@ export interface TaskPatchCascadeOptions {
   cascade?: boolean;
   cascade_mode?: "same_gap" | "only_collisions";
   cascade_confirm?: boolean;
+  /** Bulk date sets (Tasks page): no cascade toast or project flag (app-only, not in the MCP schema). */
+  cascade_quiet?: boolean;
 }
 
 export type TaskPatchResult =

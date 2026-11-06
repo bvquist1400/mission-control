@@ -433,7 +433,11 @@ await test("the board narrows with the task panel: ?task drives data-panel; the 
 await test("layer order: the rail fly-out (20) sits under the desktop panel (25); the Move to… menu shares Modal's 50; both own their Esc", () => {
   const css = read("src/components/today/today-board.css");
   assert.match(css, /\.tb-rail\[data-flyout\] \{[^}]*z-index: 20;/);
-  assert.match(css, /\.tb-move \{[^}]*z-index: 50;/);
+  // S5: the menu's rules moved to their own file (Tasks shows it too); both pages import it.
+  const menuCss = read("src/components/today/move-to-menu.css");
+  assert.match(menuCss, /\.tb-move \{[^}]*z-index: 50;/);
+  assert.doesNotMatch(css, /\.tb-move\b/, "no copy left in today-board.css");
+  assert.match(read("src/components/today/sections/WeekBoard.tsx"), /import "@\/components\/today\/move-to-menu\.css";/);
   assert.match(read("src/components/tasks/panel/task-panel.css"), /\.tp-panel \{[^}]*z-index: 25;/);
   assert.match(read("src/components/ui/Modal.tsx"), /z-50/);
   const menu = read("src/components/today/MoveToMenu.tsx");
@@ -445,7 +449,7 @@ await test("layer order: the rail fly-out (20) sits under the desktop panel (25)
 });
 
 await test("phone and a11y: 44 px touch targets, the 12 px type floor, reduced motion, light-dark tokens only, no vendor names", () => {
-  const css = read("src/components/today/today-board.css");
+  const css = read("src/components/today/today-board.css") + "\n" + read("src/components/today/move-to-menu.css");
   const coarse = css.split("@media (pointer: coarse)").slice(1).map((block) => block.slice(0, block.indexOf("}\n}") + 3)).join("\n");
   for (const selector of [".tb-pager button", ".tb-wrow", ".tb-linkbtn", ".tb-addrow", ".tb-dn", ".tb-wk-it", ".tb-move-item"]) {
     assert.ok(coarse.includes(selector), `${selector} grows on a touch screen`);

@@ -169,7 +169,9 @@ for (const kept of [
   ok(exists(kept), `${kept} kept`);
 }
 // Sprint stays as a Backlog filter and a Today chip; both link to the filter, not a removed page.
-assert.match(read("src/components/backlog/BacklogList.tsx"), /searchParams\.get\("sprint"\)/, "Backlog reads ?sprint=");
+// Redesign S5: the Tasks filters are read from the URL in one place (src/lib/tasks-list.ts).
+assert.match(read("src/components/backlog/BacklogList.tsx"), /parseTaskListFilters\(searchParams\)/, "Backlog reads its filters from the URL");
+assert.match(read("src/lib/tasks-list.ts"), /sprint: parseRef\(firstParam\(params, 'sprint'\)\)/, "Backlog reads ?sprint=");
 assert.match(read("src/components/today/sections/TodayHeaderChips.tsx"), /\/backlog\?sprint=/, "sprint chip -> Backlog filter");
 checks += 2;
 

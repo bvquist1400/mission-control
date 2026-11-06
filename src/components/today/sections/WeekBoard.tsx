@@ -58,6 +58,7 @@ import { DayStrip } from "@/components/tasks/TaskRangeParts";
 import { InlineSteps } from "@/components/tasks/InlineSteps";
 import { TodayStrip, type StripEvent } from "@/components/today/sections/TodayStrip";
 import "@/components/today/today-board.css";
+import "@/components/today/move-to-menu.css";
 
 const TIME_ZONE = DEFAULT_WORKDAY_CONFIG.timezone;
 const WAITING_RAIL_LIMIT = 8;
