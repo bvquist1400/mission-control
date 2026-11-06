@@ -5,7 +5,8 @@
  *
  *   - where each task goes: the Overdue queue, the Waiting list (each Waiting
  *     task once) or the week board (`splitTodayBoard`);
- *   - the short Overdue queue (`railQueue`);
+ *   - the short Overdue queue (`railQueue`), and the faded late copies of
+ *     its tasks on their original days of the shown week (`lateCopiesByDay`);
  *   - "Move to…": which days and undated states a card offers, and the update
  *     each one sends (`moveToChoices`, `moveUpdates`, `dueAtForBoardDay`);
  *   - the board's columns: widths with the task panel closed and open, which
@@ -177,6 +178,39 @@ export function overdueLabel(dueAt: string | null, todayDate: string): string | 
   if (!due) return null;
   if (due >= addDateOnlyDays(todayDate, -6)) return `was due ${WEEKDAY_SHORT[weekdayOf(due)]}`;
   return `was due ${MONTH_SHORT[Number(due.slice(5, 7)) - 1]} ${Number(due.slice(8, 10))}`;
+}
+
+// ── Faded late copies (the week grid only) ────────────────────────────────
+
+/** A day shows this many faded late copies, then "+ n more late" (which opens that day as a list). */
+export const LATE_COPY_LIMIT = 3;
+
+/**
+ * Faded "late" copies (Brent 11/6, "yes i like your faded late idea in the
+ * week view"). An overdue task keeps its one home, the Overdue queue, where it
+ * is acted on; the week grid ALSO shows a faded copy of it on its original due
+ * day when that day is in the shown week, so an earlier day isn't empty of the
+ * work that was due on it. A multi-day task's copy sits on its due (end) day.
+ * Copies never count toward a day's header ("n open", "done/all") or the day
+ * tabs, and the one-day list has none. Takes the Overdue queue from
+ * `splitTodayBoard` and keeps its order (oldest first); a closed or Waiting
+ * task handed in anyway gets no copy.
+ */
+export function lateCopiesByDay<T extends BoardTaskLike>(overdue: ReadonlyArray<T>, weekStart: string): Map<string, T[]> {
+  const byDay = new Map<string, T[]>();
+  for (let index = 0; index < 7; index += 1) byDay.set(addDateOnlyDays(weekStart, index), []);
+  for (const task of overdue) {
+    if (CLOSED_STATUSES.includes(task.status) || task.status === WAITING_STATUS) continue;
+    const due = etDate(task.due_at);
+    if (due && byDay.has(due)) byDay.get(due)!.push(task);
+  }
+  return byDay;
+}
+
+/** A faded copy's accessible name: "Send the export: late, was due Mon. The task is in Overdue." */
+export function lateCopyLabel(title: string, dueAt: string | null, todayDate: string): string {
+  const was = overdueLabel(dueAt, todayDate);
+  return `${title.trim()}: late${was ? `, ${was}` : ''}. The task is in Overdue.`;
 }
 
 /** The due time a card shows ("5 PM", "10:30 AM"); null for an end-of-day due (minute :59), which the column already says. */

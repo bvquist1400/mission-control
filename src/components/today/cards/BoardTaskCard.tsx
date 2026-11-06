@@ -301,6 +301,28 @@ export function LaneBar({
 }
 
 /** A done task on its day: one struck-through line that still opens the task. */
+/**
+ * A faded "late" copy of an Overdue task on the day it was due (the week grid
+ * only; Brent 11/6). The real card is in the Overdue queue and is the one you
+ * act on, so this line only opens the task: no Done, no Move to…, no drag. A
+ * dashed, muted line with a "Late" tag; its name says it lives in Overdue.
+ */
+export function LateCopy({ task, label, onOpen }: { task: WeekBoardTaskData; label: string; onOpen: () => void }) {
+  return (
+    <button type="button" className="tb-lc" data-task-open={task.id} onClick={onOpen} aria-label={label} title="Late · the task is in Overdue">
+      <span className="tb-lc-tag" aria-hidden="true">
+        Late
+      </span>
+      <span className="tb-lc-t">{task.title}</span>
+      {task.squareInput ? (
+        <span className="tb-sq-end">
+          <ProjectSquare {...task.squareInput} editable={false} />
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
 export function DoneRow({ task, onOpen }: { task: WeekBoardTaskData; onOpen: () => void }) {
   return (
     <button type="button" className="tb-dn" data-task-open={task.id} onClick={onOpen} aria-label={`${task.title} (done)`}>

@@ -39,6 +39,9 @@ import {
   hidesDone,
   gridTracks,
   isoWeekNumber,
+  LATE_COPY_LIMIT,
+  lateCopiesByDay,
+  lateCopyLabel,
   moveToChoices,
   moveToastText,
   moveUpdates,
@@ -78,6 +81,7 @@ import {
   boardStepsId,
   DoneRow,
   LaneBar,
+  LateCopy,
   WeeklyTaskCard,
   type CardMove,
   type WeekBoardTaskData,
@@ -403,6 +407,9 @@ export function WeekBoard({
   });
   const overdueQueue = railQueue(overdueData, overdueExpanded);
   const waitingQueue = railQueue(split.waiting, waitingExpanded, WAITING_RAIL_LIMIT);
+  // Faded late copies (Brent 11/6): an Overdue task also shows on its original day of the shown
+  // week. They live outside the counts; the real card (the one to act on) stays in Overdue.
+  const lateByDate = lateCopiesByDay(split.overdue, selectedWeekStart);
 
   const legendInputs = [...split.board, ...split.overdue, ...split.waiting].map((task) => squareInputOf(task));
 
@@ -788,6 +795,33 @@ export function WeekBoard({
     />
   );
 
+  // A day's faded late copies: the first few, then "+ n more late", which opens that day as a list
+  // (an earlier day's list shows its still-open tasks, drawn late).
+  const renderLateCopies = (date: string) => {
+    const queue = railQueue(lateByDate.get(date) ?? [], false, LATE_COPY_LIMIT);
+    if (queue.shown.length === 0) return null;
+    return (
+      <div className="tb-late">
+        {queue.shown.map((task) => {
+          const data = dataById.get(task.id);
+          return data ? (
+            <LateCopy key={`late-${task.id}`} task={data} label={lateCopyLabel(data.title, data.dueAt, todayDate)} onOpen={() => handleOpenTask(task.id)} />
+          ) : null;
+        })}
+        {queue.hidden > 0 ? (
+          <button
+            type="button"
+            className="tb-lc-more"
+            onClick={() => goToDay(date, null)}
+            aria-label={`${queue.hidden} more late from ${longDayName(date)} (opens it as a list)`}
+          >
+            + {queue.hidden} more late
+          </button>
+        ) : null}
+      </div>
+    );
+  };
+
   const weekendItems = (date: string) => {
     const singles = singlesByDate.get(date) ?? [];
     const ranges = weekendRanges.filter((task) => {
@@ -836,6 +870,7 @@ export function WeekBoard({
             <span>{data.title}</span>
           </button>
         ))}
+        {renderLateCopies(date)}
         {doneShown.map((data) => (
           <button key={`done-${data.id}`} type="button" className="tb-wk-it" data-task-open={data.id} onClick={() => handleOpenTask(data.id)} aria-label={`${data.title} (done)`}>
             <span className="tb-ck" aria-hidden="true">
@@ -1202,6 +1237,8 @@ export function WeekBoard({
                       </button>
                     ) : null}
                   </div>
+                  {/* Outside .tb-full, so a folded earlier day still shows them. */}
+                  {renderLateCopies(column.date)}
                 </div>
               </div>
             );

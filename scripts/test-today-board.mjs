@@ -18,6 +18,11 @@
 //      cascade and Backlog / Park through useTaskMutation (no new PATCH path),
 //      the fold rules in today-board.css key off the task panel's ?task, the
 //      layer order, 44 px touch targets, the 12 px type floor, reduced motion.
+//   4. Faded late copies (Brent 11/6, "yes i like your faded late idea in the
+//      week view"): an Overdue task also shows, faded, on its original due day
+//      of the shown week; the real card stays in Overdue; copies only open the
+//      task (no Done, no Move to…, no drag), never count in a day's header, and
+//      stay off the one-day list.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -465,6 +470,131 @@ await test("phone and a11y: 44 px touch targets, the 12 px type floor, reduced m
     assert.doesNotMatch(source, /text-\[1[01]px\]/, `${file}: text-xs is the floor`);
     assert.doesNotMatch(source, /\bClaude\b|Anthropic/, `${file} names no AI product`);
   }
+});
+
+// ── 8. Faded late copies (week grid only) ────────────────────────────────
+
+// Thu 5 Nov: Mon 2 and Tue 3 are earlier days of this week; Fri 30 Oct is last week.
+const lateFixture = () => [
+  task("mon-a", { title: "Send the OnCore export", due_at: endOf("2026-11-02"), priority_score: 70 }),
+  task("mon-b", { title: "Book the venue", due_at: "2026-11-02T15:00:00.000Z" }),
+  task("tue", { due_at: endOf("2026-11-03") }),
+  task("last-fri", { due_at: endOf("2026-10-30") }),
+  task("range-wed", { due_at: endOf("2026-11-04"), start_at: "2026-10-28T04:00:00.000Z" }),
+  task("earlier-today", { due_at: "2026-11-05T14:00:00.000Z" }),
+  task("done-mon", { status: "Done", due_at: endOf("2026-11-02") }),
+  task("missed-mon", { status: "Missed", due_at: endOf("2026-11-02") }),
+  task("parked-tue", { status: "Parked", due_at: endOf("2026-11-03") }),
+  task("waiting-mon", { status: "Blocked/Waiting", due_at: endOf("2026-11-02") }),
+];
+const lateSplit = () => need(lib, "today-board").splitTodayBoard({ tasks: lateFixture(), waiting: [], todayDate: TODAY, now: NOW });
+const idsOn = (byDay, date) => (byDay.get(date) ?? []).map((t) => t.id);
+
+await test("late copies: an Overdue task shows on its original due day of the shown week, oldest first; the real one stays in Overdue", () => {
+  const { lateCopiesByDay } = need(lib, "today-board");
+  assert.equal(typeof lateCopiesByDay, "function", "lateCopiesByDay exists");
+  const split = lateSplit();
+  const byDay = lateCopiesByDay(split.overdue, WEEK);
+  assert.deepEqual([...byDay.keys()], ["2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-07", "2026-11-08"], "every day of the week, weekend too");
+  assert.deepEqual(idsOn(byDay, "2026-11-02"), ["mon-b", "mon-a"], "Monday's two, in the Overdue queue's order (oldest due first)");
+  assert.deepEqual(idsOn(byDay, "2026-11-03"), ["tue"]);
+  assert.deepEqual(idsOn(byDay, "2026-11-04"), ["range-wed"], "a multi-day task's copy sits on its due (end) day only");
+  assert.deepEqual(idsOn(byDay, "2026-10-28"), [], "never on its start day");
+  assert.deepEqual(idsOn(byDay, "2026-11-05"), [], "a task due earlier today is on today's column already, not a copy");
+  assert.ok(split.board.some((t) => t.id === "earlier-today"));
+  const real = split.overdue.map((t) => t.id);
+  for (const id of ["mon-a", "mon-b", "tue", "range-wed", "last-fri"]) assert.ok(real.includes(id), `${id} is still in the Overdue queue`);
+  assert.ok(!split.board.some((t) => real.includes(t.id)), "an overdue task is still never on the board itself");
+});
+
+await test("late copies: none for a task overdue from a previous week; that week shows it when it is the week shown", () => {
+  const { lateCopiesByDay } = need(lib, "today-board");
+  const split = lateSplit();
+  const thisWeek = lateCopiesByDay(split.overdue, WEEK);
+  const all = [...thisWeek.values()].flat().map((t) => t.id);
+  assert.ok(!all.includes("last-fri"), "Fri 30 Oct is not a day of this week");
+  const lastWeek = lateCopiesByDay(split.overdue, "2026-10-26");
+  assert.deepEqual(idsOn(lastWeek, "2026-10-30"), ["last-fri"], "paging back to last week puts it on its Friday");
+  assert.deepEqual([...lastWeek.values()].flat().map((t) => t.id), ["last-fri"]);
+});
+
+await test("late copies: Done, Missed, Parked and Waiting tasks never get one (even if handed in directly)", () => {
+  const { lateCopiesByDay } = need(lib, "today-board");
+  const viaSplit = [...lateCopiesByDay(lateSplit().overdue, WEEK).values()].flat().map((t) => t.id);
+  const direct = [...lateCopiesByDay(lateFixture(), WEEK).values()].flat().map((t) => t.id);
+  for (const ids of [viaSplit, direct]) {
+    for (const id of ["done-mon", "missed-mon", "parked-tue", "waiting-mon"]) assert.ok(!ids.includes(id), `${id} gets no copy`);
+  }
+  assert.deepEqual([...lateCopiesByDay([], WEEK).values()].flat(), []);
+});
+
+await test("late copies: a day shows 3, then '+ n more late'; the accessible name says late and that it lives in Overdue", () => {
+  const { LATE_COPY_LIMIT, railQueue, lateCopyLabel } = need(lib, "today-board");
+  assert.equal(LATE_COPY_LIMIT, 3);
+  assert.deepEqual(railQueue([1, 2, 3, 4, 5], false, LATE_COPY_LIMIT), { shown: [1, 2, 3], hidden: 2 });
+  assert.equal(lateCopyLabel("Send the OnCore export", endOf("2026-11-02"), TODAY), "Send the OnCore export: late, was due Mon. The task is in Overdue.");
+  assert.equal(lateCopyLabel("  Old one ", endOf("2026-10-20"), TODAY), "Old one: late, was due Oct 20. The task is in Overdue.");
+  assert.equal(lateCopyLabel("No date", null, TODAY), "No date: late. The task is in Overdue.");
+});
+
+await test("rendered: a late copy is a faded line that only opens the task (no Done, no Move to…, no box, not draggable)", () => {
+  const { LateCopy } = need(cards, "BoardTaskCard");
+  assert.equal(typeof LateCopy, "function", "LateCopy exists");
+  let opened = 0;
+  const props = { task: cardData({ dueState: "Overdue", title: "Send the OnCore export" }), label: "Send the OnCore export: late, was due Mon. The task is in Overdue.", onOpen: () => (opened += 1) };
+  const html = renderToStaticMarkup(h(LateCopy, props));
+  assert.match(html, /^<button type="button" class="tb-lc" data-task-open="c0000000-0000-4000-8000-000000000001"/, "one button carrying data-task-open (the panel's ↑ / ↓ see it)");
+  assert.match(html, /aria-label="Send the OnCore export: late, was due Mon\. The task is in Overdue\."/);
+  assert.match(html, /<span class="tb-lc-tag" aria-hidden="true">Late<\/span>/);
+  assert.match(html, /<span class="tb-lc-t">Send the OnCore export<\/span>/);
+  assert.doesNotMatch(html, /draggable|Done|Move|checkbox|<input|data-late=/, "no drag, no Done, no Move to…, no box, not a late card");
+  assert.equal((html.match(/<button/g) ?? []).length, 1, "nothing to click inside it");
+  const element = LateCopy(props);
+  element.props.onClick();
+  assert.equal(opened, 1, "a click opens the task");
+});
+
+await test("wiring: copies render on past days and the weekend (outside the folded part), open the panel, and change no count", () => {
+  const src = read("src/components/today/sections/WeekBoard.tsx");
+  assert.match(src, /const lateByDate = lateCopiesByDay\(split\.overdue, selectedWeekStart\);/);
+  assert.match(src, /railQueue\(lateByDate\.get\(date\) \?\? \[\], false, LATE_COPY_LIMIT\)/);
+  assert.match(src, /<LateCopy[\s\S]{0,200}onOpen=\{\(\) => handleOpenTask\(task\.id\)\}/, "click opens the same panel (?task) as the real card");
+  assert.match(src, /const handleOpenTask = \(taskId: string\) => \{\s*const raw = rawById\.get\(taskId\);\s*if \(raw\) openTask\(raw\);/);
+  assert.match(src, /className="tb-lc-more"\s+onClick=\{\(\) => goToDay\(date, null\)\}/, "'+ n more late' opens that day as a list");
+  // In the column, after .tb-full (so a folded past day still shows them).
+  assert.match(src, /<div className="tb-full"[\s\S]*?\n {18}<\/div>\n {18}\{\/\* Outside \.tb-full[^\n]*\n {18}\{renderLateCopies\(column\.date\)\}\n {16}<\/div>/);
+  assert.match(src, /\{renderLateCopies\(date\)\}/, "the weekend strip too");
+  assert.equal((src.match(/const renderLateCopies = /g) ?? []).length, 1, "defined once");
+  assert.equal((src.match(/\{renderLateCopies\(/g) ?? []).length, 2, "used in the columns and the weekend, nowhere else");
+  // Counts: the header and the day tabs read the board only.
+  assert.match(src, /weekDates\.slice\(0, 5\)\.map\(\(date\) => singlesByDate\.get\(date\)\?\.length \?\? 0\)/);
+  assert.match(src, /const dayRowsFor = \(day: string\) => groupDayList\(\{ board: split\.board, overdue: split\.overdue, done, day \}\);/);
+  const columnsCall = src.slice(src.indexOf("const columns = dayColumns("), src.indexOf("const hiddenDoneCount"));
+  assert.doesNotMatch(columnsCall, /late/i, "dayColumns gets no late copies");
+  assert.match(src, /renderCard\(data, "overdue", "overdue", \{ text: overdueLabel\(data\.dueAt, todayDate\), late: true \}\)/, "the real card is still in the Overdue rail");
+  // Week grid only: the one-day list and the phone's today list never draw copies.
+  const dayList = read("src/components/today/sections/DayList.tsx");
+  assert.doesNotMatch(dayList, /LateCopy|lateCopies|tb-lc/);
+  const dayView = src.slice(src.indexOf("const dayView = viewDay"), src.indexOf("return (\n    <div\n      className=\"tb\""));
+  assert.doesNotMatch(dayView, /LateCopy|renderLateCopies/);
+});
+
+await test("CSS: copies are muted (no opacity on the text), dashed, never folded away, 44 px on touch, tokens only", () => {
+  const css = read("src/components/today/today-board.css");
+  const rule = (selector) => {
+    const match = css.match(new RegExp(`\\n${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\{([^}]*)\\}`));
+    return match ? match[1] : "";
+  };
+  const lc = rule(".tb-lc");
+  assert.ok(lc, ".tb-lc has a rule");
+  assert.match(lc, /border: 1px dashed/);
+  assert.match(lc, /color: var\(--ink-2\)/, "muted ink, still readable");
+  assert.doesNotMatch(lc, /opacity/, "the text keeps its contrast");
+  assert.match(rule(".tb-lc-tag"), /color: var\(--tb-late\)/, "the existing late colour");
+  assert.match(rule(".tb-lc-t"), /-webkit-line-clamp: 2;/, "two lines at most: a narrow past day doesn't grow");
+  assert.doesNotMatch(css, /\.tb-(late|lc)[^{]*\{\s*display: none/, "no fold rule hides them");
+  const coarse = css.split("@media (pointer: coarse)").slice(1).map((block) => block.slice(0, block.indexOf("}\n}") + 3)).join("\n");
+  assert.ok(coarse.includes(".tb-lc") && coarse.includes(".tb-lc-more"), "copies and '+ n more late' grow on a touch screen");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
