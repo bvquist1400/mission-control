@@ -12,6 +12,7 @@ import {
   noteWithRows,
   paceChip,
   type FitView,
+  type LogSittingFields,
   type RowsProblem,
   type SessionRow,
   type SourceLabel,
@@ -30,19 +31,8 @@ export interface PacePanelData {
   unitless_note: string | null;
 }
 
-export interface LogSittingInput {
-  /** "" = a sitting across several tasks (project level). */
-  task_id: string;
-  date: string;
-  start: string;
-  end: string;
-  minutes: string;
-  rows: string;
-  note: string;
-  exclude_from_stats: boolean;
-  /** One per form open, so a retried save can't log the sitting twice. */
-  idempotency_key: string;
-}
+/** The form's fields (defined with the body builder in `pace-view.ts`). */
+export type LogSittingInput = LogSittingFields;
 
 /** `rowsProblem`: the rows sent can't be ticked (F0), so the form offers "Save without rows". */
 export type ActionResult = { ok: true } | { ok: false; error: string; rowsProblem?: RowsProblem };
@@ -233,6 +223,7 @@ function emptyForm(data: PacePanelData): LogSittingInput {
     idempotency_key: newKey(),
     task_id: data.default_task_id ?? "",
     date: data.forecast.today,
+    date_touched: false,
     start: "",
     end: "",
     minutes: "",
@@ -306,7 +297,14 @@ function LogForm({ data, actions, onDone, onCancel }: { data: PacePanelData; act
         </div>
         <div className="pace-field pace-span3 pace-f-date">
           <label htmlFor={`${ids}-date`}>Date</label>
-          <Input id={`${ids}-date`} size="sm" type="date" value={form.date} onChange={(event) => set("date", event.target.value)} required />
+          <Input
+            id={`${ids}-date`}
+            size="sm"
+            type="date"
+            value={form.date}
+            onChange={(event) => setForm((current) => ({ ...current, date: event.target.value, date_touched: true }))}
+            required
+          />
         </div>
         <div className="pace-field pace-span3 pace-f-time">
           <span className="pace-lb">Start – end</span>
@@ -359,7 +357,7 @@ function LogForm({ data, actions, onDone, onCancel }: { data: PacePanelData; act
         <Button variant="secondary" size="sm" onClick={onCancel} disabled={saving}>
           Cancel
         </Button>
-        <span className="pace-hint">Times are Eastern; an end after midnight is the next day. Minutes can be less than start to end (breaks taken off).</span>
+        <span className="pace-hint">Times are Eastern; an end after midnight is the next day, and a start later than now is last night. Minutes can be less than start to end (breaks taken off).</span>
       </div>
     </form>
   );

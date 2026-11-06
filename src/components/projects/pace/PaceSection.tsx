@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useToast } from "@/components/ui/Toast";
 import { PacePanel, type ActionResult, type LogSittingInput, type PacePanelActions, type PacePanelData } from "@/components/projects/pace/PacePanel";
-import { rowsProblemFrom } from "@/lib/pace-view";
+import { buildLogSittingBody, rowsProblemFrom, savedOnText } from "@/lib/pace-view";
 
 async function errorBodyFrom(res: Response, fallback: string): Promise<{ error: string; body: unknown }> {
   const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
@@ -46,20 +46,8 @@ export function PaceSection({ projectId }: { projectId: string }) {
   const actions = useMemo<PacePanelActions>(
     () => ({
       async logSitting(input: LogSittingInput): Promise<ActionResult> {
-        const body: Record<string, unknown> = {
-          date: input.date,
-          exclude_from_stats: input.exclude_from_stats,
-          idempotency_key: input.idempotency_key,
-        };
-        if (input.task_id) body.task_id = input.task_id;
-        else body.project_id = projectId;
-        if (input.start && input.end) {
-          body.start = input.start;
-          body.end = input.end;
-        }
-        if (input.minutes.trim()) body.minutes = Number(input.minutes.trim());
-        if (input.rows.trim()) body.rows = input.rows.trim();
-        if (input.note.trim()) body.note = input.note.trim();
+        // An untouched date (today) is left to the server: a start later than now was yesterday (F0 r1).
+        const body = buildLogSittingBody(input, projectId);
         try {
           const res = await fetch("/api/work-sessions", {
             method: "POST",
@@ -72,8 +60,10 @@ export function PaceSection({ projectId }: { projectId: string }) {
             const rowsProblem = res.status === 400 ? rowsProblemFrom(errorBody, input.rows, input.task_id ? "task" : "project") : null;
             return { ok: false, error: message, ...(rowsProblem ? { rowsProblem } : {}) };
           }
-          const result = (await res.json()) as { forecast_line?: string };
-          toast({ message: result.forecast_line ? `Sitting saved. ${result.forecast_line}` : "Sitting saved.", tone: "success" });
+          const result = (await res.json()) as { forecast_line?: string; session?: { session_date?: string } };
+          const savedOn = savedOnText(input, result.session?.session_date);
+          const saved = savedOn ? `Sitting saved. ${savedOn}` : "Sitting saved.";
+          toast({ message: result.forecast_line ? `${saved} ${result.forecast_line}` : saved, tone: "success" });
           await load();
           return { ok: true };
         } catch {

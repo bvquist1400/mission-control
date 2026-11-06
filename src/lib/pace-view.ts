@@ -655,15 +655,74 @@ export function rowsProblemFrom(body: unknown, rowsText: string, scope: "task" |
   }
   const parts: string[] = [];
   if (missing.length > 0) parts.push(missingSentence(missing, scope));
-  if (ambiguous.length > 0) {
+  if (ambiguous.length > 0 && scope === "task") {
+    // A task in the form: the duplicates are two steps of that one task, so picking a task can't help.
+    const which = ambiguous.length === 1 ? `step named "Row ${ambiguous[0]}"` : `step for ${formatRowNumbers(ambiguous)}`;
+    parts.push(`This task has more than one ${which}, so rows can't be matched; save without rows, or rename the extra step.`);
+  } else if (ambiguous.length > 0) {
     parts.push(`${rowsSentence(ambiguous)} ${ambiguous.length === 1 ? "is" : "are"} in more than one task; pick the task above, or save without rows.`);
   }
   return { message: parts.join(" "), offer };
 }
 
+/** Cuts to at most `max` UTF-16 units (the API's length rule) without splitting an emoji's surrogate pair. */
+function cutText(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const last = cut.charCodeAt(cut.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+}
+
 /** The note a "Save without rows" resend carries: what was typed, then "Rows: …", within the 2,000-character limit. */
 export function noteWithRows(note: string, rowsText: string): string {
-  const rows = `Rows: ${rowsText.trim()}`.slice(0, NOTE_MAX);
-  const kept = note.trim().slice(0, Math.max(0, NOTE_MAX - rows.length - 3)).trimEnd();
+  const rows = cutText(`Rows: ${rowsText.trim()}`, NOTE_MAX);
+  const kept = cutText(note.trim(), Math.max(0, NOTE_MAX - rows.length - 3)).trimEnd();
   return kept ? `${kept} · ${rows}` : rows;
+}
+
+// ── F0 fix round 1: the form's date, and a sitting that started before midnight ──
+
+/** The "Log a sitting" form's fields, as typed (the panel's LogSittingInput). */
+export interface LogSittingFields {
+  /** "" = a sitting across several tasks (project level). */
+  task_id: string;
+  date: string;
+  /** True once the user picked a date; the prefilled today is not a choice. */
+  date_touched: boolean;
+  start: string;
+  end: string;
+  minutes: string;
+  rows: string;
+  note: string;
+  exclude_from_stats: boolean;
+  /** One per form open, so a retried save can't log the sitting twice. */
+  idempotency_key: string;
+}
+
+/**
+ * The `POST /api/work-sessions` body for the form. The date is left out while it is the untouched prefill
+ * and still today (ET), so the server's rule applies: a start later than now was the day before (at 00:20,
+ * 23:30–00:15 is last night). A date the user picked, or a prefill from an earlier day, is sent as is.
+ */
+export function buildLogSittingBody(input: LogSittingFields, projectId: string, now: Date = new Date()): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  if (input.date_touched || input.date !== etDateOf(now)) body.date = input.date;
+  body.exclude_from_stats = input.exclude_from_stats;
+  body.idempotency_key = input.idempotency_key;
+  if (input.task_id) body.task_id = input.task_id;
+  else body.project_id = projectId;
+  if (input.start && input.end) {
+    body.start = input.start;
+    body.end = input.end;
+  }
+  if (input.minutes.trim()) body.minutes = Number(input.minutes.trim());
+  if (input.rows.trim()) body.rows = input.rows.trim();
+  if (input.note.trim()) body.note = input.note.trim();
+  return body;
+}
+
+/** Said in the saved toast when the server put the sitting on another day than the form showed. */
+export function savedOnText(input: LogSittingFields, savedDate: string | null | undefined): string | null {
+  if (input.date_touched || !savedDate || savedDate === input.date) return null;
+  return `Saved on ${formatMonthDay(savedDate)}, the day it started.`;
 }

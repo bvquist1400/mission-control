@@ -161,12 +161,27 @@ export interface SessionTiming {
 /** The longest sitting an end past midnight may make (F0: 11:30 PM–12:15 AM yes, 2 PM–1 PM no). */
 export const MAX_OVERNIGHT_MINUTES = 12 * 60;
 
+/** A start this far after `now` still counts as now (a phone clock a little fast). */
+export const FUTURE_SLACK_MINUTES = 5;
+
+function clockLabel(iso: string): string {
+  const minutes = etMinutesOf(iso);
+  const hour = Math.floor(minutes / 60);
+  return `${hour % 12 === 0 ? 12 : hour % 12}:${String(minutes % 60).padStart(2, "0")} ${hour >= 12 ? "PM" : "AM"}`;
+}
+
 /**
  * Date defaults to today (ET). Minutes are required unless both start and end
  * are given. A clock-time end at or before the start is the next day (a sitting
  * past midnight), up to 12 hours after the start. When all three are given,
  * minutes may be less than start–end (breaks taken off) but not more than it
  * by over 1 minute.
+ *
+ * A sitting never starts in the future (F0 fix round 1: Brent logs right after
+ * he stops, so at 00:20 a 23:30–00:15 sitting started yesterday). With no date
+ * given, a clock-time start later than now is yesterday's; with a date given
+ * (or an ISO start), a start more than 5 minutes after now, or a date after
+ * today, is refused in plain words.
  */
 export function resolveSessionTiming(input: SessionTimingInput, now: Date = new Date()): Parsed<SessionTiming> {
   let date = input.date?.trim() || null;
@@ -175,8 +190,37 @@ export function resolveSessionTiming(input: SessionTimingInput, now: Date = new 
   // An ISO start without a date sets the ET date.
   if (!date && input.start && ISO_INSTANT.test(input.start.trim())) date = etDateOf(input.start.trim());
   if (!date && input.end && ISO_INSTANT.test(input.end.trim())) date = etDateOf(input.end.trim());
+  const defaulted = !date;
   date = date ?? etDateOf(now);
 
+  const latest = now.getTime() + FUTURE_SLACK_MINUTES * 60000;
+  let timing = timingOnDate(input, date);
+  // No date given and the start is later than now: the sitting started on the day before.
+  if (defaulted && timing.ok && timing.value.started_at && Date.parse(timing.value.started_at) > latest) {
+    const dayBefore = timingOnDate(input, addDateDays(date, -1));
+    if (dayBefore.ok) timing = dayBefore;
+  }
+  if (!timing.ok) return timing;
+  const today = etDateOf(latest);
+  if (timing.value.session_date > today) {
+    return { ok: false, error: `date (${timing.value.session_date}) is after today (${today}, ET); a sitting can't be in the future` };
+  }
+  const start = timing.value.started_at;
+  if (start && Date.parse(start) > latest) {
+    const started = etDateOf(start);
+    const clockStart = !ISO_INSTANT.test((input.start ?? "").trim());
+    return {
+      ok: false,
+      error: `start (${clockLabel(start)} on ${started}) is later than now; a sitting can't start in the future${
+        clockStart ? `. Set the date to the day it started (${addDateDays(started, -1)})` : ""
+      }`,
+    };
+  }
+  return timing;
+}
+
+/** Everything after the date: the instants on `date`, the next-day end, and the minutes. */
+function timingOnDate(input: SessionTimingInput, date: string): Parsed<SessionTiming> {
   let startedAt: string | null = null;
   let endedAt: string | null = null;
   if (input.start) {

@@ -1277,5 +1277,88 @@ test("F0 wiring: the form offers Save without rows where the error shows, resend
   assert.match(service, /rows_unreadable: true/);
 });
 
+// ── F0 fix round 1: a sitting never starts in the future (REVIEW 74e25bcd P2, P3s) ──
+// Brent logs right after he stops: at 00:20 ET a 23:30–00:15 sitting started YESTERDAY.
+
+const at0020 = new Date("2026-11-07T05:20:00Z"); // Sat Nov 7, 00:20 EST
+
+test("F0 r1: no date given (chat / MCP) at 00:20 ET: a start later than now was yesterday", () => {
+  const night = parse.resolveSessionTiming({ start: "23:30", end: "00:15" }, at0020);
+  assert.equal(night.ok, true, night.error);
+  assert.deepEqual(night.value, { session_date: "2026-11-06", started_at: "2026-11-07T04:30:00.000Z", ended_at: "2026-11-07T05:15:00.000Z", minutes: 45 });
+  // Same rule for a sitting that ended before midnight and is logged after it, and one logged the next morning.
+  const evening = parse.resolveSessionTiming({ start: "21:00", end: "21:45" }, at0020);
+  assert.deepEqual([evening.value?.session_date, evening.value?.started_at], ["2026-11-06", "2026-11-07T02:00:00.000Z"]);
+  const nextMorning = parse.resolveSessionTiming({ start: "23:30", end: "00:15" }, new Date("2026-11-07T14:00:00Z"));
+  assert.equal(nextMorning.value?.session_date, "2026-11-06", "logged at 9 AM: still last night");
+  // A start already past stays today; minutes alone stay today.
+  assert.equal(parse.resolveSessionTiming({ start: "00:05", end: "00:15" }, at0020).value?.session_date, "2026-11-07");
+  assert.equal(parse.resolveSessionTiming({ minutes: 20 }, at0020).value?.session_date, "2026-11-07");
+  // Up to 5 minutes ahead (a phone clock a little fast) is still now, not yesterday.
+  assert.equal(parse.resolveSessionTiming({ start: "00:24", end: "00:30" }, at0020).value?.session_date, "2026-11-07");
+});
+
+test("F0 r1: a date given with a start later than now is refused in plain words naming the likely date", () => {
+  const refused = parse.resolveSessionTiming({ date: "2026-11-07", start: "23:30", end: "00:15" }, at0020);
+  assert.equal(refused.ok, false);
+  assert.equal(refused.error, "start (11:30 PM on 2026-11-07) is later than now; a sitting can't start in the future. Set the date to the day it started (2026-11-06)");
+  assert.equal(parse.resolveSessionTiming({ date: "2026-11-06", start: "23:30", end: "00:15" }, at0020).ok, true, "the right date saves");
+  const iso = parse.resolveSessionTiming({ start: "2026-11-08T04:30:00Z", minutes: 30 }, at0020);
+  assert.equal(iso.ok, false, "an ISO start in the future is never moved");
+  assert.match(iso.error, /later than now/);
+  const future = parse.resolveSessionTiming({ date: "2026-11-08", minutes: 30 }, at0020);
+  assert.equal(future.error, "date (2026-11-08) is after today (2026-11-07, ET); a sitting can't be in the future");
+  assert.equal(parse.resolveSessionTiming({ date: "2026-11-07", start: "00:24", end: "00:30" }, at0020).ok, true, "5 minutes of slack");
+  assert.equal(parse.resolveSessionTiming({ date: "2026-11-07", start: "00:26", end: "00:30" }, at0020).ok, false, "6 minutes ahead is refused");
+});
+
+test("F0 r1: DST nights logged just after midnight land on the day they started", () => {
+  // Fall back: Sun Nov 1 2026, logged at 00:20 EDT (04:20Z), before the 2 AM change.
+  const fall = parse.resolveSessionTiming({ start: "23:00", end: "00:10" }, new Date("2026-11-01T04:20:00Z"));
+  assert.deepEqual([fall.value?.session_date, fall.value?.started_at, fall.value?.minutes], ["2026-10-31", "2026-11-01T03:00:00.000Z", 70]);
+  // Fall back, logged at 1:50 EST (06:50Z), after the change: 11 PM EDT to 1:30 (the first, EDT, 1:30) is 150 min.
+  const fallLate = parse.resolveSessionTiming({ start: "23:00", end: "01:30" }, new Date("2026-11-01T06:50:00Z"));
+  assert.equal(fallLate.value?.session_date, "2026-10-31");
+  assert.equal(fallLate.value?.started_at, "2026-11-01T03:00:00.000Z");
+  // Spring forward: Sun Mar 14 2027, logged at 00:20 EST (05:20Z).
+  const spring = parse.resolveSessionTiming({ start: "23:30", end: "00:15" }, new Date("2027-03-14T05:20:00Z"));
+  assert.deepEqual(spring.value, { session_date: "2027-03-13", started_at: "2027-03-14T04:30:00.000Z", ended_at: "2027-03-14T05:15:00.000Z", minutes: 45 });
+});
+
+test("F0 r1: the form at 00:20 ET leaves today's untouched date out, so the server puts the sitting on the day it started", () => {
+  const form = { task_id: "t1", date: "2026-11-07", date_touched: false, start: "23:30", end: "00:15", minutes: "", rows: "", note: "", exclude_from_stats: false, idempotency_key: "k1" };
+  const body = view.buildLogSittingBody(form, "p1", at0020);
+  assert.equal("date" in body, false, "the prefilled today is left to the server");
+  assert.deepEqual(body, { exclude_from_stats: false, idempotency_key: "k1", task_id: "t1", start: "23:30", end: "00:15" });
+  const saved = parse.resolveSessionTiming({ date: body.date, start: body.start, end: body.end, minutes: body.minutes }, at0020);
+  assert.deepEqual([saved.value?.session_date, saved.value?.started_at], ["2026-11-06", "2026-11-07T04:30:00.000Z"]);
+  assert.equal(view.savedOnText(form, "2026-11-06"), "Saved on Nov 6, the day it started.");
+  assert.equal(view.savedOnText(form, "2026-11-07"), null);
+  // A date the user picked is sent (and a future start on it is refused, above); so is a prefill that is no longer today.
+  assert.equal(view.buildLogSittingBody({ ...form, date_touched: true }, "p1", at0020).date, "2026-11-07");
+  assert.equal(view.buildLogSittingBody({ ...form, date: "2026-11-06" }, "p1", at0020).date, "2026-11-06", "form opened yesterday evening");
+  assert.equal(view.savedOnText({ ...form, date_touched: true }, "2026-11-06"), null);
+  // The rest of the body is what the form always sent.
+  const full = view.buildLogSittingBody({ ...form, task_id: "", minutes: " 40 ", rows: " 84-96 ", note: " ok ", date_touched: true }, "p1", at0020);
+  assert.deepEqual(full, { date: "2026-11-07", exclude_from_stats: false, idempotency_key: "k1", project_id: "p1", start: "23:30", end: "00:15", minutes: 40, rows: "84-96", note: "ok" });
+  const panel = fs.readFileSync(new URL("../src/components/projects/pace/PacePanel.tsx", import.meta.url), "utf8");
+  const section = fs.readFileSync(new URL("../src/components/projects/pace/PaceSection.tsx", import.meta.url), "utf8");
+  assert.match(section, /buildLogSittingBody\(input, projectId\)/, "the section sends what the pure builder makes");
+  assert.match(section, /savedOnText\(/);
+  assert.match(panel, /date_touched: true/, "picking a date marks it as given");
+});
+
+test("F0 r1 P3: the note cut never splits an emoji; two same-numbered steps inside one task get task words", () => {
+  const emoji = view.noteWithRows("a" + "😀".repeat(1000), "84–96");
+  assert.ok(emoji.length <= 2000, `length ${emoji.length}`);
+  assert.equal(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(emoji), false, "no lone surrogate");
+  assert.ok(emoji.endsWith(" · Rows: 84–96"));
+  const twoInTask = { error: "x", details: { missing_rows: [], ambiguous_rows: [{ row: 10, items: [] }], row_items_in_scope: 12 } };
+  assert.equal(view.rowsProblemFrom(twoInTask, "10", "task").message, "This task has more than one step named \"Row 10\", so rows can't be matched; save without rows, or rename the extra step.");
+  const twoRows = { error: "x", details: { missing_rows: [], ambiguous_rows: [{ row: 10, items: [] }, { row: 11, items: [] }], row_items_in_scope: 12 } };
+  assert.match(view.rowsProblemFrom(twoRows, "10-11", "task").message, /^This task has more than one step for rows 10–11, so rows can't be matched;/);
+  assert.equal(view.rowsProblemFrom(twoRows, "10-11", "project").message, "Rows 10–11 are in more than one task; pick the task above, or save without rows.", "project words unchanged");
+});
+
 console.log(`\n${passed} passed${failures.length ? `, ${failures.length} failed` : ""}`);
 if (failures.length) process.exit(1);
