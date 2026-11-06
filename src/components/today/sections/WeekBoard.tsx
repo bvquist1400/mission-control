@@ -1219,10 +1219,11 @@ export function WeekBoard({
                     ) : null}
                   </div>
                   <div className="tb-full" data-done-hidden={doneHidden ? "" : undefined}>
+                    {/* Open cards first, done lines under them (Brent 11/6: done never sits on top of what's still to do). */}
+                    {singles.map((data) => renderCard(data, `col-${column.date}`, column.tense, cardDueText(data.dueAt, todayDate, now)))}
                     {doneRows.map((data) => (
                       <DoneRow key={data.id} task={data} onOpen={() => handleOpenTask(data.id)} />
                     ))}
-                    {singles.map((data) => renderCard(data, `col-${column.date}`, column.tense, cardDueText(data.dueAt, todayDate, now)))}
                     {singles.length === 0 && doneRows.length === 0 && column.tense !== "past" ? (
                       <p className="tb-empty">Nothing due.</p>
                     ) : null}

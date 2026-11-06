@@ -23,6 +23,11 @@
 //      of the shown week; the real card stays in Overdue; copies only open the
 //      task (no Done, no Move to…, no drag), never count in a day's header, and
 //      stay off the one-day list.
+//   5. Done below open (Brent 11/6, "the completed tasks should not appear on
+//      top of the pending tasks"): the whole WeekBoard rendered with fixture
+//      tasks; in a day column and a weekend day the open cards come first and
+//      the done lines last (just above "+ add"), so the panel's ↑ / ↓ (which
+//      follow data-task-open in page order) walk open before done too.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -37,6 +42,8 @@ const readIf = (rel) => (exists(rel) ? read(rel) : "");
 
 registerHooks({
   load(url, context, nextLoad) {
+    // Section 9 renders the whole WeekBoard, which imports its stylesheets: Node can't, so they load as nothing.
+    if (url.startsWith("file:") && url.endsWith(".css")) return { format: "module", source: "", shortCircuit: true };
     if (url.startsWith("file:") && url.endsWith(".tsx")) {
       const source = fs.readFileSync(fileURLToPath(url), "utf8");
       const output = ts.transpileModule(source, {
@@ -595,6 +602,137 @@ await test("CSS: copies are muted (no opacity on the text), dashed, never folded
   assert.doesNotMatch(css, /\.tb-(late|lc)[^{]*\{\s*display: none/, "no fold rule hides them");
   const coarse = css.split("@media (pointer: coarse)").slice(1).map((block) => block.slice(0, block.indexOf("}\n}") + 3)).join("\n");
   assert.ok(coarse.includes(".tb-lc") && coarse.includes(".tb-lc-more"), "copies and '+ n more late' grow on a touch screen");
+});
+
+// ── 9. Done below open (week grid + weekend) ─────────────────────────────
+
+// The whole WeekBoard, rendered on the server with fixture tasks and a fixed
+// clock (Thu 5 Nov 2026, 3 PM ET). Next's router contexts are given directly
+// (no mocks of the board's own code).
+async function renderBoard({ weekBoardTasks, doneTasks, waitingTasks = [] }) {
+  const WeekBoardMod = await load("src/components/today/sections/WeekBoard.tsx");
+  const { WeekBoard } = need(WeekBoardMod, "WeekBoard");
+  const { TaskPanelProvider } = need(await load("src/components/tasks/panel/TaskPanelProvider.tsx"), "TaskPanelProvider");
+  const { DateCascadeProvider } = need(await load("src/components/tasks/DateCascadeProvider.tsx"), "DateCascadeProvider");
+  const { ToastProvider } = need(await load("src/components/ui/Toast.tsx"), "Toast");
+  const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
+  const { SearchParamsContext, PathnameContext } = await import("next/dist/shared/lib/hooks-client-context.shared-runtime.js");
+  const router = { push: noop, replace: noop, refresh: noop, back: noop, forward: noop, prefetch: noop };
+  const RealDate = globalThis.Date;
+  class FixedDate extends RealDate {
+    constructor(...args) {
+      super(...(args.length === 0 ? [NOW.getTime()] : args));
+    }
+    static now() {
+      return NOW.getTime();
+    }
+  }
+  globalThis.Date = FixedDate;
+  try {
+    return renderToStaticMarkup(
+      h(AppRouterContext.Provider, { value: router },
+        h(PathnameContext.Provider, { value: "/" },
+          h(SearchParamsContext.Provider, { value: new URLSearchParams("") },
+            h(ToastProvider, null,
+              h(DateCascadeProvider, null,
+                h(TaskPanelProvider, { widths: { today: 500, tasks: 660, other: 560 } },
+                  h(WeekBoard, {
+                    weekBoardTasks, waitingTasks, doneTasks, needsReviewCount: 0, syncedTaskIds: [], updatedAt: NOW.toISOString(),
+                    hasError: false, mode: "work", meetings: [], meetingsFailed: false,
+                  })
+                )
+              )
+            )
+          )
+        )
+      )
+    );
+  } finally {
+    globalThis.Date = RealDate;
+  }
+}
+
+const rawTask = (id, title, dueDate, extra = {}) => ({
+  id, user_id: "u", title, description: null, implementation_id: null, project_id: null, section_id: null, sprint_id: null,
+  status: "Planned", task_type: "Task", priority_score: 50, base_priority: 50, estimated_minutes: 30, actual_minutes: null,
+  recurrence: null, recurring_template_id: null, is_recurring_template: false, latest_instance_id: null, last_generated_at: null,
+  estimate_source: "default", start_at: null, due_at: endOf(dueDate), needs_review: false, blocker: false, waiting_on: null,
+  blocked_reason: null, follow_up_at: null, stakeholder_mentions: [], tags: [], source_type: "Manual", source_url: null,
+  external_source_system: null, external_source_id: null, inbox_item_id: null, pinned_excerpt: null, pinned: false,
+  owner: "brent", owner_label: null, status_line: null, unit_count: null, work_type: null, is_sample: false,
+  due_change_id: null, parent_task_id: null, source_checklist_item_id: null, unblocked_at: null,
+  created_at: "2026-10-01T12:00:00.000Z", updated_at: "2026-10-01T12:00:00.000Z",
+  implementation: null, project: null, sprint: null, checklist_rows: [], step_tasks: [],
+  ...extra,
+});
+const id = (n) => `d0000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+const FRI = "2026-11-06";
+const SUN = "2026-11-08";
+const boardFixture = {
+  weekBoardTasks: [
+    rawTask(id(1), "Open today A", TODAY),
+    rawTask(id(2), "Open today B", TODAY),
+    rawTask(id(3), "Open Friday", FRI),
+    rawTask(id(4), "Open Sunday", SUN),
+    rawTask(id(5), "Late from Monday", "2026-11-02"),
+  ],
+  doneTasks: [
+    rawTask(id(11), "Done today", TODAY, { status: "Done" }),
+    rawTask(id(12), "Done Friday", FRI, { status: "Done" }),
+    rawTask(id(13), "Done Sunday", SUN, { status: "Done" }),
+    rawTask(id(14), "Done Monday", "2026-11-02", { status: "Done" }),
+  ],
+};
+/** One day column's markup (Mon–Fri) or one weekend day's, cut from the whole board. */
+function dayChunk(html, marker) {
+  const start = html.indexOf(marker);
+  assert.ok(start >= 0, `${marker} is on the board`);
+  const nextDay = [html.indexOf('<div class="tb-day"', start + 1), html.indexOf('<section class="tb-wknd"', start + 1), html.indexOf("<div data-drop-day", start + 1)]
+    .filter((index) => index > start);
+  return html.slice(start, nextDay.length ? Math.min(...nextDay) : undefined);
+}
+/** The data-task-open ids in page order (the order the panel's ↑ / ↓ walk). */
+const openOrder = (chunk) => [...chunk.matchAll(/data-task-open="([^"]+)"/g)].map((match) => match[1]);
+
+await test("done below open: today's column draws its open cards first, then the done lines, then '+ add'", async () => {
+  const html = await renderBoard(boardFixture);
+  const today = dayChunk(html, `aria-label="Open Thursday 5 Nov as a list`);
+  assert.deepEqual(openOrder(today), [id(1), id(2), id(11)], "open A, open B, then the done line (↑ / ↓ walk the same order)");
+  const lastCard = today.lastIndexOf('class="tb-card');
+  const done = today.indexOf('class="tb-dn"');
+  const add = today.indexOf('class="tb-addrow"');
+  assert.ok(lastCard >= 0 && done > lastCard, "the done line sits under the last open card");
+  assert.ok(add > done, "'+ add to Thu' stays last, under the done line");
+});
+
+await test("done below open: a later day (Friday) the same, and an earlier day keeps its fold line and late copies", async () => {
+  const html = await renderBoard(boardFixture);
+  const fri = dayChunk(html, `aria-label="Open Friday 6 Nov as a list`);
+  assert.deepEqual(openOrder(fri), [id(3), id(12)]);
+  const mon = dayChunk(html, `aria-label="Open Monday 2 Nov as a list`);
+  assert.match(mon, /class="tb-fold"[\s\S]*1 done/, "an earlier day still folds to its '1 done' line (hidden done, unchanged)");
+  assert.ok(mon.indexOf('class="tb-full"') < mon.indexOf('class="tb-late"'), "late copies still sit after .tb-full, as before");
+  assert.deepEqual(openOrder(mon), [id(14), id(5)], "Monday: its (hidden) done line, then the faded late copy, as before");
+});
+
+await test("done below open: a weekend day lists open tasks first, the done chips last, then '+ add'", async () => {
+  const html = await renderBoard(boardFixture);
+  const sun = dayChunk(html, `aria-label="Open Sunday 8 Nov as a list"`);
+  assert.deepEqual(openOrder(sun), [id(4), id(13)], "open Sunday, then done Sunday");
+  assert.ok(sun.indexOf('aria-label="Done Sunday (done)"') < sun.indexOf('class="tb-wk-add"'), "'+ add' stays last");
+});
+
+await test("done below open: the source keeps the order (open cards, then done lines, then 'Nothing due.' / '+ add')", () => {
+  const src = read("src/components/today/sections/WeekBoard.tsx");
+  const full = src.slice(src.indexOf('<div className="tb-full"'), src.indexOf("{/* Outside .tb-full"));
+  const cardsAt = full.indexOf("singles.map((data) => renderCard(");
+  const doneAt = full.indexOf("doneRows.map((data) => (");
+  assert.ok(cardsAt >= 0 && doneAt > cardsAt, "the day's open cards come before its done lines");
+  assert.ok(full.indexOf('className="tb-addrow"') > doneAt, "'+ add' after the done lines");
+  const weekend = src.slice(src.indexOf("const renderWeekendDay = "), src.indexOf("const overdueCount = "));
+  const order = ["items.continuing.map(", "[...items.ranges, ...items.singles].map(", "{renderLateCopies(date)}", "doneShown.map(", 'className="tb-fold-show"', 'className="tb-wk-add"'].map((needle) => weekend.indexOf(needle));
+  assert.ok(order.every((at) => at >= 0), "every weekend piece is there");
+  assert.deepEqual([...order].sort((a, b) => a - b), order, "weekend: continuing, ranges + singles, late copies, done, '… · show', '+ add'");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
