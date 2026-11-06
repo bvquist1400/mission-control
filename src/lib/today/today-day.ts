@@ -58,6 +58,17 @@ export function hrefWithDay(pathname: string, search: string, day: string | null
   return `${pathname}${query ? `?${query}` : ''}${hash}`;
 }
 
+/**
+ * How ← Week / Esc leaves a day list: step back (history.back) only when the entry
+ * under the day is exactly the week we would land on, i.e. the address the day was
+ * pushed from equals the week address now (both without `?day`). Otherwise replace:
+ * the panel was open when the day opened and is closed now (Back would reopen it,
+ * Fable review P3-2) or the other way round, or the day came from a link or a reload.
+ */
+export function dayBackMode(pushedFrom: string | null, weekHref: string): 'back' | 'replace' {
+  return pushedFrom !== null && pushedFrom === weekHref ? 'back' : 'replace';
+}
+
 /** The Monday of the week a day is in (weeks run Mon–Sun). */
 export function mondayOf(dateOnly: string): string {
   const weekday = weekdayOf(dateOnly);
@@ -318,6 +329,27 @@ export function dayKeyAction(
     default:
       return null;
   }
+}
+
+/**
+ * Whether a dialog or menu was up when a key went down. `start` runs in a
+ * capture-phase listener on document (before any layer acts on the key);
+ * `openFor` in the day list's own listener. A layer that closes itself on this
+ * very Esc (a Modal: ? help, "+ add to <day>", the >25 cascade confirm) is gone
+ * by then, so asking only at that point sent one Esc to both (Fable review P2-1).
+ */
+export function keyDownTracker(isOpen: () => boolean) {
+  let pressed: { event: object; open: boolean } | null = null;
+  return {
+    start(event: object) {
+      pressed = { event, open: isOpen() };
+    },
+    openFor(event: object): boolean {
+      const open = (pressed?.event === event && pressed.open) || isOpen();
+      pressed = null;
+      return open;
+    },
+  };
 }
 
 /** The next row to focus for ↑ / ↓ (no wrap; -1 = nothing focused yet). */

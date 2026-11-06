@@ -51,12 +51,14 @@ import {
 } from "@/lib/today/today-board";
 import {
   DAY_PARAM,
+  dayBackMode,
   dayKeyAction,
   dayMonthLabel,
   dayRowDue,
   dayTabs,
   groupDayList,
   hrefWithDay,
+  keyDownTracker,
   longDayName,
   mondayOf,
   nextRowIndex,
@@ -258,7 +260,8 @@ export function WeekBoard({
   const [phoneWeek, setPhoneWeek] = useState(false);
   const [motion, setMotion] = useState<"in" | "prev" | "next" | "back" | null>(null);
   const [motionKey, setMotionKey] = useState(0);
-  const pushedDayRef = useRef(false);
+  // The week address a day was opened from with pushState (null: the day came from a link or a reload).
+  const pushedFromRef = useRef<string | null>(null);
   const [createDueDate, setCreateDueDate] = useState<string | null>(null);
   const [implementations, setImplementations] = useState<ImplementationSummary[]>([]);
   const [implementationsLoading, setImplementationsLoading] = useState(false);
@@ -505,8 +508,8 @@ export function WeekBoard({
     const here = window.location;
     const href = hrefWithDay(here.pathname, here.search, date, here.hash);
     if (!viewDay) {
+      pushedFromRef.current = hrefWithDay(here.pathname, here.search, null, here.hash);
       window.history.pushState(null, "", href);
-      pushedDayRef.current = true;
       setMotion("in");
     } else {
       window.history.replaceState(null, "", href);
@@ -526,14 +529,13 @@ export function WeekBoard({
     setMotionKey((key) => key + 1);
     if (!dayParam) return;
     const here = window.location;
-    const panelShowing = new URLSearchParams(here.search).has("task");
-    if (pushedDayRef.current && !panelShowing && offset === undefined) {
-      pushedDayRef.current = false;
-      window.history.back();
-    } else {
-      pushedDayRef.current = false;
-      window.history.replaceState(null, "", hrefWithDay(here.pathname, here.search, null, here.hash));
-    }
+    const weekHref = hrefWithDay(here.pathname, here.search, null, here.hash);
+    // Step back only onto the very week entry the day was pushed from; if the panel was open
+    // then and is closed now (or the other way round), Back would land on a different page.
+    const mode = offset === undefined ? dayBackMode(pushedFromRef.current, weekHref) : "replace";
+    pushedFromRef.current = null;
+    if (mode === "back") window.history.back();
+    else window.history.replaceState(null, "", weekHref);
   }
 
   const goToDayRef = useRef(goToDay);
@@ -690,12 +692,20 @@ export function WeekBoard({
     markBusy(setMovingIds, taskId, false);
   }
 
+  // What was up when a key went down: a layer that closes itself on this very Esc (a Modal) is
+  // already gone by the time the day list's window listener runs (Fable review P2-1). One tracker
+  // for the page, so the answer survives the listener being re-registered mid-key.
+  const [keyDown] = useState(() => keyDownTracker(anyOverlayOpen));
+
   // Day list keys: ← / → the day before / after, Esc back to the week (after the panel), ↑ / ↓ between rows.
   useEffect(() => {
     if (!viewDay) return;
     const day = viewDay;
+    function onKeyStart(event: KeyboardEvent) {
+      keyDown.start(event);
+    }
     function onKey(event: KeyboardEvent) {
-      const action = dayKeyAction(event, { typing: isTypingTarget(event.target), dialogOpen: anyOverlayOpen(), panelOpen: Boolean(openTaskId) });
+      const action = dayKeyAction(event, { typing: isTypingTarget(event.target), dialogOpen: keyDown.openFor(event), panelOpen: Boolean(openTaskId) });
       if (!action) return;
       if (action === "prev" || action === "next") {
         event.preventDefault();
@@ -715,9 +725,13 @@ export function WeekBoard({
       titles[index].focus();
       titles[index].scrollIntoView({ block: "nearest" });
     }
+    document.addEventListener("keydown", onKeyStart, true);
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [viewDay, openTaskId]);
+    return () => {
+      document.removeEventListener("keydown", onKeyStart, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [viewDay, openTaskId, keyDown]);
 
   function handleTaskCreated(task: TaskWithImplementation) {
     setTasks((current) => [task, ...current.filter((item) => item.id !== task.id)]);

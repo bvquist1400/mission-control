@@ -279,7 +279,7 @@ await test("keys: wired on the day list only, listed in the ? dialog, no-ops in 
   assert.ok(TODAY_DAY_KEYS.some((row) => row.keys[0] === "←") && TODAY_DAY_KEYS.some((row) => row.keys[0] === "Esc"));
   const src = read("src/components/today/sections/WeekBoard.tsx");
   assert.match(src, /if \(!viewDay\) return;\s*const day = viewDay;/);
-  assert.match(src, /dayKeyAction\(event, \{ typing: isTypingTarget\(event\.target\), dialogOpen: anyOverlayOpen\(\), panelOpen: Boolean\(openTaskId\) \}\)/);
+  assert.match(src, /dayKeyAction\(event, \{ typing: isTypingTarget\(event\.target\), dialogOpen: keyDown\.openFor\(event\), panelOpen: Boolean\(openTaskId\) \}\)/);
 });
 
 // ── 5. Phone ─────────────────────────────────────────────────────────────
@@ -418,7 +418,7 @@ await test("wiring: day headers are buttons into the day list (history entry fro
   const src = read("src/components/today/sections/WeekBoard.tsx");
   assert.match(src, /className="tb-dh-btn"\s+onClick=\{\(\) => goToDay\(column\.date, null\)\}/);
   assert.match(src, /className="tb-wk-h"\s+onClick=\{\(\) => goToDay\(date, null\)\}/, "Sat and Sun too");
-  assert.match(src, /window\.history\.pushState\(null, "", href\);\s*pushedDayRef\.current = true;/);
+  assert.match(src, /pushedFromRef\.current = hrefWithDay\(here\.pathname, here\.search, null, here\.hash\);\s*window\.history\.pushState\(null, "", href\);/);
   assert.match(src, /window\.history\.replaceState\(null, "", href\);/);
   assert.match(src, /window\.history\.back\(\);/);
   assert.match(src, /const dayParam = parseDayParam\(params\.get\(DAY_PARAM\)\);/);
@@ -501,6 +501,61 @@ await test("saved views: the bar keeps the tapped id (and the view just saved); 
 });
 
 // ── 9. S4 review follow-ups in this path ─────────────────────────────────
+
+// ── Fix round 1 (Fable review 760de609) ──────────────────────────────────
+
+await test("P2-1: Esc on a Modal over the day list (? help, + add, the >25 cascade confirm) closes only the Modal", () => {
+  const { dayKeyAction, keyDownTracker } = need(day, "today-day");
+  assert.equal(typeof keyDownTracker, "function", "keyDownTracker exists");
+  const free = { typing: false, panelOpen: false };
+  // The real order of one Esc: document capture (tracker.start) → the Modal's document listener
+  // (closes the Modal) → the day list's window listener. The Modal is gone by the last step.
+  let modalOpen = true;
+  const tracker = keyDownTracker(() => modalOpen);
+  const esc = { key: "Escape" };
+  tracker.start(esc);
+  modalOpen = false;
+  assert.equal(dayKeyAction(esc, { ...free, dialogOpen: tracker.openFor(esc) }), null, "the Esc belonged to the Modal: stay on the day");
+  const next = { key: "Escape" };
+  tracker.start(next);
+  assert.equal(dayKeyAction(next, { ...free, dialogOpen: tracker.openFor(next) }), "week", "with no Modal up, Esc still returns to the week");
+  // A key the capture step never saw (or another event) asks the page as before.
+  modalOpen = true;
+  assert.equal(tracker.openFor({ key: "Escape" }), true);
+  modalOpen = false;
+  assert.equal(tracker.openFor(esc), false, "a snapshot is used once");
+  // The Modal marks the Esc it handles, so any later listener can tell (dayKeyAction skips handled keys).
+  const modal = read("src/components/ui/Modal.tsx");
+  assert.match(modal, /if \(e\.key !== "Escape"\) return;[\s\S]{0,240}e\.preventDefault\(\);\s*onClose\(\);/, "Modal: preventDefault before onClose");
+  assert.equal(dayKeyAction({ key: "Escape", defaultPrevented: true }, { ...free, dialogOpen: false }), null);
+  // Wiring: one tracker for the page; start in a capture listener on document, read in the day list's listener.
+  const src = read("src/components/today/sections/WeekBoard.tsx");
+  assert.match(src, /const \[keyDown\] = useState\(\(\) => keyDownTracker\(anyOverlayOpen\)\);/);
+  assert.match(src, /function onKeyStart\(event: KeyboardEvent\) \{\s*keyDown\.start\(event\);\s*\}/);
+  assert.match(src, /document\.addEventListener\("keydown", onKeyStart, true\);\s*window\.addEventListener\("keydown", onKey\);/);
+  assert.match(src, /document\.removeEventListener\("keydown", onKeyStart, true\);/);
+});
+
+await test("P3-2: week + panel → a day → close the panel → Esc goes to the week without reopening the task", () => {
+  const { dayBackMode, hrefWithDay } = need(day, "today-day");
+  assert.equal(typeof dayBackMode, "function", "dayBackMode exists");
+  const week = hrefWithDay("/", "?mode=all", null);
+  const weekWithPanel = hrefWithDay("/", "?mode=all&task=t1", null);
+  // Week (no panel) → day → Esc: the entry under the day is that week, step back.
+  assert.equal(dayBackMode(week, hrefWithDay("/", "?mode=all&day=2026-11-05", null)), "back");
+  // Week with the panel → day → panel closed → Esc: Back would land on ?task (panel reopens), replace instead.
+  assert.equal(dayBackMode(weekWithPanel, hrefWithDay("/", "?mode=all&day=2026-11-05", null)), "replace");
+  // Week → day → panel opened on the day → ← Week while it is open: replace (as before).
+  assert.equal(dayBackMode(week, hrefWithDay("/", "?mode=all&day=2026-11-05&task=t1", null)), "replace");
+  // Week with the panel → day → ← Week with the same panel still open: the entry under is that page, step back.
+  assert.equal(dayBackMode(weekWithPanel, hrefWithDay("/", "?mode=all&task=t1&day=2026-11-05", null)), "back");
+  // A day reached from a link or a reload has nothing of ours underneath.
+  assert.equal(dayBackMode(null, week), "replace");
+  const src = read("src/components/today/sections/WeekBoard.tsx");
+  assert.match(src, /const mode = offset === undefined \? dayBackMode\(pushedFromRef\.current, weekHref\) : "replace";/);
+  assert.match(src, /if \(mode === "back"\) window\.history\.back\(\);\s*else window\.history\.replaceState\(null, "", weekHref\);/);
+  assert.doesNotMatch(src, /pushedDayRef/);
+});
 
 await test("F2: ↑/↓ in the panel still walk the Overdue / Waiting list after the rail folds into side tabs", () => {
   const { listOrder } = need(panel, "task-panel");

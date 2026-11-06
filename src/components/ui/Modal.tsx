@@ -36,7 +36,11 @@ export function Modal({ open, onClose, title, size = "default", children }: Moda
     if (!open) return;
 
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      // This Esc is the dialog's: mark it handled so a page key listener that runs after this one
+      // (the Today day list's Esc = back to the week) does not also act on it once the dialog is gone.
+      e.preventDefault();
+      onClose();
     }
 
     document.addEventListener("keydown", handleKeyDown);
