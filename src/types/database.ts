@@ -160,6 +160,9 @@ export interface StatusUpdate {
 }
 
 export interface TaskChecklistItem {
+  /** Craft row identity (migration 071), both null for ordinary checklist items. */
+  craft_part_id: string | null;
+  craft_row: number | null;
   id: string;
   user_id: string;
   task_id: string;

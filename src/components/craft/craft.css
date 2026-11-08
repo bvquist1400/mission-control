@@ -1,0 +1,51 @@
+.craft-screen { min-height: 100dvh; width: 100%; max-width: 1080px; margin: 0 auto; padding: env(safe-area-inset-top) max(16px, env(safe-area-inset-right)) max(28px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); color: var(--foreground); }
+.craft-header { display: flex; align-items: center; gap: 12px; min-height: 64px; border-bottom: 1px solid var(--stroke); }
+.craft-header h1 { font-size: 24px; font-weight: 700; }
+.craft-readonly { margin-left: auto; color: var(--muted-foreground); font-size: 12px; font-family: var(--font-plex-mono); }
+.craft-columns { display: grid; grid-template-columns: minmax(0, 1fr); }
+.craft-front { min-width: 0; padding: 20px 0; }
+.craft-project { margin-bottom: 20px; }
+.craft-project h2 { font-size: 24px; font-weight: 700; overflow-wrap: anywhere; }
+.craft-project > p:last-child { color: var(--muted-foreground); font-size: 14px; overflow-wrap: anywhere; }
+.craft-eyebrow { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted-foreground); font-family: var(--font-plex-mono); }
+.craft-part { padding: 12px 16px; border: 1px solid var(--stroke); background: var(--panel); }
+.craft-part h3 { font-size: 22px; font-weight: 700; }
+.craft-part p { font-size: 14px; color: var(--muted-foreground); }
+.craft-timer { padding: 24px 12px; margin-top: 14px; background: var(--panel); border: 1px solid var(--stroke); text-align: center; color: var(--muted-foreground); font-size: 14px; }
+.craft-row { padding: 28px 0; }
+.craft-number { font-family: var(--font-plex-cond); font-size: clamp(72px, 18vw, 112px); line-height: 1; font-weight: 700; font-variant-numeric: tabular-nums; }
+.craft-number > span { font-family: var(--font-plex-mono); font-size: 16px; font-weight: 400; color: var(--muted-foreground); margin-left: 12px; white-space: nowrap; }
+.craft-row-label { font-size: 20px; font-weight: 600; margin-top: 8px; }
+.craft-quarter { color: var(--accent-text); margin-top: 8px; }
+.craft-band-name { font-size: 22px; font-weight: 700; margin-top: 16px; }
+.craft-meta { font-size: 12px; color: var(--muted-foreground); }
+.craft-finished { font-size: 48px; font-weight: 700; }
+.craft-today { border-top: 2px solid var(--stroke); padding-top: 16px; }
+.craft-today h3 { font-size: 18px; font-weight: 700; }
+.craft-today p { margin-top: 8px; font-family: var(--font-plex-mono); font-size: 14px; }
+.craft-today p > span { margin: 0 8px; }
+.craft-inside { display: none; min-width: 0; }
+.craft-inside > section { padding: 20px 0; border-bottom: 1px solid var(--stroke); }
+.craft-inside h2 { font-size: 22px; font-weight: 700; margin-bottom: 12px; }
+.craft-inside p { font-size: 14px; overflow-wrap: anywhere; }
+.craft-parts li, .craft-bands li { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--stroke); font-size: 14px; }
+.craft-parts li > span, .craft-bands li > span:last-child { text-align: right; font-family: var(--font-plex-mono); font-size: 12px; }
+.craft-parts [aria-current], .craft-bands [aria-current] { color: var(--accent-text); font-weight: 600; }
+.craft-bands small { display: block; font-size: 12px; }
+.craft-strip { display: flex; gap: 3px; margin: 16px 0; }
+.craft-strip > span { min-width: 3px; height: 10px; border: 1px solid var(--stroke); background: var(--panel); }
+.craft-strip [data-state="done"] { background: var(--accent); }
+.craft-strip [data-state="current"] { background: var(--panel-muted); border: 2px solid var(--accent-text); }
+.craft-peek { border-left: 3px solid var(--accent-text); background: var(--panel); padding: 12px; margin-top: 16px; }
+.craft-peek h3 { font-size: 18px; font-weight: 700; }
+.craft-next { list-style: decimal; padding-left: 24px; }
+.craft-next li { padding: 8px 0; font-size: 14px; overflow-wrap: anywhere; }
+.craft-sittings li { border-bottom: 1px solid var(--stroke); padding: 12px 0; }
+.craft-sittings li > div { display: flex; justify-content: space-between; gap: 12px; font-family: var(--font-plex-mono); font-size: 12px; }
+.craft-sittings p { margin-top: 8px; }
+.craft-empty { padding: 24px 0; }
+@media (min-width: 600px) {
+  .craft-columns { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .craft-front { padding-right: 24px; }
+  .craft-inside { display: block; border-left: 1px solid var(--stroke); padding-left: 24px; }
+}

@@ -281,13 +281,13 @@ await test("links: no unlayered `a { color }` rule (it beat every text-* utility
 
 const CUT_PAGES = ["/focus", "/planner", "/llm", "/stakeholders", "/weekly-review", "/sprints"];
 
-await test("shell: top bar is Today · Tasks · Portfolio · Launch, More holds Applications · Projects · Calendar", async () => {
+await test("shell: top bar is Today · Tasks · Portfolio · Launch, More holds Craft · Applications · Projects · Calendar", async () => {
   const nav = read("src/components/layout/nav-items.tsx");
   const primary = nav.slice(nav.indexOf("export const PRIMARY_NAV"), nav.indexOf("export const MORE_NAV"));
   const more = nav.slice(nav.indexOf("export const MORE_NAV"), nav.indexOf("export const MORE_ICON"));
   const hrefs = (text) => [...text.matchAll(/href: "([^"]+)",\s+label: "([^"]+)"/g)].map((m) => `${m[2]} ${m[1]}`);
   assert.deepEqual(hrefs(primary), ["Today /", "Tasks /backlog", "Portfolio /portfolio", "Launch /launch"]);
-  assert.deepEqual(hrefs(more), ["Applications /applications", "Projects /projects", "Calendar /calendar"]);
+  assert.deepEqual(hrefs(more), ["Craft /craft", "Applications /applications", "Projects /projects", "Calendar /calendar"]);
   for (const cut of CUT_PAGES) assert.ok(!nav.includes(`"${cut}"`), `nav links ${cut}, which S0 removes`);
 });
 

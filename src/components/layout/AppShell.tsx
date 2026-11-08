@@ -34,6 +34,11 @@ export function AppShell({
 }) {
   const pathname = usePathname() ?? "";
 
+  // Craft is a dedicated full-screen reading surface with its own back link.
+  if (pathname === "/craft" || pathname.startsWith("/craft/")) {
+    return <>{children}</>;
+  }
+
   if (BARE_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
     return <main className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6">{children}</main>;
   }

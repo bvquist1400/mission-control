@@ -86,6 +86,12 @@ export const PRIMARY_NAV: NavItem[] = [
 /** Under "More". The page-view data (~11/19) may still change what sits here. */
 export const MORE_NAV: NavItem[] = [
   {
+    href: "/craft",
+    label: "Craft",
+    hint: "Your current row, bands and recent sittings",
+    icon: <Icon><path d="m4 3 12 14M16 3 4 17M3 8h14M3 12h14" /></Icon>,
+  },
+  {
     href: "/applications",
     label: "Applications",
     hint: "Each app's health and updates",

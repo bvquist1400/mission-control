@@ -425,6 +425,538 @@ export type Database = {
           },
         ]
       }
+      craft_instructions: {
+        Row: {
+          created_at: string
+          every_rows: number | null
+          from_row: number
+          id: string
+          kind: string
+          link_id: string | null
+          page: number | null
+          part_id: string
+          text: string
+          to_row: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          every_rows?: number | null
+          from_row: number
+          id?: string
+          kind: string
+          link_id?: string | null
+          page?: number | null
+          part_id: string
+          text: string
+          to_row: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          every_rows?: number | null
+          from_row?: number
+          id?: string
+          kind?: string
+          link_id?: string | null
+          page?: number | null
+          part_id?: string
+          text?: string
+          to_row?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "craft_instructions_link_id_fkey"
+            columns: ["link_id"]
+            isOneToOne: false
+            referencedRelation: "craft_links"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "craft_instructions_part_id_fkey"
+            columns: ["part_id"]
+            isOneToOne: false
+            referencedRelation: "craft_parts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      craft_links: {
+        Row: {
+          created_at: string
+          id: string
+          kind: string
+          page: number | null
+          part_id: string | null
+          project_id: string
+          segment_id: string | null
+          sort_order: number
+          start_seconds: number | null
+          title: string
+          updated_at: string
+          url: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          kind: string
+          page?: number | null
+          part_id?: string | null
+          project_id: string
+          segment_id?: string | null
+          sort_order?: number
+          start_seconds?: number | null
+          title: string
+          updated_at?: string
+          url: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          kind?: string
+          page?: number | null
+          part_id?: string | null
+          project_id?: string
+          segment_id?: string | null
+          sort_order?: number
+          start_seconds?: number | null
+          title?: string
+          updated_at?: string
+          url?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "craft_links_part_id_fkey"
+            columns: ["part_id"]
+            isOneToOne: false
+            referencedRelation: "craft_parts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "craft_links_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "craft_links_segment_id_fkey"
+            columns: ["segment_id"]
+            isOneToOne: false
+            referencedRelation: "craft_segments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      craft_notes: {
+        Row: {
+          created_at: string
+          id: string
+          part_id: string | null
+          project_id: string
+          row: number | null
+          session_id: string | null
+          text: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          part_id?: string | null
+          project_id: string
+          row?: number | null
+          session_id?: string | null
+          text: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          part_id?: string | null
+          project_id?: string
+          row?: number | null
+          session_id?: string | null
+          text?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "craft_notes_part_id_fkey"
+            columns: ["part_id"]
+            isOneToOne: false
+            referencedRelation: "craft_parts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "craft_notes_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "craft_notes_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "work_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      craft_parts: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+          project_id: string
+          quarter: number
+          quarter_row: number | null
+          quarters: boolean
+          ridges: boolean
+          row_word: string
+          sort_order: number
+          stitch_count: number | null
+          total_rows: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          name: string
+          project_id: string
+          quarter?: number
+          quarter_row?: number | null
+          quarters?: boolean
+          ridges?: boolean
+          row_word?: string
+          sort_order?: number
+          stitch_count?: number | null
+          total_rows: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string
+          project_id?: string
+          quarter?: number
+          quarter_row?: number | null
+          quarters?: boolean
+          ridges?: boolean
+          row_word?: string
+          sort_order?: number
+          stitch_count?: number | null
+          total_rows?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "craft_parts_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      craft_projects: {
+        Row: {
+          active_part_id: string | null
+          craft: string
+          created_at: string
+          gear: string | null
+          project_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          active_part_id?: string | null
+          craft: string
+          created_at?: string
+          gear?: string | null
+          project_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          active_part_id?: string | null
+          craft?: string
+          created_at?: string
+          gear?: string | null
+          project_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "craft_projects_active_part_id_fkey"
+            columns: ["active_part_id"]
+            isOneToOne: false
+            referencedRelation: "craft_parts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "craft_projects_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: true
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      craft_segments: {
+        Row: {
+          close_check: boolean
+          created_at: string
+          from_row: number
+          id: string
+          name: string
+          part_id: string
+          sort_order: number
+          task_id: string | null
+          to_row: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          close_check?: boolean
+          created_at?: string
+          from_row: number
+          id?: string
+          name: string
+          part_id: string
+          sort_order?: number
+          task_id?: string | null
+          to_row: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          close_check?: boolean
+          created_at?: string
+          from_row?: number
+          id?: string
+          name?: string
+          part_id?: string
+          sort_order?: number
+          task_id?: string | null
+          to_row?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "craft_segments_part_id_fkey"
+            columns: ["part_id"]
+            isOneToOne: false
+            referencedRelation: "craft_parts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "craft_segments_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      craft_sitting_details: {
+        Row: {
+          adjust_minutes: number
+          created_at: string
+          from_quarter: number
+          from_row: number
+          in_progress_row: number | null
+          part_id: string | null
+          session_id: string
+          to_quarter: number
+          to_row: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          adjust_minutes?: number
+          created_at?: string
+          from_quarter?: number
+          from_row: number
+          in_progress_row?: number | null
+          part_id?: string | null
+          session_id: string
+          to_quarter?: number
+          to_row: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          adjust_minutes?: number
+          created_at?: string
+          from_quarter?: number
+          from_row?: number
+          in_progress_row?: number | null
+          part_id?: string | null
+          session_id?: string
+          to_quarter?: number
+          to_row?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "craft_sitting_details_part_id_fkey"
+            columns: ["part_id"]
+            isOneToOne: false
+            referencedRelation: "craft_parts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "craft_sitting_details_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: true
+            referencedRelation: "work_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      craft_timers: {
+        Row: {
+          adjust_seconds: number
+          banked_seconds: number
+          created_at: string
+          part_id: string | null
+          project_id: string
+          running_since: string | null
+          sitting_started_at: string
+          start_quarter: number
+          start_row: number
+          updated_at: string
+          user_id: string
+          version: number
+        }
+        Insert: {
+          adjust_seconds?: number
+          banked_seconds?: number
+          created_at?: string
+          part_id?: string | null
+          project_id: string
+          running_since?: string | null
+          sitting_started_at: string
+          start_quarter?: number
+          start_row: number
+          updated_at?: string
+          user_id: string
+          version?: number
+        }
+        Update: {
+          adjust_seconds?: number
+          banked_seconds?: number
+          created_at?: string
+          part_id?: string | null
+          project_id?: string
+          running_since?: string | null
+          sitting_started_at?: string
+          start_quarter?: number
+          start_row?: number
+          updated_at?: string
+          user_id?: string
+          version?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "craft_timers_part_id_fkey"
+            columns: ["part_id"]
+            isOneToOne: false
+            referencedRelation: "craft_parts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "craft_timers_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      craft_yarns: {
+        Row: {
+          color: string | null
+          created_at: string
+          id: string
+          name: string
+          part_id: string | null
+          project_id: string
+          role: string | null
+          runouts: Json
+          skeins_on_hand: number | null
+          updated_at: string
+          user_id: string
+          weight: string | null
+          yards_needed: number | null
+          yards_per_skein: number | null
+        }
+        Insert: {
+          color?: string | null
+          created_at?: string
+          id?: string
+          name: string
+          part_id?: string | null
+          project_id: string
+          role?: string | null
+          runouts?: Json
+          skeins_on_hand?: number | null
+          updated_at?: string
+          user_id: string
+          weight?: string | null
+          yards_needed?: number | null
+          yards_per_skein?: number | null
+        }
+        Update: {
+          color?: string | null
+          created_at?: string
+          id?: string
+          name?: string
+          part_id?: string | null
+          project_id?: string
+          role?: string | null
+          runouts?: Json
+          skeins_on_hand?: number | null
+          updated_at?: string
+          user_id?: string
+          weight?: string | null
+          yards_needed?: number | null
+          yards_per_skein?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "craft_yarns_part_id_fkey"
+            columns: ["part_id"]
+            isOneToOne: false
+            referencedRelation: "craft_parts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "craft_yarns_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       focus_directives: {
         Row: {
           created_at: string
@@ -2372,6 +2904,8 @@ export type Database = {
       task_checklist_items: {
         Row: {
           completed_at: string | null
+          craft_part_id: string | null
+          craft_row: number | null
           created_at: string
           id: string
           is_done: boolean
@@ -2384,6 +2918,8 @@ export type Database = {
         }
         Insert: {
           completed_at?: string | null
+          craft_part_id?: string | null
+          craft_row?: number | null
           created_at?: string
           id?: string
           is_done?: boolean
@@ -2396,6 +2932,8 @@ export type Database = {
         }
         Update: {
           completed_at?: string | null
+          craft_part_id?: string | null
+          craft_row?: number | null
           created_at?: string
           id?: string
           is_done?: boolean
@@ -2407,6 +2945,13 @@ export type Database = {
           work_type?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "task_checklist_items_craft_part_id_fkey"
+            columns: ["craft_part_id"]
+            isOneToOne: false
+            referencedRelation: "craft_parts"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "task_checklist_items_task_id_fkey"
             columns: ["task_id"]

@@ -481,6 +481,18 @@ await test("actions key unchanged: same allow/deny decisions as before", async (
   }
 });
 
+await test("Craft GET routes refuse FamCal and Actions keys before any database lookup", async () => {
+  const routes = [await import("../src/app/api/craft/route.ts"), await import("../src/app/api/craft/[projectId]/route.ts")];
+  const before = authFetchCalls;
+  for (const key of [FAMCAL_KEY, ACTIONS_KEY]) {
+    for (const [index, path] of ["/api/craft", `/api/craft/${PERSONAL_ID}`].entries()) {
+      const response = await routes[index].GET(keyRequest(key, "GET", path), { params: Promise.resolve({ projectId: PERSONAL_ID }) });
+      assert.equal(response.status, 403);
+    }
+  }
+  assert.equal(authFetchCalls, before);
+});
+
 await test("FamCal key alone (no legacy/actions key) is enough to configure machine auth", async () => {
   const saved = { legacy: process.env.MISSION_CONTROL_API_KEY, actions: process.env.MISSION_CONTROL_ACTIONS_API_KEY };
   delete process.env.MISSION_CONTROL_API_KEY;

@@ -1,0 +1,22 @@
+-- Removes only 071 additions. Existing ticks, sessions and minutes survive.
+BEGIN;
+SET LOCAL lock_timeout = '10s';
+DROP TRIGGER trg_tasks_guard_project_move_craft ON tasks;
+DROP FUNCTION tasks_guard_project_move_with_craft();
+DROP TRIGGER trg_checklist_craft_cleanup ON task_checklist_items;
+DROP TRIGGER trg_checklist_craft_ownership ON task_checklist_items;
+DROP FUNCTION craft_checklist_ownership();
+ALTER TABLE task_checklist_items DROP COLUMN craft_row, DROP COLUMN craft_part_id;
+ALTER TABLE craft_projects DROP CONSTRAINT craft_projects_active_part_id_fkey;
+DROP TABLE craft_yarns;
+DROP TABLE craft_instructions;
+DROP TABLE craft_links;
+DROP TABLE craft_notes;
+DROP TABLE craft_sitting_details;
+DROP TABLE craft_timers;
+DROP TABLE craft_segments;
+DROP TABLE craft_parts;
+DROP TABLE craft_projects;
+DROP FUNCTION craft_check_ownership();
+COMMIT;
+NOTIFY pgrst, 'reload schema';

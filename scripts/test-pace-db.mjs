@@ -42,6 +42,12 @@ if (!["127.0.0.1", "localhost", "[::1]"].includes(new URL(url).hostname)) {
 
 const MIGRATION = readFileSync(new URL("../supabase/migrations/059_add_work_sessions_and_units.sql", import.meta.url), "utf8");
 const ROLLBACK = readFileSync(new URL("../supabase/rollbacks/059_add_work_sessions_and_units.down.sql", import.meta.url), "utf8");
+// 071 references work_sessions. This disposable-stack suite tests 059's down
+// migration, so temporarily remove its dependent craft schema first, then
+// restore 071 in finally. Never use this suite on a persistent database.
+const CRAFT_MIGRATION = readFileSync(new URL("../supabase/migrations/071_add_craft_tables.sql", import.meta.url), "utf8");
+const CRAFT_ROLLBACK = readFileSync(new URL("../supabase/rollbacks/071_add_craft_tables.down.sql", import.meta.url), "utf8");
+let restoreCraft = false;
 
 function psql(sql) {
   return execFileSync(
@@ -256,6 +262,8 @@ function psqlConnection(label) {
 }
 
 try {
+  restoreCraft = psql("SELECT to_regclass('public.craft_projects') IS NOT NULL;") === "t";
+  if (restoreCraft) psql(CRAFT_ROLLBACK);
   // ── Part 1: migration 059 ──────────────────────────────────────────────
   await test("059 rollback removes every table, column, trigger and function; re-apply restores them", async () => {
     psql(ROLLBACK + "\nNOTIFY pgrst, 'reload schema';");
@@ -1094,6 +1102,7 @@ try {
     console.log("(Part 3 skipped: set PACE_TEST_SNAPSHOT to run the blanket backfill acceptance check)");
   }
 } finally {
+  if (restoreCraft) psql(CRAFT_MIGRATION);
   globalThis.fetch = realFetch;
   for (const id of users) {
     await admin.from("work_sessions").delete().eq("user_id", id);
