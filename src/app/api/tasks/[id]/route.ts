@@ -90,8 +90,8 @@ function asStringOrNull(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-const TASK_MOVE_WITH_SESSIONS_ERROR =
-  'This task has logged work sessions in its project, so it can\'t move to another project. Delete or move those sessions first (list_work_sessions / delete_work_session).';
+const TASK_MOVE_WITH_LINKED_WORK_ERROR =
+  "This task has sittings or craft rows, so it can't move to another project.";
 
 // GET /api/tasks/[id] - Get a single task
 export async function GET(
@@ -697,7 +697,7 @@ export async function PATCH(
       // It runs under the task's row lock, so it also covers a session logged at
       // the same moment; no pre-check here (it would race and build long URLs).
       if (error.code === '55006') {
-        return NextResponse.json({ error: TASK_MOVE_WITH_SESSIONS_ERROR }, { status: 409 });
+        return NextResponse.json({ error: TASK_MOVE_WITH_LINKED_WORK_ERROR }, { status: 409 });
       }
       // 063's guard: the start date was saved after the due date (a race with
       // another edit of the due date since the check above).

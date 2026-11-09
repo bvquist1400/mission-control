@@ -15,6 +15,48 @@ const migration = readFileSync(new URL("../supabase/migrations/071_add_craft_tab
 const down = readFileSync(new URL("../supabase/rollbacks/071_add_craft_tables.down.sql", import.meta.url), "utf8");
 const psql = (sql) => execFileSync("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"], { input: sql, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
 const asyncSql = (sql) => new Promise(resolve => { const child = spawn("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"]); let stdout = "", stderr = ""; child.stdout.on("data", c => stdout += c); child.stderr.on("data", c => stderr += c); child.on("close", code => resolve({ code, stdout, stderr })); child.stdin.end(sql); });
+// Interactive sessions make the reviewed lock order reproducible, without timing luck.
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+function connection(label) {
+    const child = spawn("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-v", "VERBOSITY=verbose", "-q", "-t", "-A"]);
+    let output = "";
+    child.stdout.on("data", c => output += c);
+    child.stderr.on("data", c => output += c);
+    const closed = new Promise(resolve => child.on("close", resolve));
+    return {
+        send: sql => child.stdin.write(sql + "\n"),
+        output: () => output,
+        async wait(marker) {
+            for (let i = 0; i < 200; i++) {
+                if (output.includes(marker) || output.includes("ERROR:")) return;
+                await sleep(25);
+            }
+            throw new Error(`${label}: missing ${marker}: ${output}`);
+        },
+        async end() { child.stdin.end(); await closed; },
+    };
+}
+async function childTaskRace(lockSql, childSql, parentSql) {
+    const parent = connection("parent"), child = connection("child");
+    const label = `craft-race-${randomUUID()}`;
+    try {
+        parent.send(`BEGIN; SET LOCAL statement_timeout='5s'; SET LOCAL deadlock_timeout='100ms'; ${lockSql} SELECT 'parent-ready';`);
+        await parent.wait("parent-ready");
+        assert.doesNotMatch(parent.output(), /ERROR:/);
+        child.send(`BEGIN; SET LOCAL application_name='${label}'; SET LOCAL statement_timeout='5s'; SET LOCAL deadlock_timeout='100ms'; ${childSql} ROLLBACK; SELECT 'child-done';`);
+        let reached = false;
+        for (let i = 0; i < 100; i++) {
+            if (/child-done|ERROR:/.test(child.output()) || psql(`SELECT count(*) FROM pg_stat_activity WHERE application_name='${label}' AND wait_event_type='Lock'`) === "1") { reached = true; break; }
+            await sleep(10);
+        }
+        assert.ok(reached, "child completed or reached the task lock");
+        parent.send(`${parentSql} ROLLBACK; SELECT 'parent-done';`);
+        await Promise.all([parent.wait("parent-done"), child.wait("child-done")]);
+    } finally {
+        await Promise.all([parent.end(), child.end()]);
+    }
+    return parent.output() + child.output();
+}
 let passed = 0, failed = 0;
 async function test(name, fn) { try {
     await fn();
@@ -85,6 +127,10 @@ try {
                 assert.equal(psql(`SELECT bool_and(has_table_privilege('${role}','${table}', privilege)) FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE']) AS privilege`), "t");
             assert.equal(psql(`SELECT count(*) FROM pg_trigger WHERE tgrelid='${table}'::regclass AND tgname='trg_${table}_updated'`), "1");
         });
+        await test(`${table}: anon and PUBLIC have no table privileges`, () => {
+            assert.equal(psql(`SELECT bool_or(has_table_privilege('anon','${table}', privilege)) FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) AS privilege`), "f");
+            assert.equal(psql(`SELECT count(*) FROM pg_class c, LATERAL aclexplode(c.relacl) acl WHERE c.oid='${table}'::regclass AND acl.grantee=0`), "0");
+        });
         await test(`${table}: other user sees none and cannot insert/update/delete`, async () => {
             const seen = await b.client.from(table).select("*").eq("user_id", a.id);
             assert.ifError(seen.error);
@@ -130,6 +176,72 @@ try {
         await rejects("craft_instructions", { ...fixtures.craft_instructions, link_id: id }); });
     const item = await insert("task_checklist_items", { user_id: a.id, task_id: task.id, text: "Row 1", craft_part_id: p.id, craft_row: 1, is_done: true });
     await insert("work_session_items", { user_id: a.id, session_id: s.id, checklist_item_id: item.id });
+    // Roll back even a vulnerable successful UPDATE, so fail-before tests do not
+    // contaminate later assertions. SET ROLE exercises the real owner RLS path.
+    const anchorCases = Object.keys(fixtures).map(table => [table, "user_id", b.id]);
+    anchorCases.push(["craft_parts", "project_id", project2.id], ["craft_links", "project_id", project2.id], ["craft_segments", "part_id", p2.id]);
+    for (const [table, column, value] of anchorCases) {
+        for (const role of ["authenticated", "service_role"]) {
+            await test(`${table}.${column}: immutable for ${role} (55006)`, async () => {
+                const result = await asyncSql(`\\set VERBOSITY verbose
+BEGIN; SET LOCAL ROLE ${role}; SET LOCAL request.jwt.claim.sub='${a.id}'; SET LOCAL row_security=on;
+UPDATE ${table} SET ${column}='${value}' WHERE user_id='${a.id}'; ROLLBACK;`);
+                assert.match(result.stderr, /55006/, result.stderr || "anchor UPDATE unexpectedly succeeded");
+                assert.match(result.stderr, /cannot change/i);
+            });
+        }
+    }
+    for (const role of ["authenticated", "service_role"]) {
+        await test(`review repro: populated part A→B is refused for ${role}`, async () => {
+            assert.equal(psql(`SELECT count(*) FROM task_checklist_items WHERE craft_part_id='${p.id}'`), "1");
+            assert.equal(psql(`SELECT count(*) FROM craft_segments WHERE part_id='${p.id}' AND task_id='${task.id}'`), "1");
+            const result = await asyncSql(`\\set VERBOSITY verbose
+BEGIN; SET LOCAL ROLE ${role}; SET LOCAL request.jwt.claim.sub='${a.id}'; SET LOCAL row_security=on;
+UPDATE craft_parts SET project_id='${project2.id}' WHERE id='${p.id}'; ROLLBACK;`);
+            assert.match(result.stderr, /55006/, result.stderr || "populated part moved");
+        });
+    }
+    await test("30 work_session_create vs craft_row-only UPDATE races: zero 40P01", async () => {
+        const t = await insert("tasks", { user_id: a.id, project_id: project2.id, title: "Craft row race" });
+        const part = await makePart(a.id, project2.id, "Race");
+        const row = await insert("task_checklist_items", { user_id: a.id, task_id: t.id, text: "Row", craft_part_id: part.id, craft_row: 1 });
+        let deadlocks = 0, errors = 0;
+        for (let i = 0; i < 30; i++) {
+            const output = await childTaskRace(
+                `SELECT id FROM tasks WHERE id='${t.id}' FOR NO KEY UPDATE;`,
+                `UPDATE task_checklist_items SET craft_row=2 WHERE id='${row.id}';`,
+                `SELECT work_session_create('${a.id}', '{"project_id":"${project2.id}","task_id":"${t.id}","session_date":"2026-11-08","minutes":1}'::jsonb, ARRAY['${row.id}']::uuid[], true);`);
+            deadlocks += (output.match(/ERROR:  40P01/g) ?? []).length;
+            errors += (output.match(/ERROR:/g) ?? []).length;
+        }
+        console.log(`    craft-row races: 30; 40P01=${deadlocks}; total errors=${errors}`);
+        assert.equal(deadlocks, 0);
+        assert.equal(errors, 0);
+    });
+    await test("segment task_id UPDATE vs task DELETE: zero 40P01, busy retry allowed", async () => {
+        const oldTask = await insert("tasks", { user_id: a.id, project_id: project2.id, title: "Segment old task" });
+        const newTask = await insert("tasks", { user_id: a.id, project_id: project2.id, title: "Segment new task" });
+        const segment = await insert("craft_segments", { ...fixtures.craft_segments, part_id: p2.id, task_id: oldTask.id });
+        const output = await childTaskRace(
+            `SELECT id FROM tasks WHERE id='${newTask.id}' FOR UPDATE;`,
+            `UPDATE craft_segments SET task_id='${newTask.id}' WHERE id='${segment.id}';`,
+            `DELETE FROM tasks WHERE id='${oldTask.id}';`);
+        console.log(`    segment/delete race: 40P01=${(output.match(/ERROR:  40P01/g) ?? []).length}; 55P03=${(output.match(/ERROR:  55P03/g) ?? []).length}`);
+        assert.doesNotMatch(output, /40P01/);
+        assert.match(output, /55P03.*busy, retry/);
+        assert.equal((output.match(/ERROR:/g) ?? []).length, 1);
+    });
+    await test("checklist reference UPDATE uses busy retry under a held task lock", async () => {
+        const part = await makePart(a.id, project2.id, "Reference race");
+        const row = await insert("task_checklist_items", { user_id: a.id, task_id: task2.id, text: "Reference race", craft_part_id: part.id, craft_row: 1 });
+        const output = await childTaskRace(
+            `SELECT id FROM tasks WHERE id='${task2.id}' FOR NO KEY UPDATE;`,
+            `UPDATE task_checklist_items SET craft_part_id='${p2.id}' WHERE id='${row.id}';`,
+            `SELECT id FROM task_checklist_items WHERE id='${row.id}' FOR UPDATE;`);
+        assert.doesNotMatch(output, /40P01/);
+        assert.match(output, /55P03.*busy, retry/);
+        assert.equal((output.match(/ERROR:/g) ?? []).length, 1);
+    });
     await test("checklist: cross-user part, cross-project part and task refused", async () => { for (const [part, taskId] of [[fp.id, task.id], [p2.id, task.id], [p.id, task2.id], [p.id, foreignTask.id]])
         await rejects("task_checklist_items", { user_id: a.id, task_id: taskId, text: "Row 2", craft_part_id: part, craft_row: 2 }); });
     await test("checklist pair CHECK, positive rows, partial UNIQUE and ordinary null rows", async () => {
@@ -150,6 +262,7 @@ try {
         const req = new NextRequest(`http://localhost/api/tasks/${t.id}`, { method: "PATCH", headers: { "x-mission-control-key": process.env.MISSION_CONTROL_API_KEY, "content-type": "application/json" }, body: JSON.stringify({ project_id: project2.id }) });
         const res = await taskRoute.PATCH(req, { params: Promise.resolve({ id: t.id }) });
         assert.equal(res.status, 409);
+        assert.equal((await res.json()).error, "This task has sittings or craft rows, so it can't move to another project.");
     });
     await test("task lock serializes a craft insert against a concurrent project move", async () => {
         const t = await insert("tasks", { user_id: a.id, project_id: project.id, title: "Lock test", status: "Planned" });

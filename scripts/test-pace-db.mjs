@@ -4,7 +4,7 @@
 //
 //   PACE_TEST_SUPABASE_URL=http://127.0.0.1:58321 \
 //   PACE_TEST_ANON_KEY=... PACE_TEST_SERVICE_ROLE_KEY=... \
-//   PACE_TEST_DB_CONTAINER=supabase_db_<project_id> \
+//   PACE_TEST_DB_CONTAINER=supabase_db_mc-pace \
 //   [PACE_TEST_SNAPSHOT=/path/to/blanket-snapshot.json] \
 //   npm run test:pace-db
 //
@@ -31,8 +31,8 @@ const serviceKey = process.env.PACE_TEST_SERVICE_ROLE_KEY;
 const dbContainer = process.env.PACE_TEST_DB_CONTAINER;
 const snapshotPath = process.env.PACE_TEST_SNAPSHOT;
 
-if (!url || !anonKey || !serviceKey || !dbContainer) {
-  console.error("Set PACE_TEST_SUPABASE_URL, PACE_TEST_ANON_KEY, PACE_TEST_SERVICE_ROLE_KEY and PACE_TEST_DB_CONTAINER (local stack only).");
+if (!url || !anonKey || !serviceKey || dbContainer !== "supabase_db_mc-pace") {
+  console.error("Set PACE_TEST_SUPABASE_URL, PACE_TEST_ANON_KEY, PACE_TEST_SERVICE_ROLE_KEY and PACE_TEST_DB_CONTAINER=supabase_db_mc-pace (disposable local stack only).");
   process.exit(2);
 }
 if (!["127.0.0.1", "localhost", "[::1]"].includes(new URL(url).hostname)) {
@@ -47,7 +47,34 @@ const ROLLBACK = readFileSync(new URL("../supabase/rollbacks/059_add_work_sessio
 // restore 071 in finally. Never use this suite on a persistent database.
 const CRAFT_MIGRATION = readFileSync(new URL("../supabase/migrations/071_add_craft_tables.sql", import.meta.url), "utf8");
 const CRAFT_ROLLBACK = readFileSync(new URL("../supabase/rollbacks/071_add_craft_tables.down.sql", import.meta.url), "utf8");
-let restoreCraft = false;
+let craftWasPresent = false;
+let craftWasRemoved = false;
+const faultAfterDown = process.env.PACE_TEST_FAULT_AFTER_059_DOWN;
+if (faultAfterDown && !["initial", "populated"].includes(faultAfterDown)) throw new Error("Unknown PACE_TEST_FAULT_AFTER_059_DOWN hook");
+let faultInjected = false;
+
+async function restorePace() {
+  if (psql("SELECT to_regclass('public.work_sessions') IS NULL;") === "t") {
+    psql(MIGRATION + "\nNOTIFY pgrst, 'reload schema';");
+  }
+  await waitForSchema(true);
+}
+
+// Each down/up interval owns its prerequisite restoration, including assertion
+// and schema-cache failures. The outer cleanup retries before restoring 071.
+async function withPaceRollback(label, body) {
+  try {
+    psql(ROLLBACK + "\nNOTIFY pgrst, 'reload schema';");
+    if (faultAfterDown === label) {
+      faultInjected = true;
+      throw new Error(`Injected failure after 059 down: ${label}`);
+    }
+    await body();
+  } finally {
+    await restorePace();
+    if (faultAfterDown === label) console.log(`    fault proof: ${label} restored 059 in finally`);
+  }
+}
 
 function psql(sql) {
   return execFileSync(
@@ -262,24 +289,28 @@ function psqlConnection(label) {
 }
 
 try {
-  restoreCraft = psql("SELECT to_regclass('public.craft_projects') IS NOT NULL;") === "t";
-  if (restoreCraft) psql(CRAFT_ROLLBACK);
+  craftWasPresent = psql("SELECT to_regclass('public.craft_projects') IS NOT NULL;") === "t";
+  if (craftWasPresent) {
+    psql(CRAFT_ROLLBACK);
+    craftWasRemoved = true;
+  }
   // ── Part 1: migration 059 ──────────────────────────────────────────────
   await test("059 rollback removes every table, column, trigger and function; re-apply restores them", async () => {
-    psql(ROLLBACK + "\nNOTIFY pgrst, 'reload schema';");
-    assert.equal(psql("SELECT to_regclass('public.work_sessions') IS NULL AND to_regclass('public.work_session_items') IS NULL;"), "t");
-    assert.equal(psql(`SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND (
-      (table_name='tasks' AND column_name IN ('unit_count','work_type','is_sample')) OR
-      (table_name='task_checklist_items' AND column_name IN ('unit_count','work_type','completed_at','created_at')) OR
-      (table_name='projects' AND column_name IN ('unit_label','pace_settings')));`), "0");
-    assert.equal(psql("SELECT count(*) FROM pg_proc WHERE proname IN ('work_sessions_rollup_actual_minutes','work_sessions_check_ownership','work_session_items_check_project','task_checklist_items_set_completed_at','tasks_guard_project_move_with_sessions','work_session_create','work_session_update','work_session_delete','work_sessions_out_of_scope_items','work_sessions_assert_caller','work_sessions_lock_tasks','work_sessions_item_tasks');"), "0");
-    await waitForSchema(false);
-    psql(MIGRATION + "\nNOTIFY pgrst, 'reload schema';");
-    psql(MIGRATION); // idempotent: a second apply is a no-op
-    assert.equal(psql("SELECT to_regclass('public.work_sessions') IS NOT NULL;"), "t");
-    assert.equal(psql("SELECT count(*) FROM pg_policies WHERE tablename IN ('work_sessions','work_session_items');"), "8");
-    assert.equal(psql("SELECT has_table_privilege('authenticated','public.work_sessions','select,insert,update,delete') AND has_table_privilege('service_role','public.work_session_items','select,insert,update,delete') AND NOT has_table_privilege('anon','public.work_sessions','select');"), "t");
-    await waitForSchema(true);
+    await withPaceRollback("initial", async () => {
+      assert.equal(psql("SELECT to_regclass('public.work_sessions') IS NULL AND to_regclass('public.work_session_items') IS NULL;"), "t");
+      assert.equal(psql(`SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND (
+        (table_name='tasks' AND column_name IN ('unit_count','work_type','is_sample')) OR
+        (table_name='task_checklist_items' AND column_name IN ('unit_count','work_type','completed_at','created_at')) OR
+        (table_name='projects' AND column_name IN ('unit_label','pace_settings')));`), "0");
+      assert.equal(psql("SELECT count(*) FROM pg_proc WHERE proname IN ('work_sessions_rollup_actual_minutes','work_sessions_check_ownership','work_session_items_check_project','task_checklist_items_set_completed_at','tasks_guard_project_move_with_sessions','work_session_create','work_session_update','work_session_delete','work_sessions_out_of_scope_items','work_sessions_assert_caller','work_sessions_lock_tasks','work_sessions_item_tasks');"), "0");
+      await waitForSchema(false);
+      psql(MIGRATION + "\nNOTIFY pgrst, 'reload schema';");
+      psql(MIGRATION); // idempotent: a second apply is a no-op
+      assert.equal(psql("SELECT to_regclass('public.work_sessions') IS NOT NULL;"), "t");
+      assert.equal(psql("SELECT count(*) FROM pg_policies WHERE tablename IN ('work_sessions','work_session_items');"), "8");
+      assert.equal(psql("SELECT has_table_privilege('authenticated','public.work_sessions','select,insert,update,delete') AND has_table_privilege('service_role','public.work_session_items','select,insert,update,delete') AND NOT has_table_privilege('anon','public.work_sessions','select');"), "t");
+      await waitForSchema(true);
+    });
   });
 
   const project = await makeProject(userA, "Pace DB blanket", { target_date: "2026-12-05" });
@@ -521,13 +552,14 @@ try {
     const t = await makeTask(userA, project.id, "Rollback task");
     await insert("work_sessions", { user_id: userA, project_id: project.id, task_id: t.id, session_date: "2026-10-04", minutes: 13 });
     assert.equal(await actualMinutes(t.id), 13);
-    psql(ROLLBACK + "\nNOTIFY pgrst, 'reload schema';");
-    assert.equal(psql("SELECT to_regclass('public.work_sessions') IS NULL;"), "t");
-    assert.equal(psql(`SELECT actual_minutes FROM tasks WHERE id = '${t.id}';`), "13", "kept, not restored to NULL");
-    await waitForSchema(false);
-    psql(MIGRATION + "\nNOTIFY pgrst, 'reload schema';");
-    await waitForSchema(true);
-    assert.equal(await actualMinutes(t.id), 13, "re-apply doesn't recompute it either");
+    await withPaceRollback("populated", async () => {
+      assert.equal(psql("SELECT to_regclass('public.work_sessions') IS NULL;"), "t");
+      assert.equal(psql(`SELECT actual_minutes FROM tasks WHERE id = '${t.id}';`), "13", "kept, not restored to NULL");
+      await waitForSchema(false);
+      psql(MIGRATION + "\nNOTIFY pgrst, 'reload schema';");
+      await waitForSchema(true);
+      assert.equal(await actualMinutes(t.id), 13, "re-apply doesn't recompute it either");
+    });
   });
 
   // ── Part 2: API + MCP ──────────────────────────────────────────────────
@@ -779,7 +811,7 @@ try {
     await logWorkSession(admin, userA, { task_id: withSession.id, minutes: 5, date: "2026-10-04" });
     const viaApi = await callTool("update_task", { task_id: withSession.id, project_id: otherProject.id });
     assert.equal(viaApi.isError, true);
-    assert.match(viaApi.data.error, /work session/i);
+    assert.match(viaApi.data.error, /sittings or craft rows/i);
     const direct = await admin.from("tasks").update({ project_id: otherProject.id }).eq("id", withSession.id);
     assert.equal(errCode(direct), "55006", "the DB guard covers every writer");
     const linkedOnly = await makeTask(userA, paceProject.id, "Only linked by a project-level session");
@@ -789,7 +821,7 @@ try {
     assert.equal(errCode(await admin.from("tasks").update({ project_id: null }).eq("id", linkedOnly.id)), "55006", "unlinking counts as a move");
     const linkedViaApi = await callTool("update_task", { task_id: linkedOnly.id, project_id: otherProject.id });
     assert.equal(linkedViaApi.isError, true);
-    assert.match(linkedViaApi.data.error, /work session/i, "the DB guard's 55006 comes back as a plain 409");
+    assert.match(linkedViaApi.data.error, /sittings or craft rows/i, "the DB guard's 55006 comes back as a plain 409");
     // A task with many rows: the move check must not build an over-long request.
     const big = await makeTask(userA, paceProject.id, "Many rows");
     const { data: bigRows, error: bigError } = await admin.from("task_checklist_items")
@@ -799,7 +831,7 @@ try {
     await logWorkSession(admin, userA, { project_id: paceProject.id, minutes: 5, item_ids: [bigRows[699].id], date: "2026-10-04" });
     const bigMove = await callTool("update_task", { task_id: big.id, project_id: otherProject.id });
     assert.equal(bigMove.isError, true);
-    assert.match(bigMove.data.error, /work session/i, "409, not a 500 from a long URL");
+    assert.match(bigMove.data.error, /sittings or craft rows/i, "409, not a 500 from a long URL");
     const bigFree = await makeTask(userA, paceProject.id, "Many rows, no sessions");
     await admin.from("task_checklist_items").insert(Array.from({ length: 700 }, (_, n) => ({ user_id: userA, task_id: bigFree.id, text: `Row ${n + 1}`, sort_order: n })));
     const bigFreeMove = await callTool("update_task", { task_id: bigFree.id, project_id: otherProject.id });
@@ -818,7 +850,7 @@ try {
     };
     const sessionMove = await patchTask(withSession.id, { project_id: otherProject.id });
     assert.equal(sessionMove.status, 409, "HTTP 409 for a task with a session");
-    assert.match(sessionMove.body.error, /work session/i);
+    assert.match(sessionMove.body.error, /sittings or craft rows/i);
     const linkedMove = await patchTask(linkedOnly.id, { project_id: otherProject.id });
     assert.equal(linkedMove.status, 409, "HTTP 409 for a task only linked by a project-level session");
     const bigMoveHttp = await patchTask(big.id, { project_id: otherProject.id });
@@ -1102,13 +1134,41 @@ try {
     console.log("(Part 3 skipped: set PACE_TEST_SNAPSHOT to run the blanket backfill acceptance check)");
   }
 } finally {
-  if (restoreCraft) psql(CRAFT_MIGRATION);
+  // test() records a restore failure without preventing fetch/user cleanup.
+  await test("cleanup: restore 059 before the removed 071", async () => {
+    await restorePace();
+    if (craftWasRemoved) {
+      psql(CRAFT_MIGRATION);
+      craftWasRemoved = false;
+    }
+  });
   globalThis.fetch = realFetch;
-  for (const id of users) {
-    await admin.from("work_sessions").delete().eq("user_id", id);
-    await admin.from("tasks").delete().eq("user_id", id);
-    await admin.from("projects").delete().eq("user_id", id);
-    await admin.auth.admin.deleteUser(id).catch(() => null);
+  await test("cleanup: restore fetch and remove every test user", async () => {
+    const errors = [];
+    for (const id of users) {
+      // Protect each step, including auth deletion, from earlier failures.
+      for (const table of ["work_sessions", "tasks", "projects"]) {
+        try {
+          const { error } = await admin.from(table).delete().eq("user_id", id);
+          if (error) errors.push(`${table}: ${error.message}`);
+        } catch (error) { errors.push(`${table}: ${error.message}`); }
+      }
+      try {
+        const { error } = await admin.auth.admin.deleteUser(id);
+        if (error) errors.push(`user: ${error.message}`);
+      } catch (error) { errors.push(`user: ${error.message}`); }
+    }
+    assert.equal(globalThis.fetch, realFetch);
+    assert.deepEqual(errors, []);
+  });
+  if (faultAfterDown) {
+    await test(`fault proof: ${faultAfterDown} leaves 059/071, fetch and users restored`, () => {
+      assert.ok(faultInjected);
+      assert.equal(psql("SELECT to_regclass('public.work_sessions') IS NOT NULL;"), "t");
+      if (craftWasPresent) assert.equal(psql("SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'craft_%';"), "9");
+      assert.equal(globalThis.fetch, realFetch);
+      assert.equal(psql(`SELECT count(*) FROM auth.users WHERE id IN (${users.map(id => `'${id}'`).join(",")});`), "0");
+    });
   }
 }
 

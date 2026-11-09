@@ -49,6 +49,8 @@ const PAGES = {
   "/briefs/[code]": ["/briefs/AM-1105", "/briefs/[code]"],
   "/calendar": ["/calendar", "/calendar"],
   "/calendar/events/[id]": [`/calendar/events/${UUID}`, "/calendar/events/[id]"],
+  "/craft": ["/craft", "/craft"],
+  "/craft/[projectId]": [`/craft/${UUID}`, "/craft/[projectId]"],
   "/focus": ["/focus", "/focus"],
   "/implementations": ["/implementations", "/implementations"],
   "/implementations/[id]": [`/implementations/${UUID}`, "/implementations/[id]"],
@@ -104,6 +106,7 @@ for (const { route } of handlers) {
 // --- 2. Id collapsing --------------------------------------------------------
 for (const id of [UUID, UUID_UPPER, UUID_MIXED]) {
   eq(toRoutePattern(`/r/task/${id}`), "/r/task/[id]", `uuid case ${id}`);
+  eq(toRoutePattern(`/craft/${id}`), "/craft/[projectId]");
   eq(toRoutePattern(`/projects/${id}`), "/projects/[id]");
   eq(toRoutePattern(`/applications/${id}`), "/applications/[id]");
   eq(toRoutePattern(`/sprints/${id}`), "/sprints/[id]");
@@ -117,6 +120,7 @@ for (const kind of ["task", "note", "application", "project", "sprint", "stakeho
 }
 eq(toRoutePattern(`/r/mystery-kind/${UUID}`), "/r/[kind]/[id]");
 eq(toRoutePattern("/r/task/not-a-uuid-but-slot"), "/r/task/[id]", "dynamic slot is always collapsed");
+eq(toRoutePattern("/craft/not-a-uuid-but-slot"), "/craft/[projectId]");
 // Brief codes.
 eq(toRoutePattern("/briefs/AM-1105"), "/briefs/[code]");
 eq(toRoutePattern("/briefs/am-1105"), "/briefs/[code]");

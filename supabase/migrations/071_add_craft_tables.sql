@@ -146,10 +146,11 @@ ALTER TABLE task_checklist_items
   );
 CREATE UNIQUE INDEX idx_checklist_craft_row ON task_checklist_items(craft_part_id, craft_row)
   WHERE craft_part_id IS NOT NULL;
-CREATE INDEX idx_checklist_craft_progress ON task_checklist_items(craft_part_id, is_done, craft_row);
+CREATE INDEX idx_checklist_craft_progress ON task_checklist_items(craft_part_id, is_done, craft_row)
+  WHERE craft_part_id IS NOT NULL;
 
--- Task first, then read its project: the 059 lock order. A task move and a
--- craft-row/segment write serialize on the same NO KEY UPDATE lock.
+-- Inserts lock the task before reading its project, like 059. UPDATE triggers
+-- already hold a child tuple: never wait for the task and invert 059's order.
 -- JSON is used only to share reference validation across the nine row shapes.
 CREATE FUNCTION craft_check_ownership()
 RETURNS TRIGGER LANGUAGE plpgsql SET search_path = public AS $$
@@ -165,9 +166,33 @@ DECLARE
   task_project UUID;
   task_user UUID;
 BEGIN
+  -- These anchors also own reverse references whose triggers would not run
+  -- when their parent moves. Optional SET NULL references remain editable.
+  IF TG_OP = 'UPDATE' AND TG_TABLE_NAME <> 'task_checklist_items' THEN
+    IF NEW.user_id IS DISTINCT FROM OLD.user_id THEN
+      RAISE EXCEPTION 'Cannot change the owner of a craft row' USING ERRCODE = '55006';
+    END IF;
+    IF TG_TABLE_NAME IN ('craft_parts', 'craft_links')
+       AND r->>'project_id' IS DISTINCT FROM to_jsonb(OLD)->>'project_id' THEN
+      RAISE EXCEPTION 'Cannot change the project of a craft part or link' USING ERRCODE = '55006';
+    END IF;
+    IF TG_TABLE_NAME = 'craft_segments'
+       AND r->>'part_id' IS DISTINCT FROM to_jsonb(OLD)->>'part_id' THEN
+      RAISE EXCEPTION 'Cannot change the part of a craft segment' USING ERRCODE = '55006';
+    END IF;
+  END IF;
   IF task_ref IS NOT NULL THEN
-    SELECT project_id, user_id INTO task_project, task_user FROM tasks
-      WHERE id = task_ref FOR NO KEY UPDATE;
+    IF TG_OP = 'UPDATE' THEN
+      BEGIN
+        SELECT project_id, user_id INTO task_project, task_user FROM tasks
+          WHERE id = task_ref FOR NO KEY UPDATE NOWAIT;
+      EXCEPTION WHEN lock_not_available THEN
+        RAISE EXCEPTION 'Craft task is busy, retry the change' USING ERRCODE = '55P03';
+      END;
+    ELSE
+      SELECT project_id, user_id INTO task_project, task_user FROM tasks
+        WHERE id = task_ref FOR NO KEY UPDATE;
+    END IF;
     IF task_user IS DISTINCT FROM owner_id THEN
       RAISE EXCEPTION 'craft task must belong to the same user' USING ERRCODE = '23503';
     END IF;
@@ -227,7 +252,7 @@ END;
 $$;
 
 -- SET NULL must clear the paired row number as well, before the pair CHECK.
-CREATE FUNCTION craft_checklist_ownership()
+CREATE FUNCTION craft_checklist_clear_deleted_part()
 RETURNS TRIGGER LANGUAGE plpgsql SET search_path = public AS $$
 BEGIN
   IF TG_OP = 'UPDATE' AND NEW.craft_part_id IS NULL AND OLD.craft_part_id IS NOT NULL
@@ -238,9 +263,15 @@ BEGIN
 END;
 $$;
 CREATE TRIGGER trg_checklist_craft_cleanup BEFORE UPDATE OF craft_part_id ON task_checklist_items
-  FOR EACH ROW EXECUTE FUNCTION craft_checklist_ownership();
-CREATE TRIGGER trg_checklist_craft_ownership BEFORE INSERT OR UPDATE OF user_id, task_id, craft_part_id, craft_row ON task_checklist_items
+  FOR EACH ROW EXECUTE FUNCTION craft_checklist_clear_deleted_part();
+CREATE TRIGGER trg_checklist_craft_ownership_insert BEFORE INSERT ON task_checklist_items
   FOR EACH ROW WHEN (NEW.craft_part_id IS NOT NULL) EXECUTE FUNCTION craft_check_ownership();
+CREATE TRIGGER trg_checklist_craft_ownership_update BEFORE UPDATE OF user_id, task_id, craft_part_id ON task_checklist_items
+  FOR EACH ROW WHEN (NEW.craft_part_id IS NOT NULL AND (
+    NEW.user_id IS DISTINCT FROM OLD.user_id OR
+    NEW.task_id IS DISTINCT FROM OLD.task_id OR
+    NEW.craft_part_id IS DISTINCT FROM OLD.craft_part_id
+  )) EXECUTE FUNCTION craft_check_ownership();
 
 CREATE FUNCTION tasks_guard_project_move_with_craft()
 RETURNS TRIGGER LANGUAGE plpgsql SET search_path = public AS $$
@@ -263,6 +294,7 @@ CREATE POLICY "Users can view own craft_projects" ON craft_projects FOR SELECT U
 CREATE POLICY "Users can insert own craft_projects" ON craft_projects FOR INSERT WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can update own craft_projects" ON craft_projects FOR UPDATE USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can delete own craft_projects" ON craft_projects FOR DELETE USING (auth.uid() = user_id);
+REVOKE ALL ON craft_projects FROM anon, PUBLIC;
 GRANT SELECT, INSERT, UPDATE, DELETE ON craft_projects TO authenticated, service_role;
 CREATE TRIGGER trg_craft_projects_updated BEFORE UPDATE ON craft_projects FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_craft_projects_ownership BEFORE INSERT OR UPDATE ON craft_projects FOR EACH ROW EXECUTE FUNCTION craft_check_ownership();
@@ -271,6 +303,7 @@ CREATE POLICY "Users can view own craft_parts" ON craft_parts FOR SELECT USING (
 CREATE POLICY "Users can insert own craft_parts" ON craft_parts FOR INSERT WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can update own craft_parts" ON craft_parts FOR UPDATE USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can delete own craft_parts" ON craft_parts FOR DELETE USING (auth.uid() = user_id);
+REVOKE ALL ON craft_parts FROM anon, PUBLIC;
 GRANT SELECT, INSERT, UPDATE, DELETE ON craft_parts TO authenticated, service_role;
 CREATE TRIGGER trg_craft_parts_updated BEFORE UPDATE ON craft_parts FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_craft_parts_ownership BEFORE INSERT OR UPDATE ON craft_parts FOR EACH ROW EXECUTE FUNCTION craft_check_ownership();
@@ -279,6 +312,7 @@ CREATE POLICY "Users can view own craft_segments" ON craft_segments FOR SELECT U
 CREATE POLICY "Users can insert own craft_segments" ON craft_segments FOR INSERT WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can update own craft_segments" ON craft_segments FOR UPDATE USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can delete own craft_segments" ON craft_segments FOR DELETE USING (auth.uid() = user_id);
+REVOKE ALL ON craft_segments FROM anon, PUBLIC;
 GRANT SELECT, INSERT, UPDATE, DELETE ON craft_segments TO authenticated, service_role;
 CREATE TRIGGER trg_craft_segments_updated BEFORE UPDATE ON craft_segments FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_craft_segments_ownership BEFORE INSERT OR UPDATE ON craft_segments FOR EACH ROW EXECUTE FUNCTION craft_check_ownership();
@@ -287,6 +321,7 @@ CREATE POLICY "Users can view own craft_timers" ON craft_timers FOR SELECT USING
 CREATE POLICY "Users can insert own craft_timers" ON craft_timers FOR INSERT WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can update own craft_timers" ON craft_timers FOR UPDATE USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can delete own craft_timers" ON craft_timers FOR DELETE USING (auth.uid() = user_id);
+REVOKE ALL ON craft_timers FROM anon, PUBLIC;
 GRANT SELECT, INSERT, UPDATE, DELETE ON craft_timers TO authenticated, service_role;
 CREATE TRIGGER trg_craft_timers_updated BEFORE UPDATE ON craft_timers FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_craft_timers_ownership BEFORE INSERT OR UPDATE ON craft_timers FOR EACH ROW EXECUTE FUNCTION craft_check_ownership();
@@ -295,6 +330,7 @@ CREATE POLICY "Users can view own craft_sitting_details" ON craft_sitting_detail
 CREATE POLICY "Users can insert own craft_sitting_details" ON craft_sitting_details FOR INSERT WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can update own craft_sitting_details" ON craft_sitting_details FOR UPDATE USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can delete own craft_sitting_details" ON craft_sitting_details FOR DELETE USING (auth.uid() = user_id);
+REVOKE ALL ON craft_sitting_details FROM anon, PUBLIC;
 GRANT SELECT, INSERT, UPDATE, DELETE ON craft_sitting_details TO authenticated, service_role;
 CREATE TRIGGER trg_craft_sitting_details_updated BEFORE UPDATE ON craft_sitting_details FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_craft_sitting_details_ownership BEFORE INSERT OR UPDATE ON craft_sitting_details FOR EACH ROW EXECUTE FUNCTION craft_check_ownership();
@@ -303,6 +339,7 @@ CREATE POLICY "Users can view own craft_notes" ON craft_notes FOR SELECT USING (
 CREATE POLICY "Users can insert own craft_notes" ON craft_notes FOR INSERT WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can update own craft_notes" ON craft_notes FOR UPDATE USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can delete own craft_notes" ON craft_notes FOR DELETE USING (auth.uid() = user_id);
+REVOKE ALL ON craft_notes FROM anon, PUBLIC;
 GRANT SELECT, INSERT, UPDATE, DELETE ON craft_notes TO authenticated, service_role;
 CREATE TRIGGER trg_craft_notes_updated BEFORE UPDATE ON craft_notes FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_craft_notes_ownership BEFORE INSERT OR UPDATE ON craft_notes FOR EACH ROW EXECUTE FUNCTION craft_check_ownership();
@@ -311,6 +348,7 @@ CREATE POLICY "Users can view own craft_links" ON craft_links FOR SELECT USING (
 CREATE POLICY "Users can insert own craft_links" ON craft_links FOR INSERT WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can update own craft_links" ON craft_links FOR UPDATE USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can delete own craft_links" ON craft_links FOR DELETE USING (auth.uid() = user_id);
+REVOKE ALL ON craft_links FROM anon, PUBLIC;
 GRANT SELECT, INSERT, UPDATE, DELETE ON craft_links TO authenticated, service_role;
 CREATE TRIGGER trg_craft_links_updated BEFORE UPDATE ON craft_links FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_craft_links_ownership BEFORE INSERT OR UPDATE ON craft_links FOR EACH ROW EXECUTE FUNCTION craft_check_ownership();
@@ -319,6 +357,7 @@ CREATE POLICY "Users can view own craft_instructions" ON craft_instructions FOR 
 CREATE POLICY "Users can insert own craft_instructions" ON craft_instructions FOR INSERT WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can update own craft_instructions" ON craft_instructions FOR UPDATE USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can delete own craft_instructions" ON craft_instructions FOR DELETE USING (auth.uid() = user_id);
+REVOKE ALL ON craft_instructions FROM anon, PUBLIC;
 GRANT SELECT, INSERT, UPDATE, DELETE ON craft_instructions TO authenticated, service_role;
 CREATE TRIGGER trg_craft_instructions_updated BEFORE UPDATE ON craft_instructions FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_craft_instructions_ownership BEFORE INSERT OR UPDATE ON craft_instructions FOR EACH ROW EXECUTE FUNCTION craft_check_ownership();
@@ -327,6 +366,7 @@ CREATE POLICY "Users can view own craft_yarns" ON craft_yarns FOR SELECT USING (
 CREATE POLICY "Users can insert own craft_yarns" ON craft_yarns FOR INSERT WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can update own craft_yarns" ON craft_yarns FOR UPDATE USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can delete own craft_yarns" ON craft_yarns FOR DELETE USING (auth.uid() = user_id);
+REVOKE ALL ON craft_yarns FROM anon, PUBLIC;
 GRANT SELECT, INSERT, UPDATE, DELETE ON craft_yarns TO authenticated, service_role;
 CREATE TRIGGER trg_craft_yarns_updated BEFORE UPDATE ON craft_yarns FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_craft_yarns_ownership BEFORE INSERT OR UPDATE ON craft_yarns FOR EACH ROW EXECUTE FUNCTION craft_check_ownership();

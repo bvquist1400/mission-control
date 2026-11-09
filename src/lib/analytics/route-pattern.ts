@@ -16,6 +16,7 @@ const NEVER_REPORTED_ROOTS = new Set(['api', 'oauth', 'auth', '.well-known', '_n
 // Pages whose last segment is a record id: `/<root>/<id>`.
 // A static child of the same root (e.g. /projects/templates) wins over the slot.
 const ID_PAGE_ROOTS: Record<string, { slot: string; staticChildren: ReadonlySet<string> }> = {
+  craft: { slot: '[projectId]', staticChildren: new Set() },
   applications: { slot: '[id]', staticChildren: new Set() },
   implementations: { slot: '[id]', staticChildren: new Set() },
   projects: { slot: '[id]', staticChildren: new Set(['templates']) },
