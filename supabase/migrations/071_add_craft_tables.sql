@@ -156,6 +156,14 @@ CREATE FUNCTION craft_check_ownership()
 RETURNS TRIGGER LANGUAGE plpgsql SET search_path = public AS $$
 DECLARE
   r JSONB := to_jsonb(NEW);
+  previous JSONB := CASE WHEN TG_OP = 'UPDATE' THEN to_jsonb(OLD) ELSE '{}'::jsonb END;
+  task_changed BOOLEAN := TG_OP = 'INSERT' OR r->>'task_id' IS DISTINCT FROM previous->>'task_id';
+  session_changed BOOLEAN := TG_OP = 'INSERT' OR r->>'session_id' IS DISTINCT FROM previous->>'session_id';
+  part_changed BOOLEAN := TG_OP = 'INSERT' OR
+    COALESCE(r->>'part_id', r->>'active_part_id', r->>'craft_part_id') IS DISTINCT FROM
+    COALESCE(previous->>'part_id', previous->>'active_part_id', previous->>'craft_part_id');
+  project_changed BOOLEAN := TG_OP = 'INSERT' OR r->>'project_id' IS DISTINCT FROM previous->>'project_id';
+  owner_changed BOOLEAN := TG_OP = 'INSERT' OR r->>'user_id' IS DISTINCT FROM previous->>'user_id';
   owner_id UUID := (r->>'user_id')::uuid;
   project_ref UUID := (r->>'project_id')::uuid;
   part_ref UUID := COALESCE((r->>'part_id')::uuid, (r->>'active_part_id')::uuid, (r->>'craft_part_id')::uuid);
@@ -181,7 +189,7 @@ BEGIN
       RAISE EXCEPTION 'Cannot change the part of a craft segment' USING ERRCODE = '55006';
     END IF;
   END IF;
-  IF task_ref IS NOT NULL THEN
+  IF task_ref IS NOT NULL AND (task_changed OR (TG_TABLE_NAME = 'task_checklist_items' AND (part_changed OR owner_changed))) THEN
     IF TG_OP = 'UPDATE' THEN
       BEGIN
         SELECT project_id, user_id INTO task_project, task_user FROM tasks
@@ -201,7 +209,20 @@ BEGIN
     END IF;
   END IF;
 
-  IF session_ref IS NOT NULL THEN
+  -- Unchanged parents supply project context without revalidating their existence
+  -- during FK cleanup. Checklist reference changes still lock their owning task;
+  -- segment metadata edits never take that lock.
+  IF TG_TABLE_NAME = 'task_checklist_items' AND task_ref IS NOT NULL AND NOT (task_changed OR part_changed OR owner_changed) THEN
+    SELECT project_id INTO project_ref FROM tasks WHERE id = task_ref;
+  END IF;
+  IF project_ref IS NULL AND TG_TABLE_NAME = 'craft_sitting_details' AND session_ref IS NOT NULL THEN
+    SELECT project_id INTO project_ref FROM work_sessions WHERE id = session_ref;
+  END IF;
+  IF project_ref IS NULL AND TG_TABLE_NAME IN ('craft_segments', 'craft_instructions') AND part_ref IS NOT NULL THEN
+    SELECT project_id INTO project_ref FROM craft_parts WHERE id = part_ref;
+  END IF;
+
+  IF session_ref IS NOT NULL AND (session_changed OR project_changed) THEN
     SELECT project_id, user_id INTO ref_project, ref_user FROM work_sessions WHERE id = session_ref;
     IF ref_user IS DISTINCT FROM owner_id THEN
       RAISE EXCEPTION 'craft session must belong to the same user' USING ERRCODE = '23503';
@@ -212,7 +233,7 @@ BEGIN
     END IF;
   END IF;
 
-  IF part_ref IS NOT NULL THEN
+  IF part_ref IS NOT NULL AND (part_changed OR project_changed OR (task_changed AND task_ref IS NOT NULL) OR (session_changed AND session_ref IS NOT NULL) OR owner_changed) THEN
     SELECT project_id, user_id INTO ref_project, ref_user FROM craft_parts WHERE id = part_ref;
     IF ref_user IS DISTINCT FROM owner_id THEN
       RAISE EXCEPTION 'craft part must belong to the same user' USING ERRCODE = '23503';
@@ -223,18 +244,18 @@ BEGIN
     END IF;
   END IF;
 
-  IF task_ref IS NOT NULL AND task_project IS DISTINCT FROM project_ref THEN
+  IF task_ref IS NOT NULL AND task_changed AND task_project IS DISTINCT FROM project_ref THEN
     RAISE EXCEPTION 'craft task must belong to the same project' USING ERRCODE = '23503';
   END IF;
 
-  IF (r->>'segment_id') IS NOT NULL THEN
+  IF (r->>'segment_id') IS NOT NULL AND (TG_OP = 'INSERT' OR r->>'segment_id' IS DISTINCT FROM previous->>'segment_id') THEN
     SELECT p.project_id, s.user_id INTO ref_project, ref_user
       FROM craft_segments s JOIN craft_parts p ON p.id = s.part_id WHERE s.id = (r->>'segment_id')::uuid;
     IF ref_user IS DISTINCT FROM owner_id OR ref_project IS DISTINCT FROM project_ref THEN
       RAISE EXCEPTION 'craft segment must belong to the same user and project' USING ERRCODE = '23503';
     END IF;
   END IF;
-  IF (r->>'link_id') IS NOT NULL THEN
+  IF (r->>'link_id') IS NOT NULL AND (TG_OP = 'INSERT' OR r->>'link_id' IS DISTINCT FROM previous->>'link_id' OR part_changed) THEN
     SELECT project_id, user_id INTO ref_project, ref_user FROM craft_links WHERE id = (r->>'link_id')::uuid;
     IF ref_user IS DISTINCT FROM owner_id OR ref_project IS DISTINCT FROM project_ref THEN
       RAISE EXCEPTION 'craft link must belong to the same user and project' USING ERRCODE = '23503';
@@ -242,7 +263,7 @@ BEGIN
   END IF;
   -- During a project CASCADE, optional links are nulled after the project has
   -- disappeared. Let that referential cleanup finish (same exception as 059).
-  IF project_ref IS NOT NULL AND NOT EXISTS (SELECT 1 FROM projects WHERE id = project_ref AND user_id = owner_id) THEN
+  IF project_ref IS NOT NULL AND project_changed AND NOT EXISTS (SELECT 1 FROM projects WHERE id = project_ref AND user_id = owner_id) THEN
     IF TG_OP <> 'UPDATE' OR EXISTS (SELECT 1 FROM projects WHERE id = project_ref) THEN
       RAISE EXCEPTION 'craft project must belong to the same user' USING ERRCODE = '23503';
     END IF;

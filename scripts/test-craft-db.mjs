@@ -284,6 +284,83 @@ UPDATE craft_parts SET project_id='${project2.id}' WHERE id='${p.id}'; ROLLBACK;
     await test("GET /api/craft picks latest session (not newest craft row); RLS loader returns linked rows", async () => { const res = await craftRoute.GET(routeRequest(a.client, "/api/craft")); assert.equal(res.status, 200); const view = await res.json(); assert.equal(view.project.id, project.id); assert.equal(view.active_part.current_row, 2); assert.equal(view.recent_sittings[0].rows[0].row, 1); assert.equal(view.recent_sittings[0].detail.part_id, p.id); });
     await test("GET detail: another user's craft project is 404", async () => { const res = await craftDetailRoute.GET(routeRequest(a.client, `/api/craft/${foreign.id}`), { params: Promise.resolve({ projectId: foreign.id }) }); assert.equal(res.status, 404); });
     await test("GET fallback: no sessions chooses newest craft project; no projects gives 404", async () => { const empty = await user(); const req = () => { const r = new NextRequest("http://localhost/api/craft"); writeInternalAuthContext(r, { supabase: empty.client, userId: empty.id, user: { id: empty.id }, authSource: "session" }); return r; }; assert.equal((await craftRoute.GET(req())).status, 404); const ep = await insert("projects", { user_id: empty.id, name: "New" }); await insert("craft_projects", { user_id: empty.id, project_id: ep.id, craft: "other" }); const res = await craftRoute.GET(req()); assert.equal(res.status, 200); assert.equal((await res.json()).project.id, ep.id); });
+    for (const [table, pk, id, patch] of [
+        ["craft_timers", "user_id", a.id, { project_id: project2.id }],
+        ["craft_sitting_details", "session_id", s.id, { session_id: s2.id }],
+        ["task_checklist_items", "id", item.id, { task_id: task2.id }],
+    ]) {
+        await test(`${table}: changed context still rejects unchanged cross-project references`, async () => {
+            const { error } = await admin.from(table).update(patch).eq(pk, id);
+            assert.equal(error?.code, "23503", error?.message);
+        });
+    }
+    for (const [table, patch] of [["craft_notes", { project_id: project2.id }], ["craft_instructions", { part_id: p2.id }]]) {
+        await test(`${table}: changed context still rejects unchanged companion references`, async () => {
+            const { data, error: readError } = await admin.from(table).select("id").eq("part_id", p.id).single();
+            assert.ifError(readError);
+            const { error } = await admin.from(table).update(patch).eq("id", data.id);
+            assert.equal(error?.code, "23503", error?.message);
+        });
+    }
+    // Each delete runs with every companion reference populated, for both API roles.
+    for (const [role, client] of [["owner RLS", a.client], ["service_role", admin]]) {
+        await test(`${role}: delete part with link part+segment and all optional references`, async () => {
+            const part = await makePart(a.id, project.id, "FR2 delete");
+            const segment = await insert("craft_segments", { ...fixtures.craft_segments, part_id: part.id, task_id: task.id });
+            const l = await insert("craft_links", { ...fixtures.craft_links, part_id: part.id, segment_id: segment.id });
+            const session = await makeSession(a.id, project.id, "2026-11-08");
+            const note = await insert("craft_notes", { ...fixtures.craft_notes, part_id: part.id, session_id: session.id });
+            await insert("craft_sitting_details", { ...fixtures.craft_sitting_details, session_id: session.id, part_id: part.id });
+            const yarn = await insert("craft_yarns", { ...fixtures.craft_yarns, part_id: part.id });
+            const row = await insert("task_checklist_items", { user_id: a.id, task_id: task.id, text: "Keep tick", craft_part_id: part.id, craft_row: 1, is_done: true });
+            assert.ifError((await admin.from("craft_projects").update({ active_part_id: part.id }).eq("project_id", project.id)).error);
+            assert.ifError((await admin.from("craft_timers").update({ part_id: part.id }).eq("user_id", a.id)).error);
+            try {
+                assert.ifError((await client.from("craft_parts").delete().eq("id", part.id)).error);
+                assert.deepEqual((await admin.from("craft_links").select("part_id,segment_id").eq("id", l.id).single()).data, { part_id: null, segment_id: null });
+                for (const [table, pk, id] of [["craft_notes", "id", note.id], ["craft_sitting_details", "session_id", session.id], ["craft_yarns", "id", yarn.id], ["craft_timers", "user_id", a.id]]) {
+                    const result = await admin.from(table).select("part_id").eq(pk, id).single();
+                    assert.ifError(result.error); assert.equal(result.data.part_id, null);
+                }
+                assert.equal((await admin.from("craft_projects").select("active_part_id").eq("project_id", project.id).single()).data.active_part_id, null);
+                assert.deepEqual((await admin.from("task_checklist_items").select("craft_part_id,craft_row,is_done").eq("id", row.id).single()).data, { craft_part_id: null, craft_row: null, is_done: true });
+                assert.equal((await admin.from("work_sessions").select("minutes").eq("id", session.id).single()).data.minutes, 20);
+            } finally { await admin.from("craft_notes").delete().eq("id", note.id); }
+        });
+        for (const target of ["segment", "link", "session", "task"]) {
+            await test(`${role}: SET NULL ${target} with companion reference present`, async () => {
+                const part = await makePart(a.id, project.id, "FR2 companion");
+                const t = await insert("tasks", { user_id: a.id, project_id: project.id, title: "FR2 companion" });
+                const segment = await insert("craft_segments", { ...fixtures.craft_segments, part_id: part.id, task_id: t.id });
+                const l = await insert("craft_links", { ...fixtures.craft_links, part_id: part.id, segment_id: segment.id });
+                const instruction = await insert("craft_instructions", { ...fixtures.craft_instructions, part_id: part.id, link_id: l.id });
+                const session = await makeSession(a.id, project.id, "2026-11-08");
+                const note = await insert("craft_notes", { ...fixtures.craft_notes, part_id: part.id, session_id: session.id });
+                const [table, id, child, pk, childId, field, companion, expected] = {
+                    segment: ["craft_segments", segment.id, "craft_links", "id", l.id, "segment_id", "part_id", part.id],
+                    link: ["craft_links", l.id, "craft_instructions", "id", instruction.id, "link_id", "part_id", part.id],
+                    session: ["work_sessions", session.id, "craft_notes", "id", note.id, "session_id", "part_id", part.id],
+                    task: ["tasks", t.id, "craft_segments", "id", segment.id, "task_id", "part_id", part.id],
+                }[target];
+                assert.ifError((await client.from(table).delete().eq("id", id)).error);
+                assert.deepEqual((await admin.from(child).select(`${field},${companion}`).eq(pk, childId).single()).data, { [field]: null, [companion]: expected });
+                await admin.from("craft_notes").delete().eq("id", note.id);
+            });
+        }
+    }
+    assert.ifError((await admin.from("craft_projects").update({ active_part_id: p.id }).eq("project_id", project.id)).error);
+    assert.ifError((await admin.from("craft_timers").update({ part_id: p.id }).eq("user_id", a.id)).error);
+    for (const [field, value] of [["name", "Renamed"], ["sort_order", 9]]) {
+        await test(`segment ${field} edit succeeds while unchanged task is locked`, async () => {
+            const output = await childTaskRace(`SELECT id FROM tasks WHERE id='${task.id}' FOR NO KEY UPDATE;`,
+                `UPDATE craft_segments SET ${field}=${typeof value === "string" ? `'${value}'` : value} WHERE id='${seg.id}';`, "SELECT 1;");
+            assert.doesNotMatch(output, /ERROR:/);
+        });
+    }
+    await test("segment task change still rejects a different project", async () => {
+        const { error } = await admin.from("craft_segments").update({ task_id: task2.id }).eq("id", seg.id);
+        assert.equal(error?.code, "23503");
+    });
     await test("SET NULL: segment deletion preserves links", async () => { const { error } = await admin.from("craft_segments").delete().eq("id", seg.id); assert.ifError(error); const { data } = await admin.from("craft_links").select("segment_id").eq("id", link.id).single(); assert.equal(data.segment_id, null); });
     await test("SET NULL: link deletion preserves instructions", async () => { const { error } = await admin.from("craft_links").delete().eq("id", link.id); assert.ifError(error); const { data } = await admin.from("craft_instructions").select("link_id").eq("part_id", p.id).single(); assert.equal(data.link_id, null); });
     await test("SET NULL: task deletion preserves segments", async () => { const t = await insert("tasks", { user_id: a.id, project_id: project.id, title: "Delete task" }); const sg = await insert("craft_segments", { ...fixtures.craft_segments, task_id: t.id }); assert.ifError((await admin.from("tasks").delete().eq("id", t.id)).error); assert.equal((await admin.from("craft_segments").select("task_id").eq("id", sg.id).single()).data.task_id, null); });
@@ -353,6 +430,9 @@ UPDATE craft_parts SET project_id='${project2.id}' WHERE id='${p.id}'; ROLLBACK;
         psql(down);
         assert.equal(psql("SELECT count(*) FROM pg_trigger WHERE tgname='trg_tasks_guard_project_move'"), "1");
         assert.equal(fingerprint(), before);
+        assert.equal(psql("SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'craft_%'"), "0");
+        assert.equal(psql("SELECT count(*) FROM pg_proc WHERE pronamespace='public'::regnamespace AND (proname LIKE 'craft_%' OR proname='tasks_guard_project_move_with_craft')"), "0");
+        assert.equal(psql("SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='task_checklist_items' AND column_name IN ('craft_part_id','craft_row')"), "0");
         psql(migration);
         assert.equal(fingerprint(), before);
         assert.equal(psql("SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'craft_%'"), "9");

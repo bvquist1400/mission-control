@@ -18,6 +18,7 @@ DROP TABLE craft_timers;
 DROP TABLE craft_segments;
 DROP TABLE craft_parts;
 DROP TABLE craft_projects;
+-- Reference-change flags live inside this function; no helper objects remain.
 DROP FUNCTION craft_check_ownership();
 COMMIT;
 NOTIFY pgrst, 'reload schema';
