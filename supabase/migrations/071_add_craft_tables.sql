@@ -261,12 +261,10 @@ BEGIN
       RAISE EXCEPTION 'craft link must belong to the same user and project' USING ERRCODE = '23503';
     END IF;
   END IF;
-  -- During a project CASCADE, optional links are nulled after the project has
-  -- disappeared. Let that referential cleanup finish (same exception as 059).
+  -- Project FKs all CASCADE: referential cleanup never changes project_id.
+  -- A changed project must be owned, even when RLS hides the referenced row.
   IF project_ref IS NOT NULL AND project_changed AND NOT EXISTS (SELECT 1 FROM projects WHERE id = project_ref AND user_id = owner_id) THEN
-    IF TG_OP <> 'UPDATE' OR EXISTS (SELECT 1 FROM projects WHERE id = project_ref) THEN
-      RAISE EXCEPTION 'craft project must belong to the same user' USING ERRCODE = '23503';
-    END IF;
+    RAISE EXCEPTION 'craft project must belong to the same user' USING ERRCODE = '23503';
   END IF;
   RETURN NEW;
 END;

@@ -14,7 +14,7 @@ const admin = createClient(url, key, { auth: { persistSession: false, autoRefres
 const migration = readFileSync(new URL("../supabase/migrations/071_add_craft_tables.sql", import.meta.url), "utf8");
 const down = readFileSync(new URL("../supabase/rollbacks/071_add_craft_tables.down.sql", import.meta.url), "utf8");
 const psql = (sql) => execFileSync("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"], { input: sql, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
-const asyncSql = (sql) => new Promise(resolve => { const child = spawn("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"]); let stdout = "", stderr = ""; child.stdout.on("data", c => stdout += c); child.stderr.on("data", c => stderr += c); child.on("close", code => resolve({ code, stdout, stderr })); child.stdin.end(sql); });
+const asyncSql = (sql, dbUser = "postgres") => new Promise(resolve => { const child = spawn("docker", ["exec", "-i", container, "psql", "-U", dbUser, "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"]); let stdout = "", stderr = ""; child.stdout.on("data", c => stdout += c); child.stderr.on("data", c => stderr += c); child.on("close", code => resolve({ code, stdout, stderr })); child.stdin.end(sql); });
 // Interactive sessions make the reviewed lock order reproducible, without timing luck.
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 function connection(label) {
@@ -150,6 +150,30 @@ try {
             row.user_id = b.id;
             row.project_id = project.id;
         } await rejects(table, row); });
+    }
+    // Keep vulnerable successful moves inside rolled-back transactions so the
+    // fail-before run cannot contaminate later fixtures or hit a unique-key clash.
+    for (const role of ["authenticated", "service_role"]) {
+        for (const [table, setup, predicate] of [
+            ["craft_notes", `INSERT INTO craft_notes(user_id,project_id,text) VALUES ('${a.id}','${project.id}','Bare move');`, "text='Bare move'"],
+            ["craft_yarns", `INSERT INTO craft_yarns(user_id,project_id,name) VALUES ('${a.id}','${project.id}','Bare move');`, "name='Bare move'"],
+            ["craft_timers", `UPDATE craft_timers SET part_id=NULL WHERE user_id='${a.id}';`, `user_id='${a.id}'`],
+            ["craft_projects", `UPDATE craft_projects SET active_part_id=NULL WHERE project_id='${project.id}';`, `project_id='${project.id}'`],
+        ]) {
+            await test(`${table}: bare project move to another user rejected for ${role} (23503)`, async () => {
+                const result = await asyncSql(`\\set VERBOSITY verbose
+BEGIN; ${setup}
+SET LOCAL ROLE ${role}; SET LOCAL request.jwt.claim.sub='${a.id}'; SET LOCAL row_security=on;
+SELECT count(*) FROM projects WHERE id='${foreign.id}';
+SELECT count(*) FROM ${table} WHERE user_id='${a.id}' AND ${predicate};
+UPDATE ${table} SET project_id='${foreign.id}' WHERE user_id='${a.id}' AND ${predicate} RETURNING 'moved-to-foreign-project';
+ROLLBACK;`);
+                assert.deepEqual(result.stdout.trim().split("\n").slice(0, 2), [role === "authenticated" ? "0" : "1", "1"], "owner sees its row; only service_role sees the foreign project");
+                assert.match(result.stderr, /23503/, result.stderr || result.stdout);
+                assert.match(result.stderr, /craft project must belong to the same user/);
+                assert.equal(result.code, 3);
+            });
+        }
     }
     for (const table of ["craft_segments", "craft_timers", "craft_sitting_details", "craft_notes", "craft_links", "craft_instructions", "craft_yarns"]) {
         await test(`${table}: cross-user part refused`, async () => { await rejects(table, { ...fixtures[table], part_id: fp.id }); });
@@ -424,6 +448,49 @@ UPDATE craft_parts SET project_id='${project2.id}' WHERE id='${p.id}'; ROLLBACK;
         assert.equal(saved.craft_row, null);
         assert.equal(saved.craft_part_id, null);
     });
+    for (const role of ["authenticated", "service_role"]) {
+        for (const target of ["project", "auth user"]) {
+            await test(`${role}: ${target} deletion cascades all craft tables`, async () => {
+                const ids = Array.from({ length: 7 }, () => randomUUID());
+                const [proj, part, task, segment, link, session, item] = ids;
+                // Auth deletion is normally an admin operation. Transaction-local
+                // grants and an owner-only policy let both roles exercise FK cleanup;
+                // ROLLBACK removes them and restores the user and all fixtures.
+                const grants = target === "auth user" ? `GRANT USAGE ON SCHEMA auth TO authenticated, service_role; GRANT SELECT, DELETE ON auth.users TO authenticated, service_role; CREATE POLICY craft_fr3_auth_delete ON auth.users TO authenticated USING (id='${a.id}'::uuid);` : "";
+                const deletion = target === "project" ? `DELETE FROM projects WHERE id='${proj}';` : `DELETE FROM auth.users WHERE id='${a.id}';`;
+                const result = await asyncSql(`\\set VERBOSITY verbose
+BEGIN;
+INSERT INTO projects(id,user_id,name) VALUES ('${proj}','${a.id}','FR3 cascade');
+INSERT INTO craft_parts(id,user_id,project_id,name,total_rows) VALUES ('${part}','${a.id}','${proj}','Body',1);
+INSERT INTO craft_projects(user_id,project_id,craft,active_part_id) VALUES ('${a.id}','${proj}','knit','${part}');
+INSERT INTO tasks(id,user_id,project_id,title) VALUES ('${task}','${a.id}','${proj}','Keep tick');
+INSERT INTO craft_segments(id,user_id,part_id,task_id,name,from_row,to_row) VALUES ('${segment}','${a.id}','${part}','${task}','Band',1,1);
+INSERT INTO craft_links(id,user_id,project_id,part_id,segment_id,kind,title,url) VALUES ('${link}','${a.id}','${proj}','${part}','${segment}','web','Pattern','https://example.test');
+INSERT INTO craft_instructions(user_id,part_id,from_row,to_row,kind,text,link_id) VALUES ('${a.id}','${part}',1,1,'instruction','Knit','${link}');
+INSERT INTO work_sessions(id,user_id,project_id,session_date,minutes) VALUES ('${session}','${a.id}','${proj}','2026-11-08',20);
+INSERT INTO craft_sitting_details(user_id,session_id,part_id,from_row,to_row) VALUES ('${a.id}','${session}','${part}',1,1);
+INSERT INTO craft_notes(user_id,project_id,part_id,session_id,text) VALUES ('${a.id}','${proj}','${part}','${session}','Cascade');
+INSERT INTO craft_yarns(user_id,project_id,part_id,name) VALUES ('${a.id}','${proj}','${part}','Wool');
+INSERT INTO craft_timers(user_id,project_id,part_id,sitting_started_at,start_row) VALUES ('${a.id}','${proj}','${part}','2026-11-08T12:00:00Z',1);
+INSERT INTO task_checklist_items(id,user_id,task_id,text,craft_part_id,craft_row,is_done) VALUES ('${item}','${a.id}','${task}','Row 1','${part}',1,true);
+INSERT INTO work_session_items(user_id,session_id,checklist_item_id) VALUES ('${a.id}','${session}','${item}');
+${grants}
+SET LOCAL ROLE ${role}; SET LOCAL request.jwt.claim.sub='${a.id}'; SET LOCAL row_security=on;
+${deletion}
+RESET ROLE;
+SELECT ${["craft_projects", "craft_parts", "craft_timers", "craft_notes", "craft_links", "craft_yarns"].map(table => `(SELECT count(*) FROM ${table} WHERE project_id='${proj}')`).concat([
+                    `(SELECT count(*) FROM craft_segments WHERE part_id='${part}')`,
+                    `(SELECT count(*) FROM craft_instructions WHERE part_id='${part}')`,
+                    `(SELECT count(*) FROM craft_sitting_details WHERE session_id='${session}')`,
+                    `(SELECT count(*) FROM work_sessions WHERE id='${session}')`,
+                ]).join("+")};
+${target === "project" ? `SELECT is_done AND craft_part_id IS NULL AND craft_row IS NULL FROM task_checklist_items WHERE id='${item}';` : `SELECT count(*) FROM auth.users WHERE id='${a.id}';`}
+ROLLBACK;`, target === "auth user" ? "supabase_admin" : "postgres");
+                assert.equal(result.code, 0, result.stderr);
+                assert.equal(result.stdout.trim(), target === "project" ? "0\nt" : "0\n0");
+            });
+        }
+    }
     await test("071 down then 071 applies cleanly; existing ticks, sessions, minutes and 059 guard survive", () => {
         const fingerprint = () => psql(`SELECT md5(coalesce(string_agg(row_to_json(s)::text,',' ORDER BY s.id),'')) FROM work_sessions s; SELECT md5(coalesce(string_agg((to_jsonb(i)-'craft_part_id'-'craft_row')::text,',' ORDER BY i.id),'')) FROM task_checklist_items i; SELECT md5(coalesce(string_agg((id::text||coalesce(actual_minutes::text,'')),',' ORDER BY id),'')) FROM tasks;`);
         const before = fingerprint();
