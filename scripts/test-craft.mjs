@@ -8,6 +8,9 @@ import ts from "typescript";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { buildCraftView } from "../src/lib/craft.ts";
+import * as craftModel from "../src/lib/craft.ts";
+import * as craftLoader from "../src/lib/craft/loader.ts";
+import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime.js";
 import { writeInternalAuthContext } from "../src/lib/supabase/internal-auth.ts";
 import { NextRequest } from "next/server";
 import { GET as detailGet } from "../src/app/api/craft/[projectId]/route.ts";
@@ -203,6 +206,183 @@ await test("CSS pattern first: big instruction text wraps, number is medium, tim
     assert.match(rule(".craft-timer"), /display: flex;.*min-height: 64px;/);
     assert.doesNotMatch(rule(".craft-timer"), /text-align: center/);
     assert.doesNotMatch(css, /#[0-9a-f]{3,8}\b|rgba?\(|oklch\(/i);
+});
+// Project switcher (Brent 11/11, "Dropdown by the title"): one list of every craft project, the URL is the state.
+const scarfId = "11111111-1111-4111-8111-111111111111", blanketId = "22222222-2222-4222-8222-222222222222", emptyId = "33333333-3333-4333-8333-333333333333", foreignId = "44444444-4444-4444-8444-444444444444";
+const listInput = () => {
+    const owned = (rowsList, project_id) => rowsList.map((row) => ({ ...row, project_id }));
+    return {
+        craft_projects: [{ project_id: scarfId, craft: "knit", active_part_id: null }, { project_id: blanketId, craft: "crochet", active_part_id: null }, { project_id: emptyId, craft: "other", active_part_id: null }],
+        projects: [{ id: scarfId, name: "Personal — Test Scarf" }, { id: blanketId, name: "Personal — Test Blanket" }, { id: emptyId, name: "Personal — Empty Craft" }],
+        parts: [...owned(scarf.parts, scarfId), ...owned(blanket.parts, blanketId)],
+        items: [...scarf.items, ...blanket.items].filter((item) => !item.is_done),
+    };
+};
+await test("Switcher list: one entry per craft project with its active part's row word and current row", () => {
+    const list = craftModel.buildCraftProjectList(listInput());
+    assert.deepEqual(list, [
+        { id: emptyId, name: "Personal — Empty Craft", craft: "other", progress: null },
+        { id: blanketId, name: "Personal — Test Blanket", craft: "crochet", progress: "row 59" },
+        { id: scarfId, name: "Personal — Test Scarf", craft: "knit", progress: "row 119" },
+    ]);
+    assert.deepEqual(list.map(craftModel.craftProjectOptionLabel), ["Personal — Empty Craft", "Personal — Test Blanket · row 59", "Personal — Test Scarf · row 119"]);
+});
+await test("Switcher list: rounds say round, a finished active part says done, all finished says done", () => {
+    const data = listInput();
+    data.craft_projects[1].active_part_id = "Border";
+    data.craft_projects[0].active_part_id = "Body";
+    data.items = data.items.filter((item) => item.craft_part_id !== "Body");
+    assert.deepEqual(craftModel.buildCraftProjectList(data).map((p) => p.progress), [null, "round 1", "done"]);
+    data.craft_projects[0].active_part_id = null;
+    assert.equal(craftModel.buildCraftProjectList(data).find((p) => p.id === scarfId).progress, "done");
+});
+await test("Switcher list: matches the screen's own current row (only unticked rows are read for the list)", () => {
+    for (const [data, id] of [[scarf, scarfId], [blanket, blanketId]]) {
+        const fromList = craftModel.buildCraftProjectList(listInput()).find((p) => p.id === id).progress;
+        const part = buildCraftView(data).active_part;
+        assert.equal(fromList, `${part.row_word} ${part.current_row}`);
+    }
+});
+await test("Switcher list: a craft project whose project row is not visible is left out", () => {
+    const data = listInput();
+    data.projects = data.projects.filter((p) => p.id !== blanketId);
+    assert.deepEqual(craftModel.buildCraftProjectList(data).map((p) => p.id), [emptyId, scarfId]);
+});
+await test("Switcher navigation target: /craft/<projectId>, nothing for the current one", async () => {
+    const { switchCraftProject } = await import("../src/components/craft/CraftProjectSwitcher.tsx");
+    const pushed = [], router = { push: (href) => pushed.push(href) };
+    assert.equal(switchCraftProject(router, scarfId, blanketId), `/craft/${blanketId}`);
+    assert.equal(switchCraftProject(router, scarfId, scarfId), null);
+    assert.equal(switchCraftProject(router, scarfId, ""), null);
+    assert.deepEqual(pushed, [`/craft/${blanketId}`]);
+    assert.equal(craftModel.craftProjectHref(emptyId), `/craft/${emptyId}`);
+});
+const routerStub = { push() { }, replace() { }, refresh() { }, back() { }, forward() { }, prefetch() { } };
+const renderWithRouter = (view) => renderToStaticMarkup(createElement(AppRouterContext.Provider, { value: routerStub }, createElement(CraftScreen, { view })));
+const withProjects = (data, id, projects) => ({ ...buildCraftView({ ...data, project: { id, name: projects.find((p) => p.id === id)?.name ?? "Sample" } }), projects });
+await test("SSR switcher: one craft project keeps the plain title, no select and no caret", () => {
+    const one = craftModel.buildCraftProjectList(listInput()).filter((p) => p.id === scarfId);
+    for (const view of [withProjects(scarf, scarfId, one), { ...buildCraftView(scarf), projects: [] }, buildCraftView(scarf)]) {
+        const html = renderWithRouter(view);
+        assert.match(html, /<div class="craft-project"><p class="craft-eyebrow">Knitting<\/p><h2>[^<]+<\/h2>/);
+        assert.doesNotMatch(html, /<select|craft-switch|▾/);
+    }
+});
+await test("SSR switcher: two or more projects make the title a labelled select listing each with its row, current marked", () => {
+    const list = craftModel.buildCraftProjectList(listInput());
+    const html = renderWithRouter(withProjects(blanket, blanketId, list));
+    const block = html.match(/<div class="craft-switch">[\s\S]*?<\/select><\/div>/)?.[0];
+    assert.ok(block, "switcher missing");
+    assert.match(block, /^<div class="craft-switch"><h2>Personal — Test <span class="craft-switch-tail">Blanket<span class="craft-switch-caret" aria-hidden="true">▾<\/span><\/span><\/h2><select aria-label="Switch craft project">/);
+    const options = [...block.matchAll(/<option value="([^"]+)"( selected="")?>([^<]*)<\/option>/g)].map((m) => [m[1], Boolean(m[2]), m[3]]);
+    assert.deepEqual(options, [
+        [emptyId, false, "Personal — Empty Craft"],
+        [blanketId, true, "Personal — Test Blanket · row 59 (current)"],
+        [scarfId, false, "Personal — Test Scarf · row 119"],
+    ]);
+    assert.equal((html.match(/<select/g) ?? []).length, 1);
+    assert.equal((html.match(/<h2>/g) ?? []).length, 1 + 4, "one title heading plus the four inside headings");
+    assert.doesNotMatch(html, /<button|<input|<textarea|<form|disabled=|Start timer|Log sitting/);
+});
+await test("SSR switcher: the shown project is always an option even if the list missed it", () => {
+    const list = craftModel.buildCraftProjectList(listInput()).filter((p) => p.id !== blanketId);
+    const html = renderWithRouter({ ...buildCraftView({ ...blanket, project: { id: blanketId, name: "Personal — Test Blanket" } }), projects: list });
+    assert.match(html, new RegExp(`<select aria-label="Switch craft project"><option value="${blanketId}" selected="">Personal — Test Blanket \\(current\\)</option>`));
+});
+await test("SSR switcher: the caret stays with a short last word; a very long word is left free to wrap", () => {
+    const list = craftModel.buildCraftProjectList(listInput());
+    const title = (name) => renderWithRouter({ ...buildCraftView({ ...blanket, project: { id: blanketId, name } }), projects: list }).match(/<div class="craft-switch"><h2>([\s\S]*?)<\/h2>/)[1];
+    const caret = '<span class="craft-switch-caret" aria-hidden="true">▾</span>';
+    assert.equal(title("Scarf"), `<span class="craft-switch-tail">Scarf${caret}</span>`);
+    const long = "x".repeat(340);
+    assert.equal(title(`Personal — ${long}`), `Personal — ${long}<span class="craft-switch-tail">${caret}</span>`);
+});
+await test("CSS switcher: invisible select covers the title, 16px (no iOS zoom), visible focus, 44px on touch, tokens only", () => {
+    const rule = (sel) => css.match(new RegExp(`^${sel.replace(/[.[\]():]/g, "\\$&")} \\{([^}]*)\\}`, "m"))?.[1] ?? "";
+    assert.match(rule(".craft-switch"), /position: relative;/);
+    assert.match(rule(".craft-switch select"), /position: absolute; inset: 0; width: 100%; height: 100%;.*opacity: 0; font-size: 16px; cursor: pointer;/);
+    assert.match(css, /\.craft-switch:has\(select:focus-visible\) \{ outline: 2px solid var\(--focus-ring, var\(--accent-text\)\); outline-offset: 2px; \}/);
+    assert.match(css, /\.craft-switch-tail \{ white-space: nowrap; \}/);
+    assert.match(css, /@media \(pointer: coarse\) \{ \.craft-switch \{ display: flex; align-items: center; min-height: 44px; \} \}/);
+    assert.doesNotMatch(css, /font-size:\s*(9|9\.5|10|10\.5|11|11\.5)px/);
+});
+// A fake PostgREST client over in-memory rows: applies eq/in filters, records every query.
+function fakeDb(tables) {
+    const log = [];
+    return { log, from(table) {
+            const entry = { table, cols: null, filters: [] }, conds = [];
+            log.push(entry);
+            const rows = () => (tables[table] ?? []).filter((row) => conds.every((cond) => cond(row)));
+            const q = {
+                select(cols) { entry.cols = cols; return q; },
+                eq(col, val) { entry.filters.push(`eq ${col}`); conds.push((row) => row[col] === val); return q; },
+                in(col, vals) { entry.filters.push(`in ${col}`); conds.push((row) => vals.includes(row[col])); return q; },
+                order() { return q; }, limit() { return q; },
+                range(from, to) { return Promise.resolve({ data: rows().slice(from, to + 1), error: null }); },
+                single() { const found = rows(); return Promise.resolve(found.length === 1 ? { data: found[0], error: null } : { data: null, error: { code: "PGRST116", message: "none" } }); },
+                maybeSingle() { return Promise.resolve({ data: rows()[0] ?? null, error: null }); },
+                then(resolve, reject) { return Promise.resolve({ data: rows(), error: null }).then(resolve, reject); },
+            };
+            return q;
+        } };
+}
+const dbRows = () => {
+    const mine = (row) => ({ ...row, user_id: "user" });
+    const parts = [...scarf.parts.map((p) => ({ ...p, project_id: scarfId })), ...blanket.parts.map((p) => ({ ...p, project_id: blanketId }))].map(mine);
+    return {
+        projects: [{ id: scarfId, name: "Personal — Test Scarf" }, { id: blanketId, name: "Personal — Test Blanket" }, { id: foreignId, name: "Someone else" }].map(mine).map((p) => p.id === foreignId ? { ...p, user_id: "other" } : p),
+        craft_projects: [{ project_id: scarfId, craft: "knit", gear: null, active_part_id: null, created_at: "2026-11-01T00:00:00Z" }, { project_id: blanketId, craft: "crochet", gear: null, active_part_id: null, created_at: "2026-11-02T00:00:00Z" }, { project_id: foreignId, craft: "knit", gear: null, active_part_id: null, created_at: "2026-11-03T00:00:00Z", user_id: "other" }].map((row) => ({ user_id: "user", ...row })),
+        craft_parts: [...parts, { ...part("Foreign", 4), project_id: foreignId, user_id: "other" }],
+        task_checklist_items: [...scarf.items, ...blanket.items].map(mine),
+        craft_segments: [...scarf.segments, ...blanket.segments].map(mine),
+        work_sessions: [], work_session_items: [], craft_sitting_details: [], craft_timers: [],
+    };
+};
+await test("Loader: the switcher list is 4 reads however many projects (no per-project reads), all filtered by user", async () => {
+    const db = fakeDb(dbRows());
+    const list = await craftLoader.loadCraftProjects(db, "user");
+    assert.deepEqual(list.map((p) => [p.name, p.progress]), [["Personal — Test Blanket", "row 59"], ["Personal — Test Scarf", "row 119"]]);
+    assert.deepEqual(db.log.map((q) => q.table), ["craft_projects", "projects", "craft_parts", "task_checklist_items"]);
+    for (const q of db.log)
+        assert.ok(q.filters.includes("eq user_id"), `${q.table} not filtered by user`);
+    assert.ok(db.log[3].filters.includes("eq is_done"), "only unticked rows are read for the list");
+    assert.ok(!db.log[3].cols.includes("text"), "the list never reads row text");
+    const rows = dbRows();
+    for (let i = 0; i < 5; i++) {
+        const id = `5555555${i}-5555-4555-8555-555555555555`;
+        rows.projects.push({ id, name: `More ${i}`, user_id: "user" });
+        rows.craft_projects.push({ project_id: id, craft: "knit", gear: null, active_part_id: null, created_at: "2026-11-04T00:00:00Z", user_id: "user" });
+    }
+    const more = fakeDb(rows);
+    assert.equal((await craftLoader.loadCraftProjects(more, "user")).length, 7);
+    assert.equal(more.log.length, 4);
+});
+await test("Real GET detail and last-used carry the projects list, with the same auth path", async () => {
+    const detail = await detailGet(request(fakeDb(dbRows()), `/api/craft/${blanketId}`), { params: Promise.resolve({ projectId: blanketId }) });
+    assert.equal(detail.status, 200);
+    const body = await detail.json();
+    assert.equal(body.project.id, blanketId);
+    assert.deepEqual(body.projects, [{ id: blanketId, name: "Personal — Test Blanket", craft: "crochet", progress: "row 59" }, { id: scarfId, name: "Personal — Test Scarf", craft: "knit", progress: "row 119" }]);
+    const last = await lastGet(request(fakeDb(dbRows()), "/api/craft"), { params: Promise.resolve({}) });
+    assert.equal(last.status, 200);
+    assert.equal((await last.json()).projects.length, 2);
+});
+await test("Real GET: the view's own 404 wins when the list read fails too; a list failure alone is a 500", async () => {
+    const res = await detailGet(request(errorClient("PGRST116")), { params: Promise.resolve({ projectId: scarfId }) });
+    assert.equal(res.status, 404);
+    const rows = dbRows();
+    const db = fakeDb(rows), from = db.from.bind(db);
+    db.from = (table) => { const q = from(table); if (table === "craft_projects") q.range = () => Promise.resolve({ data: null, error: { code: "XX000", message: "list failed" } }); return q; };
+    const original = console.error;
+    console.error = () => { };
+    try {
+        const failed = await detailGet(request(db, `/api/craft/${scarfId}`), { params: Promise.resolve({ projectId: scarfId }) });
+        assert.equal(failed.status, 500);
+        assert.equal(failed.headers.get("cache-control"), "no-store");
+    }
+    finally {
+        console.error = original;
+    }
 });
 console.log(`\nCraft: ${passed} passed, ${failed} failed`);
 if (failed)

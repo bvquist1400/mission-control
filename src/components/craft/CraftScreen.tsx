@@ -1,9 +1,11 @@
 import Link from "next/link";
-import type { CraftView } from "@/lib/craft";
+import type { CraftProjectOption, CraftView } from "@/lib/craft";
 import { buttonClasses } from "@/components/ui/Button";
+import { CraftProjectSwitcher } from "@/components/craft/CraftProjectSwitcher";
 import "./craft.css";
 
-export function CraftScreen({ view }: { view: CraftView }) {
+// projects comes from the loader (GET /api/craft); with fewer than two the title is plain text.
+export function CraftScreen({ view }: { view: CraftView & { projects?: CraftProjectOption[] } }) {
   const part = view.active_part;
   const allFinished = !part && view.parts.length > 0;
   // The current row's own checklist text leads the screen; row_label stands in when that row has no item.
@@ -18,7 +20,7 @@ export function CraftScreen({ view }: { view: CraftView }) {
       </header>
       <div className="craft-columns">
         <section className="craft-front" aria-label="Current progress">
-          <div className="craft-project"><p className="craft-eyebrow">{view.craft === "knit" ? "Knitting" : view.craft === "crochet" ? "Crochet" : "Craft"}</p><h2>{view.project.name}</h2>{view.gear && <p>{view.gear}</p>}</div>
+          <div className="craft-project"><p className="craft-eyebrow">{view.craft === "knit" ? "Knitting" : view.craft === "crochet" ? "Crochet" : "Craft"}</p>{(view.projects?.length ?? 0) > 1 ? <CraftProjectSwitcher currentId={view.project.id} currentName={view.project.name} projects={view.projects ?? []} /> : <h2>{view.project.name}</h2>}{view.gear && <p>{view.gear}</p>}</div>
           <div className="craft-part"><span className="craft-eyebrow">{allFinished ? "Project progress" : "Active part"}</span><h3>{part?.name ?? (allFinished ? "All parts finished" : "No parts yet")}</h3>{part?.stitch_count !== null && part?.stitch_count !== undefined && <p>{part.stitch_count} stitches</p>}</div>
           {part ? (
             <section className="craft-pf" aria-label="Current row instructions" data-quarter={part.quarter > 0 ? part.quarter : undefined}>

@@ -1,7 +1,7 @@
 /** Server-only reads using the caller's client, with RLS and explicit owner filters. */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/supabase.generated";
-import { buildCraftView, type CraftInput } from "@/lib/craft";
+import { buildCraftProjectList, buildCraftView, type CraftInput, type CraftProjectListInput, type CraftScreenView } from "@/lib/craft";
 import { chunks, pagedSelect } from "@/lib/supabase/batch";
 
 type Tables = Database["public"]["Tables"];
@@ -23,7 +23,34 @@ async function lastProject(client: SupabaseClient<Database>, userId: string): Pr
   return latest[0]?.project_id ?? projects[0].project_id;
 }
 
-export async function loadCraftView(client: SupabaseClient<Database>, userId: string, projectId?: string, now = new Date()) {
+/** Every craft project the caller owns, for the title switcher: 4 reads in all, however many projects. */
+export async function loadCraftProjects(client: SupabaseClient<Database>, userId: string) {
+  const crafts = await pagedSelect<CraftProjectListInput["craft_projects"][number]>((from, to) => client.from("craft_projects")
+    .select("project_id, craft, active_part_id").eq("user_id", userId).order("project_id").range(from, to));
+  if (!crafts.length) return [];
+  const projectIds = chunks(crafts.map((craft) => craft.project_id));
+  const [projects, parts] = await Promise.all([
+    Promise.all(projectIds.map((ids) => pagedSelect<CraftProjectListInput["projects"][number]>((from, to) => client.from("projects")
+      .select("id, name").eq("user_id", userId).in("id", ids).order("id").range(from, to)))).then((pages) => pages.flat()),
+    Promise.all(projectIds.map((ids) => pagedSelect<CraftProjectListInput["parts"][number]>((from, to) => client.from("craft_parts")
+      .select("id, project_id, name, sort_order, total_rows, row_word, quarters, quarter, quarter_row, ridges, stitch_count")
+      .eq("user_id", userId).in("project_id", ids).order("id").range(from, to)))).then((pages) => pages.flat()),
+  ]);
+  const items = (await Promise.all(chunks(parts.map((part) => part.id)).map((ids) => pagedSelect<CraftProjectListInput["items"][number]>((from, to) => client
+    .from("task_checklist_items").select("id, craft_part_id, craft_row, is_done").eq("user_id", userId).in("craft_part_id", ids)
+    .eq("is_done", false).order("id").range(from, to))))).flat();
+  return buildCraftProjectList({ craft_projects: crafts, projects, parts, items });
+}
+
+export async function loadCraftView(client: SupabaseClient<Database>, userId: string, projectId?: string, now = new Date()): Promise<CraftScreenView> {
+  // The list loads alongside the view; the view's own error (404 vs 500) wins when both fail.
+  const [view, projects] = await Promise.allSettled([loadOneCraftView(client, userId, projectId, now), loadCraftProjects(client, userId)]);
+  if (view.status === "rejected") throw view.reason;
+  if (projects.status === "rejected") throw projects.reason;
+  return { ...view.value, projects: projects.value };
+}
+
+async function loadOneCraftView(client: SupabaseClient<Database>, userId: string, projectId: string | undefined, now: Date) {
   const id = projectId ?? await lastProject(client, userId);
   const [projectResult, craftResult] = await Promise.all([
     client.from("projects").select("id, name").eq("user_id", userId).eq("id", id).single(),

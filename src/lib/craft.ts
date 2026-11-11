@@ -20,24 +20,37 @@ export interface CraftInput {
   server_now: string;
 }
 
+type ProgressItem = Pick<CraftItem, "craft_part_id" | "craft_row" | "is_done">;
+
+/** One part's progress from its ticks: the lowest unticked row is the current row. */
+function partProgress<P extends CraftPart>(part: P, items: ProgressItem[]) {
+  const rows = items.filter((item) => item.craft_part_id === part.id && item.craft_row !== null && item.craft_row <= part.total_rows);
+  const undone = rows.filter((item) => !item.is_done).map((item) => item.craft_row as number);
+  const current_row = undone.length ? Math.min(...undone) : part.total_rows + 1;
+  const finished = current_row > part.total_rows;
+  const ridge = part.ridges && !finished ? Math.ceil(current_row / 2) : null;
+  const row_word = part.row_word === "round" ? "round" : "row";
+  return {
+    ...part, row_word, current_row, finished, ridge,
+    row_label: finished ? "Finished" : `${row_word === "round" ? "Round" : "Row"} ${current_row}${ridge === null ? "" : ` · ridge ${ridge}`}`,
+    quarter: !finished && part.quarters && part.quarter_row === current_row ? part.quarter : 0,
+    done_rows: rows.filter((item) => item.is_done).length,
+  };
+}
+
+function sortedProgress<P extends CraftPart>(parts: P[], items: ProgressItem[]) {
+  return [...parts].sort((a, b) => a.sort_order - b.sort_order || a.id.localeCompare(b.id)).map((part) => partProgress(part, items));
+}
+
+/** The stored active part (even when finished), else the first unfinished part by sort order. */
+function pickActivePart<P extends { id: string; finished: boolean }>(parts: P[], activePartId: string | null) {
+  return parts.find((part) => part.id === activePartId) ?? parts.find((part) => !part.finished) ?? null;
+}
+
 export function buildCraftView(input: CraftInput) {
   const today = etDateOf(input.server_now);
-  const parts = [...input.parts].sort((a, b) => a.sort_order - b.sort_order || a.id.localeCompare(b.id)).map((part) => {
-    const rows = input.items.filter((item) => item.craft_part_id === part.id && item.craft_row !== null && item.craft_row <= part.total_rows);
-    const undone = rows.filter((item) => !item.is_done).map((item) => item.craft_row as number);
-    const current_row = undone.length ? Math.min(...undone) : part.total_rows + 1;
-    const finished = current_row > part.total_rows;
-    const ridge = part.ridges && !finished ? Math.ceil(current_row / 2) : null;
-    const row_word = part.row_word === "round" ? "round" : "row";
-    return {
-      ...part, row_word, current_row, finished, ridge,
-      row_label: finished ? "Finished" : `${row_word === "round" ? "Round" : "Row"} ${current_row}${ridge === null ? "" : ` · ridge ${ridge}`}`,
-      quarter: !finished && part.quarters && part.quarter_row === current_row ? part.quarter : 0,
-      done_rows: rows.filter((item) => item.is_done).length,
-    };
-  });
-  const active_part = parts.find((part) => part.id === input.craft_project.active_part_id)
-    ?? parts.find((part) => !part.finished) ?? null;
+  const parts = sortedProgress(input.parts, input.items);
+  const active_part = pickActivePart(parts, input.craft_project.active_part_id);
   const segments = active_part ? input.segments.filter((segment) => segment.part_id === active_part.id)
     .sort((a, b) => a.sort_order - b.sort_order || a.from_row - b.from_row || a.id.localeCompare(b.id))
     .map((segment) => ({
@@ -77,3 +90,29 @@ export function buildCraftView(input: CraftInput) {
   };
 }
 export type CraftView = ReturnType<typeof buildCraftView>;
+
+/** One entry per craft project for the title switcher: "row 61", "round 1", "done", or null with no parts. */
+export interface CraftProjectOption { id: string; name: string; craft: string; progress: string | null }
+export interface CraftProjectListInput {
+  craft_projects: Pick<Row<"craft_projects">, "project_id" | "craft" | "active_part_id">[];
+  projects: { id: string; name: string }[];
+  parts: (CraftPart & { project_id: string })[];
+  /** Unticked craft rows are enough: ticked ones never change the current row. */
+  items: ProgressItem[];
+}
+export function buildCraftProjectList(input: CraftProjectListInput): CraftProjectOption[] {
+  const names = new Map(input.projects.map((project) => [project.id, project.name]));
+  return input.craft_projects.flatMap((craft) => {
+    const name = names.get(craft.project_id);
+    if (name === undefined) return [];
+    const parts = sortedProgress(input.parts.filter((part) => part.project_id === craft.project_id), input.items);
+    const active = pickActivePart(parts, craft.active_part_id);
+    const progress = active ? (active.finished ? "done" : `${active.row_word} ${active.current_row}`) : parts.length ? "done" : null;
+    return [{ id: craft.project_id, name, craft: craft.craft, progress }];
+  }).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+}
+/** What the craft screen and GET /api/craft return: the view plus the switcher list. */
+export type CraftScreenView = CraftView & { projects: CraftProjectOption[] };
+export const craftProjectHref = (projectId: string) => `/craft/${projectId}`;
+export const craftProjectOptionLabel = (option: Pick<CraftProjectOption, "name" | "progress">) =>
+  option.progress ? `${option.name} · ${option.progress}` : option.name;

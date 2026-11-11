@@ -84,6 +84,7 @@ const { NextRequest } = await import("next/server.js");
 const { writeInternalAuthContext } = await import("../src/lib/supabase/internal-auth.ts");
 const craftRoute = await import("../src/app/api/craft/route.ts");
 const craftDetailRoute = await import("../src/app/api/craft/[projectId]/route.ts");
+const craftModule = await import("../src/lib/craft/loader.ts");
 const taskRoute = await import("../src/app/api/tasks/[id]/route.ts");
 try {
     const a = await user(), b = await user();
@@ -306,6 +307,18 @@ UPDATE craft_parts SET project_id='${project2.id}' WHERE id='${p.id}'; ROLLBACK;
     });
     const routeRequest = (client, path) => { const req = new NextRequest(`http://localhost${path}`); writeInternalAuthContext(req, { supabase: client, userId: a.id, user: { id: a.id }, authSource: "session" }); return req; };
     await test("GET /api/craft picks latest session (not newest craft row); RLS loader returns linked rows", async () => { const res = await craftRoute.GET(routeRequest(a.client, "/api/craft")); assert.equal(res.status, 200); const view = await res.json(); assert.equal(view.project.id, project.id); assert.equal(view.active_part.current_row, 2); assert.equal(view.recent_sittings[0].rows[0].row, 1); assert.equal(view.recent_sittings[0].detail.part_id, p.id); });
+    await test("GET craft: the title switcher lists only the caller's craft projects (RLS), with each current row", async () => {
+        const res = await craftDetailRoute.GET(routeRequest(a.client, `/api/craft/${project2.id}`), { params: Promise.resolve({ projectId: project2.id }) });
+        assert.equal(res.status, 200);
+        const { projects } = await res.json();
+        assert.deepEqual(projects.map(p => p.id).sort(), [project.id, project2.id].sort());
+        assert.deepEqual(projects.find(p => p.id === project.id), { id: project.id, name: "Craft local A", craft: "knit", progress: "row 2" });
+        assert.equal(projects.find(p => p.id === project2.id).craft, "crochet");
+        const listB = await craftModule.loadCraftProjects(b.client, b.id);
+        assert.ok(!listB.some(p => [project.id, project2.id].includes(p.id)), "the other user's list never shows A's projects");
+        const crafted = await craftModule.loadCraftProjects(b.client, a.id);
+        assert.deepEqual(crafted, [], "another user's client reads none of A's craft projects even when asking with A's id");
+    });
     await test("GET detail: another user's craft project is 404", async () => { const res = await craftDetailRoute.GET(routeRequest(a.client, `/api/craft/${foreign.id}`), { params: Promise.resolve({ projectId: foreign.id }) }); assert.equal(res.status, 404); });
     await test("GET fallback: no sessions chooses newest craft project; no projects gives 404", async () => { const empty = await user(); const req = () => { const r = new NextRequest("http://localhost/api/craft"); writeInternalAuthContext(r, { supabase: empty.client, userId: empty.id, user: { id: empty.id }, authSource: "session" }); return r; }; assert.equal((await craftRoute.GET(req())).status, 404); const ep = await insert("projects", { user_id: empty.id, name: "New" }); await insert("craft_projects", { user_id: empty.id, project_id: ep.id, craft: "other" }); const res = await craftRoute.GET(req()); assert.equal(res.status, 200); assert.equal((await res.json()).project.id, ep.id); });
     for (const [table, pk, id, patch] of [
