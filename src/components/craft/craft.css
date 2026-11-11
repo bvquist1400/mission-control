@@ -11,16 +11,29 @@
 .craft-part { padding: 12px 16px; border: 1px solid var(--stroke); background: var(--panel); }
 .craft-part h3 { font-size: 22px; font-weight: 700; }
 .craft-part p { font-size: 14px; color: var(--muted-foreground); }
-.craft-timer { padding: 24px 12px; margin-top: 14px; background: var(--panel); border: 1px solid var(--stroke); text-align: center; color: var(--muted-foreground); font-size: 14px; }
-.craft-row { padding: 28px 0; }
-.craft-number { font-family: var(--font-plex-cond); font-size: clamp(72px, 18vw, 112px); line-height: 1; font-weight: 700; font-variant-numeric: tabular-nums; }
-.craft-number > span { font-family: var(--font-plex-mono); font-size: 16px; font-weight: 400; color: var(--muted-foreground); margin-left: 12px; white-space: nowrap; }
-.craft-row-label { font-size: 20px; font-weight: 600; margin-top: 8px; }
-.craft-quarter { color: var(--accent-text); margin-top: 8px; }
-.craft-band-name { font-size: 22px; font-weight: 700; margin-top: 16px; }
+/* Pattern first (Brent 11/11): the current row's instructions are the biggest thing on the front. */
+.craft-pf { min-width: 0; margin-top: 14px; padding: 12px 14px 14px; border: 1px solid var(--stroke); border-left: 5px solid var(--accent); background: var(--panel); }
+.craft-pf-hd { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+.craft-pf-lab { font-family: var(--font-plex-mono); font-size: 11px; font-weight: 600; line-height: 1; letter-spacing: .08em; text-transform: uppercase; color: var(--muted-foreground); }
+.craft-pf-num { font-family: var(--font-plex-cond); font-size: 42px; font-weight: 700; line-height: .86; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.craft-pf-of { font-family: var(--font-plex-cond); font-size: 15px; font-weight: 600; line-height: 1; color: var(--muted-foreground); white-space: nowrap; }
+.craft-pf-ridge { font-family: var(--font-plex-mono); font-size: 12px; font-weight: 400; }
+.craft-pf-band { margin-top: 8px; font-family: var(--font-plex-mono); font-size: 12px; line-height: 1.3; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.craft-pf-band strong { font-weight: 600; color: var(--foreground); }
+.craft-quarter { display: inline-block; margin-top: 8px; padding: 5px 8px; background: var(--accent); color: var(--on-accent); font-family: var(--font-plex-cond); font-size: 15px; font-weight: 700; line-height: 1.1; }
+.craft-pf-now { margin-top: 12px; font-size: 27px; font-weight: 600; line-height: 1.27; overflow-wrap: anywhere; text-wrap: pretty; }
+.craft-pf-then { display: flex; flex-direction: column; gap: 9px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--stroke); }
+.craft-pf-then li { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; font-size: 14px; line-height: 1.38; color: var(--muted-foreground); }
+.craft-pf-then li > span { font-family: var(--font-plex-mono); font-size: 11px; font-weight: 600; line-height: 1.7; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
+.craft-pf-then li > p { min-width: 0; overflow-wrap: anywhere; }
+/* Phone width: two upcoming rows, or one while a part-row (quarter) is in progress. */
+.craft-pf-then li:nth-child(n+3), .craft-pf[data-quarter] .craft-pf-then li:nth-child(n+2) { display: none; }
+.craft-finished { margin-top: 8px; font-family: var(--font-plex-cond); font-size: 42px; font-weight: 700; line-height: 1; }
+.craft-timer { display: flex; align-items: center; gap: 14px; min-height: 64px; margin-top: 14px; padding: 10px 14px; border: 1px solid var(--stroke); background: var(--panel); color: var(--muted-foreground); }
+.craft-timer > span { flex-shrink: 0; font-family: var(--font-plex-mono); font-size: 28px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.craft-timer > p { min-width: 0; font-size: 14px; }
 .craft-meta { font-size: 12px; color: var(--muted-foreground); }
-.craft-finished { font-size: 48px; font-weight: 700; }
-.craft-today { border-top: 2px solid var(--stroke); padding-top: 16px; }
+.craft-today { margin-top: 20px; border-top: 2px solid var(--stroke); padding-top: 16px; }
 .craft-today h3 { font-size: 18px; font-weight: 700; }
 .craft-today p { margin-top: 8px; font-family: var(--font-plex-mono); font-size: 14px; }
 .craft-today p > span { margin: 0 8px; }
@@ -47,5 +60,6 @@
 @media (min-width: 600px) {
   .craft-columns { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .craft-front { padding-right: 24px; }
+  .craft-pf-then li:nth-child(n+3), .craft-pf[data-quarter] .craft-pf-then li:nth-child(n+2) { display: grid; }
   .craft-inside { display: block; border-left: 1px solid var(--stroke); padding-left: 24px; }
 }

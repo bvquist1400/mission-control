@@ -110,6 +110,100 @@ await test("SSR: all finished differs from a project without parts", () => {
     assert.match(html, /All parts finished/);
     assert.doesNotMatch(html, /no craft parts yet|No parts yet/);
 });
+// Pattern first (Brent 11/11): title, active part, pattern card, compact timer, Today.
+const renderView = (view) => renderToStaticMarkup(createElement(CraftScreen, { view }));
+const card = (html) => { const m = html.match(/<section class="craft-pf"[^>]*>([\s\S]*?)<\/section>/); assert.ok(m, "pattern card missing"); return m[0]; };
+const nowText = (html) => card(html).match(/<p class="craft-pf-now">([\s\S]*?)<\/p>/)?.[1];
+const thenRows = (html) => [...card(html).matchAll(/<li><span>([^<]*)<\/span><p>([^<]*)<\/p><\/li>/g)].map(m => [m[1], m[2]]);
+const css = readFileSync(new URL("../src/components/craft/craft.css", import.meta.url), "utf8");
+const chartBlanket = structuredClone(blanket);
+chartBlanket.items.forEach(row => { if (row.craft_part_id === "Blanket") row.text = `Chart row ${row.craft_row}: ivory waffle as set; olive 3 sts per tree (trunk).`; });
+await test("SSR pattern first: front order is title, part, pattern card, timer, Today", () => {
+    const html = render(chartBlanket);
+    const at = (needle) => { const i = html.indexOf(needle); assert.ok(i >= 0, `missing ${needle}`); return i; };
+    const order = [at("<h2>Sample</h2>"), at('class="craft-part"'), at('aria-label="Current row instructions"'), at("Timer arrives in the next update"), at('aria-label="Today"'), at('aria-label="Project details"')];
+    assert.deepEqual([...order].sort((a, b) => a - b), order);
+});
+await test("SSR pattern first: current row's own text is the card's big line, with NOW header and band", () => {
+    const html = render(chartBlanket);
+    assert.equal(nowText(html), "Chart row 59: ivory waffle as set; olive 3 sts per tree (trunk).");
+    const c = card(html);
+    assert.match(c, /<span class="craft-pf-lab">Now · row<\/span><span class="craft-pf-num">59<\/span><span class="craft-pf-of">of 157<\/span>/);
+    assert.match(c, /<strong>Tree 2<\/strong> · 58 of 157 rows ticked/);
+    assert.doesNotMatch(c, /craft-quarter|data-quarter|ridge/);
+});
+await test("SSR pattern first: next three rows follow the current row (CSS shows 2 on phones, 3 from 600px)", () => {
+    assert.deepEqual(thenRows(render(chartBlanket)), [60, 61, 62].map(n => [`row ${n}`, `Chart row ${n}: ivory waffle as set; olive 3 sts per tree (trunk).`]));
+    assert.match(css, /\.craft-pf-then li:nth-child\(n\+3\), \.craft-pf\[data-quarter\] \.craft-pf-then li:nth-child\(n\+2\) \{ display: none; \}/);
+    assert.match(css, /@media \(min-width: 600px\) \{\n(?: {2}[^\n]*\n)*? {2}\.craft-pf-then li:nth-child\(n\+3\), \.craft-pf\[data-quarter\] \.craft-pf-then li:nth-child\(n\+2\) \{ display: grid; \}/);
+});
+await test("SSR pattern first: current row without a checklist item falls back to row_label", () => {
+    const view = buildCraftView(chartBlanket);
+    view.next_rows = view.next_rows.slice(1);
+    const html = renderView(view);
+    assert.equal(nowText(html), "Row 59");
+    assert.deepEqual(thenRows(html).map(r => r[0]), ["row 60", "row 61", "row 62"]);
+});
+await test("SSR pattern first: quarter shows FINISH, the ½ chip and only one row on phones", () => {
+    const data = structuredClone(scarf);
+    Object.assign(data.parts[0], { quarter: 2, quarter_row: 119 });
+    const c = card(render(data));
+    assert.match(c, /^<section class="craft-pf" aria-label="Current row instructions" data-quarter="2">/);
+    assert.match(c, /<span class="craft-pf-lab">Finish · row<\/span>/);
+    assert.match(c, /<p class="craft-quarter">½ of this row done<\/p><p class="craft-pf-now">Row 119<\/p>/);
+});
+await test("SSR pattern first: scarf header shows row, total and ridge", () => {
+    const c = card(render(scarf));
+    assert.match(c, /Now · row<\/span><span class="craft-pf-num">119<\/span><span class="craft-pf-of">of 519<span class="craft-pf-ridge"> · ridge 60<\/span><\/span>/);
+    assert.match(c, /<strong>Rows 101–200<\/strong> · 118 of 519 rows ticked/);
+});
+await test("SSR pattern first: Border counts rounds", () => {
+    const data = structuredClone(blanket);
+    data.craft_project.active_part_id = "Border";
+    const html = render(data);
+    assert.match(card(html), /Now · round<\/span><span class="craft-pf-num">1<\/span><span class="craft-pf-of">of 2<\/span>/);
+    assert.equal(nowText(html), "Round 1");
+    assert.deepEqual(thenRows(html), [["round 2", "Round 2"]]);
+    assert.match(card(html), /No band for this row<\/strong> · 0 of 2 rounds ticked/);
+});
+await test("SSR pattern first: finished active part shows Finished in the card, no rows", () => {
+    const data = structuredClone(scarf);
+    data.items.forEach(row => row.is_done = true);
+    data.craft_project.active_part_id = "Body";
+    const html = render(data);
+    const c = card(html);
+    assert.match(c, /Part complete/);
+    assert.match(c, /<p class="craft-finished">Finished<\/p>/);
+    assert.match(c, /All rows ticked<\/strong> · 519 of 519 rows ticked/);
+    assert.doesNotMatch(c, /craft-pf-now|craft-pf-then|craft-pf-num/);
+    assert.ok(html.indexOf("craft-pf") < html.indexOf("Timer arrives in the next update"));
+});
+await test("SSR pattern first: no parts and all-finished have no card but keep the timer and Today", () => {
+    const allDone = structuredClone(scarf);
+    allDone.items.forEach(row => row.is_done = true);
+    for (const [data, text] of [[input(), "This project has no craft parts yet."], [allDone, "Every part is finished. All rows are ticked."]]) {
+        const html = render(data);
+        assert.doesNotMatch(html, /craft-pf/);
+        assert.ok(html.indexOf(text) >= 0 && html.indexOf(text) < html.indexOf("Timer arrives in the next update"));
+        assert.ok(html.indexOf("Timer arrives in the next update") < html.indexOf('aria-label="Today"'));
+    }
+});
+await test("SSR pattern first: card is a labelled region with no headings; lists keep aria-current", () => {
+    const html = render(chartBlanket);
+    assert.doesNotMatch(card(html), /<h[1-6]/);
+    assert.match(html, /<li aria-current="true"><strong>Blanket<\/strong>/);
+    assert.match(html, /<li data-state="current" aria-current="step"><span>Tree 2<\/span>/);
+    assert.match(html, /<h2>Next rows<\/h2><ol class="craft-next">/);
+});
+await test("CSS pattern first: big instruction text wraps, number is medium, timer is a compact row", () => {
+    const rule = (sel) => css.match(new RegExp(`^${sel.replace(/[.[\]]/g, "\\$&")} \\{([^}]*)\\}`, "m"))?.[1] ?? "";
+    assert.match(rule(".craft-pf-now"), /font-size: 27px;.*font-weight: 600;.*line-height: 1\.27;.*overflow-wrap: anywhere;/);
+    assert.match(rule(".craft-pf-num"), /font-size: 42px;/);
+    assert.match(rule(".craft-pf"), /border-left: 5px solid var\(--accent\);/);
+    assert.match(rule(".craft-timer"), /display: flex;.*min-height: 64px;/);
+    assert.doesNotMatch(rule(".craft-timer"), /text-align: center/);
+    assert.doesNotMatch(css, /#[0-9a-f]{3,8}\b|rgba?\(|oklch\(/i);
+});
 console.log(`\nCraft: ${passed} passed, ${failed} failed`);
 if (failed)
     process.exitCode = 1;

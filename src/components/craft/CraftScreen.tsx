@@ -6,6 +6,9 @@ import "./craft.css";
 export function CraftScreen({ view }: { view: CraftView }) {
   const part = view.active_part;
   const allFinished = !part && view.parts.length > 0;
+  // The current row's own checklist text leads the screen; row_label stands in when that row has no item.
+  const nowRow = part && view.next_rows[0]?.row === part.current_row ? view.next_rows[0] : null;
+  const upcoming = part ? view.next_rows.filter((row) => row.row > part.current_row).slice(0, 3) : [];
   return (
     <main className="craft-screen">
       <header className="craft-header">
@@ -17,16 +20,26 @@ export function CraftScreen({ view }: { view: CraftView }) {
         <section className="craft-front" aria-label="Current progress">
           <div className="craft-project"><p className="craft-eyebrow">{view.craft === "knit" ? "Knitting" : view.craft === "crochet" ? "Crochet" : "Craft"}</p><h2>{view.project.name}</h2>{view.gear && <p>{view.gear}</p>}</div>
           <div className="craft-part"><span className="craft-eyebrow">{allFinished ? "Project progress" : "Active part"}</span><h3>{part?.name ?? (allFinished ? "All parts finished" : "No parts yet")}</h3>{part?.stitch_count !== null && part?.stitch_count !== undefined && <p>{part.stitch_count} stitches</p>}</div>
-          <div className="craft-timer"><p>Timer arrives in the next update</p></div>
           {part ? (
-            <div className="craft-row">
-              <p className="craft-eyebrow">{part.finished ? "Part complete" : `Current ${part.row_word}`}</p>
-              {part.finished ? <p className="craft-finished">Finished</p> : <><div className="craft-number">{part.current_row}<span>of {part.total_rows}</span></div><p className="craft-row-label">{part.row_label}</p></>}
-              {part.quarter > 0 && <p className="craft-quarter">{["", "¼", "½", "¾"][part.quarter]} of this {part.row_word} done</p>}
-              <p className="craft-band-name">{view.current_segment?.name ?? (part.finished ? "All rows ticked" : "No band for this row")}</p>
-              <p className="craft-meta">{part.done_rows} of {part.total_rows} {part.row_word}s ticked</p>
-            </div>
+            <section className="craft-pf" aria-label="Current row instructions" data-quarter={part.quarter > 0 ? part.quarter : undefined}>
+              {part.finished ? (
+                <>
+                  <p className="craft-pf-lab">Part complete</p>
+                  <p className="craft-finished">Finished</p>
+                  <p className="craft-pf-band"><strong>All rows ticked</strong> · {part.done_rows} of {part.total_rows} {part.row_word}s ticked</p>
+                </>
+              ) : (
+                <>
+                  <div className="craft-pf-hd"><span className="craft-pf-lab">{part.quarter > 0 ? "Finish" : "Now"} · {part.row_word}</span><span className="craft-pf-num">{part.current_row}</span><span className="craft-pf-of">of {part.total_rows}{part.ridge !== null && <span className="craft-pf-ridge"> · ridge {part.ridge}</span>}</span></div>
+                  <p className="craft-pf-band"><strong>{view.current_segment?.name ?? "No band for this row"}</strong> · {part.done_rows} of {part.total_rows} {part.row_word}s ticked</p>
+                  {part.quarter > 0 && <p className="craft-quarter">{["", "¼", "½", "¾"][part.quarter]} of this {part.row_word} done</p>}
+                  <p className="craft-pf-now">{nowRow?.text ?? part.row_label}</p>
+                  {upcoming.length > 0 && <ol className="craft-pf-then" aria-label={`Upcoming ${part.row_word}s`}>{upcoming.map((row) => <li key={row.id}><span>{part.row_word} {row.row}</span><p>{row.text}</p></li>)}</ol>}
+                </>
+              )}
+            </section>
           ) : <p className="craft-empty">{allFinished ? "Every part is finished. All rows are ticked." : "This project has no craft parts yet."}</p>}
+          <div className="craft-timer"><span aria-hidden="true">--:--</span><p>Timer arrives in the next update</p></div>
           <section className="craft-today" aria-label="Today"><h3>Today</h3><p><strong>{view.today.rows}</strong> rows ticked <span>·</span> <strong>{view.today.minutes}</strong> min</p></section>
         </section>
         <aside className="craft-inside" aria-label="Project details">
