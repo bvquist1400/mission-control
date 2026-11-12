@@ -108,6 +108,15 @@ export function CraftSetupScreen({ projectId, plan, fingerprint }: { projectId: 
             </details>
           )}
         </section>
+        {plan.near_misses.length > 0 && (
+          <section className="craft-setup-section" aria-labelledby="craft-setup-near">
+            <h2 id="craft-setup-near">Not counted as rounds/rows <span className="craft-setup-count">{plan.near_misses.length}</span></h2>
+            <p className="craft-setup-hint">These look numbered but don&rsquo;t start exactly like &ldquo;Rnd 12&rdquo;, &ldquo;Round 12&rdquo; or &ldquo;Row 12&rdquo; (capital first letter, a space, then the number). Fix them in the app before Create if they should count.</p>
+            <ul className="craft-setup-near">{plan.near_misses.map((item) => (
+              <li key={item.id}><span>{item.text}</span><small>{item.task_title}</small></li>
+            ))}</ul>
+          </section>
+        )}
         {plan.ok && (
           <section className="craft-setup-section" aria-labelledby="craft-setup-create">
             <h2 id="craft-setup-create">Create</h2>

@@ -58,10 +58,11 @@ async function loadOneCraftView(client: SupabaseClient<Database>, userId: string
   ]);
   if (projectResult.error) throw projectResult.error;
   if (craftResult.error) throw craftResult.error;
-  const [parts, sessions, timerResult] = await Promise.all([
+  const [parts, sessions, timerResult, remove_blockers] = await Promise.all([
     pagedSelect<Tables["craft_parts"]["Row"]>((from, to) => client.from("craft_parts").select("*").eq("user_id", userId).eq("project_id", id).order("id").range(from, to)),
     pagedSelect<Tables["work_sessions"]["Row"]>((from, to) => client.from("work_sessions").select("*").eq("user_id", userId).eq("project_id", id).order("id").range(from, to)),
     client.from("craft_timers").select("*").eq("user_id", userId).eq("project_id", id).maybeSingle(),
+    removeBlockers(client, userId, id),
   ]);
   if (timerResult.error) throw timerResult.error;
   const items: CraftInput["items"] = [], segments: CraftInput["segments"] = [];
@@ -81,5 +82,15 @@ async function loadOneCraftView(client: SupabaseClient<Database>, userId: string
     session_items.push(...links); sitting_details.push(...details);
   }
   return buildCraftView({ project: projectResult.data, craft_project: craftResult.data, parts, segments, items,
-    sessions, session_items, sitting_details, timer: timerResult.data, server_now: now.toISOString() });
+    sessions, session_items, sitting_details, timer: timerResult.data, server_now: now.toISOString(), remove_blockers });
+}
+
+/** 072's rule for Remove, asked once per view. Before 072 is applied (no such function) the screen loads without Remove. */
+async function removeBlockers(client: SupabaseClient<Database>, userId: string, projectId: string): Promise<string[] | null> {
+  const { data, error } = await client.rpc("craft_remove_blockers", { p_user_id: userId, p_project_id: projectId });
+  if (error) {
+    if (error.code === "PGRST202" || error.code === "42883") { console.error("craft_remove_blockers is missing; Remove is hidden"); return null; }
+    throw error;
+  }
+  return Array.isArray(data) ? data.map(String) : null;
 }

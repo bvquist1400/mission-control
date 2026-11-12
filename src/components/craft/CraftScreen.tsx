@@ -18,7 +18,7 @@ export function CraftScreen({ view }: { view: CraftView & { projects?: CraftProj
         <Link href={`/projects/${view.project.id}`} className={buttonClasses({ variant: "ghost", size: "icon" })} aria-label="Back to project">←</Link>
         <h1>Craft</h1>
         <span className="craft-readonly">Read only</span>
-        <CraftScreenMenu projectId={view.project.id} projectName={view.project.name} />
+        <CraftScreenMenu projectId={view.project.id} projectName={view.project.name} canRemove={view.can_remove} partCount={view.parts.length} blockers={view.remove_blockers} />
       </header>
       <div className="craft-columns">
         <section className="craft-front" aria-label="Current progress">

@@ -2,8 +2,12 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
+import { removeBlockersText } from "@/lib/craft";
 
 export const REMOVE_KEEPS = "Your ticks, stitch counts and sittings stay.";
+/** Exactly what Remove takes away (072 refuses whenever there is more than this). */
+export const removeGoes = (parts: number) =>
+  `Removes the craft screen setup for this project: ${parts} ${parts === 1 ? "part and its" : "parts and their"} row links.`;
 
 export type RemoveResult = { ok: true } | { ok: false; message: string };
 export async function sendRemove(projectId: string, fetcher: typeof fetch = fetch): Promise<RemoveResult> {
@@ -17,8 +21,13 @@ export async function sendRemove(projectId: string, fetcher: typeof fetch = fetc
   }
 }
 
-/** The craft screen's menu: a disclosure with one item, "Remove from craft screen", behind a confirm sheet. */
-export function CraftScreenMenu({ projectId, projectName }: { projectId: string; projectName: string }) {
+/**
+ * The craft screen's menu: a disclosure with "Remove from craft screen" behind a confirm sheet, offered only
+ * when the server says nothing would be lost (canRemove); otherwise a plain line says why it isn't there.
+ */
+export function CraftScreenMenu({ projectId, projectName, canRemove, partCount, blockers }: {
+  projectId: string; projectName: string; canRemove: boolean; partCount: number; blockers: string[] | null;
+}) {
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [state, setState] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
@@ -47,19 +56,24 @@ export function CraftScreenMenu({ projectId, projectName }: { projectId: string;
     <div className="craft-menu" ref={wrap}>
       <Button ref={trigger} variant="ghost" size="icon" aria-label="Craft screen menu" aria-expanded={open} aria-controls={menuId} onClick={() => setOpen((v) => !v)}>⋯</Button>
       <div id={menuId} className="craft-menu-panel" hidden={!open}>
-        <button type="button" className="craft-menu-item" onClick={() => { setOpen(false); setConfirming(true); }}>Remove from craft screen</button>
+        {canRemove
+          ? <button type="button" className="craft-menu-item" onClick={() => { setOpen(false); setConfirming(true); }}>Remove from craft screen</button>
+          : <p className="craft-menu-note">{blockers?.length
+            ? `Remove from craft screen isn’t offered here: this project has ${removeBlockersText(blockers)} that Set up can’t make again.`
+            : "Remove from craft screen isn’t offered for this project."}</p>}
       </div>
-      <Modal open={confirming} onClose={close} title="Remove from craft screen?">
+      {canRemove && <Modal open={confirming} onClose={close} title="Remove from craft screen?">
         <div className="craft-remove">
-          <p>This takes <strong>{projectName}</strong> off the craft screen: its parts, round and row counts, and anything added there (notes, links, yarn).</p>
-          <p><strong>{REMOVE_KEEPS}</strong> The checklist items stay on their tasks, and you can set it up again from the project page.</p>
+          <p><strong>{projectName}</strong></p>
+          <p>{removeGoes(partCount)} <strong>{REMOVE_KEEPS}</strong></p>
+          <p>The checklist items stay on their tasks, and you can set it up again from the project page.</p>
           {state.error && <p className="craft-setup-error" role="alert">{state.error}</p>}
           <div className="craft-remove-actions">
             <Button variant="secondary" size="md" onClick={close} disabled={state.busy}>Cancel</Button>
             <Button variant="danger" size="md" onClick={remove} disabled={state.busy} aria-busy={state.busy || undefined}>{state.busy ? "Removing…" : "Remove"}</Button>
           </div>
         </div>
-      </Modal>
+      </Modal>}
     </div>
   );
 }

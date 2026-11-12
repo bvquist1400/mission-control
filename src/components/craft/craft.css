@@ -79,6 +79,7 @@
 .craft-menu-panel { position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; min-width: 220px; border: 1px solid var(--stroke); background: var(--panel); }
 .craft-menu-item { display: block; width: 100%; min-height: 44px; padding: 10px 14px; text-align: left; font-size: 14px; color: var(--foreground); background: transparent; }
 .craft-menu-item:hover { background: var(--panel-muted); }
+.craft-menu-note { margin: 0; padding: 10px 14px; font-size: 14px; line-height: 1.4; color: var(--muted-foreground); max-width: 300px; }
 .craft-remove p { margin-bottom: 12px; font-size: 14px; line-height: 1.45; color: var(--foreground); }
 .craft-remove-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 /* S1C: the "Set up craft screen" preview, same tokens as the craft screen. */
@@ -112,6 +113,9 @@
 .craft-setup-details summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-size: 14px; font-weight: 600; color: var(--accent-text); }
 .craft-setup-details li { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; border-bottom: 1px solid var(--stroke); font-size: 14px; overflow-wrap: anywhere; }
 .craft-setup-details small { font-size: 12px; color: var(--muted-foreground); }
+.craft-setup-near { margin-top: 12px; border-left: 3px solid var(--warning-border, var(--stroke)); padding-left: 12px; }
+.craft-setup-near li { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; border-bottom: 1px solid var(--stroke); font-size: 14px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.craft-setup-near small { font-size: 12px; color: var(--muted-foreground); white-space: normal; }
 .craft-setup-kind { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 12px 0 16px; padding: 0; border: 0; }
 .craft-setup-kind legend { width: 100%; margin-bottom: 6px; font-family: var(--font-plex-mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted-foreground); }
 .craft-setup-kind label { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; font-size: 16px; }

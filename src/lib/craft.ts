@@ -18,6 +18,8 @@ export interface CraftInput {
   sitting_details: Row<"craft_sitting_details">[];
   timer: Row<"craft_timers"> | null;
   server_now: string;
+  /** From 072's craft_remove_blockers: what Remove would lose that Set up can't make again. Absent or null = unknown (no Remove). */
+  remove_blockers?: string[] | null;
 }
 
 type ProgressItem = Pick<CraftItem, "craft_part_id" | "craft_row" | "is_done">;
@@ -47,9 +49,27 @@ function sortedProgress<P extends CraftPart>(parts: P[], items: ProgressItem[]) 
   return [...parts].sort((a, b) => a.sort_order - b.sort_order || a.id.localeCompare(b.id)).map((part) => partProgress(part, items));
 }
 
-/** The stored active part (even when finished), else the first unfinished part by sort order. */
+/**
+ * The stored active part while it is unfinished; once it is finished, the first unfinished part by sort
+ * order (FR1, F2: the mittens' cuff done → the hand; the stored value stays until S2 writes it). With
+ * every part finished, the stored part (it reads "Finished"), else none.
+ */
 function pickActivePart<P extends { id: string; finished: boolean }>(parts: P[], activePartId: string | null) {
-  return parts.find((part) => part.id === activePartId) ?? parts.find((part) => !part.finished) ?? null;
+  const stored = parts.find((part) => part.id === activePartId);
+  if (stored && !stored.finished) return stored;
+  return parts.find((part) => !part.finished) ?? stored ?? null;
+}
+
+/** 072's craft_remove_blockers keys in plain words, in its order. */
+export const CRAFT_REMOVE_BLOCKER_WORDS: Record<string, string> = {
+  links: "links", instructions: "instructions", notes: "notes", yarn: "yarn", timer: "a timer", gear: "gear notes",
+  quarters: "quarter rows", ridges: "ridge counts", close_checks: "band checks",
+};
+/** ["links", "notes"] → "links and notes"; unknown keys are named as "other craft details". */
+export function removeBlockersText(keys: string[]): string {
+  const words = [...new Set(keys.map((key) => CRAFT_REMOVE_BLOCKER_WORDS[key] ?? "other craft details"))];
+  if (!words.length) return "craft details";
+  return words.length === 1 ? words[0] : `${words.slice(0, -1).join(", ")} and ${words.at(-1)}`;
 }
 
 export function buildCraftView(input: CraftInput) {
@@ -92,6 +112,9 @@ export function buildCraftView(input: CraftInput) {
       minutes: input.sessions.filter((session) => session.session_date === today).reduce((sum, session) => sum + session.minutes, 0),
     },
     recent_sittings, server_now: input.server_now,
+    // Remove is offered only when the server said nothing would be lost (072 refuses otherwise too).
+    can_remove: Array.isArray(input.remove_blockers) && input.remove_blockers.length === 0,
+    remove_blockers: input.remove_blockers ?? null,
   };
 }
 export type CraftView = ReturnType<typeof buildCraftView>;
