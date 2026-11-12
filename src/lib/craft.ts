@@ -86,6 +86,7 @@ function pickActivePart<P extends { id: string; finished: boolean }>(parts: P[],
 export const CRAFT_REMOVE_BLOCKER_WORDS: Record<string, string> = {
   links: "links", instructions: "instructions", notes: "notes", yarn: "yarn", timer: "a timer", gear: "gear notes",
   quarters: "quarter rows", ridges: "ridge counts", close_checks: "band checks",
+  sittings: "craft screen sittings",
 };
 /** ["links", "notes"] → "links and notes"; unknown keys are named as "other craft details". */
 export function removeBlockersText(keys: string[]): string {
@@ -141,6 +142,8 @@ export function buildCraftView(input: CraftInput) {
     const bandRows = row_states.filter((state) => state.row >= segment.from_row && state.row <= segment.to_row);
     if (!bandRows.length || bandRows.some((state) => !state.done)) return [];
     const check = bandCheckFor(segment.task_id as string, input.count_items ?? [], active_part.stitch_count);
+    // A band whose count item is already ticked was confirmed before (the blanket's rows 1–52 at setup).
+    if (check.item_id && (input.count_items ?? []).find((item) => item.id === check.item_id)?.is_done) return [];
     return [{ segment_id: segment.id, name: segment.name, from_row: segment.from_row, to_row: segment.to_row, ...check }];
   }) : [];
   const craftItems = input.items.filter((item) => item.craft_part_id && partIds.has(item.craft_part_id));

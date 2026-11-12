@@ -510,6 +510,20 @@ await test("Craft S1C setup and remove routes refuse FamCal and Actions keys bef
   assert.equal(authFetchCalls, before);
 });
 
+await test("Craft S2 write routes (row, timer, sittings, total, notes) refuse FamCal and Actions keys before any database lookup", async () => {
+  const base = "../src/app/api/craft/[projectId]";
+  const routes = [["row", "POST"], ["timer", "POST"], ["sittings", "POST"], ["total", "POST"], ["notes", "POST"], ["notes", "DELETE"]];
+  const before = authFetchCalls;
+  for (const key of [FAMCAL_KEY, ACTIONS_KEY]) {
+    for (const [name, method] of routes) {
+      const handler = (await import(`${base}/${name}/route.ts`))[method];
+      const response = await handler(keyRequest(key, method, `/api/craft/${PERSONAL_ID}/${name}`), { params: Promise.resolve({ projectId: PERSONAL_ID }) });
+      assert.equal(response.status, 403, `${method} ${name}`);
+    }
+  }
+  assert.equal(authFetchCalls, before);
+});
+
 await test("FamCal key alone (no legacy/actions key) is enough to configure machine auth", async () => {
   const saved = { legacy: process.env.MISSION_CONTROL_API_KEY, actions: process.env.MISSION_CONTROL_ACTIONS_API_KEY };
   delete process.env.MISSION_CONTROL_API_KEY;

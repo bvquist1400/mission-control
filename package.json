@@ -95,8 +95,8 @@
     "backfill:project-sections:apply": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/backfill-project-sections.mjs --apply",
     "backfill:task-external-source:dry-run": "node --experimental-strip-types scripts/backfill-task-external-source-ids.mjs",
     "backfill:task-external-source:apply": "node --experimental-strip-types scripts/backfill-task-external-source-ids.mjs --apply",
-    "test:craft": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-craft.mjs && node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-craft-setup.mjs",
-    "test:craft-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-craft-db.mjs && node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-craft-setup-db.mjs"
+    "test:craft": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-craft.mjs && node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-craft-setup.mjs && node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-craft-s2.mjs",
+    "test:craft-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-craft-db.mjs && node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-craft-setup-db.mjs && node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-craft-s2-db.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",

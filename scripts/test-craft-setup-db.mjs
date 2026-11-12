@@ -18,6 +18,10 @@ const up072 = readFileSync(new URL("../supabase/migrations/072_craft_setup.sql",
 const down072 = readFileSync(new URL("../supabase/rollbacks/072_craft_setup.down.sql", import.meta.url), "utf8");
 const up071 = readFileSync(new URL("../supabase/migrations/071_add_craft_tables.sql", import.meta.url), "utf8");
 const down071 = readFileSync(new URL("../supabase/rollbacks/071_add_craft_tables.down.sql", import.meta.url), "utf8");
+// 073 (S2) replaces three 072 functions: it is rolled back before any 072 rollback and re-applied after 072.
+const up073 = readFileSync(new URL("../supabase/migrations/073_craft_rpcs.sql", import.meta.url), "utf8");
+const down073 = readFileSync(new URL("../supabase/rollbacks/073_craft_rpcs.down.sql", import.meta.url), "utf8");
+const has073 = () => psql("SELECT to_regprocedure('craft_rows(uuid,uuid,integer,integer,text,uuid)') IS NOT NULL;") === "t";
 const psql = (sql) => execFileSync("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"], { input: sql, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function connection(label) {
@@ -149,12 +153,15 @@ let rights071, functions071;
 try {
   // FR1 (F5): the 071 state is captured from a FRESH 071 apply (071 down, 071 up), never from after 072's down.
   await test("072 applies on top of a fresh 071; the 071 rights are captured from that fresh apply", () => {
+    if (has073()) psql(down073);
     if (functionNames().includes("craft_setup_project")) psql(down072);
     psql(down071); psql(up071);
     rights071 = rights(); functions071 = functionNames();
     assert.equal(functions071, "craft_check_ownership,craft_checklist_clear_deleted_part");
     psql(up072);
     assert.equal(functionNames(), FUNCTIONS_072);
+    // The rest runs on what ships: 072 with 073 over it.
+    psql(up073);
   });
   await test("072 functions: SECURITY INVOKER, EXECUTE for authenticated and service_role only (not anon, not PUBLIC)", () => {
     for (const fn of FUNCTIONS) {
@@ -535,7 +542,7 @@ try {
   });
 
   // ── Remove ──────────────────────────────────────────────────────────
-  await test("Remove: refuses while a note or link exists (FR1); then unlinks first and the craft rows go; items byte-identical apart from the two craft columns; sittings stay", async () => {
+  await test("Remove: refuses while a note, a link or a craft sitting detail exists (FR1; S2 carry-over a); then unlinks first and the craft rows go; items byte-identical apart from the two craft columns; sittings stay", async () => {
     const parts = (await a.client.from("craft_parts").select("id, name").eq("project_id", m1.projectId).order("sort_order")).data;
     const cuffRows = (await a.client.from("task_checklist_items").select("id").eq("craft_part_id", parts[0].id).lte("craft_row", 3)).data.map((r) => r.id);
     const s = await a.client.rpc("work_session_create", { p_user_id: a.id, p_session: { project_id: m1.projectId, session_date: "2026-11-10", minutes: 25, note: "cuff" }, p_item_ids: cuffRows, p_mark_done: false });
@@ -550,11 +557,18 @@ try {
     const stateBefore = craftState(m1.projectId);
     const refused = await remove(a, m1.projectId);
     assert.equal(refused.status, 409);
-    assert.deepEqual(await refused.json(), { error: "This project can’t be removed from the craft screen: it has links and notes that Set up can’t make again.", reason: "keeps" });
+    assert.deepEqual(await refused.json(), { error: "This project can’t be removed from the craft screen: it has links, notes and craft screen sittings that Set up can’t make again.", reason: "keeps" });
     assert.equal(craftState(m1.projectId), stateBefore);
     const kept = await (await detailRoute.GET(routeReq(a, "GET", `/api/craft/${m1.projectId}`), ctx(m1.projectId))).json();
-    assert.deepEqual([kept.can_remove, kept.remove_blockers], [false, ["links", "notes"]]);
+    assert.deepEqual([kept.can_remove, kept.remove_blockers], [false, ["links", "notes", "sittings"]]);
     psql(`DELETE FROM craft_notes WHERE project_id='${m1.projectId}'; DELETE FROM craft_links WHERE project_id='${m1.projectId}';`);
+    // S2 carry-over a (073): a craft sitting detail on one of the parts still blocks Remove, which would clear its part.
+    const beforeSitting = craftState(m1.projectId);
+    const sittingKept = await remove(a, m1.projectId);
+    assert.deepEqual([sittingKept.status, (await sittingKept.json()).error], [409, "This project can’t be removed from the craft screen: it has craft screen sittings that Set up can’t make again."]);
+    assert.equal(craftState(m1.projectId), beforeSitting, "nothing changed");
+    assert.equal(psql(`SELECT part_id FROM craft_sitting_details WHERE session_id='${s.data.session_id}';`), parts[0].id);
+    psql(`DELETE FROM craft_sitting_details WHERE session_id='${s.data.session_id}';`);
     const res = await remove(a, m1.projectId);
     assert.equal(res.status, 200);
     assert.deepEqual(await res.json(), { project_id: m1.projectId, items_unlinked: 198, parts_removed: 8, segments_removed: 10 });
@@ -564,7 +578,7 @@ try {
     assert.equal(psql(itemsSql(m1.projectId)), before.all, "every column of every item is as before setup");
     assert.equal(sessions(), sessionsBefore, "sittings and their row links unchanged");
     assert.equal(tasksHash(), tasksBefore, "tasks unchanged (actual_minutes included)");
-    assert.equal(psql(`SELECT part_id IS NULL FROM craft_sitting_details WHERE session_id='${s.data.session_id}';`), "t", "the sitting detail stays, its part cleared");
+    assert.equal(psql(`SELECT count(*) FROM work_sessions WHERE id='${s.data.session_id}';`), "1", "the sitting itself stays");
     assert.equal((await remove(a, m1.projectId)).status, 404, "removing again is a 404");
   });
   await test("Setup → Remove → setup again gives the same plan and fingerprint, and Create works again", async () => {
@@ -642,11 +656,13 @@ try {
   await test("072 down returns the schema to 071 (functions and rights), keeps craft rows; 072 re-applies", () => {
     const data = () => psql(`SELECT count(*) FROM craft_parts; SELECT count(*) FROM task_checklist_items WHERE craft_part_id IS NOT NULL;`);
     const kept = data();
+    psql(down073);
     psql(down072);
     assert.equal(functionNames(), functions071);
     assert.equal(rights(), rights071);
     assert.equal(data(), kept);
     psql(up072);
+    psql(up073);
     assert.ok(functionNames().includes("craft_setup_project"));
     assert.equal(psql("SELECT has_table_privilege('authenticated','craft_parts','TRUNCATE');"), "f");
   });
@@ -654,6 +670,7 @@ try {
     const narrow = "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE TRUNCATE, MAINTAIN ON TABLES FROM service_role;";
     const widen = "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT TRUNCATE, MAINTAIN ON TABLES TO service_role;";
     try {
+      if (has073()) psql(down073);
       psql(down072); psql(down071); psql(narrow); psql(up071);
       const fresh = rights();
       assert.ok(fresh.includes("craft_parts:service_role:TRUNCATE:false") && fresh.includes("craft_parts:authenticated:TRUNCATE:true"), "the fresh 071 follows the narrowed defaults");
@@ -663,10 +680,12 @@ try {
       assert.equal(rights(), fresh, "down restored exactly the fresh 071 rights");
     } finally {
       psql(widen);
+      if (has073()) psql(down073);
       if (functionNames().includes("craft_setup_project")) psql(down072);
       psql(down071); psql(up071); psql(up072);
     }
     assert.equal(functionNames(), FUNCTIONS_072);
+    psql(up073);
     assert.equal(psql("SELECT has_table_privilege('service_role','craft_parts','SELECT') AND NOT has_table_privilege('service_role','craft_parts','TRUNCATE');"), "t", "the stack is left with 072 applied over a fresh 071");
   });
 } finally {

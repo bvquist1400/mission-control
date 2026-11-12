@@ -50,6 +50,10 @@ const CRAFT_ROLLBACK = readFileSync(new URL("../supabase/rollbacks/071_add_craft
 // 072 (craft setup) depends on 071: roll it back first and restore it after 071.
 const CRAFT_SETUP_MIGRATION = readFileSync(new URL("../supabase/migrations/072_craft_setup.sql", import.meta.url), "utf8");
 const CRAFT_SETUP_ROLLBACK = readFileSync(new URL("../supabase/rollbacks/072_craft_setup.down.sql", import.meta.url), "utf8");
+// 073 (craft S2) depends on 072 and 071: rolled back before them and restored after them.
+const CRAFT_S2_MIGRATION = readFileSync(new URL("../supabase/migrations/073_craft_rpcs.sql", import.meta.url), "utf8");
+const CRAFT_S2_ROLLBACK = readFileSync(new URL("../supabase/rollbacks/073_craft_rpcs.down.sql", import.meta.url), "utf8");
+let craftS2WasRemoved = false;
 let craftSetupWasRemoved = false;
 let craftWasPresent = false;
 let craftWasRemoved = false;
@@ -295,6 +299,10 @@ function psqlConnection(label) {
 try {
   craftWasPresent = psql("SELECT to_regclass('public.craft_projects') IS NOT NULL;") === "t";
   if (craftWasPresent) {
+    if (psql("SELECT to_regprocedure('craft_rows(uuid,uuid,integer,integer,text,uuid)') IS NOT NULL;") === "t") {
+      psql(CRAFT_S2_ROLLBACK);
+      craftS2WasRemoved = true;
+    }
     if (psql("SELECT to_regprocedure('craft_setup_project(uuid,uuid,jsonb,text)') IS NOT NULL;") === "t") {
       psql(CRAFT_SETUP_ROLLBACK);
       craftSetupWasRemoved = true;
@@ -1143,7 +1151,7 @@ try {
   }
 } finally {
   // test() records a restore failure without preventing fetch/user cleanup.
-  await test("cleanup: restore 059 before the removed 071 and 072", async () => {
+  await test("cleanup: restore 059 before the removed 071, 072 and 073", async () => {
     await restorePace();
     if (craftWasRemoved) {
       psql(CRAFT_MIGRATION);
@@ -1152,6 +1160,10 @@ try {
     if (craftSetupWasRemoved) {
       psql(CRAFT_SETUP_MIGRATION);
       craftSetupWasRemoved = false;
+    }
+    if (craftS2WasRemoved) {
+      psql(CRAFT_S2_MIGRATION);
+      craftS2WasRemoved = false;
     }
   });
   globalThis.fetch = realFetch;

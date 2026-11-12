@@ -16,6 +16,9 @@ const down = readFileSync(new URL("../supabase/rollbacks/071_add_craft_tables.do
 // 072 (S1C) sits on 071: its rollback runs first and it is re-applied after 071.
 const migration072 = readFileSync(new URL("../supabase/migrations/072_craft_setup.sql", import.meta.url), "utf8");
 const down072 = readFileSync(new URL("../supabase/rollbacks/072_craft_setup.down.sql", import.meta.url), "utf8");
+// 073 (S2) sits on 072: rolled back first and re-applied last.
+const migration073 = readFileSync(new URL("../supabase/migrations/073_craft_rpcs.sql", import.meta.url), "utf8");
+const down073 = readFileSync(new URL("../supabase/rollbacks/073_craft_rpcs.down.sql", import.meta.url), "utf8");
 const psql = (sql) => execFileSync("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"], { input: sql, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
 const asyncSql = (sql, dbUser = "postgres") => new Promise(resolve => { const child = spawn("docker", ["exec", "-i", container, "psql", "-U", dbUser, "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"]); let stdout = "", stderr = ""; child.stdout.on("data", c => stdout += c); child.stderr.on("data", c => stderr += c); child.on("close", code => resolve({ code, stdout, stderr })); child.stdin.end(sql); });
 // Interactive sessions make the reviewed lock order reproducible, without timing luck.
@@ -511,6 +514,8 @@ ROLLBACK;`, target === "auth user" ? "supabase_admin" : "postgres");
         const fingerprint = () => psql(`SELECT md5(coalesce(string_agg(row_to_json(s)::text,',' ORDER BY s.id),'')) FROM work_sessions s; SELECT md5(coalesce(string_agg((to_jsonb(i)-'craft_part_id'-'craft_row')::text,',' ORDER BY i.id),'')) FROM task_checklist_items i; SELECT md5(coalesce(string_agg((id::text||coalesce(actual_minutes::text,'')),',' ORDER BY id),'')) FROM tasks;`);
         const before = fingerprint();
         const had072 = psql("SELECT to_regprocedure('craft_setup_project(uuid,uuid,jsonb,text)') IS NOT NULL") === "t";
+        const had073 = psql("SELECT to_regprocedure('craft_rows(uuid,uuid,integer,integer,text,uuid)') IS NOT NULL") === "t";
+        if (had073) psql(down073);
         if (had072) psql(down072);
         psql(down);
         assert.equal(psql("SELECT count(*) FROM pg_trigger WHERE tgname='trg_tasks_guard_project_move'"), "1");
@@ -520,6 +525,7 @@ ROLLBACK;`, target === "auth user" ? "supabase_admin" : "postgres");
         assert.equal(psql("SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='task_checklist_items' AND column_name IN ('craft_part_id','craft_row')"), "0");
         psql(migration);
         if (had072) psql(migration072);
+        if (had073) psql(migration073);
         assert.equal(fingerprint(), before);
         assert.equal(psql("SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'craft_%'"), "9");
     });
