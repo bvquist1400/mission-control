@@ -47,6 +47,10 @@ const ROLLBACK = readFileSync(new URL("../supabase/rollbacks/059_add_work_sessio
 // restore 071 in finally. Never use this suite on a persistent database.
 const CRAFT_MIGRATION = readFileSync(new URL("../supabase/migrations/071_add_craft_tables.sql", import.meta.url), "utf8");
 const CRAFT_ROLLBACK = readFileSync(new URL("../supabase/rollbacks/071_add_craft_tables.down.sql", import.meta.url), "utf8");
+// 072 (craft setup) depends on 071: roll it back first and restore it after 071.
+const CRAFT_SETUP_MIGRATION = readFileSync(new URL("../supabase/migrations/072_craft_setup.sql", import.meta.url), "utf8");
+const CRAFT_SETUP_ROLLBACK = readFileSync(new URL("../supabase/rollbacks/072_craft_setup.down.sql", import.meta.url), "utf8");
+let craftSetupWasRemoved = false;
 let craftWasPresent = false;
 let craftWasRemoved = false;
 const faultAfterDown = process.env.PACE_TEST_FAULT_AFTER_059_DOWN;
@@ -291,6 +295,10 @@ function psqlConnection(label) {
 try {
   craftWasPresent = psql("SELECT to_regclass('public.craft_projects') IS NOT NULL;") === "t";
   if (craftWasPresent) {
+    if (psql("SELECT to_regprocedure('craft_setup_project(uuid,uuid,jsonb,text)') IS NOT NULL;") === "t") {
+      psql(CRAFT_SETUP_ROLLBACK);
+      craftSetupWasRemoved = true;
+    }
     psql(CRAFT_ROLLBACK);
     craftWasRemoved = true;
   }
@@ -1135,11 +1143,15 @@ try {
   }
 } finally {
   // test() records a restore failure without preventing fetch/user cleanup.
-  await test("cleanup: restore 059 before the removed 071", async () => {
+  await test("cleanup: restore 059 before the removed 071 and 072", async () => {
     await restorePace();
     if (craftWasRemoved) {
       psql(CRAFT_MIGRATION);
       craftWasRemoved = false;
+    }
+    if (craftSetupWasRemoved) {
+      psql(CRAFT_SETUP_MIGRATION);
+      craftSetupWasRemoved = false;
     }
   });
   globalThis.fetch = realFetch;
