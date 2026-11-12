@@ -180,6 +180,108 @@ await test("View notes: newest first, at most 50; Remove words name craft screen
   assert.equal(removeBlockersText(["notes", "sittings"]), "notes and craft screen sittings");
 });
 
+// ── FR1 (fix round 1): timed sittings across a part end, stale sheets, the toast, Change total's units ──
+const mittens = ({ cuffSince = 15, handSince = 0, gusset = false } = {}) => {
+  const parts = [part("Cuff", 31, { name: "Mitten 1 · Cuff", row_word: "round", sort_order: 0, stitch_count: 36 }),
+    ...(gusset ? [part("Gusset", 4, { name: "Mitten 1 · Gusset", row_word: "round", sort_order: 1 })] : []),
+    part("Hand", 45, { name: "Mitten 1 · Hand", row_word: "round", sort_order: 2, stitch_count: 36 })];
+  const items = [...rows("Cuff", 31, 31), ...(gusset ? rows("Gusset", 4, 4) : []), ...rows("Hand", 45, handSince)].map((r) => ({ ...r, text: r.text.replace("Row", "Rnd") }));
+  // Ticked during the sitting (it started 17:20Z): the cuff from round `cuffSince`, the gusset, the hand's first rounds.
+  for (const r of items) if (r.is_done && ((r.craft_part_id === "Cuff" && r.craft_row >= cuffSince) || r.craft_part_id !== "Cuff")) r.completed_at = "2026-11-08T17:45:00Z";
+  const v = input(parts, items);
+  v.timer = timer({ part_id: "Cuff", start_row: 15, sitting_started_at: "2026-11-08T17:20:00Z", running_since: "2026-11-08T17:20:00Z", banked_seconds: 0, adjust_seconds: 0, version: 1 });
+  return v;
+};
+await test("FR1 F1a (pure): timer on the Cuff, Cuff finished, screen on the Hand: the view names the Cuff rounds the sitting also saves, defaults start this part at its first round ticked since, the preview says both parts and the minutes", () => {
+  const out = buildCraftView(mittens({ handSince: 3 }));
+  assert.equal(out.active_part.id, "Hand");
+  assert.equal(out.timer.on_active_part, false);
+  assert.deepEqual(out.timer_rows.map((o) => [o.name, o.word, o.rows]), [["Mitten 1 · Cuff", "round", Array.from({ length: 17 }, (_, i) => 15 + i)]]);
+  assert.deepEqual(out.row_states.slice(0, 4).map((s) => s.since_timer), [true, true, true, false]);
+  const d = A.logSittingDefaults(out.row_states, 45, out.timer);
+  assert.deepEqual([d.from, d.to, d.minutes], [0, 3, 40]);
+  const plan = A.sittingPlan(out.row_states, 45, d.from, d.to);
+  assert.equal(A.sittingSummary("round", "Mitten 1 · Hand", plan, out.timer_rows, 52), "Saves Mitten 1 · Cuff rounds 15–31 and Mitten 1 · Hand rounds 1–3, 52 min");
+  // Zero rounds on the Hand yet (Fable R1 / Astra's zero-row case): the sitting still saves the Cuff's rounds.
+  const fresh = buildCraftView(mittens());
+  const d0 = A.logSittingDefaults(fresh.row_states, 45, fresh.timer);
+  assert.deepEqual([d0.from, d0.to], [0, 0]);
+  assert.equal(A.sittingSummary("round", "Mitten 1 · Hand", A.sittingPlan(fresh.row_states, 45, 0, 0), fresh.timer_rows, 35), "Saves Mitten 1 · Cuff rounds 15–31, 35 min");
+  // A part between them (finished during the sitting too) is named as well, with only its rounds ticked since the sitting started.
+  const three = buildCraftView(mittens({ gusset: true, handSince: 1 }));
+  assert.deepEqual(three.timer_rows.map((o) => [o.part_id, o.rows]), [["Cuff", Array.from({ length: 17 }, (_, i) => 15 + i)], ["Gusset", [1, 2, 3, 4]]]);
+  // Hand rounds ticked before the sitting (last week) are not this sitting's.
+  const old = mittens({ handSince: 5 });
+  old.items.filter((r) => r.craft_part_id === "Hand" && r.craft_row <= 2).forEach((r) => { r.completed_at = "2026-11-01T17:00:00Z"; });
+  const ov = buildCraftView(old);
+  assert.deepEqual([A.logSittingDefaults(ov.row_states, 45, ov.timer).from, A.logSittingDefaults(ov.row_states, 45, ov.timer).to], [2, 5]);
+});
+await test("FR1 F1b (pure): timer on this part with its start row past the last full row (count fixed back): from never passes \"last full row\"; the same part reads on_active_part with no other rows", () => {
+  const v = input([part("Blanket", 157, { stitch_count: 195 })], rows("Blanket", 157, 59));
+  v.timer = timer({ part_id: "Blanket", start_row: 61, version: 2 });
+  const out = buildCraftView(v);
+  assert.deepEqual([out.timer.on_active_part, out.timer_rows], [true, []]);
+  const d = A.logSittingDefaults(out.row_states, 157, out.timer);
+  assert.deepEqual([d.from, d.to], [59, 59]);
+  assert.equal(A.sittingSummary("row", "Blanket", A.sittingPlan(out.row_states, 157, 58, 59), [], 25), "Saves row 59, 25 min");
+  assert.equal(A.sittingSummary("row", "Blanket", A.sittingPlan(out.row_states, 157, 59, 59), [], 25), "Saves 25 min, the time only (no rows)");
+});
+await test("FR1 stale sheets (Astra 1, pure): a sheet opened on row 62 keeps sending expected row 62 after a refresh shows 63, and says \"Your count changed on another screen (now row 63). Check and save again.\"", () => {
+  const at = (done) => { const v = input([part("Blanket", 157, { stitch_count: 195 })], rows("Blanket", 157, done)); return buildCraftView(v); };
+  const opened = at(61), refreshed = at(62);
+  const before = A.sheetFactsOf(opened);
+  assert.equal(A.sheetChangeText(before, A.sheetFactsOf(opened)), null);
+  assert.equal(A.sheetChangeText(before, A.sheetFactsOf(refreshed)), "Your count changed on another screen (now row 63). Check and save again.");
+  const form = { from: 58, to: 61, quarter: 0, note: "", key: "k", minutesTouched: true };
+  const body = A.logSittingBody(opened.active_part, opened.timer, form, 30);
+  assert.deepEqual([body.expected_row, body.to_row, body.from_row, body.minutes], [62, 61, 58, 30]);
+  // The timer and the total count only for the sheets that send them.
+  const t1 = { ...before, timer_version: 3 };
+  assert.equal(A.sheetChangeText(before, t1), null);
+  assert.equal(A.sheetChangeText(before, t1, { timer: true }), "Your timer changed on another screen. Check and save again.");
+  assert.equal(A.sheetChangeText(before, { ...before, total: 160 }, { total: true }), "Your total changed on another screen (now 160 rows). Check and save again.");
+  assert.equal(A.sheetChangeText(before, { ...before, part_id: "Border", part_name: "Border", word: "round", current_row: 1 }), "Your count changed on another screen (now Border round 1). Check and save again.");
+  const src = readFileSync(new URL("../src/components/craft/CraftSheets.tsx", import.meta.url), "utf8");
+  for (const sheet of ["LogSittingSheet", "UndoRowsSheet", "FixCountSheet", "ChangeTotalSheet"]) {
+    assert.match(src, new RegExp(`export function ${sheet}\\([^)]*view: live, part: livePart[\\s\\S]*?useSheetSnapshot\\(live, livePart`), `${sheet} captures its view`);
+  }
+  assert.match(src, /logSittingBody\(part, timer, form, shownMinutes\)/, "Log sitting sends the captured part and timer");
+});
+await test("FR1 Undo toast (Fable F2 / R3, pure): Row done 59 with rows 60–63 already ticked opens Undo rows… on row 59 (never unticks 59–63 by itself); the usual case unticks only row 59", () => {
+  const ahead = states(157, 58).map((s) => (s.row >= 60 && s.row <= 63 ? { ...s, done: true } : s));
+  assert.deepEqual(A.toastUndo(ahead, 157, 59, 64), { kind: "sheet", to: 59 });
+  assert.deepEqual(A.toastUndo(states(157, 58), 157, 59, 60), { kind: "one", body: { mode: "undo", to_row: 59, expected_row: 60 } });
+  const gap = states(31, 21).filter((s) => s.row < 22 || s.row > 28);
+  assert.deepEqual(A.toastUndo(gap, 31, 21, 29), { kind: "one", body: { mode: "undo", to_row: 21, expected_row: 29 } }, "a gap is not a ticked row");
+  assert.deepEqual(A.toastUndo(states(3, 2), 3, 3, 4).kind, "one", "the last row");
+  const src = readFileSync(new URL("../src/components/craft/CraftScreen.tsx", import.meta.url), "utf8");
+  assert.match(src, /if \(t\.undo\.kind === "sheet"\) \{ setUndoTo\(t\.undo\.to\); setSheet\("undo"\); return; \}/);
+  assert.match(src, /void act\("undo", "row", \{ part_id: t\.partId, \.\.\.t\.undo\.body \}\)/);
+});
+await test("FR1 Delete note (Astra follow-up): the screen's Delete sends DELETE { id } to /notes", () => {
+  const src = readFileSync(new URL("../src/components/craft/CraftScreen.tsx", import.meta.url), "utf8");
+  assert.match(src, /void act\("note", "notes", \{ id: note\.id \}, undefined, undefined, "DELETE"\)/);
+  assert.match(src, /const reply = await send\(kind, body, method\)/);
+});
+await test("FR1 Change total (Fable R9, pure): new rows copy the last row's stitches and type when the part has no stitch count; else the part's count; the sheet says so", () => {
+  const r = states(10, 2).map((s) => ({ ...s, units: 36 + s.row, type: "stockinette" }));
+  assert.equal(A.addedRowsText("round", r, null), "New rounds copy round 10: 46 stitches each and its stitch type (stockinette).");
+  assert.equal(A.addedRowsText("row", r, 30), "New rows get the part's 30 stitches and row 10's stitch type (stockinette).");
+  assert.equal(A.addedRowsText("row", [], 30), null);
+  const v = input([part("Hand", 3)], rows("Hand", 3, 1).map((x) => ({ ...x, unit_count: 40, work_type: "rib" })));
+  assert.deepEqual(buildCraftView(v).row_states.map((s) => [s.units, s.type]), [[40, "rib"], [40, "rib"], [40, "rib"]]);
+  assert.match(readFileSync(new URL("../src/components/craft/CraftSheets.tsx", import.meta.url), "utf8"), /addedRowsText\(word, view\.row_states, part\.stitch_count\)/);
+});
+await test("FR1 Log sitting at 360 px: the Saves… line, a changed-underneath line and any failure share the sticky foot with Save (right above it)", () => {
+  const css = readFileSync(new URL("../src/components/craft/craft.css", import.meta.url), "utf8");
+  assert.match(css, /\.craft-sheet-foot \{ position: sticky; bottom: -16px;/);
+  assert.match(css, /\.craft-sheet-foot \.craft-sheet-actions \{ position: static;/);
+  const src = readFileSync(new URL("../src/components/craft/CraftSheets.tsx", import.meta.url), "utf8");
+  const foot = src.match(/function Foot\([\s\S]*?\n\}/)[0];
+  assert.ok(foot.indexOf("changed &&") < foot.indexOf("summary !== null") && foot.indexOf("summary !== null") < foot.indexOf("<ErrorLine") && foot.indexOf("<ErrorLine") < foot.indexOf("<Actions"), "order: changed, summary, error, buttons");
+  assert.match(src, /<Foot changed=\{notice\} summary=\{sittingSummary\(/);
+});
+
 // ── Routes (no database) ────────────────────────────────────────────────────
 const routeCtx = (projectId) => ({ params: Promise.resolve({ projectId }) });
 const noDb = new Proxy({}, { get() { throw new Error("database touched"); } });

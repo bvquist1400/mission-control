@@ -550,6 +550,221 @@ try {
     assert.equal(craftPace.sessions[0].minutes, 55);
   });
 
+  // ── FR1 (fix round 1): timed sittings across a part end / a count fix, stale sheets, the toast, minutes, total ──
+  const A = await import("../src/lib/craft/actions.ts");
+  const getView = async (who, projectId) => (await detailRoute.GET(req(who, "GET", `/api/craft/${projectId}`), ctx(projectId))).json();
+  /** The body LogSittingSheet sends from a view, untouched form (minutes only when typed or with no timer). */
+  const sheetBody = (view, minutes = null) => {
+    const part = view.active_part, timer = view.timer, d = A.logSittingDefaults(view.row_states, part.total_rows, timer);
+    return A.logSittingBody(part, timer, { from: d.from, to: d.to, quarter: 0, note: "", key: `craft-${randomUUID()}`, minutesTouched: minutes !== null }, minutes ?? d.minutes ?? 30);
+  };
+  const preview = (view) => {
+    const part = view.active_part, d = A.logSittingDefaults(view.row_states, part.total_rows, view.timer);
+    return A.sittingSummary(part.row_word, part.name, A.sittingPlan(view.row_states, part.total_rows, d.from, d.to), view.timer && !view.timer.on_active_part ? view.timer_rows : [], d.minutes);
+  };
+  const linkedRows = (sessionId) => psql(`SELECT string_agg(p.name || ':' || i.craft_row, ',' ORDER BY p.sort_order, i.craft_row) FROM work_session_items w JOIN task_checklist_items i ON i.id = w.checklist_item_id JOIN craft_parts p ON p.id = i.craft_part_id WHERE w.session_id='${sessionId}';`);
+  const range = (name, from, to) => Array.from({ length: to - from + 1 }, (_, i) => `${name}:${from + i}`).join(",");
+  const mittensTwo = (owner, cuffDone) => seedCraft(owner, "Fake Mittens", [{ name: "Cuff", word: "Rnd", total: 31, done: cuffDone, stitch: 36, type: "rib" }, { name: "Hand", word: "Rnd", total: 45, done: 0, stitch: 36, type: "stockinette" }], { craft: "knit" });
+  const startTimerAgo = async (who, s, partId, minutes) => {
+    const st = await post(timerRoute, who, s.projectId, "timer", { action: "start", part_id: partId });
+    assert.equal(st.status, 200, JSON.stringify(st.body).slice(0, 300));
+    psql(`UPDATE craft_timers SET running_since = now() - interval '${minutes} minutes', sitting_started_at = now() - interval '${minutes} minutes' WHERE user_id='${who.id}';`);
+  };
+  const rowDone = async (who, s, partId, from, to) => { for (let row = from; row <= to; row++) assert.equal((await post(rowRoute, who, s.projectId, "row", { part_id: partId, mode: "done", expected_row: row })).status, 200, `row ${row}`); };
+
+  await test("FR1 F1a: mittens, timer started on the Cuff at round 15, Row done through 31, the screen moves to the Hand; Log sitting with the sheet's exact body saves Cuff rounds 15–31 (the preview said so), the minutes, and clears the timer", async () => {
+    clearTimer(a.id);
+    const s = mittensTwo(a.id, 14), [cuff, hand] = s.parts;
+    await startTimerAgo(a, s, cuff, 35);
+    await rowDone(a, s, cuff, 15, 31);
+    const view = await getView(a, s.projectId);
+    assert.deepEqual([view.active_part.id, view.timer.part_id, view.timer.on_active_part], [hand, cuff, false]);
+    assert.equal(preview(view), "Saves Cuff rounds 15–31, 35 min");
+    const body = sheetBody(view);
+    assert.deepEqual([body.part_id, body.to_row, body.expected_row, "from_row" in body, "minutes" in body], [hand, 0, 1, false, false]);
+    const r = await post(sittingsRoute, a, s.projectId, "sittings", body);
+    assert.equal(r.status, 201, `${r.status} ${r.body.error}`);
+    assert.equal(linkedRows(r.body.result.session_id), range("Cuff", 15, 31));
+    assert.deepEqual([r.body.result.minutes, r.body.result.task_id, r.body.result.rows_linked], [35, s.tasks.Cuff, 17]);
+    assert.deepEqual(r.body.result.other_rows, [{ part_id: cuff, rows: Array.from({ length: 17 }, (_, i) => 15 + i) }]);
+    assert.equal(psql(`SELECT part_id || ':' || from_row || ':' || to_row FROM craft_sitting_details WHERE session_id='${r.body.result.session_id}';`), `${hand}:0:0`);
+    assert.equal(timerRow(a.id), null);
+    assert.equal(psql(`SELECT actual_minutes FROM tasks WHERE id='${s.tasks.Cuff}';`), "35");
+  });
+
+  await test("FR1 F1a + 3 Hand rounds: links Cuff 29–31 and Hand 1–3 (task NULL across two tasks), exactly the view's preview; Hand rounds ticked before the sitting are not linked", async () => {
+    clearTimer(a.id);
+    const s = mittensTwo(a.id, 28), [cuff, hand] = s.parts;
+    // Hand round 1 was ticked last week (before this sitting) and is in no sitting: not this sitting's.
+    psql(`UPDATE task_checklist_items SET is_done = true, completed_at = '2026-11-01T17:00:00Z' WHERE craft_part_id='${hand}' AND craft_row = 1;`);
+    await startTimerAgo(a, s, cuff, 50);
+    await rowDone(a, s, cuff, 29, 31);
+    await rowDone(a, s, hand, 2, 4);
+    const view = await getView(a, s.projectId);
+    assert.equal(preview(view), "Saves Cuff rounds 29–31 and Hand rounds 2–4, 50 min");
+    const r = await post(sittingsRoute, a, s.projectId, "sittings", sheetBody(view));
+    assert.equal(r.status, 201, `${r.status} ${r.body.error}`);
+    assert.equal(linkedRows(r.body.result.session_id), `${range("Cuff", 29, 31)},${range("Hand", 2, 4)}`);
+    assert.deepEqual([r.body.result.task_id, r.body.result.from_row, r.body.result.minutes], [null, 1, 50]);
+  });
+
+  await test("FR1 part end with 0 rows in the next part, timer started on round 1 of the Cuff (Astra's zero-row case): the sitting saves all 31 Cuff rounds and the minutes, never a zero-row Hand sitting that drops them", async () => {
+    clearTimer(a.id);
+    const s = mittensTwo(a.id, 0), [cuff] = s.parts;
+    await startTimerAgo(a, s, cuff, 90);
+    assert.equal(timerRow(a.id).start_row, 1);
+    await rowDone(a, s, cuff, 1, 31);
+    const view = await getView(a, s.projectId);
+    assert.equal(preview(view), "Saves Cuff rounds 1–31, 1 h 30 min");
+    const r = await post(sittingsRoute, a, s.projectId, "sittings", sheetBody(view));
+    assert.equal(r.status, 201, `${r.status} ${r.body.error}`);
+    assert.deepEqual([r.body.result.rows_linked, r.body.result.minutes], [31, 90]);
+    assert.equal(linkedRows(r.body.result.session_id), range("Cuff", 1, 31));
+  });
+
+  await test("FR1 F1b: blanket timer started on row 61, Fix count back to 59 lowers the timer's start row (version bumped), row 59 done; Log sitting with the sheet's exact body saves row 59; an Undo below the start row lowers it too", async () => {
+    clearTimer(a.id);
+    const s = blanket(a.id, 60), [part] = s.parts;
+    await startTimerAgo(a, s, part, 25);
+    assert.equal(timerRow(a.id).start_row, 61);
+    assert.equal((await post(rowRoute, a, s.projectId, "row", { part_id: part, mode: "fix", expected_row: 61, to_row: 59 })).status, 200);
+    assert.deepEqual([timerRow(a.id).start_row, timerRow(a.id).version], [59, 2]);
+    await rowDone(a, s, part, 59, 59);
+    const view = await getView(a, s.projectId);
+    assert.equal(preview(view), "Saves row 59, 25 min");
+    const r = await post(sittingsRoute, a, s.projectId, "sittings", sheetBody(view));
+    assert.equal(r.status, 201, `${r.status} ${r.body.error}`);
+    assert.equal(linkedRows(r.body.result.session_id), "Blanket:59");
+    // Undo below the start row (and a body sent straight to the function with a start row past the saved row) never raises.
+    const s2 = blanket(a.id, 62), [p2] = s2.parts;
+    await startTimerAgo(a, s2, p2, 10);
+    assert.equal((await post(rowRoute, a, s2.projectId, "row", { part_id: p2, mode: "undo", expected_row: 63, to_row: 60 })).status, 200);
+    assert.deepEqual([timerRow(a.id).start_row, timerRow(a.id).version], [60, 2]);
+    psql(`UPDATE craft_timers SET start_row = 63 WHERE user_id='${a.id}';`);
+    const r2 = await post(sittingsRoute, a, s2.projectId, "sittings", { part_id: p2, use_timer: true, timer_version: 2, to_row: 59, expected_row: 60, idempotency_key: randomUUID() });
+    assert.equal(r2.status, 201, `${r2.status} ${r2.body.error}`);
+    assert.deepEqual([r2.body.result.rows_linked, timerRow(a.id)], [0, null]);
+  });
+
+  await test("FR1 pace parity across two parts: the Cuff 29–31 + Hand 1–3 sitting via craft_log_sitting = the same sitting via the project page's service (same getProjectPace() and getProjectForecast())", async () => {
+    clearTimer(a.id);
+    const s = mittensTwo(a.id, 28), [cuff, hand] = s.parts;
+    psql(`UPDATE projects SET target_date = '2026-12-20' WHERE id='${s.projectId}';`);
+    await startTimerAgo(a, s, cuff, 45);
+    await rowDone(a, s, cuff, 29, 31);
+    await rowDone(a, s, hand, 1, 3);
+    const r = await post(sittingsRoute, a, s.projectId, "sittings", sheetBody(await getView(a, s.projectId)));
+    assert.equal(r.status, 201, `${r.status} ${r.body.error}`);
+    const opts = { now: new Date(), today: today() };
+    const strip = (pace) => JSON.parse(JSON.stringify(pace, (k, v) => (["id", "session_id", "created_at"].includes(k) ? undefined : v)));
+    const craftPace = strip(await getProjectPace(a.client, a.id, s.projectId, opts)), craftForecast = strip(await getProjectForecast(a.client, a.id, s.projectId, opts));
+    const itemIds = psql(`SELECT string_agg(checklist_item_id::text, ',') FROM work_session_items WHERE session_id='${r.body.result.session_id}';`).split(",");
+    psql(`DELETE FROM work_sessions WHERE id='${r.body.result.session_id}';`);
+    const page = await logWorkSession(a.client, a.id, { project_id: s.projectId, date: r.body.result.session_date, start: r.body.result.started_at, end: r.body.result.ended_at,
+      minutes: r.body.result.minutes, item_ids: itemIds, idempotency_key: randomUUID() }, opts);
+    assert.equal(page.session.minutes, 45);
+    assert.deepEqual(strip(await getProjectForecast(a.client, a.id, s.projectId, opts)), craftForecast);
+    assert.deepEqual(strip(await getProjectPace(a.client, a.id, s.projectId, opts)), craftPace);
+    assert.equal(craftPace.sessions.length, 1);
+  });
+
+  await test("FR1 links stay in scope: a timer whose part is in another project is not this sitting's (no_timer), and the function refuses to link rows that are not ticked rows of this project (23503 guard present)", async () => {
+    clearTimer(a.id);
+    const s = mittensTwo(a.id, 14), other = mittensTwo(a.id, 14);
+    await startTimerAgo(a, other, other.parts[0], 20);
+    const r = await post(sittingsRoute, a, s.projectId, "sittings", { part_id: s.parts[1], use_timer: true, timer_version: 1, to_row: 0, expected_row: 1, idempotency_key: randomUUID() });
+    assert.deepEqual([r.status, r.body.reason], [409, "no_timer"]);
+    assert.notEqual(timerRow(a.id), null, "the other project's timer and its minutes stay");
+    assert.match(psql("SELECT pg_get_functiondef('craft_log_sitting(uuid,uuid,boolean,integer,integer,date,timestamp with time zone,timestamp with time zone,integer,integer,integer,integer,text,text)'::regprocedure);"),
+      /a linked row is not a ticked row of this project' USING ERRCODE = '23503'/);
+    clearTimer(a.id);
+  });
+
+  await test("FR1 stale sheets (Astra 1): Log sitting opened with row 61 finished, another screen finishes 62, the refresh arrives; the sheet says so and its captured body is refused (409 stale): row 62 stays ticked, no sitting", async () => {
+    const s = blanket(a.id, 61), [part] = s.parts;
+    const opened = await getView(a, s.projectId);
+    const body = A.logSittingBody(opened.active_part, opened.timer, { from: 58, to: 61, quarter: 0, note: "", key: `craft-${randomUUID()}`, minutesTouched: true }, 30);
+    assert.equal((await rpc(a, "craft_rows", { p_user_id: a.id, p_part_id: part, p_expected_row: 62, p_to_row: null, p_mode: "done" })).data.status, "ok");
+    const refreshed = await getView(a, s.projectId);
+    assert.equal(A.sheetChangeText(A.sheetFactsOf(opened), A.sheetFactsOf(refreshed), { timer: true }), "Your count changed on another screen (now row 63). Check and save again.");
+    const r = await post(sittingsRoute, a, s.projectId, "sittings", body);
+    assert.deepEqual([r.status, r.body.reason, r.body.result.current_row], [409, "stale", 63]);
+    assert.equal(doneRows(part).split(",").includes("62"), true);
+    assert.equal(psql(`SELECT count(*) FROM work_sessions WHERE project_id='${s.projectId}';`), "0");
+    // Undo rows opened on row 64 (go back to 60), another screen ticks 64: the captured body is refused, nothing unticked.
+    const u = blanket(a.id, 63), [up] = u.parts;
+    const openedU = await getView(a, u.projectId);
+    await rowDone(a, u, up, 64, 64);
+    const ru = await post(rowRoute, a, u.projectId, "row", { part_id: up, mode: "undo", expected_row: openedU.active_part.current_row, to_row: 60 });
+    assert.deepEqual([ru.status, ru.body.reason], [409, "stale"]);
+    assert.equal(current(up), 65);
+  });
+
+  await test("FR1 Undo toast (Fable R3): Row done 59 with rows 60–63 already ticked → the toast opens Undo rows… (nothing sent); without rows ahead the toast's body unticks only row 59", async () => {
+    const s = blanket(a.id, 58), [part] = s.parts;
+    psql(`UPDATE task_checklist_items SET is_done = true WHERE craft_part_id='${part}' AND craft_row BETWEEN 60 AND 63;`);
+    const before = (await getView(a, s.projectId)).row_states;
+    const done = await post(rowRoute, a, s.projectId, "row", { part_id: part, mode: "done", expected_row: 59 });
+    assert.deepEqual(A.toastUndo(before, 157, 59, done.body.result.current_row), { kind: "sheet", to: 59 });
+    assert.equal(doneRows(part).split(",").filter((r) => Number(r) >= 59).join(","), "59,60,61,62,63");
+    const t = blanket(a.id, 58), [tp] = t.parts;
+    const beforeT = (await getView(a, t.projectId)).row_states;
+    const doneT = await post(rowRoute, a, t.projectId, "row", { part_id: tp, mode: "done", expected_row: 59 });
+    const undo = A.toastUndo(beforeT, 157, 59, doneT.body.result.current_row);
+    assert.equal(undo.kind, "one");
+    const r = await post(rowRoute, a, t.projectId, "row", { part_id: tp, ...undo.body });
+    assert.deepEqual(r.body.result.unticked, [59]);
+  });
+
+  await test("FR1 Delete note: the screen's old POST { id } was a 400 that deleted nothing; DELETE { id } removes the note", async () => {
+    const s = blanket(a.id), [part] = s.parts;
+    const note = await post(notesRoute, a, s.projectId, "notes", { part_id: part, row: 59, text: "extra dc" });
+    const wrong = await post(notesRoute, a, s.projectId, "notes", { id: note.body.note.id });
+    assert.equal(wrong.status, 400);
+    assert.equal(psql(`SELECT count(*) FROM craft_notes WHERE id='${note.body.note.id}';`), "1");
+    const right = await post(notesRoute, a, s.projectId, "notes", { id: note.body.note.id }, "DELETE");
+    assert.deepEqual([right.status, right.body.deleted, right.body.view.notes.length], [200, note.body.note.id, 0]);
+  });
+
+  await test("FR1 typed minutes vs start–end (F0's rule): 11 typed minutes in a 10-minute span save with the start unmoved; 12 are refused with the project page's words; fewer is fine; with the timer, typed minutes over its span + 1 are refused too", async () => {
+    const s = blanket(a.id, 58), [part] = s.parts;
+    const end = new Date(Date.now() - 5 * 60_000), start = new Date(end.getTime() - 10 * 60_000);
+    const body = (minutes) => ({ part_id: part, use_timer: false, minutes, started_at: start.toISOString(), ended_at: end.toISOString(), from_row: 58, to_row: 58, expected_row: 59, idempotency_key: randomUUID() });
+    const over = await post(sittingsRoute, a, s.projectId, "sittings", body(12));
+    assert.equal(over.status, 400);
+    assert.equal(over.body.error, "minutes (12) are more than start–end (10 min); minutes can be less (breaks taken off) but not more");
+    const edge = await post(sittingsRoute, a, s.projectId, "sittings", body(11));
+    assert.equal(edge.status, 201, JSON.stringify(edge.body).slice(0, 300));
+    assert.equal(Date.parse(edge.body.result.started_at), start.getTime(), "the start never moves");
+    const less = await post(sittingsRoute, a, s.projectId, "sittings", body(4));
+    assert.equal(less.status, 201);
+    clearTimer(a.id);
+    const t = blanket(a.id, 58), [tp] = t.parts;
+    await startTimerAgo(a, t, tp, 20);
+    const timed = await post(sittingsRoute, a, t.projectId, "sittings", { part_id: tp, use_timer: true, timer_version: 1, minutes: 40, to_row: 58, expected_row: 59, idempotency_key: randomUUID() });
+    assert.equal(timed.status, 400);
+    assert.match(timed.body.error, /^minutes \(40\) are more than start–end \(20 min\)/);
+    assert.notEqual(timerRow(a.id), null, "a refused save keeps the timer's minutes");
+    const ok = await post(sittingsRoute, a, t.projectId, "sittings", { part_id: tp, use_timer: true, timer_version: 1, minutes: 21, to_row: 58, expected_row: 59, idempotency_key: randomUUID() });
+    assert.equal(ok.status, 201, JSON.stringify(ok.body).slice(0, 300));
+  });
+
+  await test("FR1 Change total (Fable R9): a part with no stitch count adds rounds that copy the last round's units and type; on the scarf a lower total lowers the stitches left in the pace forecast", async () => {
+    const s = seedCraft(a.id, "Fake Mittens 3", [{ name: "Hand", word: "Rnd", total: 10, done: 2, stitch: null, type: "stockinette" }], { craft: "knit" });
+    const [part] = s.parts;
+    psql(`UPDATE task_checklist_items SET unit_count = 36 + craft_row WHERE craft_part_id='${part}';`);
+    const r = await post(totalRoute, a, s.projectId, "total", { part_id: part, total: 12, expected_total: 10 });
+    assert.equal(r.status, 200, JSON.stringify(r.body).slice(0, 200));
+    assert.equal(psql(`SELECT string_agg(text || '=' || unit_count || '/' || work_type, ' ' ORDER BY craft_row) FROM task_checklist_items WHERE craft_part_id='${part}' AND craft_row > 10;`), "Rnd 11=46/stockinette Rnd 12=46/stockinette");
+    const sc = scarf(a.id), [body] = sc.parts;
+    const opts = { now: new Date(), today: today() };
+    const left = async () => (await getProjectForecast(a.client, a.id, sc.projectId, opts)).forecast.work_types.reduce((sum, w) => sum + w.units_left, 0);
+    const before = await left();
+    const cut = await post(totalRoute, a, sc.projectId, "total", { part_id: body, total: 500, expected_total: 519 });
+    assert.equal(cut.status, 200, JSON.stringify(cut.body).slice(0, 200));
+    assert.equal(before - (await left()), 19 * 30);
+  });
+
   // ── Change total ─────────────────────────────────────────────────────────
   await test("Change total, more: \"Row 520\"–\"Row 522\" added at the end of the last task with 30 stitches and the last row's work type; the last segment grows; the TS plan said the same", async () => {
     const s = scarf(a.id), [part] = s.parts;
