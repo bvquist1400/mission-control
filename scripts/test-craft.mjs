@@ -91,11 +91,13 @@ registerHooks({ load(url, context, nextLoad) {
     } });
 const { CraftScreen } = await import("../src/components/craft/CraftScreen.tsx");
 const render = (data) => renderToStaticMarkup(createElement(CraftScreen, { view: buildCraftView(data) }));
+const withoutMenu = (html) => { const out = html.replace(/<div class="craft-menu">.*?<\/div><\/div>/, ""); assert.notEqual(out, html, "craft screen menu missing"); return out; };
 await test("SSR: read-only screen has row/ridge, timer placeholder, no write controls", () => {
     const html = render(scarf);
     assert.match(html, /Row 119 · ridge 60/);
     assert.match(html, /Timer arrives in the next update/);
-    assert.doesNotMatch(html, /<button|<input|<textarea|<select|disabled=|Start timer|Log sitting/);
+    // S1C: the header menu (Remove from craft screen) is the screen's only control; no row or timer writes.
+    assert.doesNotMatch(withoutMenu(html), /<button|<input|<textarea|<select|disabled=|Start timer|Log sitting/);
     assert.match(html, /aria-label="Back to project"/);
 });
 await test("SSR: blanket shows bands, next rows and separate border count", () => {
@@ -282,7 +284,7 @@ await test("SSR switcher: two or more projects make the title a labelled select 
     ]);
     assert.equal((html.match(/<select/g) ?? []).length, 1);
     assert.equal((html.match(/<h2>/g) ?? []).length, 1 + 4, "one title heading plus the four inside headings");
-    assert.doesNotMatch(html, /<button|<input|<textarea|<form|disabled=|Start timer|Log sitting/);
+    assert.doesNotMatch(withoutMenu(html), /<button|<input|<textarea|<form|disabled=|Start timer|Log sitting/);
 });
 await test("SSR switcher: the shown project is always an option even if the list missed it", () => {
     const list = craftModel.buildCraftProjectList(listInput()).filter((p) => p.id !== blanketId);
