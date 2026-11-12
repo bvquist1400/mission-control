@@ -44,13 +44,13 @@
 .craft-finished { margin-top: 8px; font-family: var(--font-plex-cond); font-size: 42px; font-weight: 700; line-height: 1; }
 .craft-timer { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; min-height: 64px; margin-top: 14px; padding: 10px 10px 10px 14px; border: 1px solid var(--stroke); background: var(--panel); color: var(--muted-foreground); }
 .craft-timer[data-state="running"] { border-left: 5px solid var(--accent); }
-.craft-timer-main { flex: 1 1 140px; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-.craft-timer-clock { font-family: var(--font-plex-mono); font-size: 34px; font-weight: 600; line-height: 1; letter-spacing: -.02em; color: var(--foreground); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.craft-timer-main { flex: 1 1 0; min-width: 96px; display: flex; flex-direction: column; gap: 4px; }
+.craft-timer-clock { font-family: var(--font-plex-mono); font-size: 32px; font-weight: 600; line-height: 1; letter-spacing: -.02em; color: var(--foreground); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .craft-timer[data-state="idle"] .craft-timer-clock { color: var(--muted-foreground); }
 .craft-timer-state { display: flex; align-items: center; gap: 6px; font-family: var(--font-plex-mono); font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
 .craft-dot { width: 8px; height: 8px; flex-shrink: 0; border-radius: 9999px; background: var(--accent); }
-.craft-timer-buttons { display: flex; gap: 8px; flex-shrink: 0; }
-.craft-timer-buttons > button { min-height: 48px; }
+.craft-timer-buttons { display: flex; gap: 6px; flex-shrink: 0; }
+.craft-timer-buttons > button { min-height: 48px; padding-left: 12px; padding-right: 12px; }
 .craft-leftover, .craft-tip { flex-basis: 100%; }
 .craft-leftover { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border-left: 3px solid var(--warning-border); background: var(--warning-soft); color: var(--foreground); }
 .craft-leftover p { flex: 1 1 100%; font-size: 14px; }
@@ -142,23 +142,27 @@
 .craft-check strong { font-size: 15px; }
 .craft-check span { font-family: var(--font-plex-mono); font-size: 12px; color: var(--muted-foreground); }
 .craft-failure { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--danger-border); border-left: 5px solid var(--danger); background: var(--danger-soft); color: var(--foreground); }
-.craft-failure p { flex: 1 1 200px; font-size: 14px; line-height: 1.4; }
-/* The action bar stays at the bottom of the front screen while the pattern scrolls. */
-.craft-actions { position: sticky; bottom: 0; z-index: 5; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.7fr); gap: 10px; margin: 14px 0 0; padding: 12px 0 max(12px, env(safe-area-inset-bottom)); border-top: 1px solid var(--stroke); background: var(--background); }
-.craft-actions .craft-log { min-height: 64px; font-size: 18px; }
+.craft-failure { flex-wrap: nowrap; }
+.craft-failure p { flex: 1 1 0; min-width: 0; font-size: 14px; line-height: 1.4; }
+/* The timer and the action bar stay together at the bottom of the front screen (above the home bar) while the pattern scrolls under them. */
+.craft-s2 { position: sticky; bottom: 0; z-index: 5; margin-top: 14px; padding: 0 0 max(10px, env(safe-area-inset-bottom)); border-top: 1px solid var(--stroke); background: var(--background); }
+.craft-s2 > .craft-timer { margin-top: 10px; }
+.craft-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.7fr); gap: 10px; margin-top: 10px; }
+.craft-actions .craft-log { min-height: 64px; font-size: 17px; line-height: 1.1; }
 .craft-done { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-height: 64px; padding: 8px 12px; border: 0; background: var(--accent); color: var(--on-accent); font-family: var(--font-plex-cond); cursor: pointer; }
 .craft-done span { font-size: 24px; font-weight: 700; line-height: 1.05; }
 .craft-done small { font-family: var(--font-plex-mono); font-size: 12px; opacity: .9; }
 .craft-done:hover:not(:disabled) { filter: brightness(1.08); }
 .craft-done:disabled { opacity: .55; cursor: not-allowed; }
 .craft-done[aria-busy] { opacity: .75; }
-.craft-actions-more { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.craft-actions-more { display: flex; flex-wrap: wrap; gap: 0 16px; margin-top: 6px; }
 .craft-actions-more button { min-height: 36px; padding: 4px 0; font-size: 14px; color: var(--accent-text); text-decoration: underline; text-underline-offset: 3px; background: transparent; }
 @media (pointer: coarse) { .craft-actions-more button { min-height: 44px; } }
-.craft-toast { position: fixed; left: 50%; bottom: calc(150px + env(safe-area-inset-bottom)); z-index: 40; transform: translateX(-50%); display: flex; align-items: center; gap: 16px; max-width: calc(100vw - 32px); padding: 10px 10px 10px 16px; background: var(--ink); color: var(--on-ink); font-size: 15px; font-weight: 600; }
+/* The Undo toast floats just above the sticky timer and buttons, by Row done. */
+.craft-toast { position: absolute; left: 0; right: 0; bottom: calc(100% + 8px); z-index: 6; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 8px 8px 16px; background: var(--ink); color: var(--on-ink); font-size: 15px; font-weight: 600; }
 .craft-toast button { min-height: 44px; padding: 0 14px; border: 1px solid currentColor; background: transparent; color: inherit; font-family: var(--font-plex-cond); font-size: 16px; font-weight: 700; }
 @media (prefers-reduced-motion: no-preference) { .craft-toast { animation: craft-toast-in 160ms ease-out; } }
-@keyframes craft-toast-in { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+@keyframes craft-toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 .craft-notes li { position: relative; padding: 10px 64px 10px 0; border-bottom: 1px solid var(--stroke); }
 .craft-notes small { font-family: var(--font-plex-mono); font-size: 12px; color: var(--muted-foreground); }
 .craft-notes p { margin-top: 4px; }
@@ -170,9 +174,10 @@
 .craft-sheet-warn { padding: 8px 10px; border-left: 3px solid var(--warning-border); background: var(--warning-soft); font-size: 14px; line-height: 1.45; color: var(--foreground); }
 .craft-sheet-preview { padding: 8px 10px; border-left: 3px solid var(--accent-text); background: var(--panel-muted); font-family: var(--font-plex-mono); font-size: 13px; line-height: 1.45; color: var(--foreground); overflow-wrap: anywhere; }
 .craft-sheet-error { padding: 8px 10px; border-left: 3px solid var(--danger); background: var(--danger-soft); font-size: 14px; color: var(--foreground); }
-.craft-sheet-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr); gap: 10px; margin-top: 4px; }
+/* Cancel / Save stay in view at the bottom of a long sheet (the sheet scrolls under them). */
+.craft-sheet-actions { position: sticky; bottom: -16px; z-index: 1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr); gap: 10px; margin: 4px -4px -4px; padding: 10px 4px 16px; border-top: 1px solid var(--stroke); background: var(--panel); }
 .craft-sheet-actions > * { min-height: 52px; }
-.craft-sheet-actions-wrap { grid-template-columns: minmax(0, 1fr); }
+.craft-sheet-actions-wrap, .craft-sheet-actions-one { grid-template-columns: minmax(0, 1fr); }
 .craft-field { display: flex; flex-direction: column; gap: 6px; }
 .craft-field > label { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; font-weight: 600; }
 .craft-field > label > span { font-family: var(--font-plex-mono); font-size: 12px; font-weight: 400; color: var(--muted-foreground); text-align: right; }
@@ -180,7 +185,8 @@
 .craft-stepper { display: grid; grid-template-columns: 64px minmax(0, 1fr) 64px; border: 1px solid var(--stroke); }
 .craft-stepper button { min-height: 56px; background: var(--panel); color: var(--foreground); font-family: var(--font-plex-cond); font-size: 22px; font-weight: 700; }
 .craft-stepper button:hover { background: var(--panel-muted); }
-.craft-stepper input { min-width: 0; border: 0; border-left: 1px solid var(--stroke); border-right: 1px solid var(--stroke); background: var(--background); color: var(--foreground); text-align: center; font-family: var(--font-plex-cond); font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; }
+/* Beats the touch-screen 16px field rule in globals.css (30px is above its 16px floor, so iOS never zooms). */
+.craft-stepper input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]) { min-width: 0; border: 0; border-left: 1px solid var(--stroke); border-right: 1px solid var(--stroke); background: var(--background); color: var(--foreground); text-align: center; font-family: var(--font-plex-cond); font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .craft-quarters, .craft-choices { margin: 0; padding: 0; border: 0; }
 .craft-quarters legend, .craft-choices legend { margin-bottom: 6px; font-size: 14px; font-weight: 600; }
 .craft-quarters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--stroke); }
@@ -205,3 +211,5 @@
 @media (min-width: 600px) {
   .craft-sheet-actions-wrap { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 }
+.craft-stepper input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
+.craft-stepper input[type="number"]::-webkit-inner-spin-button, .craft-stepper input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }

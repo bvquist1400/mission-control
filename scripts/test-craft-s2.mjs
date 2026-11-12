@@ -247,16 +247,16 @@ registerHooks({ load(url, context, nextLoad) {
 } });
 const { CraftScreen } = await import("../src/components/craft/CraftScreen.tsx");
 const screen = (data) => renderToStaticMarkup(createElement(CraftScreen, { view: buildCraftView(data) }));
-const timerCard = (html) => html.match(/<div class="craft-timer"[\s\S]*?(?=<div class="craft-actions">|<div class="craft-failure"|<section class="craft-today")/)?.[0] ?? "";
+const timerCard = (html) => html.match(/<div class="craft-timer"[\s\S]*?(?=<div class="craft-actions">|<div class="craft-failure"|<div class="craft-actions-more">|<section class="craft-today")/)?.[0] ?? "";
 await test("Screen: a running timer shows the server's elapsed time, the time it started, Pause and ± time; the Auto-Lock tip until the screen lock is held", () => {
   const v = scarfInput(); v.timer = timer();
   const html = screen(v), card = timerCard(html);
   assert.match(card, /data-state="running"/);
   assert.match(card, /aria-label="Timer 32:00">32:00</);
-  assert.match(card, /Timing since 12:20 PM/);
+  assert.match(card, /Since 12:20 PM/);
   assert.match(card, />Pause<\/button>/);
   assert.match(card, />± time<\/button>/);
-  assert.match(card, /Set Auto-Lock to Never while you craft/);
+  assert.match(card, /Tip: set Auto-Lock to Never while you craft\./);
   assert.doesNotMatch(html, /screen on</, "\"screen on\" only while the lock is held (never in the server render)");
 });
 await test("Screen: paused says when it stopped (\"stopped 20 min ago\") with Resume; a long run asks Was it left on?; idle says Not timing with Start", () => {
@@ -325,10 +325,10 @@ await test("CSS (S2): tokens only, nothing under 12px, a sticky action bar above
   const css = readFileSync(new URL("../src/components/craft/craft.css", import.meta.url), "utf8");
   assert.doesNotMatch(css, /#[0-9a-f]{3,8}\b|rgba?\(|oklch\(/i);
   assert.doesNotMatch(css, /font-size:\s*(\d|1[01])(\.\d+)?px/);
-  assert.match(css, /\.craft-actions \{ position: sticky; bottom: 0;[^}]*env\(safe-area-inset-bottom\)/);
+  assert.match(css, /\.craft-s2 \{ position: sticky; bottom: 0;[^}]*env\(safe-area-inset-bottom\)/);
   assert.match(css, /\.craft-done \{[^}]*min-height: 64px;/);
   assert.match(css, /\.craft-stepper button \{ min-height: 56px;/);
-  assert.match(css, /\.craft-stepper input \{[^}]*font-size: 30px;/);
+  assert.match(css, /\.craft-stepper input:not\(\[type="checkbox"\]\)[^{]*\{[^}]*font-size: 30px;/);
   assert.match(css, /label:has\(input:focus-visible\)/);
   assert.match(css, /@media \(prefers-reduced-motion: no-preference\) \{ \.craft-toast/);
   assert.match(css, /@media \(pointer: coarse\) \{ \.craft-actions-more button \{ min-height: 44px; \} \}/);

@@ -149,7 +149,7 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
   }
 
   const timerState = !timer ? (view.other_timer ? `${view.other_timer.project_name}'s timer ${view.other_timer.running ? "is running" : "is paused"} (${minutesText(view.other_timer.elapsed_seconds / 60)} not saved)` : "Not timing")
-    : timer.running ? `Timing since ${new Date(timer.sitting_started_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" })}`
+    : timer.running ? `Since ${new Date(timer.sitting_started_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" })}`
     : `Paused${timer.paused_at ? ` · stopped ${minutesText(Math.max(0, (nowMs - Date.parse(timer.paused_at)) / 60000))} ago` : ""}`;
   const leftOn = timer && timer.long_run && leftOnOk !== timer.sitting_started_at;
 
@@ -197,6 +197,12 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
             ))}</div>
           )}
           <div className="craft-s2">
+            {toast && (
+              <div className="craft-toast" role="status">
+                <span>{toast.word === "round" ? "Round" : "Row"} {toast.row} done</span>
+                <button type="button" onClick={undoToast}>Undo</button>
+              </div>
+            )}
             <div className="craft-timer" data-state={timer ? (timer.running ? "running" : "paused") : "idle"}>
               <div className="craft-timer-main">
                 <span className="craft-timer-clock" role="timer" aria-label={`Timer ${clockText(elapsed)}`}>{clockText(elapsed)}</span>
@@ -215,7 +221,7 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
                   <Button variant="ghost" size="sm" onClick={() => setLeftOnOk(timer.sitting_started_at)}>It&apos;s right</Button>
                 </div>
               )}
-              {timer?.running && !screenOn && <p className="craft-tip">Set Auto-Lock to Never while you craft, so the screen stays on.</p>}
+              {timer?.running && !screenOn && <p className="craft-tip">Tip: set Auto-Lock to Never while you craft.</p>}
             </div>
             {failure && (
               <div className="craft-failure" role="alert">
@@ -231,14 +237,16 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
                   <span>✓ {Word} done</span>
                   <small>{part.finished ? "all ticked" : `${word} ${part.current_row}${nextRow ? ` → ${nextRow}` : " (last)"}`}</small>
                 </button>
-                <div className="craft-actions-more">
-                  <button type="button" onClick={() => setSheet("undo")}>Undo {word}s…</button>
-                  <button type="button" onClick={() => setSheet("fix")}>Fix count…</button>
-                  <button type="button" onClick={() => setSheet("note")}>Note</button>
-                </div>
               </div>
             )}
           </div>
+          {part && (
+            <div className="craft-actions-more">
+              <button type="button" onClick={() => setSheet("undo")}>Undo {word}s…</button>
+              <button type="button" onClick={() => setSheet("fix")}>Fix count…</button>
+              <button type="button" onClick={() => setSheet("note")}>Note</button>
+            </div>
+          )}
           <section className="craft-today" aria-label="Today"><h3>Today</h3><p><strong>{view.today.rows}</strong> rows ticked <span>·</span> <strong>{view.today.minutes}</strong> min</p></section>
         </section>
         <aside className="craft-inside" aria-label="Project details">
@@ -252,12 +260,6 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
             <button type="button" aria-label={`Delete note: ${note.text.slice(0, 40)}`} onClick={() => { void act("note", "notes", { id: note.id }); }}>Delete</button></li>)}</ul></section>}
         </aside>
       </div>
-      {toast && (
-        <div className="craft-toast" role="status">
-          <span>{toast.word === "round" ? "Round" : "Row"} {toast.row} done</span>
-          <button type="button" onClick={undoToast}>Undo</button>
-        </div>
-      )}
       {part && sheet === "log" && <LogSittingSheet open onClose={() => setSheet(null)} view={view} part={part} send={send} onSaved={() => setSheet(null)} />}
       {part && sheet === "log-then-start" && <LogSittingSheet open thenStart onClose={() => setSheet(null)} view={view} part={part} send={send}
         onSaved={() => { setSheet(null); void act("timer", "timer", { action: "start", part_id: part.id }, undefined, onTimerRefusal); }} />}

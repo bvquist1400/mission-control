@@ -109,7 +109,8 @@ export function LogSittingSheet({ open, onClose, view, part, send, thenStart, on
         )}
         <p className={form.quarter > 0 ? "craft-sheet-warn" : "craft-sheet-hint"}>
           {form.quarter > 0 ? `Stopping partway through ${word} ${nextRow}: its minutes count toward speed once the next update ships. Or keep the timer paused and save when the ${word} is done.`
-            : `Stopped partway through a ${word}? Its minutes count toward speed once the next update ships. Or keep the timer paused and save when the ${word} is done.`}
+            : timer ? `Stopped partway through a ${word}? Its minutes count toward speed once the next update ships. Or keep the timer paused and save when the ${word} is done.`
+            : `Stopped partway through a ${word}? Its minutes count toward speed once the next update ships.`}
         </p>
         <div className="craft-field">
           <label htmlFor="craft-log-note">Note<span>optional</span></label>
@@ -322,12 +323,12 @@ export function TimerFixSheet({ open, onClose, view, send }: { open: boolean; on
       <form onSubmit={(event) => { event.preventDefault(); if (timer.running && ago) void run({ action: "stopped_ago", minutes: ago }, true); }}>
         <p className="craft-sheet-sub">The timer shows {clockText(timer.elapsed_seconds)}{timer.adjust_seconds ? ` (${timer.adjust_seconds > 0 ? "+" : "−"}${Math.abs(timer.adjust_seconds / 60)} min added by hand)` : ""}.</p>
         <div className="craft-adjust" role="group" aria-label="Add or take off minutes">
-          {[-5, -1, 1, 5].map((m) => <Button key={m} type="button" variant="secondary" size="lg" disabled={state.busy} onClick={() => run({ action: "adjust", minutes: m })}>{m > 0 ? `+${m}` : `−${-m}`} min</Button>)}
+          {[-5, -1, 1, 5].map((m) => <Button key={m} type="button" variant="secondary" size="lg" disabled={state.busy} aria-label={m > 0 ? `Add ${m} min` : `Take off ${-m} min`} onClick={() => run({ action: "adjust", minutes: m })}>{m > 0 ? `+${m}` : `−${-m}`}</Button>)}
         </div>
         {timer.running ? (
           <>
             <Stepper id="craft-stopped-ago" label="Stopped how long ago?" hint="minutes" min={1} max={SITTING_MAX_MINUTES} value={ago} onChange={setAgo} />
-            <div className="craft-sheet-actions">
+            <div className="craft-sheet-actions craft-sheet-actions-one">
               <Button type="submit" variant="primary" size="lg" disabled={state.busy || !ago}>{`Stopped ${ago ?? "…"} min ago`}</Button>
             </div>
           </>
