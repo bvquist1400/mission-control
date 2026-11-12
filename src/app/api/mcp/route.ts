@@ -1170,7 +1170,7 @@ function createMcpServer(): McpServer {
 
   mcp.tool(
     'list_work_sessions',
-    'List logged sittings of work (newest first) for a project or a task, with minutes, times, linked checklist rows and whether each counts toward speed.',
+    'List logged sittings of work (newest first) for a project or a task, with minutes, times, linked checklist rows and whether each counts toward speed. item_ids are the rows each sitting finished; in_progress_item_ids are rows worked on in it but not finished (a row over several evenings is in progress in the earlier sittings and finished in the last; never count those as finished rows).',
     {
       project_id: z.string().optional().describe('Project UUID'),
       task_id: z.string().optional().describe('Task UUID'),
@@ -1190,7 +1190,7 @@ function createMcpServer(): McpServer {
 
   mcp.tool(
     'update_work_session',
-    'Fix a logged sitting: its date, start/end, minutes, task, covered rows (rows or item_ids replace the linked rows; ticks are not undone), note, extra units, or whether it counts toward speed (exclude_from_stats + exclude_reason).',
+    'Fix a logged sitting: its date, start/end, minutes, task, covered rows (rows or item_ids replace the finished rows; ticks are not undone; rows in progress stay, and a row in progress named here becomes finished in that sitting), note, extra units, or whether it counts toward speed (exclude_from_stats + exclude_reason).',
     {
       session_id: z.string().describe('Work session UUID'),
       task_id: z.string().nullable().optional().describe('Move to another task in the same project, or null for a multi-task sitting'),

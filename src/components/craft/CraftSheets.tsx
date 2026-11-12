@@ -192,7 +192,7 @@ export function UndoRowsSheet({ open, onClose, view: live, part: livePart, send,
   const choices = undoChoices(view.row_states, part.total_rows);
   const [to, setTo] = useState<number | null>(initialTo !== undefined && choices.includes(initialTo) ? initialTo : choices[0] ?? null);
   const ripChoices = undoChoices(view.row_states, part.total_rows, RIP_CHOICES);
-  const [ripFrom, setRipFrom] = useState<number | null>(ripChoices[0] ?? null);
+  const [ripFrom, setRipFrom] = useState<number | null>(initialTo !== undefined && ripChoices.includes(initialTo) ? initialTo : ripChoices[0] ?? null);
   const [exclude, setExclude] = useState<string[]>([]);
   const [note, setNote] = useState("");
   const [key, setKey] = useState(newIdempotencyKey);
