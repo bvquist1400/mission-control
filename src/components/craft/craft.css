@@ -178,6 +178,10 @@
 .craft-sheet-actions { position: sticky; bottom: -16px; z-index: 1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr); gap: 10px; margin: 4px -4px -4px; padding: 10px 4px 16px; border-top: 1px solid var(--stroke); background: var(--panel); }
 .craft-sheet-actions > * { min-height: 52px; }
 .craft-sheet-actions-wrap, .craft-sheet-actions-one { grid-template-columns: minmax(0, 1fr); }
+/* FR1: what Save will do sits right above Save, in the sticky foot (in view at 360 px). */
+.craft-sheet-foot { position: sticky; bottom: -16px; z-index: 1; display: flex; flex-direction: column; gap: 8px; margin: 4px -4px -4px; padding: 10px 4px 16px; border-top: 1px solid var(--stroke); background: var(--panel); }
+.craft-sheet-foot .craft-sheet-actions { position: static; margin: 0; padding: 0; border-top: 0; }
+.craft-sheet-foot .craft-sheet-preview, .craft-sheet-foot .craft-sheet-warn { max-height: 7.5em; overflow-y: auto; }
 .craft-field { display: flex; flex-direction: column; gap: 6px; }
 .craft-field > label { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; font-weight: 600; }
 .craft-field > label > span { font-family: var(--font-plex-mono); font-size: 12px; font-weight: 400; color: var(--muted-foreground); text-align: right; }

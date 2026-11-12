@@ -10,8 +10,9 @@ import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import type { CraftView } from "@/lib/craft";
 import {
-  CRAFT_MAX_ROWS, SITTING_MAX_MINUTES, clockText, fixCountPlan, logSittingDefaults, minutesText, newIdempotencyKey, quarterText,
-  rowFromRidgesDone, rowsText, setTotalPlan, setTotalRefusalText, sittingPlan, timerMinutes, undoChoices, type RowWord,
+  CRAFT_MAX_ROWS, SITTING_MAX_MINUTES, addedRowsText, clockText, fixCountPlan, logSittingBody, logSittingDefaults, minutesText, newIdempotencyKey, quarterText,
+  rowFromRidgesDone, rowsText, setTotalPlan, setTotalRefusalText, sheetChangeText, sheetFactsOf, sittingPlan, sittingSummary, timerMinutes,
+  undoChoices, wordTitle, type RowWord, type SheetFacts,
 } from "@/lib/craft/actions";
 
 export type Send = (kind: "row" | "timer" | "sittings" | "total" | "notes", body: Record<string, unknown>, method?: "POST" | "DELETE") => Promise<SendReply>;
@@ -32,6 +33,44 @@ function Actions({ busy, onCancel, saveLabel, disabled }: { busy: boolean; onCan
 function ErrorLine({ text }: { text: string | null }) {
   return text ? <p className="craft-sheet-error" role="alert">{text}</p> : null;
 }
+/**
+ * The sheet's foot, sticky at the bottom of the sheet (FR1, Fable: at 360 px the "Saves…" line sat
+ * out of view above Save): the changed-underneath line, what Save will do, a failure, then the buttons.
+ */
+function Foot({ changed, summary, summaryWarn, error, ...actions }: { changed: string | null; summary: ReactNode; summaryWarn?: boolean; error: string | null;
+  busy: boolean; onCancel: () => void; saveLabel: string; disabled?: boolean }) {
+  return (
+    <div className="craft-sheet-foot">
+      {changed && <p className="craft-sheet-warn craft-sheet-changed" role="status">{changed}</p>}
+      {summary !== null && summary !== undefined && <p className={summaryWarn ? "craft-sheet-warn" : "craft-sheet-preview"}>{summary}</p>}
+      <ErrorLine text={error} />
+      <Actions {...actions} />
+    </div>
+  );
+}
+
+/**
+ * FR1 (Astra 1): a sheet sends what it showed when it opened (part, expected row, total, timer
+ * version), never what a later refresh brought. When those changed underneath, the sheet says so and
+ * its button only takes the new count; a second tap saves. 073's guards refuse a stale body anyway.
+ */
+function useSheetSnapshot(view: CraftView, part: Part, use: { timer?: boolean; total?: boolean } = {}) {
+  const [snap, setSnap] = useState(() => ({ view, part }));
+  const [notice, setNotice] = useState<string | null>(null);
+  const before = sheetFactsOf(snap.view) as SheetFacts;
+  const changed = sheetChangeText(before, sheetFactsOf(view), use);
+  return {
+    snap, changed, notice: changed ?? notice,
+    /** Takes the live count; true when the sheet had to (the tap must not save). */
+    retake(): boolean {
+      if (!changed) { setNotice(null); return false; }
+      setSnap({ view, part });
+      setNotice(changed);
+      return true;
+    },
+  };
+}
+const CHANGED_LABEL = "Use the new count";
 /** A number box with − and + beside it (big targets on the Duo, typing on a desk). */
 function Stepper({ id, label, hint, value, onChange, min, max, step = 1 }: {
   id: string; label: string; hint?: ReactNode; value: number | null; onChange: (value: number | null) => void; min: number; max: number; step?: number;
@@ -53,31 +92,34 @@ function Stepper({ id, label, hint, value, onChange, min, max, step = 1 }: {
 }
 
 // ── Log sitting ─────────────────────────────────────────────────────────────
-export function LogSittingSheet({ open, onClose, view, part, send, thenStart, onSaved }: {
+function logForm(view: CraftView, part: Part) {
+  const d = logSittingDefaults(view.row_states, part.total_rows, view.timer);
+  return { minutes: d.minutes, minutesTouched: false, from: d.from, to: d.to, quarter: 0, note: "", key: newIdempotencyKey() };
+}
+export function LogSittingSheet({ open, onClose, view: live, part: livePart, send, thenStart, onSaved }: {
   open: boolean; onClose: () => void; view: CraftView; part: Part; send: Send; thenStart?: boolean; onSaved: (reply: SendReply) => void;
 }) {
+  const { snap, changed, notice, retake } = useSheetSnapshot(live, livePart, { timer: true });
+  const { view, part } = snap;
   const word = part.row_word as RowWord;
   const timer = view.timer;
-  const defaults = logSittingDefaults(view.row_states, part.total_rows, timer);
-  const [form, setForm] = useState(() => ({ minutes: defaults.minutes, minutesTouched: false, from: defaults.from, to: defaults.to, quarter: 0, note: "", key: newIdempotencyKey() }));
+  const [form, setForm] = useState(() => logForm(view, part));
   const [state, setState] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
   const plan = sittingPlan(view.row_states, part.total_rows, form.from, form.to);
-  const timerMin = timer ? Math.min(SITTING_MAX_MINUTES, timerMinutes(timer.elapsed_seconds)) : null;
+  // The clock keeps moving while the sheet is open: show the live timer while it is the one captured.
+  const shownTimer = timer && live.timer && live.timer.version === timer.version ? live.timer : timer;
+  const timerMin = shownTimer ? Math.min(SITTING_MAX_MINUTES, timerMinutes(shownTimer.elapsed_seconds)) : null;
   const shownMinutes = form.minutesTouched || !timer ? form.minutes : timerMin;
   const rowsDone = Math.max(0, form.to - form.from);
   const nextRow = form.to + 1;
+  const other = timer && !timer.on_active_part ? view.timer_rows : [];
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (retake()) { setForm(logForm(live, livePart)); setState({ busy: false, error: null }); return; }
     if (shownMinutes === null || shownMinutes < 1) { setState({ busy: false, error: "Type the minutes (at least 1)." }); return; }
     setState({ busy: true, error: null });
-    const body: Record<string, unknown> = {
-      part_id: part.id, use_timer: Boolean(timer), to_row: form.to, to_quarter: form.quarter, expected_row: part.current_row,
-      note: form.note.trim() || null, idempotency_key: form.key,
-      ...(timer ? { timer_version: timer.version } : { from_row: form.from }),
-      // With the timer and untouched minutes the server takes the timer's own minutes at save time.
-      ...(!timer || form.minutesTouched || timer.over_cap ? { minutes: shownMinutes } : {}),
-    };
-    const reply = await send("sittings", body);
+    // The captured part, expected row and timer version (never the refreshed ones).
+    const reply = await send("sittings", logSittingBody(part, timer, form, shownMinutes));
     if (!reply.ok) { setState({ busy: false, error: reply.error }); return; }
     setState({ busy: false, error: null });
     onSaved(reply);
@@ -87,7 +129,7 @@ export function LogSittingSheet({ open, onClose, view, part, send, thenStart, on
       <form onSubmit={submit}>
         <p className="craft-sheet-sub">{view.project.name} · {part.name}{thenStart ? " · then a new timer for today" : ""}</p>
         <Stepper id="craft-log-minutes" label="Minutes" step={5} min={1} max={SITTING_MAX_MINUTES} value={shownMinutes}
-          hint={timer ? `from the timer (${clockText(timer.elapsed_seconds)})` : "no timer: type them"}
+          hint={shownTimer ? `from the timer (${clockText(shownTimer.elapsed_seconds)})` : "no timer: type them"}
           onChange={(value) => setForm((f) => ({ ...f, minutes: value, minutesTouched: true }))} />
         {timer?.over_cap && <p className="craft-sheet-warn">The timer shows {minutesText(timer.elapsed_seconds / 60)}. A sitting can be at most 24 hours (1,440 min): type the minutes you worked.</p>}
         {!timer && <Stepper id="craft-log-from" label={`Last full ${word} before this sitting`} min={0} max={form.to} value={form.from}
@@ -116,28 +158,25 @@ export function LogSittingSheet({ open, onClose, view, part, send, thenStart, on
           <label htmlFor="craft-log-note">Note<span>optional</span></label>
           <textarea id="craft-log-note" rows={2} maxLength={2000} value={form.note} placeholder="e.g. tension felt tight" onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} />
         </div>
-        <p className="craft-sheet-preview">
-          {plan.rows.length ? `Saves ${rowsText(word, plan.rows)}` : `Saves the time only (no ${word}s)`}
-          {plan.tick.length ? ` · ticks ${rowsText(word, plan.tick)}` : ""}
-          {plan.untick.length ? ` · unticks ${rowsText(word, plan.untick)}` : ""}
-          {plan.rows.length > plan.link.length ? ` · ${rowsText(word, plan.rows.filter((r) => !plan.link.includes(r)))} already in an earlier sitting` : ""}
-        </p>
-        <ErrorLine text={state.error} />
-        <Actions busy={state.busy} onCancel={onClose} saveLabel="Save sitting" />
+        <Foot changed={notice} summary={sittingSummary(word, part.name, plan, other, shownMinutes)} error={state.error}
+          busy={state.busy} onCancel={onClose} saveLabel={changed ? CHANGED_LABEL : "Save sitting"} />
       </form>
     </Sheet>
   );
 }
 
 // ── Undo rows… ──────────────────────────────────────────────────────────────
-export function UndoRowsSheet({ open, onClose, view, part, send }: { open: boolean; onClose: () => void; view: CraftView; part: Part; send: Send }) {
+export function UndoRowsSheet({ open, onClose, view: live, part: livePart, send, initialTo }: { open: boolean; onClose: () => void; view: CraftView; part: Part; send: Send; initialTo?: number }) {
+  const { snap, changed, notice, retake } = useSheetSnapshot(live, livePart);
+  const { view, part } = snap;
   const word = part.row_word as RowWord;
   const choices = undoChoices(view.row_states, part.total_rows);
-  const [to, setTo] = useState<number | null>(choices[0] ?? null);
+  const [to, setTo] = useState<number | null>(initialTo !== undefined && choices.includes(initialTo) ? initialTo : choices[0] ?? null);
   const [state, setState] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
   const plan = to === null ? null : fixCountPlan(view.row_states, part.total_rows, to);
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (retake()) { const next = undoChoices(live.row_states, livePart.total_rows); setTo(to !== null && next.includes(to) ? to : next[0] ?? null); setState({ busy: false, error: null }); return; }
     if (to === null) return;
     setState({ busy: true, error: null });
     const reply = await send("row", { part_id: part.id, mode: "undo", expected_row: part.current_row, to_row: to });
@@ -160,15 +199,17 @@ export function UndoRowsSheet({ open, onClose, view, part, send }: { open: boole
           </fieldset>
         ) : <p className="craft-sheet-hint">No ticked {word}s to undo.</p>}
         {plan && plan.linked.length > 0 && <p className="craft-sheet-hint">{rowsText(word, plan.linked)} {plan.linked.length === 1 ? "is" : "are"} in a saved sitting; the sitting stays as it is.</p>}
-        <ErrorLine text={state.error} />
-        <Actions busy={state.busy} onCancel={onClose} saveLabel="Undo" disabled={!plan || !plan.untick.length} />
+        <Foot changed={notice} summary={plan && plan.untick.length ? `Unticks ${rowsText(word, plan.untick)}. ${wordTitle(word)} ${plan.next} next.` : null} error={state.error}
+          busy={state.busy} onCancel={onClose} saveLabel={changed ? CHANGED_LABEL : "Undo"} disabled={!changed && (!plan || !plan.untick.length)} />
       </form>
     </Sheet>
   );
 }
 
 // ── Fix count ───────────────────────────────────────────────────────────────
-export function FixCountSheet({ open, onClose, view, part, send }: { open: boolean; onClose: () => void; view: CraftView; part: Part; send: Send }) {
+export function FixCountSheet({ open, onClose, view: live, part: livePart, send }: { open: boolean; onClose: () => void; view: CraftView; part: Part; send: Send }) {
+  const { snap, changed, notice, retake } = useSheetSnapshot(live, livePart);
+  const { view, part } = snap;
   const word = part.row_word as RowWord;
   const [byRidges, setByRidges] = useState(false);
   const [value, setValue] = useState<number | null>(part.current_row);
@@ -178,6 +219,7 @@ export function FixCountSheet({ open, onClose, view, part, send }: { open: boole
   const plan = valid ? fixCountPlan(view.row_states, part.total_rows, to) : null;
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (retake()) { setByRidges(false); setValue(livePart.current_row); setState({ busy: false, error: null }); return; }
     if (!plan || (!plan.tick.length && !plan.untick.length)) return;
     setState({ busy: true, error: null });
     const reply = await send("row", { part_id: part.id, mode: "fix", expected_row: part.current_row, to_row: to });
@@ -197,14 +239,12 @@ export function FixCountSheet({ open, onClose, view, part, send }: { open: boole
         <Stepper id="craft-fix-row" label={byRidges ? "Ridges done" : `${word === "round" ? "Round" : "Row"} to work next`} min={byRidges ? 0 : 1}
           max={byRidges ? Math.floor(part.total_rows / 2) : part.total_rows + 1} value={value} onChange={setValue}
           hint={byRidges && to !== null ? `= ${word} ${to} next` : undefined} />
-        <p className="craft-sheet-preview">
-          {!plan ? `Pick a ${word} from 1 to ${part.total_rows + 1}.`
-            : plan.tick.length ? `Ticks ${rowsText(word, plan.tick)}. ${word === "round" ? "Round" : "Row"} ${plan.next} next.`
-            : plan.untick.length ? `Unticks ${rowsText(word, plan.untick)}. ${word === "round" ? "Round" : "Row"} ${plan.next} next.`
+        <Foot changed={notice} error={state.error}
+          summary={!plan ? `Pick a ${word} from 1 to ${part.total_rows + 1}.`
+            : plan.tick.length ? `Ticks ${rowsText(word, plan.tick)}. ${wordTitle(word)} ${plan.next} next.`
+            : plan.untick.length ? `Unticks ${rowsText(word, plan.untick)}. ${wordTitle(word)} ${plan.next} next.`
             : "Nothing to change."}
-        </p>
-        <ErrorLine text={state.error} />
-        <Actions busy={state.busy} onCancel={onClose} saveLabel="Save count" disabled={!plan || (!plan.tick.length && !plan.untick.length)} />
+          busy={state.busy} onCancel={onClose} saveLabel={changed ? CHANGED_LABEL : "Save count"} disabled={!changed && (!plan || (!plan.tick.length && !plan.untick.length))} />
       </form>
     </Sheet>
   );
@@ -241,13 +281,17 @@ export function BandCloseSheet({ check, onClose, part, send }: { check: BandChec
 }
 
 // ── Change total ───────────────────────────────────────────────────────────
-export function ChangeTotalSheet({ open, onClose, view, part, send }: { open: boolean; onClose: () => void; view: CraftView; part: Part; send: Send }) {
+export function ChangeTotalSheet({ open, onClose, view: live, part: livePart, send }: { open: boolean; onClose: () => void; view: CraftView; part: Part; send: Send }) {
+  const { snap, changed, notice, retake } = useSheetSnapshot(live, livePart, { total: true });
+  const { view, part } = snap;
   const word = part.row_word as RowWord;
   const [value, setValue] = useState<number | null>(part.total_rows);
   const [state, setState] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
   const plan = value === null ? null : setTotalPlan(view.row_states, part.total_rows, value);
+  const adds = plan?.kind === "add" ? addedRowsText(word, view.row_states, part.stitch_count) : null;
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (retake()) { setValue(livePart.total_rows); setState({ busy: false, error: null }); return; }
     if (!plan || (plan.kind !== "add" && plan.kind !== "remove")) return;
     setState({ busy: true, error: null });
     const reply = await send("total", { part_id: part.id, total: value, expected_total: part.total_rows });
@@ -259,12 +303,10 @@ export function ChangeTotalSheet({ open, onClose, view, part, send }: { open: bo
       <form onSubmit={submit}>
         <p className="craft-sheet-sub">{part.name}: {part.total_rows} {word}s now.</p>
         <Stepper id="craft-total" label={`Total ${word}s`} min={1} max={CRAFT_MAX_ROWS} value={value} onChange={setValue} />
-        <p className={plan?.kind === "refused" ? "craft-sheet-warn" : "craft-sheet-preview"}>
-          {!plan ? "Type a total." : plan.kind === "same" ? "Same as now." : plan.kind === "add" ? `Adds ${rowsText(word, plan.add)} at the end.`
+        <Foot changed={notice} error={state.error} summaryWarn={plan?.kind === "refused"}
+          summary={!plan ? "Type a total." : plan.kind === "same" ? "Same as now." : plan.kind === "add" ? `Adds ${rowsText(word, plan.add)} at the end.${adds ? ` ${adds}` : ""}`
             : plan.kind === "remove" ? `Removes ${rowsText(word, plan.remove)} (not ticked, in no sitting).` : setTotalRefusalText(word, plan)}
-        </p>
-        <ErrorLine text={state.error} />
-        <Actions busy={state.busy} onCancel={onClose} saveLabel="Save total" disabled={!plan || (plan.kind !== "add" && plan.kind !== "remove")} />
+          busy={state.busy} onCancel={onClose} saveLabel={changed ? CHANGED_LABEL : "Save total"} disabled={!changed && (!plan || (plan.kind !== "add" && plan.kind !== "remove"))} />
       </form>
     </Sheet>
   );

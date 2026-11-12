@@ -1,12 +1,13 @@
 /** Pure read model. Checklist ticks are the only source of row progress. */
 import { etDateOf } from "@/lib/work-sessions/parse";
-import { LONG_RUN_MINUTES, SITTING_MAX_MINUTES, countFromCheckText, isCountItemText, timerElapsedAt, type RowState } from "@/lib/craft/actions";
+import { LONG_RUN_MINUTES, SITTING_MAX_MINUTES, countFromCheckText, isCountItemText, timerElapsedAt, type OtherPartRows, type RowState, type RowWord } from "@/lib/craft/actions";
 import type { Database } from "@/types/supabase.generated";
 
 type Row<T extends keyof Database["public"]["Tables"]> = Database["public"]["Tables"][T]["Row"];
 export type CraftPart = Pick<Row<"craft_parts">, "id" | "name" | "sort_order" | "total_rows" | "row_word" | "quarters" | "quarter" | "quarter_row" | "ridges" | "stitch_count">;
 export type CraftSegment = Pick<Row<"craft_segments">, "id" | "part_id" | "task_id" | "name" | "from_row" | "to_row" | "sort_order" | "close_check">;
-export type CraftItem = Pick<Row<"task_checklist_items">, "id" | "craft_part_id" | "craft_row" | "text" | "is_done" | "completed_at">;
+export type CraftItem = Pick<Row<"task_checklist_items">, "id" | "craft_part_id" | "craft_row" | "text" | "is_done" | "completed_at">
+  & Partial<Pick<Row<"task_checklist_items">, "unit_count" | "work_type">>;
 export type CraftSession = Pick<Row<"work_sessions">, "id" | "session_date" | "created_at" | "minutes" | "note" | "exclude_from_stats">;
 export interface CraftInput {
   project: { id: string; name: string };
@@ -42,6 +43,8 @@ export interface CraftTimerView {
   over_cap: boolean;
   /** The sitting started on an earlier ET day than server_now. */
   new_day: boolean;
+  /** FR1: false when the timer is on another part than the screen's (that part was finished during the sitting). */
+  on_active_part: boolean;
 }
 
 type ProgressItem = Pick<CraftItem, "craft_part_id" | "craft_row" | "is_done">;
@@ -114,12 +117,16 @@ export function buildCraftView(input: CraftInput) {
     .map((item) => ({ id: item.id, row: item.craft_row as number, text: item.text })) : [];
   const partIds = new Set(parts.map((part) => part.id));
   const linkedItems = new Set(input.session_items.map((link) => link.checklist_item_id));
+  const timerRow = input.timer;
+  // FR1: "ticked since this project's timer sitting started" (073 compares completed_at with sitting_started_at).
+  const sittingStartMs = timerRow && timerRow.project_id === input.project.id ? Date.parse(timerRow.sitting_started_at) : null;
+  const sinceTimer = (item: CraftItem) => sittingStartMs !== null && item.is_done && Boolean(item.completed_at) && Date.parse(item.completed_at as string) >= sittingStartMs;
   // S2: the active part's rows (numbers that exist, gaps left out) for the Undo, Fix count, Log sitting and total previews.
   const row_states: RowState[] = active_part ? input.items.filter((item) => item.craft_part_id === active_part.id && item.craft_row !== null)
     .map((item) => ({ row: item.craft_row as number, done: item.is_done, linked: linkedItems.has(item.id),
-      today: Boolean(item.is_done && item.completed_at && etDateOf(item.completed_at) === today) }))
+      today: Boolean(item.is_done && item.completed_at && etDateOf(item.completed_at) === today),
+      since_timer: sinceTimer(item), units: item.unit_count ?? null, type: item.work_type ?? null }))
     .sort((a, b) => a.row - b.row) : [];
-  const timerRow = input.timer;
   const nowMs = Date.parse(input.server_now);
   const elapsed = timerRow ? timerElapsedAt(timerRow, nowMs) : 0;
   const timerFacts = timerRow ? {
@@ -130,8 +137,23 @@ export function buildCraftView(input: CraftInput) {
     start_quarter: timerRow.start_quarter, elapsed_seconds: elapsed, long_run: elapsed >= LONG_RUN_MINUTES * 60,
     over_cap: elapsed > SITTING_MAX_MINUTES * 60,
     new_day: Boolean(timerRow.sitting_started_at) && etDateOf(input.server_now) > etDateOf(timerRow.sitting_started_at),
+    on_active_part: !timerRow.part_id || !active_part || timerRow.part_id === active_part.id || !parts.some((p) => p.id === timerRow.part_id),
   } satisfies CraftTimerView : null;
   const timer = timerFacts && timerFacts.project_id === input.project.id ? timerFacts : null;
+  // FR1: a timed sitting whose timer is on another part also saves that part's rows from its start row
+  // (ticked, in no sitting) and, for parts between it and the screen's part, rows ticked since the
+  // sitting started (in no sitting): the same rule as 073's craft_log_sitting, for the preview.
+  const timer_rows: OtherPartRows[] = [];
+  if (timer && !timer.on_active_part && active_part) {
+    const from = parts.findIndex((p) => p.id === timer.part_id), to = parts.findIndex((p) => p.id === active_part.id);
+    const rowsOf = (partId: string, keep: (item: CraftItem) => boolean) => input.items
+      .filter((item) => item.craft_part_id === partId && item.craft_row !== null && item.is_done && !linkedItems.has(item.id) && keep(item))
+      .map((item) => item.craft_row as number).sort((a, b) => a - b);
+    const word = (p: (typeof parts)[number]): RowWord => (p.row_word === "round" ? "round" : "row");
+    const tp = parts[from];
+    timer_rows.push({ part_id: tp.id, name: tp.name, word: word(tp), rows: rowsOf(tp.id, (item) => (item.craft_row as number) >= timer.start_row) });
+    for (let i = from + 1; i < to; i++) timer_rows.push({ part_id: parts[i].id, name: parts[i].name, word: word(parts[i]), rows: rowsOf(parts[i].id, sinceTimer) });
+  }
   const other_timer = timerFacts && timerFacts.project_id !== input.project.id ? {
     project_id: timerFacts.project_id, project_name: input.timer_project?.name ?? "another project",
     elapsed_seconds: timerFacts.elapsed_seconds, running: timerFacts.running, version: timerFacts.version,
@@ -169,7 +191,7 @@ export function buildCraftView(input: CraftInput) {
       minutes: input.sessions.filter((session) => session.session_date === today).reduce((sum, session) => sum + session.minutes, 0),
     },
     recent_sittings, server_now: input.server_now,
-    timer, other_timer, row_states, pending_checks,
+    timer, other_timer, row_states, pending_checks, timer_rows,
     notes: [...(input.notes ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at) || a.id.localeCompare(b.id)).slice(0, 50),
     // Remove is offered only when the server said nothing would be lost (072 refuses otherwise too).
     can_remove: Array.isArray(input.remove_blockers) && input.remove_blockers.length === 0,

@@ -11,14 +11,14 @@ import {
 } from "@/components/craft/CraftSheets";
 import { useWakeLock } from "@/components/craft/useWakeLock";
 import {
-  UNDO_TOAST_MS, VIEW_REFRESH_MS, clockOffsetMs, clockText, minutesText, nextExistingRow, timerElapsedAt, writeFailureText,
+  UNDO_TOAST_MS, VIEW_REFRESH_MS, clockOffsetMs, clockText, minutesText, nextExistingRow, timerElapsedAt, toastUndo, writeFailureText,
 } from "@/lib/craft/actions";
 import "./craft.css";
 
 type Screen = CraftView & { projects?: CraftProjectOption[] };
 type SheetName = "log" | "log-then-start" | "undo" | "fix" | "total" | "note" | "timer" | "new-day";
 interface Failure { text: string; retry: (() => void) | null }
-type Act = (label: string, kind: Parameters<Send>[0], body: Record<string, unknown>, onOk?: (reply: SendReply) => void, onNotOk?: (reply: SendReply) => boolean) => Promise<SendReply>;
+type Act = (label: string, kind: Parameters<Send>[0], body: Record<string, unknown>, onOk?: (reply: SendReply) => void, onNotOk?: (reply: SendReply) => boolean, method?: "POST" | "DELETE") => Promise<SendReply>;
 
 /**
  * The craft screen. Pattern first (Brent 11/11): the current row's instructions lead; the compact timer and the big
@@ -34,7 +34,8 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
   const [tick, setTick] = useState<number | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
-  const [toast, setToast] = useState<{ row: number; partId: string; word: string; current: number; id: number } | null>(null);
+  const [toast, setToast] = useState<{ row: number; partId: string; word: string; undo: ReturnType<typeof toastUndo>; id: number } | null>(null);
+  const [undoTo, setUndoTo] = useState<number | undefined>(undefined);
   const [sheet, setSheet] = useState<SheetName | null>(null);
   const [check, setCheck] = useState<BandCheck | null>(null);
   const [conflict, setConflict] = useState<OtherTimer | null>(null);
@@ -91,15 +92,15 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
 
   /** A write from the screen itself (not a sheet): a failure stays on screen with Retry. */
   const actRef = useRef<Act | null>(null);
-  const act: Act = useCallback(async (label: string, kind: Parameters<Send>[0], body: Record<string, unknown>, onOk?: (reply: SendReply) => void, onNotOk?: (reply: SendReply) => boolean) => {
+  const act: Act = useCallback(async (label: string, kind: Parameters<Send>[0], body: Record<string, unknown>, onOk?: (reply: SendReply) => void, onNotOk?: (reply: SendReply) => boolean, method: "POST" | "DELETE" = "POST") => {
     setBusy(label);
     setFailure(null);
-    const reply = await send(kind, body);
+    const reply = await send(kind, body, method);
     setBusy(null);
     if (reply.ok) { onOk?.(reply); return reply; }
     if (onNotOk?.(reply)) return reply;
     // A 409 means nothing was saved and the screen now shows the server's state: retrying the same body would be wrong.
-    setFailure({ text: reply.error ?? "Not saved, retry.", retry: reply.status === 409 || (reply.status ?? 0) === 400 ? null : () => { void actRef.current?.(label, kind, body, onOk, onNotOk); } });
+    setFailure({ text: reply.error ?? "Not saved, retry.", retry: reply.status === 409 || (reply.status ?? 0) === 400 ? null : () => { void actRef.current?.(label, kind, body, onOk, onNotOk, method); } });
     return reply;
   }, [send]);
   useEffect(() => { actRef.current = act; }, [act]);
@@ -119,12 +120,13 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
 
   function rowDone() {
     if (!part || part.finished) return;
-    const row = part.current_row, partId = part.id;
+    const row = part.current_row, partId = part.id, before = view.row_states, total = part.total_rows;
     void act("row", "row", { part_id: partId, mode: "done", expected_row: row }, (reply) => {
       const result = reply.body?.result as { current_row: number; needs_check: BandCheck | null } | undefined;
       if (toastTimer.current) clearTimeout(toastTimer.current);
       const id = Date.now();
-      setToast({ row, partId, word, current: result?.current_row ?? row + 1, id });
+      // FR1 (Fable F2): Undo unticks only the row it names; rows after it already ticked → "Undo rows…" instead.
+      setToast({ row, partId, word, undo: toastUndo(before, total, row, result?.current_row ?? row + 1), id });
       toastTimer.current = setTimeout(() => setToast((t) => (t?.id === id ? null : t)), UNDO_TOAST_MS);
       if (result?.needs_check) setCheck(result.needs_check);
     });
@@ -133,7 +135,8 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
     if (!toast) return;
     const t = toast;
     setToast(null);
-    void act("undo", "row", { part_id: t.partId, mode: "undo", expected_row: t.current, to_row: t.row });
+    if (t.undo.kind === "sheet") { setUndoTo(t.undo.to); setSheet("undo"); return; }
+    void act("undo", "row", { part_id: t.partId, ...t.undo.body });
   }
   const timerBody = (action: string, extra: Record<string, unknown> = {}) => ({ action, ...(part ? { part_id: part.id } : {}), ...(timer ? { expected_version: timer.version } : {}), ...extra });
   const onTimerRefusal = (reply: SendReply) => {
@@ -161,7 +164,7 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
         <span className="craft-awake" data-on={screenOn ? "true" : undefined}>{screenOn ? "screen on" : ""}</span>
         <CraftScreenMenu projectId={view.project.id} projectName={view.project.name} canRemove={view.can_remove} partCount={view.parts.length} blockers={view.remove_blockers}
           actions={part ? [
-            { label: `Undo ${word}s…`, onSelect: () => setSheet("undo") }, { label: "Fix count…", onSelect: () => setSheet("fix") },
+            { label: `Undo ${word}s…`, onSelect: () => { setUndoTo(undefined); setSheet("undo"); } }, { label: "Fix count…", onSelect: () => setSheet("fix") },
             { label: `Change total ${word}s…`, onSelect: () => setSheet("total") }, { label: "Add a note…", onSelect: () => setSheet("note") },
           ] : undefined} />
       </header>
@@ -200,7 +203,7 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
             {toast && (
               <div className="craft-toast" role="status">
                 <span>{toast.word === "round" ? "Round" : "Row"} {toast.row} done</span>
-                <button type="button" onClick={undoToast}>Undo</button>
+                <button type="button" onClick={undoToast} aria-label={toast.undo.kind === "sheet" ? `Undo: choose which ${toast.word}s` : `Undo ${toast.word} ${toast.row}`}>{toast.undo.kind === "sheet" ? "Undo…" : "Undo"}</button>
               </div>
             )}
             <div className="craft-timer" data-state={timer ? (timer.running ? "running" : "paused") : "idle"}>
@@ -242,7 +245,7 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
           </div>
           {part && (
             <div className="craft-actions-more">
-              <button type="button" onClick={() => setSheet("undo")}>Undo {word}s…</button>
+              <button type="button" onClick={() => { setUndoTo(undefined); setSheet("undo"); }}>Undo {word}s…</button>
               <button type="button" onClick={() => setSheet("fix")}>Fix count…</button>
               <button type="button" onClick={() => setSheet("note")}>Note</button>
             </div>
@@ -257,13 +260,13 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
           <section><h2>Next rows</h2>{view.next_rows.length ? <ol className="craft-next">{view.next_rows.map((row) => <li key={row.id}>{row.text}</li>)}</ol> : <p>No unticked rows.</p>}</section>
           <section><h2>Recent sittings</h2>{view.recent_sittings.length ? <ol className="craft-sittings">{view.recent_sittings.map((sitting) => <li key={sitting.id}><div><time dateTime={sitting.date}>{sitting.date}</time><strong>{sitting.minutes} min</strong></div><p>{sitting.rows.length ? sitting.rows.map((row) => `${row.part_name}: ${row.row_word} ${row.row}`).join(" · ") : "No linked rows"}</p>{sitting.note && <p>{sitting.note}</p>}{sitting.excluded_from_stats && <p className="craft-meta">Excluded from pace stats</p>}</li>)}</ol> : <p>No sittings logged yet.</p>}</section>
           {view.notes.length > 0 && <section><h2>Notes</h2><ul className="craft-notes">{view.notes.map((note) => <li key={note.id}><small>{note.row ? `${view.parts.find((p) => p.id === note.part_id)?.row_word === "round" ? "Round" : "Row"} ${note.row}` : "Project"} · {note.created_at.slice(0, 10)}</small><p>{note.text}</p>
-            <button type="button" aria-label={`Delete note: ${note.text.slice(0, 40)}`} onClick={() => { void act("note", "notes", { id: note.id }); }}>Delete</button></li>)}</ul></section>}
+            <button type="button" aria-label={`Delete note: ${note.text.slice(0, 40)}`} onClick={() => { void act("note", "notes", { id: note.id }, undefined, undefined, "DELETE"); }}>Delete</button></li>)}</ul></section>}
         </aside>
       </div>
       {part && sheet === "log" && <LogSittingSheet open onClose={() => setSheet(null)} view={view} part={part} send={send} onSaved={() => setSheet(null)} />}
       {part && sheet === "log-then-start" && <LogSittingSheet open thenStart onClose={() => setSheet(null)} view={view} part={part} send={send}
         onSaved={() => { setSheet(null); void act("timer", "timer", { action: "start", part_id: part.id }, undefined, onTimerRefusal); }} />}
-      {part && sheet === "undo" && <UndoRowsSheet open onClose={() => setSheet(null)} view={view} part={part} send={send} />}
+      {part && sheet === "undo" && <UndoRowsSheet open onClose={() => setSheet(null)} view={view} part={part} send={send} initialTo={undoTo} />}
       {part && sheet === "fix" && <FixCountSheet open onClose={() => setSheet(null)} view={view} part={part} send={send} />}
       {part && sheet === "total" && <ChangeTotalSheet open onClose={() => setSheet(null)} view={view} part={part} send={send} />}
       {sheet === "note" && <NoteSheet open onClose={() => setSheet(null)} part={part} send={send} />}

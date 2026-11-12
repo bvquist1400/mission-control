@@ -19,8 +19,12 @@ export const UNDO_CHOICES = 12;
 /** Change total: the setup's part limit. */
 export const CRAFT_MAX_ROWS = 2000;
 
-/** One row of the active part as the screen needs it (the rows that exist; numbers may have gaps). */
-export interface RowState { row: number; done: boolean; linked: boolean; today: boolean }
+/**
+ * One row of the active part as the screen needs it (the rows that exist; numbers may have gaps).
+ * `since_timer`: ticked since this project's timer sitting started (FR1); `units` / `type`: the
+ * row's unit_count and work type (Change total copies the last row's).
+ */
+export interface RowState { row: number; done: boolean; linked: boolean; today: boolean; since_timer?: boolean; units?: number | null; type?: string | null }
 
 export type RowWord = "row" | "round";
 export const wordTitle = (word: RowWord) => (word === "round" ? "Round" : "Row");
@@ -163,15 +167,25 @@ export const isNewEtDay = (sittingStartedAt: string, nowIso: string) => etDateOf
 // ── Log sitting ───────────────────────────────────────────────────────────────
 
 /**
- * The sheet's starting values. With the timer: from its start row, minutes from the clock.
- * Without: from just before the first row ticked today that no sitting has yet (else the
- * current row, zero rows), and no minutes until typed. "Last full row" = current − 1.
+ * The sheet's starting values, as 073's craft_log_sitting decides "from" when the sheet sends none.
+ * With the timer on this part: from its start row − 1 (never past "last full row"), minutes from the
+ * clock. With the timer on an earlier part (it was finished during the sitting and the screen moved
+ * on; `on_active_part` false): from the row before this part's first row ticked since the sitting
+ * started and in no sitting, else current − 1. Without the timer: from just before the first row
+ * ticked today that no sitting has yet (else the current row, zero rows), and no minutes until
+ * typed. "Last full row" = current − 1.
  */
-export function logSittingDefaults(rows: RowState[], total: number, timer: { start_row: number; elapsed_seconds: number } | null) {
+export function logSittingDefaults(rows: RowState[], total: number, timer: { start_row: number; elapsed_seconds: number; on_active_part?: boolean } | null) {
   const current = currentRowOf(rows, total);
   const to = Math.min(current - 1, total);
   if (timer) {
-    return { from: Math.min(timer.start_row - 1, to), to, minutes: Math.min(SITTING_MAX_MINUTES, timerMinutes(timer.elapsed_seconds)) };
+    const minutes = Math.min(SITTING_MAX_MINUTES, timerMinutes(timer.elapsed_seconds));
+    if (timer.on_active_part === false) {
+      const fresh = rows.filter((s) => s.done && s.since_timer && !s.linked).map((s) => s.row);
+      const first = fresh.length ? Math.min(...fresh) : current;
+      return { from: Math.max(0, Math.min(to, current - 1, first - 1)), to, minutes };
+    }
+    return { from: Math.max(0, Math.min(timer.start_row - 1, to)), to, minutes };
   }
   const loose = rows.filter((s) => s.done && !s.linked && s.today && s.row < current).map((s) => s.row);
   const from = loose.length ? Math.min(...loose) - 1 : to;
@@ -188,6 +202,91 @@ export function sittingPlan(rows: RowState[], total: number, from: number, to: n
     tick: inRange.filter((s) => !s.done).map((s) => s.row).sort((a, b) => a - b),
     link: inRange.filter((s) => !s.linked).map((s) => s.row).sort((a, b) => a - b),
     untick: rows.filter((s) => s.row > to && s.row < current && s.done).map((s) => s.row).sort((a, b) => a - b),
+  };
+}
+
+/** Rows a timed sitting also saves from other parts (the timer's part and any between): 073's rule, from the view. */
+export interface OtherPartRows { part_id: string; name: string; word: RowWord; rows: number[] }
+
+/**
+ * The Log sitting preview line: exactly what is saved. One part: "Saves rows 59–61, 38 min".
+ * Across parts: "Saves Cuff rounds 15–31 and Hand rounds 1–3, 52 min". Then what it ticks,
+ * unticks, and rows already in an earlier sitting (saved there, not here).
+ */
+export function sittingSummary(word: RowWord, partName: string, plan: ReturnType<typeof sittingPlan>, other: OtherPartRows[], minutes: number | null): string {
+  const mine = plan.link;
+  const named = other.filter((o) => o.rows.length).map((o) => `${o.name} ${rowsText(o.word, o.rows)}`);
+  const parts = named.length ? [...named, ...(mine.length ? [`${partName} ${rowsText(word, mine)}`] : [])] : mine.length ? [rowsText(word, mine)] : [];
+  const time = minutes && minutes > 0 ? minutesText(minutes) : null;
+  let text = parts.length ? `Saves ${parts.join(" and ")}${time ? `, ${time}` : ""}` : `Saves ${time ? `${time}, ` : ""}the time only (no ${word}s)`;
+  if (plan.tick.length) text += ` · ticks ${rowsText(word, plan.tick)}`;
+  if (plan.untick.length) text += ` · unticks ${rowsText(word, plan.untick)}`;
+  const earlier = plan.rows.filter((r) => !plan.link.includes(r));
+  if (earlier.length) text += ` · ${rowsText(word, earlier)} already in an earlier sitting`;
+  return text;
+}
+
+// ── Stale sheets (FR1) ─────────────────────────────────────────────────────────
+
+/** What a sheet captured when it opened: it sends these, never what a later refresh shows. */
+export interface SheetFacts { part_id: string; part_name: string; word: RowWord; current_row: number; total: number; timer_version: number | null; timer_part_id: string | null }
+export function sheetFactsOf(view: { active_part: { id: string; name: string; row_word: string; current_row: number; total_rows: number } | null; timer: { version: number; part_id: string | null } | null }): SheetFacts | null {
+  const part = view.active_part;
+  if (!part) return null;
+  return { part_id: part.id, part_name: part.name, word: part.row_word === "round" ? "round" : "row", current_row: part.current_row, total: part.total_rows,
+    timer_version: view.timer?.version ?? null, timer_part_id: view.timer?.part_id ?? null };
+}
+/**
+ * The line a sheet shows when what it captured changed underneath (another screen, the chat, the 30 s
+ * refresh), or null. The sheet then needs a new tap; 073's expected-row and timer-version guards
+ * refuse a stale body anyway.
+ */
+export function sheetChangeText(before: SheetFacts, now: SheetFacts | null, use: { timer?: boolean; total?: boolean } = {}): string | null {
+  if (!now) return "This part changed on another screen. Close this and check the count.";
+  const where = now.part_id !== before.part_id ? `${now.part_name} ${now.word} ${now.current_row}` : `${now.word} ${now.current_row}`;
+  if (now.part_id !== before.part_id || now.current_row !== before.current_row) return `Your count changed on another screen (now ${where}). Check and save again.`;
+  if (use.total && now.total !== before.total) return `Your total changed on another screen (now ${now.total} ${now.word}s). Check and save again.`;
+  if (use.timer && (now.timer_version !== before.timer_version || now.timer_part_id !== before.timer_part_id)) return "Your timer changed on another screen. Check and save again.";
+  return null;
+}
+
+// ── The Row done toast (FR1) ───────────────────────────────────────────────────
+
+/**
+ * What the toast's Undo does after Row done `row` (rows = the part's rows before the tap): with no
+ * row after it ticked, Undo unticks only that row ({ to_row: row, expected_row: current after });
+ * with rows after it already ticked (chat, the task panel), Undo opens "Undo rows…" instead, so it
+ * never unticks more than the row it names without showing it first.
+ */
+export function toastUndo(rows: RowState[], total: number, row: number, currentAfter: number): { kind: "one"; body: { mode: "undo"; to_row: number; expected_row: number } } | { kind: "sheet"; to: number } {
+  const expected = nextExistingRow(rows, row, total) ?? total + 1;
+  if (currentAfter === expected) return { kind: "one", body: { mode: "undo", to_row: row, expected_row: currentAfter } };
+  return { kind: "sheet", to: row };
+}
+
+/** Change total: what added rows carry (073: the part's stitch count, else the last row's units; the last row's type). */
+export function addedRowsText(word: RowWord, rows: RowState[], stitchCount: number | null): string | null {
+  const last = [...rows].sort((a, b) => b.row - a.row)[0];
+  if (!last) return null;
+  const type = last.type ? ` and its stitch type (${last.type})` : "";
+  if (stitchCount !== null) return `New ${word}s get the part's ${stitchCount.toLocaleString("en-US")} stitches${last.type ? ` and ${word} ${last.row}'s stitch type (${last.type})` : ""}.`;
+  const units = last.units ?? null;
+  return units !== null ? `New ${word}s copy ${word} ${last.row}: ${units.toLocaleString("en-US")} stitches each${type}.`
+    : `New ${word}s copy ${word} ${last.row}: no stitch count${type}.`;
+}
+
+/**
+ * The body Log sitting sends, from what the sheet captured when it opened (part, its current row as the
+ * expected row, the timer's version) and the form. With the timer, "from" is left to 073 (the rule above)
+ * and untouched minutes too (the server takes the timer's own at save time).
+ */
+export function logSittingBody(part: { id: string; current_row: number }, timer: { version: number; over_cap: boolean } | null,
+  form: { from: number; to: number; quarter: number; note: string; key: string; minutesTouched: boolean }, minutes: number | null): Record<string, unknown> {
+  return {
+    part_id: part.id, use_timer: Boolean(timer), to_row: form.to, to_quarter: form.quarter, expected_row: part.current_row,
+    note: form.note.trim() || null, idempotency_key: form.key,
+    ...(timer ? { timer_version: timer.version } : { from_row: form.from }),
+    ...(!timer || form.minutesTouched || timer.over_cap ? { minutes } : {}),
   };
 }
 
