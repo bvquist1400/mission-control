@@ -226,7 +226,8 @@ try {
     const scarf = seedProject(a.id, "Scarf shape", [0, 1, 2, 3, 4, 5].map((k) => ({ title: `Scarf rows ${k * 100 + 1}–${Math.min(519, k * 100 + 100)}`, rows: rowsOf("Row", k * 100 + 1, Math.min(519, k * 100 + 100), 118, "30") })));
     assert.equal((await parity(a, scarf.projectId, "scarf")).sql.active_part_index, 0);
     // Sections, unsectioned last, a creation-time tie broken by id, a swatch, a word change and a non-continuing number.
-    const tieA = "00000000-0000-4000-8000-00000000000a", tieB = "00000000-0000-4000-8000-00000000000b";
+    // Fresh ids every run (the stack outlives a run), ordered so tieA sorts before tieB.
+    const [tieA, tieB] = [randomUUID(), randomUUID()].sort();
     const mixed = seedProject(a.id, "Order and grouping", [
       { title: "Loose · Edge: r", section: null, rows: rowsOf("Row", 1, 3) },
       { title: "B · Two: r", section: 1, rows: rowsOf("Rnd", 1, 2, 2, "12") },
