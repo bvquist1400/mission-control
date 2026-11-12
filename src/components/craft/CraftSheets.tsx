@@ -261,7 +261,7 @@ export function UndoRowsSheet({ open, onClose, view: live, part: livePart, send,
             <p className="craft-sheet-sub">Pulled these {word}s out? They are unticked and their time is left out of speed. The minutes stay in your daily time.</p>
             {ripMin !== null && ripMax !== null && ripFrom !== null ? (
               <Stepper id="craft-rip-from" label={`First ${word} pulled out`} min={ripMin} max={ripMax} value={ripFrom}
-                hint={frog && frog.ripped.length ? `rips ${rowsText(word, frog.ripped)} (up to ${word} ${frog.to})` : undefined}
+                hint={frog && frog.ripped.length ? `rips ${rowsText(word, frog.ripped)}` : undefined}
                 onChange={(value) => { setRipFrom(value === null ? ripMax : value); setExclude([]); }} />
             ) : <p className="craft-sheet-hint">No ticked {word}s to rip back.</p>}
             {frog && frog.ripped.length > 0 && (
