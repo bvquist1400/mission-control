@@ -274,8 +274,13 @@ export interface PaceSessionInput {
   created_at?: string | null;
   minutes: number;
   exclude_from_stats: boolean;
-  /** Linked checklist rows. */
+  /** Linked checklist rows (finished in this sitting). */
   item_ids: string[];
+  /**
+   * Rows worked on in this sitting but not finished (074 `work_session_items.in_progress`): they add
+   * their share of the minutes to the row's work type with 0 units. Absent = none.
+   */
+  in_progress_item_ids?: string[];
   extra_units: number | null;
   extra_work_type: string | null;
 }
@@ -457,6 +462,12 @@ export interface SessionAllocation {
  * covered (linked rows + extra units), in proportion to units × plan speed, or
  * to units alone when any of its types has no plan speed. Sessions with no
  * units allocate nothing (they still count toward cadence).
+ *
+ * Rows in progress (S3, 074): a row worked on but not finished in a sitting
+ * takes its share the same way (its units × plan speed, or its units) but
+ * adds 0 units, so its minutes land with its work type instead of the sitting
+ * being dropped; the row's units are counted once, by the sitting that
+ * finishes it. With no in-progress links every number is as before.
  */
 export function allocateSessions(
   sessions: PaceSessionInput[],
@@ -470,17 +481,25 @@ export function allocateSessions(
   const allocations: SessionAllocation[] = [];
 
   for (const session of sessions) {
-    const parts = new Map<string, { work_type: string; scope: PaceScope; units: number }>();
-    const add = (workType: string, scope: PaceScope, units: number) => {
-      if (units <= 0) return;
+    // `share` = the units that set the minutes' split; `units` = the units counted (0 for a row in progress).
+    const parts = new Map<string, { work_type: string; scope: PaceScope; units: number; share: number }>();
+    const add = (workType: string, scope: PaceScope, units: number, share = units) => {
+      if (share <= 0) return;
       const key = `${workType}\u0000${scope}`;
-      const part = parts.get(key) ?? { work_type: workType, scope, units: 0 };
+      const part = parts.get(key) ?? { work_type: workType, scope, units: 0, share: 0 };
       part.units += units;
+      part.share += share;
       parts.set(key, part);
     };
-    for (const itemId of new Set(session.item_ids)) {
+    const finished = new Set(session.item_ids);
+    for (const itemId of finished) {
       const entry = entryByItem.get(itemId);
       if (entry) add(entry.work_type, entry.scope, entry.units);
+    }
+    for (const itemId of new Set(session.in_progress_item_ids ?? [])) {
+      if (finished.has(itemId)) continue;
+      const entry = entryByItem.get(itemId);
+      if (entry) add(entry.work_type, entry.scope, 0, entry.units);
     }
     const extra = positive(session.extra_units);
     if (extra > 0) {
@@ -495,7 +514,7 @@ export function allocateSessions(
 
     const list = [...parts.values()];
     const allPlanned = list.every((part) => planSpeeds.has(part.work_type));
-    const weights = list.map((part) => part.units * (allPlanned ? planSpeeds.get(part.work_type)! : 1));
+    const weights = list.map((part) => part.share * (allPlanned ? planSpeeds.get(part.work_type)! : 1));
     const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
     const timeKey = session.ended_at ?? session.started_at ?? session.created_at ?? "";
     list.forEach((part, index) => {
@@ -532,15 +551,18 @@ function newestFirst(a: SessionAllocation, b: SessionAllocation): number {
   return a.session_id < b.session_id ? 1 : a.session_id > b.session_id ? -1 : 0;
 }
 
+/** An allocation that carries units, or minutes on a row in progress (0 units). */
+const contributes = (allocation: SessionAllocation) => allocation.units > 0 || allocation.minutes > 0;
+
 /**
  * Seconds per unit per (type, scope) from counted sessions only: a ratio of
  * sums over the most recent `MEASURED_WINDOW_SESSIONS` sessions that
- * contributed to that (type, scope).
+ * contributed to that (type, scope), minutes on rows in progress included.
  */
 export function computeMeasuredSpeeds(allocations: SessionAllocation[]): MeasuredSpeed[] {
   const byKey = new Map<string, SessionAllocation[]>();
   for (const allocation of allocations) {
-    if (!allocation.counted || allocation.units <= 0) continue;
+    if (!allocation.counted || !contributes(allocation)) continue;
     const key = `${allocation.work_type}\u0000${allocation.scope}`;
     const list = byKey.get(key) ?? [];
     list.push(allocation);
@@ -585,7 +607,7 @@ export function computePlanRatio(allocations: SessionAllocation[], planSpeeds: M
   let sampleUnits = 0;
   const sessions = new Set<string>();
   for (const allocation of allocations) {
-    if (!allocation.counted || allocation.units <= 0) continue;
+    if (!allocation.counted || !contributes(allocation)) continue;
     const plan = planSpeeds.get(allocation.work_type);
     if (plan === undefined) continue;
     measured += allocation.minutes;

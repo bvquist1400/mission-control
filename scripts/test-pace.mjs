@@ -1396,5 +1396,117 @@ test("F0 r2 P3: the form hint says the last-night rule only holds with today's d
   assert.match(panel, /Leave the date as today and a start later than now counts as last night; a date you pick is kept, so a future start on it is refused\./);
 });
 
+
+// ── S3 (074): rows in progress ───────────────────────────────────────────────
+// A row worked on but not finished in a sitting adds that sitting's share of the minutes to the
+// row's work type with 0 units; the sitting that finishes it adds the units. No in-progress links
+// = identical numbers (every case above is unchanged).
+
+const withProgress = (base, map) => ({ ...base, sessions: base.sessions.map((s) => ({ ...s, in_progress_item_ids: map[s.id] ?? [] })) });
+
+test("S3 pinned: with no in-progress links the forecast is identical (an empty in_progress_item_ids changes nothing)", () => {
+  const before = computeForecast(blanket());
+  const after = computeForecast(withProgress(blanket(), {}));
+  assert.deepEqual(after, before);
+});
+
+test("S3: a row over two sittings: the first sitting's minutes land with the row (old engine dropped it as no linked rows)", () => {
+  const tasks = [task("t", { work_type: "sc" })];
+  const items = [item("r63", "t", 195, null)];
+  const sessions = [
+    session({ id: "s1", task_id: "t", session_date: "2026-10-01", minutes: 30, item_ids: [], in_progress_item_ids: ["r63"] }),
+    session({ id: "s2", task_id: "t", session_date: "2026-10-02", minutes: 20, item_ids: ["r63"] }),
+  ];
+  const sc = computeForecast(input({ tasks, items, sessions })).measured_speeds.find((s) => s.work_type === "sc");
+  near(sc.seconds_per_unit, (50 * 60) / 195, 0.005, "(30 + 20) min over 195 stitches");
+  assert.equal(sc.n_sessions, 2);
+  assert.equal(sc.units, 195);
+  const old = computeForecast(input({ tasks, items, sessions: sessions.map(({ in_progress_item_ids: _x, ...rest }) => rest) }))
+    .measured_speeds.find((s) => s.work_type === "sc");
+  near(old.seconds_per_unit, (20 * 60) / 195, 0.005, "the old engine counted only the finishing sitting");
+});
+
+test("S3: a row over three evenings: in progress in sittings 1–2, finished in 3; one speed from all 75 minutes", () => {
+  const tasks = [task("t", { work_type: "colorwork-dc" })];
+  const items = [item("r59", "t", 195, null)];
+  const sessions = [
+    session({ id: "e1", task_id: "t", session_date: "2026-10-01", minutes: 20, in_progress_item_ids: ["r59"] }),
+    session({ id: "e2", task_id: "t", session_date: "2026-10-02", minutes: 30, in_progress_item_ids: ["r59"] }),
+    session({ id: "e3", task_id: "t", session_date: "2026-10-03", minutes: 25, item_ids: ["r59"] }),
+  ];
+  const allocs = allocateSessions(sessions, tasks, buildUnitEntries(tasks, items), new Map());
+  assert.deepEqual(allocs.map((a) => [a.session_id, a.units, a.minutes]), [["e1", 0, 20], ["e2", 0, 30], ["e3", 195, 25]]);
+  const [speed] = computeMeasuredSpeeds(allocs);
+  near(speed.seconds_per_unit, (75 * 60) / 195, 1e-9);
+  assert.equal(speed.n_sessions, 3);
+});
+
+test("S3: an in-progress-only sitting gives minutes but no speed on its own; it still counts toward cadence", () => {
+  const tasks = [task("t", { work_type: "border" })];
+  const items = [item("rnd1", "t", 970, null)];
+  const sessions = [session({ id: "only", task_id: "t", minutes: 90, in_progress_item_ids: ["rnd1"] })];
+  const allocs = allocateSessions(sessions, tasks, buildUnitEntries(tasks, items), new Map());
+  assert.deepEqual(allocs.map((a) => [a.work_type, a.units, a.minutes]), [["border", 0, 90]]);
+  assert.deepEqual(computeMeasuredSpeeds(allocs), [], "no units yet: no measured speed");
+  const forecast = computeForecast(input({ tasks, items, sessions }));
+  assert.equal(forecast.work_left.find((row) => row.work_type === "border").source, "none");
+  near(forecast.cadence_minutes_per_day, 90 / 14, 0.05);
+});
+
+test("S3: mixed finished + in progress: the sitting's minutes are shared by units × plan speed, the in-progress row adding 0 units", () => {
+  const tasks = [task("pw", { estimated_minutes: 40 }), task("ps", { estimated_minutes: 20 }), task("work")];
+  const items = [item("p1", "pw", 60, "waffle"), item("p2", "ps", 60, "sc"), item("w1", "work", 10, "waffle"), item("w2", "work", 10, "sc")];
+  const entries = buildUnitEntries(tasks, items);
+  const plan = computePlanSpeeds(tasks, entries); // waffle 40 s, sc 20 s
+  const allocs = allocateSessions([session({ id: "mix", minutes: 30, item_ids: ["w1"], in_progress_item_ids: ["w2"] })], tasks, entries, plan);
+  const byType = Object.fromEntries(allocs.map((a) => [a.work_type, [a.units, a.minutes]]));
+  assert.deepEqual(Object.keys(byType).sort(), ["sc", "waffle"]);
+  assert.equal(byType.waffle[0], 10);
+  near(byType.waffle[1], 20, 1e-9, "10 waffle × 40 s : 10 sc × 20 s = 2 : 1, as if both were finished");
+  assert.equal(byType.sc[0], 0, "the row in progress adds no units");
+  near(byType.sc[1], 10, 1e-9);
+  // Same type: all the minutes stay with the type; only the finished row's units count.
+  const same = allocateSessions([session({ id: "same", minutes: 30, item_ids: ["w1"], in_progress_item_ids: ["p1"] })], tasks, entries, plan);
+  assert.deepEqual(same.map((a) => [a.work_type, a.units, a.minutes]), [["waffle", 10, 30]]);
+  // A row listed as both (not possible in the database) counts once, as finished.
+  const both = allocateSessions([session({ id: "both", minutes: 30, item_ids: ["w1"], in_progress_item_ids: ["w1"] })], tasks, entries, plan);
+  assert.deepEqual(both.map((a) => [a.work_type, a.units, a.minutes]), [["waffle", 10, 30]]);
+});
+
+test("S3: a sitting left out of speed (exclude_from_stats, e.g. ripped back) adds its in-progress minutes to nothing but cadence", () => {
+  const tasks = [task("t", { work_type: "sc" })];
+  const items = [item("a", "t", 100, null), item("b", "t", 100, null)];
+  const sessions = [
+    session({ id: "x", task_id: "t", session_date: "2026-10-03", minutes: 50, in_progress_item_ids: ["b"], exclude_from_stats: true, exclude_reason: "ripped back rows 1–2" }),
+    session({ id: "y", task_id: "t", session_date: "2026-10-04", minutes: 20, item_ids: ["a"] }),
+  ];
+  const forecast = computeForecast(input({ tasks, items, sessions }));
+  assert.equal(forecast.measured_speeds[0].seconds_per_unit, 12, "20 min / 100 only");
+  assert.equal(forecast.measured_speeds[0].n_sessions, 1);
+  assert.equal(forecast.cadence_minutes_per_day, 5, "(50 + 20) ÷ 14");
+});
+
+test("S3: the 8-sitting window counts in-progress sittings of that type; the plan ratio includes their minutes", () => {
+  const tasks = [task("plan", { estimated_minutes: 10, work_type: "sc" }), task("t", { work_type: "sc" })];
+  const items = [item("plan1", "plan", 100, null)];
+  const sessions = [];
+  for (let day = 1; day <= 9; day += 1) {
+    items.push(item(`r${day}`, "t", 10, null));
+    // Odd days finish a row in 1 min; even days are 2 min on a row not finished yet.
+    sessions.push(session({ id: `d${day}`, task_id: "t", session_date: `2026-10-${String(day).padStart(2, "0")}`, minutes: day % 2 ? 1 : 2,
+      ...(day % 2 ? { item_ids: [`r${day}`] } : { in_progress_item_ids: [`r${day}`] }) }));
+  }
+  const entries = buildUnitEntries(tasks, items);
+  const planSpeeds = computePlanSpeeds(tasks, entries); // 6 s per stitch
+  const allocs = allocateSessions(sessions, tasks, entries, planSpeeds);
+  const [speed] = computeMeasuredSpeeds(allocs);
+  assert.equal(speed.n_sessions, 8, "days 2–9");
+  assert.equal(speed.units, 40, "days 3, 5, 7, 9");
+  assert.equal(speed.minutes, 12, "4 × 1 + 4 × 2");
+  near(speed.seconds_per_unit, 18, 1e-9);
+  const ratio = pace.computePlanRatio(allocs, planSpeeds);
+  near(ratio.ratio, (5 + 8) / ((50 * 6) / 60), 1e-9, "13 measured minutes ÷ 5 plan minutes for the 50 finished stitches");
+});
+
 console.log(`\n${passed} passed${failures.length ? `, ${failures.length} failed` : ""}`);
 if (failures.length) process.exit(1);
