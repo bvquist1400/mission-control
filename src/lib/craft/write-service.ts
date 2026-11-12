@@ -80,10 +80,12 @@ export async function writeRows(client: Client, userId: string, projectId: strin
   onlyKeys(body, ["part_id", "mode", "expected_row", "to_row", "segment_id"]);
   const partId = uuid(body.part_id, "part_id");
   const mode = body.mode;
-  if (mode !== "done" && mode !== "undo" && mode !== "fix" && mode !== "close") bad("mode must be done, undo, fix or close");
+  // S3 (074) F2: undo_one is the Row done toast's Undo (exactly one row; refused when rows after it are ticked).
+  if (mode !== "done" && mode !== "undo" && mode !== "undo_one" && mode !== "fix" && mode !== "close") bad("mode must be done, undo, undo_one, fix or close");
   const expected = mode === "close" ? optional(body.expected_row, (v) => int(v, "expected_row", 1, 100_000)) : int(body.expected_row, "expected_row", 1, 100_000);
-  const toRow = mode === "undo" || mode === "fix" ? int(body.to_row, "to_row", 1, 100_000) : null;
-  if (mode !== "undo" && mode !== "fix" && body.to_row !== undefined && body.to_row !== null) bad("to_row is only for undo and fix");
+  const withRow = mode === "undo" || mode === "undo_one" || mode === "fix";
+  const toRow = withRow ? int(body.to_row, "to_row", 1, 100_000) : null;
+  if (!withRow && body.to_row !== undefined && body.to_row !== null) bad("to_row is only for undo, undo_one and fix");
   const segmentId = mode === "close" ? uuid(body.segment_id, "segment_id") : null;
   if (mode !== "close" && body.segment_id !== undefined && body.segment_id !== null) bad("segment_id is only for close");
   await partIn(client, userId, projectId, partId);
@@ -98,7 +100,8 @@ export async function writeRows(client: Client, userId: string, projectId: strin
     queueTaskStatusTransition(client, { userId, taskId: closed.task_id, fromStatus: closed.from_status as never, toStatus: "Done" });
   }
   const fresh = await view(client, userId, projectId);
-  if (result.status === "stale") throw new CraftWriteError(409, STALE_ROW, "stale", { result, view: fresh });
+  if (result.status === "stale") throw new CraftWriteError(409, mode === "undo_one"
+    ? "Not undone: rows after it were ticked since. Use Undo rows… to choose." : STALE_ROW, "stale", { result, view: fresh });
   if (result.status === "finished") throw new CraftWriteError(409, "Not saved: every row of this part is already ticked.", "finished", { result, view: fresh });
   if (result.status === "open_rows") throw new CraftWriteError(409, "Not closed: a row of this band isn't ticked any more.", "open_rows", { result, view: fresh });
   return { result, view: fresh };
@@ -138,7 +141,7 @@ export async function writeTimer(client: Client, userId: string, projectId: stri
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 export async function writeSitting(client: Client, userId: string, projectId: string, raw: unknown) {
   const body = record(raw);
-  onlyKeys(body, ["part_id", "use_timer", "timer_version", "minutes", "date", "started_at", "ended_at", "from_row", "to_row", "to_quarter", "expected_row", "note", "idempotency_key"]);
+  onlyKeys(body, ["part_id", "use_timer", "timer_version", "minutes", "date", "started_at", "ended_at", "from_row", "to_row", "to_quarter", "expected_row", "note", "idempotency_key", "in_progress"]);
   const partId = uuid(body.part_id, "part_id");
   if (typeof body.use_timer !== "boolean") bad("use_timer must be true or false");
   const useTimer = body.use_timer as boolean;
@@ -160,11 +163,14 @@ export async function writeSitting(client: Client, userId: string, projectId: st
   if (note.length > 2000) bad("note must be 2000 characters or fewer");
   if (typeof body.idempotency_key !== "string" || !body.idempotency_key.trim() || body.idempotency_key.trim().length > 190) bad("idempotency_key must be 1 to 190 characters");
   const key = (body.idempotency_key as string).trim();
+  if (body.in_progress !== undefined && typeof body.in_progress !== "boolean") bad("in_progress must be true or false");
   await partIn(client, userId, projectId, partId);
-  const { data, error } = await client.rpc("craft_log_sitting", {
+  // S3 (074): craft_save_sitting = 073's Log sitting plus "Partway through row N" (the next row linked in progress).
+  const { data, error } = await client.rpc("craft_save_sitting", {
     p_user_id: userId, p_part_id: partId, p_use_timer: useTimer, p_timer_version: timerVersion as number, p_minutes: minutes as number,
     p_date: date as string, p_started_at: startedAt as string, p_ended_at: endedAt as string, p_from_row: fromRow as number,
     p_to_row: toRow, p_to_quarter: toQuarter, p_expected_row: expected, p_note: note || (null as unknown as string), p_idempotency_key: key,
+    p_in_progress: body.in_progress === true,
   });
   if (error) {
     // Two identical retries at once: the loser's insert hits the source_ref index; answer with the winner.
@@ -183,6 +189,42 @@ export async function writeSitting(client: Client, userId: string, projectId: st
     stale: STALE_ROW,
     stale_timer: "Not saved: the timer changed on another screen. Check the minutes and save again.",
     no_timer: "Not saved: there is no timer on this project any more. Type the minutes instead.",
+  };
+  throw new CraftWriteError(409, words[result.status] ?? "Not saved.", result.status, { result, view: fresh });
+}
+
+// ── Ripped back (S3, 074) ───────────────────────────────────────────────────
+export async function writeFrog(client: Client, userId: string, projectId: string, raw: unknown) {
+  const body = record(raw);
+  onlyKeys(body, ["part_id", "expected_row", "from_row", "to_row", "note", "exclude_session_ids", "idempotency_key"]);
+  const partId = uuid(body.part_id, "part_id");
+  const expected = int(body.expected_row, "expected_row", 1, 100_000);
+  const fromRow = int(body.from_row, "from_row", 1, 100_000);
+  const toRow = int(body.to_row, "to_row", 1, 100_000);
+  if (toRow < fromRow) bad("to_row must be at least from_row");
+  if (body.note !== undefined && body.note !== null && typeof body.note !== "string") bad("note must be text");
+  const note = typeof body.note === "string" ? body.note.trim() : "";
+  if ([...note].length > 1000) bad("note must be 1000 characters or fewer");
+  const raws = body.exclude_session_ids ?? [];
+  if (!Array.isArray(raws) || raws.length > 500) bad("exclude_session_ids must be a list of sitting ids");
+  const exclude = [...new Set((raws as unknown[]).map((v) => uuid(v, "exclude_session_ids[]")))];
+  if (typeof body.idempotency_key !== "string" || !body.idempotency_key.trim() || body.idempotency_key.trim().length > 190) bad("idempotency_key must be 1 to 190 characters");
+  await partIn(client, userId, projectId, partId);
+  const { data, error } = await client.rpc("craft_frog", {
+    p_user_id: userId, p_part_id: partId, p_expected_row: expected, p_from_row: fromRow, p_to_row: toRow,
+    p_note: note || (null as unknown as string), p_exclude_session_ids: exclude, p_idempotency_key: (body.idempotency_key as string).trim(),
+  });
+  if (error) {
+    if (error.code === "23505") throw new CraftWriteError(409, "This rip-back key was already used for another part.", "key_used");
+    rpcFailure(error);
+  }
+  const result = data as RpcResult;
+  const fresh = await view(client, userId, projectId);
+  if (result.status === "ok") return { result, view: fresh, duplicate: false };
+  if (result.status === "duplicate") return { result, view: fresh, duplicate: true };
+  const words: Record<string, string> = {
+    stale: STALE_ROW,
+    other_part: "Not saved: the screen moved to another part. Rip back on the part the screen shows.",
   };
   throw new CraftWriteError(409, words[result.status] ?? "Not saved.", result.status, { result, view: fresh });
 }

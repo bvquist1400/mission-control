@@ -76,12 +76,16 @@ async function loadOneCraftView(client: SupabaseClient<Database>, userId: string
   }
   const items: CraftInput["items"] = [], segments: CraftInput["segments"] = [];
   const session_items: CraftInput["session_items"] = [], sitting_details: CraftInput["sitting_details"] = [];
+  const frogs: NonNullable<CraftInput["frogs"]> = [];
   for (const ids of chunks(parts.map((part) => part.id))) {
-    const [partItems, partSegments] = await Promise.all([
+    const [partItems, partSegments, partFrogs] = await Promise.all([
       pagedSelect<Tables["task_checklist_items"]["Row"]>((from, to) => client.from("task_checklist_items").select("*").eq("user_id", userId).in("craft_part_id", ids).order("id").range(from, to)),
       pagedSelect<Tables["craft_segments"]["Row"]>((from, to) => client.from("craft_segments").select("*").eq("user_id", userId).in("part_id", ids).order("id").range(from, to)),
+      // S3 (074): the "Ripped back" history.
+      pagedSelect<NonNullable<CraftInput["frogs"]>[number]>((from, to) => client.from("craft_frogs").select("id, part_id, from_row, to_row, note, session_ids, created_at")
+        .eq("user_id", userId).in("part_id", ids).order("id").range(from, to)),
     ]);
-    items.push(...partItems); segments.push(...partSegments);
+    items.push(...partItems); segments.push(...partSegments); frogs.push(...partFrogs);
   }
   // S2 band close: the tasks of close_check segments and their plain "Count …" items (only bands with a check are read).
   const checkTaskIds = [...new Set(segments.filter((segment) => segment.close_check && segment.task_id).map((segment) => segment.task_id as string))];
@@ -105,7 +109,7 @@ async function loadOneCraftView(client: SupabaseClient<Database>, userId: string
   }
   return buildCraftView({ project: projectResult.data, craft_project: craftResult.data, parts, segments, items,
     sessions, session_items, sitting_details, timer: timerResult.data, server_now: now.toISOString(), remove_blockers,
-    timer_project, band_tasks, count_items, notes });
+    timer_project, band_tasks, count_items, notes, frogs });
 }
 
 /** 072's rule for Remove, asked once per view. Before 072 is applied (no such function) the screen loads without Remove. */

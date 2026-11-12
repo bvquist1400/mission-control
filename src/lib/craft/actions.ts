@@ -24,7 +24,16 @@ export const CRAFT_MAX_ROWS = 2000;
  * `since_timer`: ticked since this project's timer sitting started (FR1); `units` / `type`: the
  * row's unit_count and work type (Change total copies the last row's).
  */
-export interface RowState { row: number; done: boolean; linked: boolean; today: boolean; since_timer?: boolean; units?: number | null; type?: string | null }
+export interface RowState {
+  row: number; done: boolean;
+  /** Finished in a saved sitting (074: an in-progress link is `in_progress`, not `linked`). */
+  linked: boolean;
+  today: boolean; since_timer?: boolean; units?: number | null; type?: string | null;
+  /** S3: worked on in a saved sitting but not finished there. */
+  in_progress?: boolean;
+  /** S3: when it was ticked (null while unticked). */
+  done_at?: string | null;
+}
 
 export type RowWord = "row" | "round";
 export const wordTitle = (word: RowWord) => (word === "round" ? "Round" : "Row");
@@ -113,7 +122,8 @@ export function setTotalPlan(rows: RowState[], total: number, next: number): Set
   const cut = rows.filter((s) => s.row > next).sort((a, b) => a.row - b.row);
   const ticked = cut.filter((s) => s.done).map((s) => s.row);
   if (ticked.length) return { kind: "refused", total: next, reason: "ticked", rows: ticked };
-  const linked = cut.filter((s) => s.linked).map((s) => s.row);
+  // A row in progress in a sitting is in that sitting too (073/074 refuse it as in_sitting).
+  const linked = cut.filter((s) => s.linked || s.in_progress).map((s) => s.row);
   if (linked.length) return { kind: "refused", total: next, reason: "in_sitting", rows: linked };
   return { kind: "remove", total: next, remove: cut.map((s) => s.row) };
 }
@@ -213,17 +223,143 @@ export interface OtherPartRows { part_id: string; name: string; word: RowWord; r
  * Across parts: "Saves Cuff rounds 15–31 and Hand rounds 1–3, 52 min". Then what it ticks,
  * unticks, and rows already in an earlier sitting (saved there, not here).
  */
-export function sittingSummary(word: RowWord, partName: string, plan: ReturnType<typeof sittingPlan>, other: OtherPartRows[], minutes: number | null): string {
-  const mine = plan.link;
-  const named = other.filter((o) => o.rows.length).map((o) => `${o.name} ${rowsText(o.word, o.rows)}`);
-  const parts = named.length ? [...named, ...(mine.length ? [`${partName} ${rowsText(word, mine)}`] : [])] : mine.length ? [rowsText(word, mine)] : [];
-  const time = minutes && minutes > 0 ? minutesText(minutes) : null;
-  let text = parts.length ? `Saves ${parts.join(" and ")}${time ? `, ${time}` : ""}` : `Saves ${time ? `${time}, ` : ""}the time only (no ${word}s)`;
+export function sittingSummary(word: RowWord, partName: string, plan: ReturnType<typeof sittingPlan>, other: OtherPartRows[], minutes: number | null, partway: number | null = null): string {
+  let text = savedRowsText({ word, partName, mine: plan.link, other, partway, minutes, verb: "Saves" });
   if (plan.tick.length) text += ` · ticks ${rowsText(word, plan.tick)}`;
   if (plan.untick.length) text += ` · unticks ${rowsText(word, plan.untick)}`;
   const earlier = plan.rows.filter((r) => !plan.link.includes(r));
   if (earlier.length) text += ` · ${rowsText(word, earlier)} already in an earlier sitting`;
   return text;
+}
+
+/**
+ * "Saves rows 61–62 and part of row 63, 48 min" (S3): the rows finished, the row in progress (if any),
+ * other parts' rows named by part, then the minutes. Used by the preview and by the confirmation.
+ */
+export function savedRowsText(args: { word: RowWord; partName: string; mine: number[]; other: OtherPartRows[]; partway: number | null; minutes: number | null; verb: "Saves" | "Saved" }): string {
+  const { word, partName, mine, other, partway, minutes, verb } = args;
+  const named = other.filter((o) => o.rows.length).map((o) => `${o.name} ${rowsText(o.word, o.rows)}`);
+  const pieces = named.length ? [...named, ...(mine.length ? [`${partName} ${rowsText(word, mine)}`] : [])] : mine.length ? [rowsText(word, mine)] : [];
+  if (partway !== null) pieces.push(named.length ? `part of ${partName} ${word} ${partway}` : `part of ${word} ${partway}`);
+  const time = minutes && minutes > 0 ? minutesText(minutes) : null;
+  return pieces.length ? `${verb} ${pieces.join(" and ")}${time ? `, ${time}` : ""}` : `${verb} ${time ? `${time}, ` : ""}the time only (no ${word}s)`;
+}
+
+// ── S3: Partway through row N ─────────────────────────────────────────────────
+
+/** A sitting that ran this long after its last Row done is taken to have stopped partway through a row. */
+export const PARTWAY_IDLE_SECONDS = 120;
+
+/** The row a sitting is partway through: the next row after "last full row" (074's rule), or null. */
+export function partwayRow(rows: RowState[], total: number, to: number): number | null {
+  const next = nextExistingRow(rows, to, total);
+  if (next === null) return null;
+  const current = currentRowOf(rows, total);
+  const state = rows.find((s) => s.row === next);
+  // Rows after "last full row" below the current row are unticked by the save; one past it must be unticked already.
+  return state && state.done && next >= current ? null : next;
+}
+
+/**
+ * "Partway through row N" starts ON when the timer ran more than 2 minutes after the sitting's last
+ * Row done (or the sitting has no Row done at all), OFF otherwise. Without a timer it starts OFF unless
+ * no rows are saved (the minutes went into the row being worked). Always OFF with no row to be partway through.
+ * `lastDoneAt`: the newest Row done of this project's rows since the timer's sitting started (any part).
+ */
+export function partwayDefault(rows: RowState[], total: number, form: { from: number; to: number },
+  timer: { running: boolean; paused_at: string | null; elapsed_seconds: number } | null, nowIso: string, lastDoneAt: string | null): boolean {
+  if (partwayRow(rows, total, form.to) === null) return false;
+  if (!timer) return form.to <= form.from;
+  if (!lastDoneAt) return true;
+  const stopMs = timer.running || !timer.paused_at ? Date.parse(nowIso) : Date.parse(timer.paused_at);
+  const after = Math.min(Math.max(0, (stopMs - Date.parse(lastDoneAt)) / 1000), timer.elapsed_seconds);
+  return after > PARTWAY_IDLE_SECONDS;
+}
+
+/**
+ * F6: "N rounds this sitting" counts every part the sitting saves, not only the screen's part:
+ * "3 rounds this sitting" or "20 rounds this sitting (17 on Cuff)".
+ */
+export function sittingCountText(word: RowWord, from: number, to: number, other: OtherPartRows[]): string {
+  const mine = Math.max(0, to - from);
+  const elsewhere = other.filter((o) => o.rows.length);
+  const extra = elsewhere.reduce((sum, o) => sum + o.rows.length, 0);
+  const n = mine + extra;
+  const where = elsewhere.map((o) => `${o.rows.length} on ${o.name}`).join(", ");
+  return `${n} ${plural(word, n)} this sitting${extra ? ` (${where})` : ""}`;
+}
+
+/** F6: the Log sitting form after "Use the new count": the new count's rows, but the typed note and minutes kept. */
+export interface LogForm { minutes: number | null; minutesTouched: boolean; from: number; to: number; quarter: number; note: string; key: string; partway: boolean; partwayTouched: boolean }
+export function retakeLogForm(previous: LogForm, fresh: LogForm): LogForm {
+  return {
+    ...fresh, note: previous.note, key: previous.key,
+    minutes: previous.minutesTouched ? previous.minutes : fresh.minutes, minutesTouched: previous.minutesTouched,
+  };
+}
+
+/** F3: the line shown once a sitting is saved, from the rows the server actually saved. */
+export function savedSittingText(result: { saved_rows?: number[]; in_progress_row?: number | null; other_rows?: { part_id: string; rows: number[] }[]; minutes?: number; status?: string },
+  word: RowWord, partName: string, parts: { id: string; name: string; row_word: string }[]): string {
+  const other: OtherPartRows[] = (result.other_rows ?? []).map((o) => {
+    const part = parts.find((p) => p.id === o.part_id);
+    return { part_id: o.part_id, name: part?.name ?? "another part", word: part?.row_word === "round" ? "round" : "row", rows: o.rows };
+  });
+  const text = savedRowsText({ word, partName, mine: result.saved_rows ?? [], other, partway: result.in_progress_row ?? null, minutes: result.minutes ?? null, verb: "Saved" });
+  return result.status === "duplicate" ? `Already saved: ${text.replace(/^Saved /, "")}.` : `${text}.`;
+}
+
+// ── S3: Ripped back ────────────────────────────────────────────────────────────
+
+/** A sitting the Ripped back sheet may change (the view's rip_sittings). */
+export interface RipSittingFacts {
+  id: string; date: string; minutes: number; excluded: boolean; exclude_reason: string | null; extra_units: number;
+  links: { part_id: string | null; row: number | null; in_progress: boolean }[];
+}
+
+/** The reason a rip-back leaves a sitting out of speed (074 writes the same words). */
+export function frogReason(word: RowWord, from: number, to: number): string {
+  return from === to ? `ripped back ${word} ${from}` : `ripped back ${word}s ${from}–${to}`;
+}
+
+/**
+ * What "Ripped back to row N" does, as 074's craft_frog decides it: rows N to current − 1 unticked;
+ * every link to them and to the current row (worked partway, ripped out with them) removed from its
+ * sitting; sittings left with nothing are all ripped (left out of speed); the rest are partly ripped
+ * (left out only when ticked in the sheet); sittings already left out keep their reason.
+ */
+export function frogPlan(rows: RowState[], total: number, partId: string, sittings: RipSittingFacts[], from: number) {
+  const current = currentRowOf(rows, total);
+  const to = current - 1;
+  const ripped = rows.filter((s) => s.row >= from && s.row <= to).map((s) => s.row).sort((a, b) => a - b);
+  const hit = (link: RipSittingFacts["links"][number]) => link.part_id === partId && link.row !== null && link.row >= from && link.row <= current;
+  const touched = sittings.filter((sitting) => sitting.links.some(hit)).map((sitting) => {
+    const keeps = sitting.links.filter((link) => !hit(link));
+    return { ...sitting, removed: sitting.links.filter(hit).length, keeps, all: keeps.length === 0 && !(sitting.extra_units > 0) };
+  });
+  const partwayLinks = sittings.some((sitting) => sitting.links.some((link) => link.part_id === partId && link.row === current));
+  return {
+    from, to, current, ripped, partway: partwayLinks && current <= total ? current : null,
+    all: touched.filter((s) => s.all && !s.excluded), partly: touched.filter((s) => !s.all && !s.excluded), already: touched.filter((s) => s.excluded),
+  };
+}
+export type FrogPlan = ReturnType<typeof frogPlan>;
+
+/** What a partly ripped sitting keeps, in words: "keeps rows 58–60", "keeps 3 other rows". */
+export function keepsText(word: RowWord, partId: string, keeps: RipSittingFacts["links"]): string {
+  const here = keeps.filter((link) => link.part_id === partId && link.row !== null).map((link) => link.row as number);
+  const elsewhere = keeps.length - here.length;
+  const pieces = [...(here.length ? [rowsText(word, here)] : []), ...(elsewhere ? [`${elsewhere} ${elsewhere === 1 ? "row" : "rows"} of other parts`] : [])];
+  return pieces.length ? `keeps ${pieces.join(" and ")}` : "keeps other work";
+}
+
+/** The body POST /api/craft/[id]/frog sends: the part, the current row it saw, the rows, the note, the picked sittings, a key. */
+export function frogBody(part: { id: string; current_row: number }, plan: FrogPlan, form: { note: string; key: string; exclude: string[] }) {
+  const partly = new Set(plan.partly.map((s) => s.id));
+  return {
+    part_id: part.id, expected_row: part.current_row, from_row: plan.from, to_row: plan.to,
+    note: form.note.trim() || null, exclude_session_ids: form.exclude.filter((id) => partly.has(id)), idempotency_key: form.key,
+  };
 }
 
 // ── Stale sheets (FR1) ─────────────────────────────────────────────────────────
@@ -245,8 +381,10 @@ export function sheetChangeText(before: SheetFacts, now: SheetFacts | null, use:
   if (!now) return "This part changed on another screen. Close this and check the count.";
   const where = now.part_id !== before.part_id ? `${now.part_name} ${now.word} ${now.current_row}` : `${now.word} ${now.current_row}`;
   if (now.part_id !== before.part_id || now.current_row !== before.current_row) return `Your count changed on another screen (now ${where}). Check and save again.`;
-  if (use.total && now.total !== before.total) return `Your total changed on another screen (now ${now.total} ${now.word}s). Check and save again.`;
-  if (use.timer && (now.timer_version !== before.timer_version || now.timer_part_id !== before.timer_part_id)) return "Your timer changed on another screen. Check and save again.";
+  // S3 F5: every sheet watches the total and the timer too (Undo, Fix count and Ripped back move the
+  // timer's start row; Change total's preview rests on the rows), unless a caller opts out.
+  if (use.total !== false && now.total !== before.total) return `Your total changed on another screen (now ${now.total} ${now.word}s). Check and save again.`;
+  if (use.timer !== false && (now.timer_version !== before.timer_version || now.timer_part_id !== before.timer_part_id)) return "Your timer changed on another screen. Check and save again.";
   return null;
 }
 
@@ -258,9 +396,10 @@ export function sheetChangeText(before: SheetFacts, now: SheetFacts | null, use:
  * with rows after it already ticked (chat, the task panel), Undo opens "Undo rows…" instead, so it
  * never unticks more than the row it names without showing it first.
  */
-export function toastUndo(rows: RowState[], total: number, row: number, currentAfter: number): { kind: "one"; body: { mode: "undo"; to_row: number; expected_row: number } } | { kind: "sheet"; to: number } {
+export function toastUndo(rows: RowState[], total: number, row: number, currentAfter: number): { kind: "one"; body: { mode: "undo_one"; to_row: number; expected_row: number } } | { kind: "sheet"; to: number } {
   const expected = nextExistingRow(rows, row, total) ?? total + 1;
-  if (currentAfter === expected) return { kind: "one", body: { mode: "undo", to_row: row, expected_row: currentAfter } };
+  // S3 F2: mode "undo_one" makes the server untick only this row, and refuse when rows after it are ticked.
+  if (currentAfter === expected) return { kind: "one", body: { mode: "undo_one", to_row: row, expected_row: currentAfter } };
   return { kind: "sheet", to: row };
 }
 
@@ -281,9 +420,11 @@ export function addedRowsText(word: RowWord, rows: RowState[], stitchCount: numb
  * and untouched minutes too (the server takes the timer's own at save time).
  */
 export function logSittingBody(part: { id: string; current_row: number }, timer: { version: number; over_cap: boolean } | null,
-  form: { from: number; to: number; quarter: number; note: string; key: string; minutesTouched: boolean }, minutes: number | null): Record<string, unknown> {
+  form: { from: number; to: number; quarter: number; note: string; key: string; minutesTouched: boolean; partway?: boolean }, minutes: number | null): Record<string, unknown> {
   return {
     part_id: part.id, use_timer: Boolean(timer), to_row: form.to, to_quarter: form.quarter, expected_row: part.current_row,
+    // S3: "Partway through row N" (a quarter is always partway).
+    in_progress: Boolean(form.partway) || form.quarter > 0,
     note: form.note.trim() || null, idempotency_key: form.key,
     ...(timer ? { timer_version: timer.version } : { from_row: form.from }),
     ...(!timer || form.minutesTouched || timer.over_cap ? { minutes } : {}),

@@ -9,13 +9,14 @@ import Link from "next/link";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import type { CraftView } from "@/lib/craft";
+import { RIP_CHOICES } from "@/lib/craft";
 import {
-  CRAFT_MAX_ROWS, SITTING_MAX_MINUTES, addedRowsText, clockText, fixCountPlan, logSittingBody, logSittingDefaults, minutesText, newIdempotencyKey, quarterText,
-  rowFromRidgesDone, rowsText, setTotalPlan, setTotalRefusalText, sheetChangeText, sheetFactsOf, sittingPlan, sittingSummary, timerMinutes,
-  undoChoices, wordTitle, type RowWord, type SheetFacts,
+  CRAFT_MAX_ROWS, SITTING_MAX_MINUTES, addedRowsText, clockText, fixCountPlan, frogBody, frogPlan, keepsText, logSittingBody, logSittingDefaults, minutesText,
+  newIdempotencyKey, partwayDefault, partwayRow, quarterText, retakeLogForm, rowFromRidgesDone, rowsText, setTotalPlan, setTotalRefusalText, sheetChangeText,
+  sheetFactsOf, sittingCountText, sittingPlan, sittingSummary, timerMinutes, undoChoices, wordTitle, type LogForm, type RowWord, type SheetFacts,
 } from "@/lib/craft/actions";
 
-export type Send = (kind: "row" | "timer" | "sittings" | "total" | "notes", body: Record<string, unknown>, method?: "POST" | "DELETE") => Promise<SendReply>;
+export type Send = (kind: "row" | "timer" | "sittings" | "total" | "notes" | "frog", body: Record<string, unknown>, method?: "POST" | "DELETE") => Promise<SendReply>;
 export interface SendReply { ok: boolean; status: number | null; body: Record<string, unknown> | null; error: string | null }
 type Part = NonNullable<CraftView["active_part"]>;
 
@@ -92,9 +93,10 @@ function Stepper({ id, label, hint, value, onChange, min, max, step = 1 }: {
 }
 
 // ── Log sitting ─────────────────────────────────────────────────────────────
-function logForm(view: CraftView, part: Part) {
+function logForm(view: CraftView, part: Part): LogForm {
   const d = logSittingDefaults(view.row_states, part.total_rows, view.timer);
-  return { minutes: d.minutes, minutesTouched: false, from: d.from, to: d.to, quarter: 0, note: "", key: newIdempotencyKey() };
+  const partway = partwayDefault(view.row_states, part.total_rows, d, view.timer, view.server_now, view.timer_last_done_at);
+  return { minutes: d.minutes, minutesTouched: false, from: d.from, to: d.to, quarter: 0, note: "", key: newIdempotencyKey(), partway, partwayTouched: false };
 }
 export function LogSittingSheet({ open, onClose, view: live, part: livePart, send, thenStart, onSaved }: {
   open: boolean; onClose: () => void; view: CraftView; part: Part; send: Send; thenStart?: boolean; onSaved: (reply: SendReply) => void;
@@ -110,16 +112,22 @@ export function LogSittingSheet({ open, onClose, view: live, part: livePart, sen
   const shownTimer = timer && live.timer && live.timer.version === timer.version ? live.timer : timer;
   const timerMin = shownTimer ? Math.min(SITTING_MAX_MINUTES, timerMinutes(shownTimer.elapsed_seconds)) : null;
   const shownMinutes = form.minutesTouched || !timer ? form.minutes : timerMin;
-  const rowsDone = Math.max(0, form.to - form.from);
   const nextRow = form.to + 1;
   const other = timer && !timer.on_active_part ? view.timer_rows : [];
+  // S3: the row this sitting is partway through (the next row after "last full row"); a quarter is always partway.
+  const partRow = partwayRow(view.row_states, part.total_rows, form.to);
+  // Until it is tapped, the toggle follows the default for the rows now chosen.
+  const partwayOn = form.partwayTouched ? form.partway
+    : partwayDefault(view.row_states, part.total_rows, form, view.timer, view.server_now, view.timer_last_done_at);
+  const partway = partRow !== null && (partwayOn || form.quarter > 0);
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (retake()) { setForm(logForm(live, livePart)); setState({ busy: false, error: null }); return; }
+    // F6: the new count's rows, but the typed note and minutes stay.
+    if (retake()) { setForm((f) => retakeLogForm(f, logForm(live, livePart))); setState({ busy: false, error: null }); return; }
     if (shownMinutes === null || shownMinutes < 1) { setState({ busy: false, error: "Type the minutes (at least 1)." }); return; }
     setState({ busy: true, error: null });
     // The captured part, expected row and timer version (never the refreshed ones).
-    const reply = await send("sittings", logSittingBody(part, timer, form, shownMinutes));
+    const reply = await send("sittings", logSittingBody(part, timer, { ...form, partway }, shownMinutes));
     if (!reply.ok) { setState({ busy: false, error: reply.error }); return; }
     setState({ busy: false, error: null });
     onSaved(reply);
@@ -135,7 +143,7 @@ export function LogSittingSheet({ open, onClose, view: live, part: livePart, sen
         {!timer && <Stepper id="craft-log-from" label={`Last full ${word} before this sitting`} min={0} max={form.to} value={form.from}
           hint={form.from === 0 ? "started at the beginning" : undefined} onChange={(value) => setForm((f) => ({ ...f, from: value ?? 0 }))} />}
         <Stepper id="craft-log-to" label={`Last full ${word} finished`} min={form.from} max={part.total_rows} value={form.to}
-          hint={rowsDone === 1 ? `1 ${word} this sitting` : `${rowsDone} ${word}s this sitting`} onChange={(value) => setForm((f) => ({ ...f, to: value ?? f.from, quarter: 0 }))} />
+          hint={sittingCountText(word, form.from, form.to, other)} onChange={(value) => setForm((f) => ({ ...f, to: value ?? f.from, quarter: 0 }))} />
         {part.ridges && <p className="craft-sheet-hint">{word === "row" ? `Row ${form.to} = ridge ${Math.ceil(form.to / 2)}` : null}</p>}
         {part.quarters && nextRow <= part.total_rows && (
           <fieldset className="craft-quarters">
@@ -149,61 +157,162 @@ export function LogSittingSheet({ open, onClose, view: live, part: livePart, sen
             ))}
           </fieldset>
         )}
-        <p className={form.quarter > 0 ? "craft-sheet-warn" : "craft-sheet-hint"}>
-          {form.quarter > 0 ? `Stopping partway through ${word} ${nextRow}: its minutes count toward speed once the next update ships. Or keep the timer paused and save when the ${word} is done.`
-            : timer ? `Stopped partway through a ${word}? Its minutes count toward speed once the next update ships. Or keep the timer paused and save when the ${word} is done.`
-            : `Stopped partway through a ${word}? Its minutes count toward speed once the next update ships.`}
-        </p>
+        {partRow !== null ? (
+          <label className="craft-partway" data-on={partway ? "true" : undefined}>
+            <input type="checkbox" checked={partway} disabled={form.quarter > 0}
+              onChange={(e) => setForm((f) => ({ ...f, partway: e.target.checked, partwayTouched: true }))} />
+            <span>Partway through {word} {partRow}</span>
+            <small>{form.quarter > 0 ? `A part of ${word} ${nextRow} is partway.` : partway ? `Its minutes count with ${word} ${partRow}; it is ticked when you finish it.` : `Off: the minutes go with the ${word}s finished.`}</small>
+          </label>
+        ) : null}
         <div className="craft-field">
           <label htmlFor="craft-log-note">Note<span>optional</span></label>
           <textarea id="craft-log-note" rows={2} maxLength={2000} value={form.note} placeholder="e.g. tension felt tight" onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} />
         </div>
-        <Foot changed={notice} summary={sittingSummary(word, part.name, plan, other, shownMinutes)} error={state.error}
+        <Foot changed={notice} summary={sittingSummary(word, part.name, plan, other, shownMinutes, partway ? partRow : null)} error={state.error}
           busy={state.busy} onCancel={onClose} saveLabel={changed ? CHANGED_LABEL : "Save sitting"} />
       </form>
     </Sheet>
   );
 }
 
-// ── Undo rows… ──────────────────────────────────────────────────────────────
-export function UndoRowsSheet({ open, onClose, view: live, part: livePart, send, initialTo }: { open: boolean; onClose: () => void; view: CraftView; part: Part; send: Send; initialTo?: number }) {
+// ── Undo rows… and Ripped back ───────────────────────────────────────────────
+/**
+ * Two different fixes in one sheet (S3): "Wrong count" unticks rows that weren't done (a counting
+ * slip: sittings and speed untouched, like Fix count); "Ripped back" is for rows pulled out (074's
+ * craft_frog: rows unticked, their links removed from their sittings, sittings left out of speed).
+ */
+export function UndoRowsSheet({ open, onClose, view: live, part: livePart, send, initialTo, initialMode = "undo", onRipped }: {
+  open: boolean; onClose: () => void; view: CraftView; part: Part; send: Send; initialTo?: number; initialMode?: "undo" | "rip"; onRipped?: (reply: SendReply) => void;
+}) {
   const { snap, changed, notice, retake } = useSheetSnapshot(live, livePart);
   const { view, part } = snap;
   const word = part.row_word as RowWord;
+  const [mode, setMode] = useState<"undo" | "rip">(initialMode);
   const choices = undoChoices(view.row_states, part.total_rows);
   const [to, setTo] = useState<number | null>(initialTo !== undefined && choices.includes(initialTo) ? initialTo : choices[0] ?? null);
+  const ripChoices = undoChoices(view.row_states, part.total_rows, RIP_CHOICES);
+  const [ripFrom, setRipFrom] = useState<number | null>(ripChoices[0] ?? null);
+  const [exclude, setExclude] = useState<string[]>([]);
+  const [note, setNote] = useState("");
+  const [key, setKey] = useState(newIdempotencyKey);
   const [state, setState] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
   const plan = to === null ? null : fixCountPlan(view.row_states, part.total_rows, to);
+  const ripMin = ripChoices.length ? Math.min(...ripChoices) : null;
+  const ripMax = ripChoices.length ? Math.max(...ripChoices) : null;
+  const frog = ripFrom === null ? null : frogPlan(view.row_states, part.total_rows, part.id, view.rip_sittings, ripFrom);
+  const leftOut = frog ? frog.all.length + frog.partly.filter((s) => exclude.includes(s.id)).length : 0;
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (retake()) { const next = undoChoices(live.row_states, livePart.total_rows); setTo(to !== null && next.includes(to) ? to : next[0] ?? null); setState({ busy: false, error: null }); return; }
+    if (retake()) {
+      const next = undoChoices(live.row_states, livePart.total_rows);
+      setTo(to !== null && next.includes(to) ? to : next[0] ?? null);
+      const nextRip = undoChoices(live.row_states, livePart.total_rows, RIP_CHOICES);
+      setRipFrom(ripFrom !== null && nextRip.includes(ripFrom) ? ripFrom : nextRip[0] ?? null);
+      setExclude([]); setKey(newIdempotencyKey());
+      setState({ busy: false, error: null });
+      return;
+    }
+    if (mode === "rip") {
+      if (!frog || !frog.ripped.length) return;
+      setState({ busy: true, error: null });
+      const reply = await send("frog", frogBody(part, frog, { note, key, exclude }));
+      if (!reply.ok) { setState({ busy: false, error: reply.error }); return; }
+      onRipped?.(reply);
+      onClose();
+      return;
+    }
     if (to === null) return;
     setState({ busy: true, error: null });
     const reply = await send("row", { part_id: part.id, mode: "undo", expected_row: part.current_row, to_row: to });
     if (!reply.ok) { setState({ busy: false, error: reply.error }); return; }
     onClose();
   }
+  const sittingLine = (s: { date: string; minutes: number }) => `${shortDate(s.date)} · ${minutesText(s.minutes)}`;
+  const ripSummary = !frog || !frog.ripped.length ? null
+    : `Unticks ${rowsText(word, frog.ripped)}${frog.partway !== null ? ` and takes the part of ${word} ${frog.partway} out of its sitting` : ""}. `
+      + `${leftOut ? `${leftOut} ${leftOut === 1 ? "sitting" : "sittings"} left out of speed. ` : "Speed: no sitting left out. "}${wordTitle(word)} ${frog.from} next.`;
   return (
-    <Sheet open={open} onClose={onClose} title={`Undo ${word}s`}>
+    <Sheet open={open} onClose={onClose} title={mode === "rip" ? "Ripped back" : `Undo ${word}s`}>
       <form onSubmit={submit}>
-        {choices.length ? (
-          <fieldset className="craft-choices">
-            <legend>Go back to</legend>
-            {choices.map((row) => (
-              <label key={row} data-on={to === row ? "true" : undefined}>
-                <input type="radio" name="craft-undo" value={row} checked={to === row} onChange={() => setTo(row)} />
-                <span>{word === "round" ? "Round" : "Row"} {row}</span>
-                <small>unticks {rowsText(word, fixCountPlan(view.row_states, part.total_rows, row).untick)}</small>
-              </label>
-            ))}
-          </fieldset>
-        ) : <p className="craft-sheet-hint">No ticked {word}s to undo.</p>}
-        {plan && plan.linked.length > 0 && <p className="craft-sheet-hint">{rowsText(word, plan.linked)} {plan.linked.length === 1 ? "is" : "are"} in a saved sitting; the sitting stays as it is.</p>}
-        <Foot changed={notice} summary={plan && plan.untick.length ? `Unticks ${rowsText(word, plan.untick)}. ${wordTitle(word)} ${plan.next} next.` : null} error={state.error}
-          busy={state.busy} onCancel={onClose} saveLabel={changed ? CHANGED_LABEL : "Undo"} disabled={!changed && (!plan || !plan.untick.length)} />
+        <div className="craft-toggle craft-undo-kind" role="group" aria-label="What happened">
+          <Button type="button" variant="toggle" size="sm" active={mode === "undo"} onClick={() => { setMode("undo"); setState({ busy: false, error: null }); }}>Wrong count</Button>
+          <Button type="button" variant="toggle" size="sm" active={mode === "rip"} onClick={() => { setMode("rip"); setState({ busy: false, error: null }); }}>Ripped back</Button>
+        </div>
+        {mode === "undo" ? (
+          <>
+            <p className="craft-sheet-sub">Ticked by mistake? This unticks them. Sittings and speed stay as they are (like Fix count).</p>
+            {choices.length ? (
+              <fieldset className="craft-choices">
+                <legend>Go back to</legend>
+                {choices.map((row) => (
+                  <label key={row} data-on={to === row ? "true" : undefined}>
+                    <input type="radio" name="craft-undo" value={row} checked={to === row} onChange={() => setTo(row)} />
+                    <span>{wordTitle(word)} {row}</span>
+                    <small>unticks {rowsText(word, fixCountPlan(view.row_states, part.total_rows, row).untick)}</small>
+                  </label>
+                ))}
+              </fieldset>
+            ) : <p className="craft-sheet-hint">No ticked {word}s to undo.</p>}
+            {plan && plan.linked.length > 0 && <p className="craft-sheet-hint">{rowsText(word, plan.linked)} {plan.linked.length === 1 ? "is" : "are"} in a saved sitting; the sitting stays as it is.</p>}
+          </>
+        ) : (
+          <>
+            <p className="craft-sheet-sub">Pulled these {word}s out? They are unticked and their time is left out of speed. The minutes stay in your daily time.</p>
+            {ripMin !== null && ripMax !== null && ripFrom !== null ? (
+              <Stepper id="craft-rip-from" label={`First ${word} pulled out`} min={ripMin} max={ripMax} value={ripFrom}
+                hint={frog && frog.ripped.length ? `rips ${rowsText(word, frog.ripped)} (up to ${word} ${frog.to})` : undefined}
+                onChange={(value) => { setRipFrom(value === null ? ripMax : value); setExclude([]); }} />
+            ) : <p className="craft-sheet-hint">No ticked {word}s to rip back.</p>}
+            {frog && frog.ripped.length > 0 && (
+              <div className="craft-rip">
+                {frog.all.length > 0 && (
+                  <section aria-label="Left out of speed">
+                    <h3>Left out of speed (every {word} in them ripped)</h3>
+                    <ul>{frog.all.map((s) => <li key={s.id}>{sittingLine(s)}</li>)}</ul>
+                  </section>
+                )}
+                {frog.partly.length > 0 && (
+                  <fieldset className="craft-rip-partly">
+                    <legend>Partly ripped: tick to leave out of speed too</legend>
+                    {frog.partly.map((s) => (
+                      <label key={s.id} data-on={exclude.includes(s.id) ? "true" : undefined}>
+                        <input type="checkbox" checked={exclude.includes(s.id)}
+                          onChange={(e) => setExclude((ids) => (e.target.checked ? [...ids, s.id] : ids.filter((id) => id !== s.id)))} />
+                        <span>{sittingLine(s)}</span>
+                        <small>{keepsText(word, part.id, s.keeps)}</small>
+                      </label>
+                    ))}
+                  </fieldset>
+                )}
+                {frog.already.length > 0 && (
+                  <section aria-label="Already left out">
+                    <h3>Already left out of speed</h3>
+                    <ul>{frog.already.map((s) => <li key={s.id}>{sittingLine(s)}{s.exclude_reason ? ` · ${s.exclude_reason}` : ""}</li>)}</ul>
+                  </section>
+                )}
+                {!frog.all.length && !frog.partly.length && !frog.already.length && <p className="craft-sheet-hint">No saved sitting has these {word}s, so speed doesn&apos;t change.</p>}
+              </div>
+            )}
+            <div className="craft-field">
+              <label htmlFor="craft-rip-note">Note<span>optional</span></label>
+              <textarea id="craft-rip-note" rows={2} maxLength={1000} value={note} placeholder="e.g. dropped a stitch at row 58" onChange={(e) => setNote(e.target.value)} />
+            </div>
+            <p className="craft-sheet-hint">There is no un-rip: to put {word}s back, use Fix count.</p>
+          </>
+        )}
+        <Foot changed={notice} error={state.error}
+          summary={mode === "rip" ? ripSummary : plan && plan.untick.length ? `Unticks ${rowsText(word, plan.untick)}. ${wordTitle(word)} ${plan.next} next.` : null}
+          busy={state.busy} onCancel={onClose} saveLabel={changed ? CHANGED_LABEL : mode === "rip" ? "Rip back" : "Undo"}
+          disabled={!changed && (mode === "rip" ? !frog || !frog.ripped.length : !plan || !plan.untick.length)} />
       </form>
     </Sheet>
   );
+}
+/** "Nov 12" from YYYY-MM-DD (an ET date, no clock). */
+function shortDate(date: string): string {
+  const [y, m, d] = date.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 }
 
 // ── Fix count ───────────────────────────────────────────────────────────────

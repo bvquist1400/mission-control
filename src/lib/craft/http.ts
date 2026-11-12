@@ -4,7 +4,7 @@ import { isPostgrestNotFound } from "@/lib/supabase/errors";
 import { withCorsHeaders } from "@/lib/cors";
 import { CraftNotFoundError, loadCraftView } from "@/lib/craft/loader";
 import { CraftSetupRefusal, createCraftSetup, loadCraftSetupPreview, removeCraftProject } from "@/lib/craft/setup-service";
-import { CraftWriteError, deleteNote, writeNote, writeRows, writeSitting, writeTimer, writeTotal } from "@/lib/craft/write-service";
+import { CraftWriteError, deleteNote, writeFrog, writeNote, writeRows, writeSitting, writeTimer, writeTotal } from "@/lib/craft/write-service";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const jsonFor = (request: NextRequest) => (body: unknown, status: number) => withCorsHeaders(NextResponse.json(body, {
@@ -51,11 +51,11 @@ export async function craftSetupRoute(request: NextRequest, action: SetupAction,
   }
 }
 
-export type CraftWriteKind = "row" | "timer" | "sittings" | "total" | "note" | "note_delete";
-const WRITERS = { row: writeRows, timer: writeTimer, sittings: writeSitting, total: writeTotal, note: writeNote, note_delete: deleteNote } as const;
+export type CraftWriteKind = "row" | "timer" | "sittings" | "total" | "note" | "note_delete" | "frog";
+const WRITERS = { row: writeRows, timer: writeTimer, sittings: writeSitting, total: writeTotal, note: writeNote, note_delete: deleteNote, frog: writeFrog } as const;
 
 /**
- * S2 writes: POST /api/craft/[id]/row | timer | sittings | total | notes, DELETE /api/craft/[id]/notes. Same auth path as
+ * S2 writes: POST /api/craft/[id]/row | timer | sittings | total | notes, DELETE /api/craft/[id]/notes; S3: POST /api/craft/[id]/frog. Same auth path as
  * every craft route (the FamCal and Actions keys are refused before any read), user filters inside, PGRST116 → 404 only.
  */
 export async function craftWriteRoute(request: NextRequest, kind: CraftWriteKind, projectId: string) {
@@ -68,7 +68,7 @@ export async function craftWriteRoute(request: NextRequest, kind: CraftWriteKind
     try { body = await request.json(); } catch { return json({ error: "Body must be JSON" }, 400); }
     const { supabase, userId } = auth.context;
     const reply = await WRITERS[kind](supabase, userId, projectId.toLowerCase(), body);
-    const created = (kind === "sittings" && !(reply as { duplicate?: boolean }).duplicate) || kind === "note";
+    const created = ((kind === "sittings" || kind === "frog") && !(reply as { duplicate?: boolean }).duplicate) || kind === "note";
     return json(reply, created ? 201 : 200);
   } catch (error) {
     if (error instanceof CraftWriteError) return json({ error: error.message, reason: error.reason, ...error.extra }, error.status);

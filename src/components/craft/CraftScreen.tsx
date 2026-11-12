@@ -11,7 +11,8 @@ import {
 } from "@/components/craft/CraftSheets";
 import { useWakeLock } from "@/components/craft/useWakeLock";
 import {
-  UNDO_TOAST_MS, VIEW_REFRESH_MS, clockOffsetMs, clockText, minutesText, nextExistingRow, timerElapsedAt, toastUndo, writeFailureText,
+  UNDO_TOAST_MS, VIEW_REFRESH_MS, clockOffsetMs, clockText, frogReason, minutesText, nextExistingRow, rowsText, savedSittingText, timerElapsedAt, toastUndo,
+  writeFailureText,
 } from "@/lib/craft/actions";
 import "./craft.css";
 
@@ -36,6 +37,10 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
   const [failure, setFailure] = useState<Failure | null>(null);
   const [toast, setToast] = useState<{ row: number; partId: string; word: string; undo: ReturnType<typeof toastUndo>; id: number } | null>(null);
   const [undoTo, setUndoTo] = useState<number | undefined>(undefined);
+  const [undoMode, setUndoMode] = useState<"undo" | "rip">("undo");
+  // S3 F3: what the server actually saved (or ripped back), shown once the sheet closes.
+  const [saved, setSaved] = useState<{ text: string; id: number } | null>(null);
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sheet, setSheet] = useState<SheetName | null>(null);
   const [check, setCheck] = useState<BandCheck | null>(null);
   const [conflict, setConflict] = useState<OtherTimer | null>(null);
@@ -117,6 +122,24 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
   const elapsed = timer ? (tick === null ? timer.elapsed_seconds : timerElapsedAt(timer, nowMs)) : 0;
   const screenOn = useWakeLock(running);
   const rowNotes = part ? view.notes.filter((note) => note.part_id === part.id && note.row === part.current_row) : [];
+  function confirm(text: string) {
+    if (savedTimer.current) clearTimeout(savedTimer.current);
+    const id = Date.now();
+    setSaved({ text, id });
+    savedTimer.current = setTimeout(() => setSaved((current) => (current?.id === id ? null : current)), 10_000);
+  }
+  function onSittingSaved(reply: SendReply) {
+    const result = reply.body?.result as Parameters<typeof savedSittingText>[0] | undefined;
+    if (part && result) confirm(savedSittingText(result, part.row_word === "round" ? "round" : "row", part.name, view.parts));
+  }
+  function onRipped(reply: SendReply) {
+    const result = reply.body?.result as { from_row?: number; to_row?: number; excluded?: string[] } | undefined;
+    if (!part || !result?.from_row || !result.to_row) return;
+    const w = part.row_word === "round" ? "round" : "row";
+    const n = result.excluded?.length ?? 0;
+    confirm(`${frogReason(w, result.from_row, result.to_row).replace(/^ripped/, "Ripped")}. ${n ? `${n} ${n === 1 ? "sitting" : "sittings"} left out of speed.` : "No sitting left out of speed."}`);
+  }
+  const openUndo = (mode: "undo" | "rip", to?: number) => { setUndoTo(to); setUndoMode(mode); setSheet("undo"); };
 
   function rowDone() {
     if (!part || part.finished) return;
@@ -124,6 +147,7 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
     void act("row", "row", { part_id: partId, mode: "done", expected_row: row }, (reply) => {
       const result = reply.body?.result as { current_row: number; needs_check: BandCheck | null } | undefined;
       if (toastTimer.current) clearTimeout(toastTimer.current);
+      setSaved(null);
       const id = Date.now();
       // FR1 (Fable F2): Undo unticks only the row it names; rows after it already ticked → "Undo rows…" instead.
       setToast({ row, partId, word, undo: toastUndo(before, total, row, result?.current_row ?? row + 1), id });
@@ -135,7 +159,7 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
     if (!toast) return;
     const t = toast;
     setToast(null);
-    if (t.undo.kind === "sheet") { setUndoTo(t.undo.to); setSheet("undo"); return; }
+    if (t.undo.kind === "sheet") { openUndo("undo", t.undo.to); return; }
     void act("undo", "row", { part_id: t.partId, ...t.undo.body });
   }
   const timerBody = (action: string, extra: Record<string, unknown> = {}) => ({ action, ...(part ? { part_id: part.id } : {}), ...(timer ? { expected_version: timer.version } : {}), ...extra });
@@ -164,7 +188,8 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
         <span className="craft-awake" data-on={screenOn ? "true" : undefined}>{screenOn ? "screen on" : ""}</span>
         <CraftScreenMenu projectId={view.project.id} projectName={view.project.name} canRemove={view.can_remove} partCount={view.parts.length} blockers={view.remove_blockers}
           actions={part ? [
-            { label: `Undo ${word}s…`, onSelect: () => { setUndoTo(undefined); setSheet("undo"); } }, { label: "Fix count…", onSelect: () => setSheet("fix") },
+            { label: `Undo ${word}s…`, onSelect: () => openUndo("undo") }, { label: "Fix count…", onSelect: () => setSheet("fix") },
+            { label: "Ripped back…", onSelect: () => openUndo("rip") },
             { label: `Change total ${word}s…`, onSelect: () => setSheet("total") }, { label: "Add a note…", onSelect: () => setSheet("note") },
           ] : undefined} />
       </header>
@@ -200,6 +225,12 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
             ))}</div>
           )}
           <div className="craft-s2">
+            {saved && (
+              <div className="craft-toast craft-saved" role="status">
+                <span>{saved.text}</span>
+                <button type="button" onClick={() => setSaved(null)} aria-label="Dismiss">×</button>
+              </div>
+            )}
             {toast && (
               <div className="craft-toast" role="status">
                 <span>{toast.word === "round" ? "Round" : "Row"} {toast.row} done</span>
@@ -245,28 +276,43 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
           </div>
           {part && (
             <div className="craft-actions-more">
-              <button type="button" onClick={() => { setUndoTo(undefined); setSheet("undo"); }}>Undo {word}s…</button>
+              <button type="button" onClick={() => openUndo("undo")}>Undo {word}s…</button>
               <button type="button" onClick={() => setSheet("fix")}>Fix count…</button>
+              <button type="button" onClick={() => openUndo("rip")}>Ripped back…</button>
               <button type="button" onClick={() => setSheet("note")}>Note</button>
             </div>
           )}
           <section className="craft-today" aria-label="Today"><h3>Today</h3><p><strong>{view.today.rows}</strong> rows ticked <span>·</span> <strong>{view.today.minutes}</strong> min</p></section>
         </section>
         <aside className="craft-inside" aria-label="Project details">
-          <section><h2>Parts</h2><ul className="craft-parts">{view.parts.map((entry) => <li key={entry.id} aria-current={entry.id === part?.id ? "true" : undefined}><strong>{entry.name}</strong><span>{entry.row_label}</span></li>)}</ul></section>
+          <section><h2>Parts</h2><ul className="craft-parts">{view.parts.map((entry) => <li key={entry.id} aria-current={entry.id === part?.id ? "true" : undefined}><strong>{entry.name}</strong><span>{entry.row_label}</span></li>)}</ul>
+            {view.frogs.length > 0 && (
+              <div className="craft-frogs">
+                <h3>Ripped back</h3>
+                <ol aria-label="Ripped back history">{view.frogs.map((frog) => (
+                  <li key={frog.id}>
+                    <div><time dateTime={frog.created_at}>{new Date(frog.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "America/New_York" })}</time>
+                      <strong>{view.parts.length > 1 ? `${frog.part_name} · ` : ""}{rowsText(frog.row_word === "round" ? "round" : "row", Array.from({ length: frog.to_row - frog.from_row + 1 }, (_, i) => frog.from_row + i))}</strong></div>
+                    {frog.note && <p>{frog.note}</p>}
+                    <p className="craft-meta">{frog.sittings_left_out ? `${frog.sittings_left_out} ${frog.sittings_left_out === 1 ? "sitting" : "sittings"} left out of speed` : "No sitting left out of speed"}</p>
+                  </li>
+                ))}</ol>
+              </div>
+            )}
+          </section>
           <section><h2>Bands</h2>{view.segments.length ? <><div className="craft-strip" aria-label="Band progress">{view.segments.map((segment) => <span key={segment.id} data-state={segment.state} title={`${segment.name}: ${segment.from_row}–${segment.to_row}, ${segment.state}`} style={{ flexGrow: segment.to_row - segment.from_row + 1 }} />)}</div><ol className="craft-bands">{view.segments.map((segment) => <li key={segment.id} data-state={segment.state} aria-current={segment.state === "current" ? "step" : undefined}><span>{segment.state === "done" ? "✓ " : ""}{segment.name}</span><span>{part?.row_word}s {segment.from_row}–{segment.to_row}<small>{segment.state}</small></span></li>)}</ol></> : <p>No bands yet.</p>}
             {view.next_segment && <div className="craft-peek"><p className="craft-eyebrow">Coming up</p><h3>{view.next_segment.name}</h3><p>{part?.row_word}s {view.next_segment.from_row}–{view.next_segment.to_row}</p></div>}
           </section>
           <section><h2>Next rows</h2>{view.next_rows.length ? <ol className="craft-next">{view.next_rows.map((row) => <li key={row.id}>{row.text}</li>)}</ol> : <p>No unticked rows.</p>}</section>
-          <section><h2>Recent sittings</h2>{view.recent_sittings.length ? <ol className="craft-sittings">{view.recent_sittings.map((sitting) => <li key={sitting.id}><div><time dateTime={sitting.date}>{sitting.date}</time><strong>{sitting.minutes} min</strong></div><p>{sitting.rows.length ? sitting.rows.map((row) => `${row.part_name}: ${row.row_word} ${row.row}`).join(" · ") : "No linked rows"}</p>{sitting.note && <p>{sitting.note}</p>}{sitting.excluded_from_stats && <p className="craft-meta">Excluded from pace stats</p>}</li>)}</ol> : <p>No sittings logged yet.</p>}</section>
+          <section><h2>Recent sittings</h2>{view.recent_sittings.length ? <ol className="craft-sittings">{view.recent_sittings.map((sitting) => <li key={sitting.id}><div><time dateTime={sitting.date}>{sitting.date}</time><strong>{sitting.minutes} min</strong></div><p>{sittingRowsText(sitting)}</p>{sitting.note && <p>{sitting.note}</p>}{sitting.excluded_from_stats && <p className="craft-meta">{sitting.exclude_reason ? `Left out of speed: ${sitting.exclude_reason}` : "Excluded from pace stats"}</p>}</li>)}</ol> : <p>No sittings logged yet.</p>}</section>
           {view.notes.length > 0 && <section><h2>Notes</h2><ul className="craft-notes">{view.notes.map((note) => <li key={note.id}><small>{note.row ? `${view.parts.find((p) => p.id === note.part_id)?.row_word === "round" ? "Round" : "Row"} ${note.row}` : "Project"} · {note.created_at.slice(0, 10)}</small><p>{note.text}</p>
             <button type="button" aria-label={`Delete note: ${note.text.slice(0, 40)}`} onClick={() => { void act("note", "notes", { id: note.id }, undefined, undefined, "DELETE"); }}>Delete</button></li>)}</ul></section>}
         </aside>
       </div>
-      {part && sheet === "log" && <LogSittingSheet open onClose={() => setSheet(null)} view={view} part={part} send={send} onSaved={() => setSheet(null)} />}
+      {part && sheet === "log" && <LogSittingSheet open onClose={() => setSheet(null)} view={view} part={part} send={send} onSaved={(reply) => { setSheet(null); onSittingSaved(reply); }} />}
       {part && sheet === "log-then-start" && <LogSittingSheet open thenStart onClose={() => setSheet(null)} view={view} part={part} send={send}
-        onSaved={() => { setSheet(null); void act("timer", "timer", { action: "start", part_id: part.id }, undefined, onTimerRefusal); }} />}
-      {part && sheet === "undo" && <UndoRowsSheet open onClose={() => setSheet(null)} view={view} part={part} send={send} initialTo={undoTo} />}
+        onSaved={(reply) => { setSheet(null); onSittingSaved(reply); void act("timer", "timer", { action: "start", part_id: part.id }, undefined, onTimerRefusal); }} />}
+      {part && sheet === "undo" && <UndoRowsSheet open onClose={() => setSheet(null)} view={view} part={part} send={send} initialTo={undoTo} initialMode={undoMode} onRipped={onRipped} />}
       {part && sheet === "fix" && <FixCountSheet open onClose={() => setSheet(null)} view={view} part={part} send={send} />}
       {part && sheet === "total" && <ChangeTotalSheet open onClose={() => setSheet(null)} view={view} part={part} send={send} />}
       {sheet === "note" && <NoteSheet open onClose={() => setSheet(null)} part={part} send={send} />}
@@ -290,4 +336,11 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
       }} />
     </main>
   );
+}
+
+/** A sitting's rows on the screen, as S2 wrote them ("Blanket: row 61 · Blanket: row 62"), plus S3's "Blanket: part of row 63". */
+function sittingRowsText(sitting: CraftView["recent_sittings"][number]): string {
+  const pieces = [...sitting.rows.map((row) => `${row.part_name}: ${row.row_word} ${row.row}`),
+    ...sitting.in_progress_rows.map((row) => `${row.part_name}: part of ${row.row_word} ${row.row}`)];
+  return pieces.length ? pieces.join(" · ") : "No linked rows";
 }

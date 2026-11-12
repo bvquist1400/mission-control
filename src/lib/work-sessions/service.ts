@@ -58,7 +58,10 @@ const SESSION_SOURCES = ["manual", "agent", "backfill"] as const;
 type SessionSource = (typeof SESSION_SOURCES)[number];
 
 export interface WorkSessionView extends WorkSession {
+  /** Rows this sitting finished (its linked rows, as before 074). */
   item_ids: string[];
+  /** 074: rows worked on in this sitting but not finished (no tick, no units); never also in item_ids. */
+  in_progress_item_ids: string[];
 }
 
 function bad(message: string, details?: unknown): never {
@@ -147,13 +150,16 @@ async function loadItems(supabase: SupabaseClient, userId: string, taskIds: stri
   return out.map((row) => ({ ...row, unit_count: row.unit_count === null ? null : Number(row.unit_count) }));
 }
 
-async function loadSessionItemIds(supabase: SupabaseClient, userId: string, sessionIds: string[]): Promise<Map<string, string[]>> {
-  const map = new Map<string, string[]>();
+interface SessionLinks { finished: string[]; in_progress: string[] }
+
+/** Each session's links: finished rows and (074) rows in progress, kept apart. */
+async function loadSessionItemIds(supabase: SupabaseClient, userId: string, sessionIds: string[]): Promise<Map<string, SessionLinks>> {
+  const map = new Map<string, SessionLinks>();
   for (const ids of chunks(sessionIds)) {
-    const rows = await pagedSelect<{ session_id: string; checklist_item_id: string }>((from, to) =>
+    const rows = await pagedSelect<{ session_id: string; checklist_item_id: string; in_progress: boolean }>((from, to) =>
       supabase
         .from("work_session_items")
-        .select("session_id, checklist_item_id")
+        .select("session_id, checklist_item_id, in_progress")
         .eq("user_id", userId)
         .in("session_id", ids)
         .order("session_id", { ascending: true })
@@ -161,12 +167,17 @@ async function loadSessionItemIds(supabase: SupabaseClient, userId: string, sess
         .range(from, to)
     );
     for (const row of rows) {
-      const list = map.get(row.session_id) ?? [];
-      list.push(row.checklist_item_id);
-      map.set(row.session_id, list);
+      const links = map.get(row.session_id) ?? { finished: [], in_progress: [] };
+      (row.in_progress ? links.in_progress : links.finished).push(row.checklist_item_id);
+      map.set(row.session_id, links);
     }
   }
   return map;
+}
+
+function withLinks(session: WorkSession, links: Map<string, SessionLinks>): WorkSessionView {
+  const own = links.get(session.id);
+  return { ...session, item_ids: own?.finished ?? [], in_progress_item_ids: own?.in_progress ?? [] };
 }
 
 function normalizeSessionRow(row: Record<string, unknown>): WorkSession {
@@ -189,7 +200,7 @@ async function loadProjectSessions(supabase: SupabaseClient, userId: string, pro
   );
   const sessions = rows.map(normalizeSessionRow);
   const links = await loadSessionItemIds(supabase, userId, sessions.map((session) => session.id));
-  return sessions.map((session) => ({ ...session, item_ids: links.get(session.id) ?? [] }));
+  return sessions.map((session) => withLinks(session, links));
 }
 
 function toPaceSession(session: WorkSessionView): PaceSessionInput {
@@ -203,6 +214,7 @@ function toPaceSession(session: WorkSessionView): PaceSessionInput {
     minutes: session.minutes,
     exclude_from_stats: session.exclude_from_stats,
     item_ids: session.item_ids,
+    in_progress_item_ids: session.in_progress_item_ids,
     extra_units: session.extra_units,
     extra_work_type: session.extra_work_type,
   };
@@ -600,7 +612,7 @@ async function readSession(supabase: SupabaseClient, userId: string, id: string)
   if (error) throw error;
   if (!data) throw new WorkSessionServiceError(404, "Work session not found");
   const links = await loadSessionItemIds(supabase, userId, [id]);
-  return { ...normalizeSessionRow(data as Record<string, unknown>), item_ids: links.get(id) ?? [] };
+  return withLinks(normalizeSessionRow(data as Record<string, unknown>), links);
 }
 
 async function findBySourceRef(supabase: SupabaseClient, userId: string, sourceRef: string): Promise<string | null> {
@@ -797,7 +809,7 @@ export async function listWorkSessions(
   });
   const sessions = rows.map(normalizeSessionRow);
   const links = await loadSessionItemIds(supabase, userId, sessions.map((session) => session.id));
-  return sessions.map((session) => ({ ...session, item_ids: links.get(session.id) ?? [] }));
+  return sessions.map((session) => withLinks(session, links));
 }
 
 /**

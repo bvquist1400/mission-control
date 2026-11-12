@@ -235,9 +235,10 @@ await test("FR1 stale sheets (Astra 1, pure): a sheet opened on row 62 keeps sen
   const form = { from: 58, to: 61, quarter: 0, note: "", key: "k", minutesTouched: true };
   const body = A.logSittingBody(opened.active_part, opened.timer, form, 30);
   assert.deepEqual([body.expected_row, body.to_row, body.from_row, body.minutes], [62, 61, 58, 30]);
-  // The timer and the total count only for the sheets that send them.
+  // S3 F5: every sheet watches the timer and the total (S2 left them to the sheets that send them); a caller can opt out.
   const t1 = { ...before, timer_version: 3 };
-  assert.equal(A.sheetChangeText(before, t1), null);
+  assert.equal(A.sheetChangeText(before, t1), "Your timer changed on another screen. Check and save again.");
+  assert.equal(A.sheetChangeText(before, t1, { timer: false }), null);
   assert.equal(A.sheetChangeText(before, t1, { timer: true }), "Your timer changed on another screen. Check and save again.");
   assert.equal(A.sheetChangeText(before, { ...before, total: 160 }, { total: true }), "Your total changed on another screen (now 160 rows). Check and save again.");
   assert.equal(A.sheetChangeText(before, { ...before, part_id: "Border", part_name: "Border", word: "round", current_row: 1 }), "Your count changed on another screen (now Border round 1). Check and save again.");
@@ -245,17 +246,20 @@ await test("FR1 stale sheets (Astra 1, pure): a sheet opened on row 62 keeps sen
   for (const sheet of ["LogSittingSheet", "UndoRowsSheet", "FixCountSheet", "ChangeTotalSheet"]) {
     assert.match(src, new RegExp(`export function ${sheet}\\([^)]*view: live, part: livePart[\\s\\S]*?useSheetSnapshot\\(live, livePart`), `${sheet} captures its view`);
   }
-  assert.match(src, /logSittingBody\(part, timer, form, shownMinutes\)/, "Log sitting sends the captured part and timer");
+  assert.match(src, /logSittingBody\(part, timer, \{ \.\.\.form, partway \}, shownMinutes\)/, "Log sitting sends the captured part and timer (S3: and Partway through)");
 });
 await test("FR1 Undo toast (Fable F2 / R3, pure): Row done 59 with rows 60–63 already ticked opens Undo rows… on row 59 (never unticks 59–63 by itself); the usual case unticks only row 59", () => {
   const ahead = states(157, 58).map((s) => (s.row >= 60 && s.row <= 63 ? { ...s, done: true } : s));
   assert.deepEqual(A.toastUndo(ahead, 157, 59, 64), { kind: "sheet", to: 59 });
-  assert.deepEqual(A.toastUndo(states(157, 58), 157, 59, 60), { kind: "one", body: { mode: "undo", to_row: 59, expected_row: 60 } });
+  // S3 F2: the toast's body uses the server's one-row mode.
+  assert.deepEqual(A.toastUndo(states(157, 58), 157, 59, 60), { kind: "one", body: { mode: "undo_one", to_row: 59, expected_row: 60 } });
   const gap = states(31, 21).filter((s) => s.row < 22 || s.row > 28);
-  assert.deepEqual(A.toastUndo(gap, 31, 21, 29), { kind: "one", body: { mode: "undo", to_row: 21, expected_row: 29 } }, "a gap is not a ticked row");
+  assert.deepEqual(A.toastUndo(gap, 31, 21, 29), { kind: "one", body: { mode: "undo_one", to_row: 21, expected_row: 29 } }, "a gap is not a ticked row");
   assert.deepEqual(A.toastUndo(states(3, 2), 3, 3, 4).kind, "one", "the last row");
   const src = readFileSync(new URL("../src/components/craft/CraftScreen.tsx", import.meta.url), "utf8");
-  assert.match(src, /if \(t\.undo\.kind === "sheet"\) \{ setUndoTo\(t\.undo\.to\); setSheet\("undo"\); return; \}/);
+  // S3: openUndo sets the row and opens the Undo sheet in its "Wrong count" mode.
+  assert.match(src, /if \(t\.undo\.kind === "sheet"\) \{ openUndo\("undo", t\.undo\.to\); return; \}/);
+  assert.match(src, /const openUndo = \(mode: "undo" \| "rip", to\?: number\) => \{ setUndoTo\(to\); setUndoMode\(mode\); setSheet\("undo"\); \};/);
   assert.match(src, /void act\("undo", "row", \{ part_id: t\.partId, \.\.\.t\.undo\.body \}\)/);
 });
 await test("FR1 Delete note (Astra follow-up): the screen's Delete sends DELETE { id } to /notes", () => {
@@ -383,7 +387,8 @@ await test("Screen: Row done is the big button with the next existing row (gaps 
   const gap = input([part("Cuff", 31, { row_word: "round" })], rows("Cuff", 31, 20).filter((r) => r.craft_row < 22 || r.craft_row > 28).map((r) => ({ ...r, text: `Rnd ${r.craft_row}` })));
   const html = screen(gap);
   assert.match(html, /<button type="button" class="craft-done"><span>✓ Round done<\/span><small>round 21 → 29<\/small><\/button>/);
-  assert.match(html, /<div class="craft-actions-more"><button type="button">Undo rounds…<\/button><button type="button">Fix count…<\/button><button type="button">Note<\/button><\/div>/);
+  // S3: Ripped back… sits next to Fix count.
+  assert.match(html, /<div class="craft-actions-more"><button type="button">Undo rounds…<\/button><button type="button">Fix count…<\/button><button type="button">Ripped back…<\/button><button type="button">Note<\/button><\/div>/);
   const last = input([part("Body", 3)], rows("Body", 3, 2));
   assert.match(screen(last), /<small>row 3 \(last\)<\/small>/);
 });

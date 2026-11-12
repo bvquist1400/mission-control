@@ -1508,5 +1508,19 @@ test("S3: the 8-sitting window counts in-progress sittings of that type; the pla
   near(ratio.ratio, (5 + 8) / ((50 * 6) / 60), 1e-9, "13 measured minutes ÷ 5 plan minutes for the 50 finished stitches");
 });
 
+test("S3 project page sittings: a row in progress reads \"part of row 63\", never as a finished row; a ripped-back sitting shows its reason", () => {
+  const tasks = [{ id: "band", title: "Tree 2", status: "Planned", section_id: null, work_type: "colorwork-dc", unit_count: null }];
+  const items = [61, 62, 63].map((n) => ({ id: `r${n}`, task_id: "band", text: `Row ${n}`, is_done: n < 63, unit_count: 195, work_type: null }));
+  const base = { note: null, exclude_from_stats: false, exclude_reason: null, extra_units: null, extra_work_type: null, started_at: null, ended_at: null };
+  const rows = view.buildSessionRows([
+    { ...base, id: "s1", task_id: "band", session_date: "2026-11-12", minutes: 48, item_ids: ["r61", "r62"], in_progress_item_ids: ["r63"] },
+    { ...base, id: "s0", task_id: "band", session_date: "2026-11-11", minutes: 20, item_ids: [], in_progress_item_ids: ["r63"] },
+    { ...base, id: "x", task_id: "band", session_date: "2026-11-10", minutes: 30, item_ids: [], exclude_from_stats: true, exclude_reason: "ripped back rows 58–60" },
+  ], tasks, items, "stitches");
+  assert.deepEqual(rows.map((row) => [row.id, row.rows]), [["s1", "rows 61–62 · part of row 63"], ["s0", "part of row 63"], ["x", ""]]);
+  assert.equal(rows[0].detail, "390 colorwork-dc · 7.4 s/stitch", "the units are the two finished rows only");
+  assert.equal(rows[2].detail, "Not counted: ripped back rows 58–60");
+});
+
 console.log(`\n${passed} passed${failures.length ? `, ${failures.length} failed` : ""}`);
 if (failures.length) process.exit(1);

@@ -457,6 +457,8 @@ export interface PaceSessionLite {
   exclude_from_stats: boolean;
   exclude_reason: string | null;
   item_ids: string[];
+  /** 074: rows worked on but not finished in this sitting. */
+  in_progress_item_ids?: string[];
   extra_units: number | null;
   extra_work_type: string | null;
 }
@@ -469,7 +471,7 @@ export interface SessionRow {
   task_id: string | null;
   /** The task, or "Several tasks (no single task)". */
   what: string;
-  /** "rows 11–15", "row 10", or "". */
+  /** "rows 11–15", "row 10", "rows 61–62 · part of row 63", "part of row 63", or "". */
   rows: string;
   minutes: number;
   /** "135 colorwork-dc · 27.1 s/stitch · 1:38–2:39 PM", or "Not counted: ..." for an excluded one. */
@@ -564,7 +566,11 @@ export function buildSessionRows(
       addUnits(item.work_type ?? taskById.get(item.task_id)?.work_type ?? null, item.unit_count);
     }
     addUnits(session.extra_work_type ?? task?.work_type ?? null, session.extra_units);
-    const rows = formatRowNumbers(rowNumbers);
+    // 074: a row in progress is named as "part of row 63", never as a finished row (no units here).
+    const partway = [...new Set(session.in_progress_item_ids ?? [])].filter((id) => !session.item_ids.includes(id))
+      .map((id) => itemById.get(id)).flatMap((item) => (item ? [itemRowNumber(item.text)] : [])).filter((row): row is number => row !== null);
+    const rows = [formatRowNumbers(rowNumbers), ...[...new Set(partway)].sort((a, b) => a - b).map((row) => `part of row ${row}`)]
+      .filter(Boolean).join(" · ");
     const detailParts: string[] = [];
     if (session.exclude_from_stats) {
       const reason = session.exclude_reason ? REASON_TEXT[session.exclude_reason] ?? session.exclude_reason : "left out of speed";

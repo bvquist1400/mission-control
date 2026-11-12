@@ -510,9 +510,9 @@ await test("Craft S1C setup and remove routes refuse FamCal and Actions keys bef
   assert.equal(authFetchCalls, before);
 });
 
-await test("Craft S2 write routes (row, timer, sittings, total, notes) refuse FamCal and Actions keys before any database lookup", async () => {
+await test("Craft S2/S3 write routes (row, timer, sittings, total, notes, frog) refuse FamCal and Actions keys before any database lookup", async () => {
   const base = "../src/app/api/craft/[projectId]";
-  const routes = [["row", "POST"], ["timer", "POST"], ["sittings", "POST"], ["total", "POST"], ["notes", "POST"], ["notes", "DELETE"]];
+  const routes = [["row", "POST"], ["timer", "POST"], ["sittings", "POST"], ["total", "POST"], ["notes", "POST"], ["notes", "DELETE"], ["frog", "POST"]];
   const before = authFetchCalls;
   for (const key of [FAMCAL_KEY, ACTIONS_KEY]) {
     for (const [name, method] of routes) {

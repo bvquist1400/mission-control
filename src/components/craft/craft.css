@@ -217,3 +217,32 @@
 }
 .craft-stepper input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
 .craft-stepper input[type="number"]::-webkit-inner-spin-button, .craft-stepper input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+/* S3: Partway through row N (Log sitting) */
+.craft-partway { position: relative; display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: center; gap: 2px 10px; min-height: 52px; padding: 8px 12px; border: 1px solid var(--stroke); background: var(--panel); cursor: pointer; }
+.craft-partway input { grid-row: 1 / span 2; width: 22px; height: 22px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.craft-partway > span { font-size: 16px; font-weight: 600; }
+.craft-partway > small { grid-column: 2; font-size: 12px; line-height: 1.4; color: var(--muted-foreground); }
+.craft-partway[data-on] { border-color: var(--accent-text); box-shadow: inset 4px 0 0 var(--accent-text); }
+.craft-partway:has(input:disabled) { cursor: default; }
+/* S3: Ripped back (in the Undo sheet) */
+.craft-undo-kind > * { flex: 1 1 0; }
+.craft-rip { display: flex; flex-direction: column; gap: 10px; }
+.craft-rip h3, .craft-rip-partly legend { margin-bottom: 4px; font-size: 14px; font-weight: 600; }
+.craft-rip ul li { padding: 6px 0 6px 10px; border-left: 3px solid var(--stroke); font-family: var(--font-plex-mono); font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+.craft-rip-partly { margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: 6px; }
+.craft-rip-partly label { position: relative; display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: center; gap: 2px 10px; min-height: 48px; padding: 6px 10px; border: 1px solid var(--stroke); cursor: pointer; }
+.craft-rip-partly input { grid-row: 1 / span 2; width: 22px; height: 22px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.craft-rip-partly label > span { font-family: var(--font-plex-mono); font-size: 13px; }
+.craft-rip-partly label > small { grid-column: 2; font-size: 12px; color: var(--muted-foreground); }
+.craft-rip-partly label[data-on] { border-color: var(--accent-text); box-shadow: inset 4px 0 0 var(--accent-text); }
+/* S3: Ripped back history (inside screen, under Parts) */
+.craft-frogs { margin-top: 14px; }
+.craft-frogs h3 { font-size: 15px; font-weight: 700; }
+.craft-frogs li { padding: 8px 0; border-bottom: 1px solid var(--stroke); }
+.craft-frogs li > div { display: flex; flex-wrap: wrap; gap: 4px 12px; font-family: var(--font-plex-mono); font-size: 12px; }
+.craft-frogs li > div strong { font-weight: 600; }
+.craft-frogs li > p { margin-top: 4px; font-size: 13px; }
+/* S3 F3: the saved line (what the server saved) floats where the Undo toast does. */
+.craft-saved { background: var(--panel); color: var(--foreground); border: 1px solid var(--accent-text); border-left-width: 5px; font-weight: 500; font-size: 14px; line-height: 1.35; }
+.craft-saved span { min-width: 0; overflow-wrap: anywhere; }
+.craft-saved button { flex-shrink: 0; border: 0; font-size: 20px; }

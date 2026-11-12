@@ -8,7 +8,10 @@ export type CraftPart = Pick<Row<"craft_parts">, "id" | "name" | "sort_order" | 
 export type CraftSegment = Pick<Row<"craft_segments">, "id" | "part_id" | "task_id" | "name" | "from_row" | "to_row" | "sort_order" | "close_check">;
 export type CraftItem = Pick<Row<"task_checklist_items">, "id" | "craft_part_id" | "craft_row" | "text" | "is_done" | "completed_at">
   & Partial<Pick<Row<"task_checklist_items">, "unit_count" | "work_type">>;
-export type CraftSession = Pick<Row<"work_sessions">, "id" | "session_date" | "created_at" | "minutes" | "note" | "exclude_from_stats">;
+export type CraftSession = Pick<Row<"work_sessions">, "id" | "session_date" | "created_at" | "minutes" | "note" | "exclude_from_stats">
+  & Partial<Pick<Row<"work_sessions">, "exclude_reason" | "extra_units">>;
+/** S3 (074): one rip-back, as the history list shows it. */
+export type CraftFrog = Pick<Row<"craft_frogs">, "id" | "part_id" | "from_row" | "to_row" | "note" | "session_ids" | "created_at">;
 export interface CraftInput {
   project: { id: string; name: string };
   craft_project: Pick<Row<"craft_projects">, "craft" | "gear" | "active_part_id">;
@@ -16,7 +19,8 @@ export interface CraftInput {
   segments: CraftSegment[];
   items: CraftItem[];
   sessions: CraftSession[];
-  session_items: Pick<Row<"work_session_items">, "session_id" | "checklist_item_id">[];
+  /** `in_progress` (074): the row was worked on in that sitting but not finished. Absent = finished. */
+  session_items: (Pick<Row<"work_session_items">, "session_id" | "checklist_item_id"> & { in_progress?: boolean })[];
   sitting_details: Row<"craft_sitting_details">[];
   timer: Row<"craft_timers"> | null;
   server_now: string;
@@ -29,6 +33,17 @@ export interface CraftInput {
   count_items?: { id: string; task_id: string; text: string; is_done: boolean; sort_order: number }[];
   /** S2: notes on a row or the project, newest first. */
   notes?: Pick<Row<"craft_notes">, "id" | "part_id" | "row" | "text" | "created_at" | "session_id">[];
+  /** S3: "Ripped back" history of the project's parts. */
+  frogs?: CraftFrog[];
+}
+
+/** S3: how far back the "Ripped back" sheet offers rows (the rows it lists, newest first). */
+export const RIP_CHOICES = 40;
+
+/** S3: a sitting the "Ripped back" sheet may change: all its links (part and row; null for a row of no part). */
+export interface RipSitting {
+  id: string; date: string; minutes: number; excluded: boolean; exclude_reason: string | null; extra_units: number;
+  links: { part_id: string | null; row: number | null; in_progress: boolean }[];
 }
 
 /** The craft timer as the screen shows it, at the view's server_now (073: one per user). */
@@ -89,7 +104,7 @@ function pickActivePart<P extends { id: string; finished: boolean }>(parts: P[],
 export const CRAFT_REMOVE_BLOCKER_WORDS: Record<string, string> = {
   links: "links", instructions: "instructions", notes: "notes", yarn: "yarn", timer: "a timer", gear: "gear notes",
   quarters: "quarter rows", ridges: "ridge counts", close_checks: "band checks",
-  sittings: "craft screen sittings",
+  sittings: "craft screen sittings", frogs: "ripped-back history",
 };
 /** ["links", "notes"] → "links and notes"; unknown keys are named as "other craft details". */
 export function removeBlockersText(keys: string[]): string {
@@ -116,16 +131,18 @@ export function buildCraftView(input: CraftInput) {
     .sort((a, b) => (a.craft_row as number) - (b.craft_row as number)).slice(0, 5)
     .map((item) => ({ id: item.id, row: item.craft_row as number, text: item.text })) : [];
   const partIds = new Set(parts.map((part) => part.id));
-  const linkedItems = new Set(input.session_items.map((link) => link.checklist_item_id));
+  // 074: "linked" = finished in a sitting; a row in progress somewhere is shown and counted apart.
+  const linkedItems = new Set(input.session_items.filter((link) => !link.in_progress).map((link) => link.checklist_item_id));
+  const inProgressItems = new Set(input.session_items.filter((link) => link.in_progress).map((link) => link.checklist_item_id));
   const timerRow = input.timer;
   // FR1: "ticked since this project's timer sitting started" (073 compares completed_at with sitting_started_at).
   const sittingStartMs = timerRow && timerRow.project_id === input.project.id ? Date.parse(timerRow.sitting_started_at) : null;
   const sinceTimer = (item: CraftItem) => sittingStartMs !== null && item.is_done && Boolean(item.completed_at) && Date.parse(item.completed_at as string) >= sittingStartMs;
   // S2: the active part's rows (numbers that exist, gaps left out) for the Undo, Fix count, Log sitting and total previews.
   const row_states: RowState[] = active_part ? input.items.filter((item) => item.craft_part_id === active_part.id && item.craft_row !== null)
-    .map((item) => ({ row: item.craft_row as number, done: item.is_done, linked: linkedItems.has(item.id),
+    .map((item) => ({ row: item.craft_row as number, done: item.is_done, linked: linkedItems.has(item.id), in_progress: inProgressItems.has(item.id),
       today: Boolean(item.is_done && item.completed_at && etDateOf(item.completed_at) === today),
-      since_timer: sinceTimer(item), units: item.unit_count ?? null, type: item.work_type ?? null }))
+      since_timer: sinceTimer(item), done_at: item.is_done ? item.completed_at : null, units: item.unit_count ?? null, type: item.work_type ?? null }))
     .sort((a, b) => a.row - b.row) : [];
   const nowMs = Date.parse(input.server_now);
   const elapsed = timerRow ? timerElapsedAt(timerRow, nowMs) : 0;
@@ -140,6 +157,9 @@ export function buildCraftView(input: CraftInput) {
     on_active_part: !timerRow.part_id || !active_part || timerRow.part_id === active_part.id || !parts.some((p) => p.id === timerRow.part_id),
   } satisfies CraftTimerView : null;
   const timer = timerFacts && timerFacts.project_id === input.project.id ? timerFacts : null;
+  // S3: the sitting's last Row done on any of this project's parts (the "Partway through" default).
+  const timer_last_done_at = timer ? input.items.filter((item) => item.craft_part_id && partIds.has(item.craft_part_id) && sinceTimer(item))
+    .map((item) => item.completed_at as string).reduce<string | null>((latest, at) => (latest === null || Date.parse(at) > Date.parse(latest) ? at : latest), null) : null;
   // FR1: a timed sitting whose timer is on another part also saves that part's rows from its start row
   // (ticked, in no sitting) and, for parts between it and the screen's part, rows ticked since the
   // sitting started (in no sitting): the same rule as 073's craft_log_sitting, for the preview.
@@ -171,17 +191,48 @@ export function buildCraftView(input: CraftInput) {
   }) : [];
   const craftItems = input.items.filter((item) => item.craft_part_id && partIds.has(item.craft_part_id));
   const itemById = new Map(craftItems.map((item) => [item.id, item]));
-  const recent_sittings = [...input.sessions].sort((a, b) => b.session_date.localeCompare(a.session_date)
-    || b.created_at.localeCompare(a.created_at) || a.id.localeCompare(b.id)).slice(0, 10).map((session) => ({
-    id: session.id, date: session.session_date, minutes: session.minutes, note: session.note,
-    excluded_from_stats: session.exclude_from_stats,
-    rows: input.session_items.filter((link) => link.session_id === session.id).flatMap((link) => {
+  const linkRows = (sessionId: string, inProgress: boolean) => input.session_items
+    .filter((link) => link.session_id === sessionId && Boolean(link.in_progress) === inProgress).flatMap((link) => {
       const item = itemById.get(link.checklist_item_id);
       const part = parts.find((part) => part.id === item?.craft_part_id);
       return item && part && item.craft_row !== null ? [{ part_id: part.id, part_name: part.name, row_word: part.row_word, row: item.craft_row, text: item.text }] : [];
-    }).sort((a, b) => a.part_name.localeCompare(b.part_name) || a.row - b.row),
+    }).sort((a, b) => a.part_name.localeCompare(b.part_name) || a.row - b.row);
+  const recent_sittings = [...input.sessions].sort((a, b) => b.session_date.localeCompare(a.session_date)
+    || b.created_at.localeCompare(a.created_at) || a.id.localeCompare(b.id)).slice(0, 10).map((session) => ({
+    id: session.id, date: session.session_date, minutes: session.minutes, note: session.note,
+    excluded_from_stats: session.exclude_from_stats, exclude_reason: session.exclude_reason ?? null,
+    rows: linkRows(session.id, false),
+    /** S3: rows worked on in this sitting but not finished ("part of row 63"). */
+    in_progress_rows: linkRows(session.id, true),
     detail: input.sitting_details.find((detail) => detail.session_id === session.id) ?? null,
   }));
+  // S3 "Ripped back": the sittings that link the active part's rows the sheet can rip (the last
+  // RIP_CHOICES ticked rows below the current row, and the current row), each with all its links, so
+  // the sheet can tell all-ripped sittings from partly ripped ones before saving.
+  const ripLow = active_part ? (row_states.filter((state) => state.done && state.row < active_part.current_row)
+    .map((state) => state.row).sort((a, b) => b - a)[RIP_CHOICES - 1] ?? 1) : 1;
+  const ripItems = new Set(active_part ? input.items.filter((item) => item.craft_part_id === active_part.id && item.craft_row !== null
+    && item.craft_row >= ripLow && item.craft_row <= active_part.current_row).map((item) => item.id) : []);
+  const ripSessionIds = new Set(input.session_items.filter((link) => ripItems.has(link.checklist_item_id)).map((link) => link.session_id));
+  const rip_sittings: RipSitting[] = input.sessions.filter((session) => ripSessionIds.has(session.id))
+    .sort((a, b) => b.session_date.localeCompare(a.session_date) || b.created_at.localeCompare(a.created_at) || a.id.localeCompare(b.id))
+    .map((session) => ({
+      id: session.id, date: session.session_date, minutes: session.minutes, excluded: session.exclude_from_stats,
+      exclude_reason: session.exclude_reason ?? null, extra_units: Number(session.extra_units ?? 0) || 0,
+      links: input.session_items.filter((link) => link.session_id === session.id).flatMap((link): RipSitting["links"] => {
+        const item = itemById.get(link.checklist_item_id);
+        return item?.craft_part_id && item.craft_row !== null
+          ? [{ part_id: item.craft_part_id, row: item.craft_row, in_progress: Boolean(link.in_progress) }]
+          : [{ part_id: null, row: null, in_progress: Boolean(link.in_progress) }];
+      }),
+    }));
+  const partById = new Map(parts.map((part) => [part.id, part]));
+  const frogs = [...(input.frogs ?? [])].filter((frog) => partById.has(frog.part_id))
+    .sort((a, b) => b.created_at.localeCompare(a.created_at) || a.id.localeCompare(b.id)).slice(0, 20).map((frog) => ({
+      id: frog.id, part_id: frog.part_id, part_name: partById.get(frog.part_id)?.name ?? "",
+      row_word: partById.get(frog.part_id)?.row_word ?? "row", from_row: frog.from_row, to_row: frog.to_row,
+      note: frog.note, created_at: frog.created_at, sittings_left_out: frog.session_ids.length,
+    }));
   return {
     project: input.project, craft: input.craft_project.craft, gear: input.craft_project.gear,
     parts, active_part, segments, current_segment, next_segment, next_rows,
@@ -191,7 +242,7 @@ export function buildCraftView(input: CraftInput) {
       minutes: input.sessions.filter((session) => session.session_date === today).reduce((sum, session) => sum + session.minutes, 0),
     },
     recent_sittings, server_now: input.server_now,
-    timer, other_timer, row_states, pending_checks, timer_rows,
+    timer, other_timer, row_states, pending_checks, timer_rows, timer_last_done_at, rip_sittings, frogs,
     notes: [...(input.notes ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at) || a.id.localeCompare(b.id)).slice(0, 50),
     // Remove is offered only when the server said nothing would be lost (072 refuses otherwise too).
     can_remove: Array.isArray(input.remove_blockers) && input.remove_blockers.length === 0,
