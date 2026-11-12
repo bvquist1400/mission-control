@@ -68,12 +68,8 @@ const rowRoute = await import("../src/app/api/craft/[projectId]/row/route.ts");
 const timerRoute = await import("../src/app/api/craft/[projectId]/timer/route.ts");
 const sittingsRoute = await import("../src/app/api/craft/[projectId]/sittings/route.ts");
 const totalRoute = await import("../src/app/api/craft/[projectId]/total/route.ts");
-const notesRoute = await import("../src/app/api/craft/[projectId]/notes/route.ts");
 const detailRoute = await import("../src/app/api/craft/[projectId]/route.ts");
-const { loadSetupSnapshot } = await import("../src/lib/craft/setup-service.ts");
-const { planCraftSetup, craftSetupPayload } = await import("../src/lib/craft/setup.ts");
 const { getProjectPace, getProjectForecast, logWorkSession } = await import("../src/lib/work-sessions/service.ts");
-const { fixCountPlan, setTotalPlan, sittingPlan } = await import("../src/lib/craft/actions.ts");
 
 const lit = (t) => `$lit$${t}$lit$`;
 const ctx = (projectId) => ({ params: Promise.resolve({ projectId }) });
@@ -137,7 +133,6 @@ const scarf = (owner, done = 96) => seedCraft(owner, "Fake Scarf", [{ name: "Bod
   bands: [["Scarf rows 1–100", 1, 100, false, null], ["Scarf rows 101–200", 101, 200, false, null], ["Scarf rows 201–519", 201, 519, false, null]] }], { craft: "knit" });
 const current = (partId) => Number(psql(`SELECT COALESCE(min(craft_row), (SELECT total_rows FROM craft_parts WHERE id='${partId}') + 1) FROM task_checklist_items WHERE craft_part_id='${partId}' AND NOT is_done AND craft_row <= (SELECT total_rows FROM craft_parts WHERE id='${partId}');`));
 const doneRows = (partId) => psql(`SELECT coalesce(string_agg(craft_row::text, ',' ORDER BY craft_row), '') FROM task_checklist_items WHERE craft_part_id='${partId}' AND is_done;`);
-const rowStates = (partId) => JSON.parse(psql(`SELECT coalesce(json_agg(json_build_object('row', craft_row, 'done', is_done, 'linked', EXISTS (SELECT 1 FROM work_session_items w WHERE w.checklist_item_id = i.id), 'today', false) ORDER BY craft_row), '[]') FROM task_checklist_items i WHERE craft_part_id='${partId}';`));
 const total = (partId) => Number(psql(`SELECT total_rows FROM craft_parts WHERE id='${partId}';`));
 const up073 = readFileSync(new URL("../supabase/migrations/073_craft_rpcs.sql", import.meta.url), "utf8");
 const down073 = readFileSync(new URL("../supabase/rollbacks/073_craft_rpcs.down.sql", import.meta.url), "utf8");

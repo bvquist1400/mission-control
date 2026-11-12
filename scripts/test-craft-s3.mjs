@@ -12,7 +12,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import * as C from "../src/lib/craft.ts";
 const { buildCraftView, removeBlockersText, RIP_CHOICES } = C;
 import * as A from "../src/lib/craft/actions.ts";
-import { blanketInput, input, part, rows } from "./fixtures/craft/sample-views.mjs";
+import { blanketInput } from "./fixtures/craft/sample-views.mjs";
 
 let passed = 0, failed = 0;
 async function test(name, fn) { try { await fn(); passed++; console.log(`ok - ${name}`); } catch (e) { failed++; console.error(`FAIL - ${name}`, e); } }

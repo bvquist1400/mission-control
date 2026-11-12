@@ -1421,7 +1421,7 @@ test("S3: a row over two sittings: the first sitting's minutes land with the row
   near(sc.seconds_per_unit, (50 * 60) / 195, 0.005, "(30 + 20) min over 195 stitches");
   assert.equal(sc.n_sessions, 2);
   assert.equal(sc.units, 195);
-  const old = computeForecast(input({ tasks, items, sessions: sessions.map(({ in_progress_item_ids: _x, ...rest }) => rest) }))
+  const old = computeForecast(input({ tasks, items, sessions: sessions.map((rest) => ({ ...rest, in_progress_item_ids: [] })) }))
     .measured_speeds.find((s) => s.work_type === "sc");
   near(old.seconds_per_unit, (20 * 60) / 195, 0.005, "the old engine counted only the finishing sitting");
 });
