@@ -151,21 +151,35 @@ async function loadItems(supabase: SupabaseClient, userId: string, taskIds: stri
 }
 
 interface SessionLinks { finished: string[]; in_progress: string[] }
+let warnedNoInProgress = false;
 
-/** Each session's links: finished rows and (074) rows in progress, kept apart. */
+/**
+ * Each session's links: finished rows and (074) rows in progress, kept apart. Before 074 is applied
+ * (no in_progress column, 42703) every link is a finished one, as it was, so the pace routes keep
+ * working on a database that hasn't had 074 yet.
+ */
 async function loadSessionItemIds(supabase: SupabaseClient, userId: string, sessionIds: string[]): Promise<Map<string, SessionLinks>> {
   const map = new Map<string, SessionLinks>();
+  const read = (ids: string[], columns: string) => pagedSelect<{ session_id: string; checklist_item_id: string; in_progress?: boolean }>((from, to) =>
+    supabase
+      .from("work_session_items")
+      .select(columns)
+      .eq("user_id", userId)
+      .in("session_id", ids)
+      .order("session_id", { ascending: true })
+      .order("checklist_item_id", { ascending: true })
+      .range(from, to)
+  );
   for (const ids of chunks(sessionIds)) {
-    const rows = await pagedSelect<{ session_id: string; checklist_item_id: string; in_progress: boolean }>((from, to) =>
-      supabase
-        .from("work_session_items")
-        .select("session_id, checklist_item_id, in_progress")
-        .eq("user_id", userId)
-        .in("session_id", ids)
-        .order("session_id", { ascending: true })
-        .order("checklist_item_id", { ascending: true })
-        .range(from, to)
-    );
+    let rows;
+    try {
+      rows = await read(ids, "session_id, checklist_item_id, in_progress");
+    } catch (error) {
+      if ((error as { code?: string } | null)?.code !== "42703") throw error;
+      if (!warnedNoInProgress) console.error("work_session_items.in_progress is missing (migration 074 not applied); reading every link as finished");
+      warnedNoInProgress = true;
+      rows = await read(ids, "session_id, checklist_item_id");
+    }
     for (const row of rows) {
       const links = map.get(row.session_id) ?? { finished: [], in_progress: [] };
       (row.in_progress ? links.in_progress : links.finished).push(row.checklist_item_id);
