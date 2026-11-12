@@ -46,6 +46,41 @@ await test("Partway default with the timer: ON more than 2 min after the last Ro
   assert.equal(A.partwayDefault(s, 157, form, timer({ elapsed_seconds: 60 }), NOW, minutesBefore(10)), false);
   assert.equal(A.partwayDefault(states(157, 157), 157, { from: 150, to: 157 }, timer(), NOW, null), false, "no row left");
 });
+// FR1 (Codex P3): only TIMED time after the last Row done counts, never a pause. Clock times are ET evening
+// times written as UTC (21:00 = 2026-11-12T21:00:00Z); the sitting starts at 21:00.
+const at = (hms) => `2026-11-12T${hms}Z`;
+const timedTimer = ({ running, running_since = null, paused_at = null, banked, last_done_seconds = null }) => ({
+  running, running_since, paused_at, banked_seconds: banked, adjust_seconds: 0, sitting_started_at: at("21:00:00"), last_done_seconds,
+  elapsed_seconds: banked + (running ? Math.floor((Date.parse(NOW) - Date.parse(running_since)) / 1000) : 0),
+});
+await test("FR1 Partway default: a pause after the last Row done doesn't count (Row done 22:00, pause 22:00:30, resume 22:30, save 22:30:30 → OFF: 60 s timed)", () => {
+  const s = states(157, 62), form = { from: 60, to: 62 };
+  const now = at("22:30:30");
+  // Ran 21:00–22:00:30 (3630 s banked), resumed 22:30; the Row done at 22:00 was at 3600 timed seconds.
+  const t = { ...timedTimer({ running: true, running_since: at("22:30:00"), banked: 3630, last_done_seconds: 3600 }), elapsed_seconds: 3660 };
+  assert.equal(A.partwayDefault(s, 157, form, t, now, at("22:00:00")), false, "60 s of timed work after the Row done");
+  // Same timer read without the stored Row done seconds (a timer from before 074): the sitting's own start bounds it, still OFF.
+  assert.equal(A.partwayDefault(s, 157, form, { ...t, last_done_seconds: null }, now, at("22:00:00")), false, "fallback: 3660 timed − 3600 before the Row done");
+  // Still paused at 22:30:30 (never resumed): 30 s timed after the Row done.
+  const paused = { ...timedTimer({ running: false, paused_at: at("22:00:30"), banked: 3630, last_done_seconds: 3600 }), elapsed_seconds: 3630 };
+  assert.equal(A.partwayDefault(s, 157, form, paused, now, at("22:00:00")), false);
+});
+await test("FR1 Partway default: 3 min of timed work after a Row done with a pause BEFORE it → ON; no Row done → ON", () => {
+  const s = states(157, 62), form = { from: 60, to: 62 };
+  // Ran 21:00–21:10 (600 s), paused, resumed 21:40, Row done 21:50 (1200 timed s), saved 21:53 (1380 timed s).
+  const t = { ...timedTimer({ running: true, running_since: at("21:40:00"), banked: 600, last_done_seconds: 1200 }), elapsed_seconds: 1380 };
+  assert.equal(A.partwayDefault(s, 157, form, t, at("21:53:00"), at("21:50:00")), true, "180 s timed");
+  assert.equal(A.partwayDefault(s, 157, form, { ...t, last_done_seconds: null }, at("21:53:00"), at("21:50:00")), true, "fallback: the running stretch alone is 180 s");
+  assert.equal(A.partwayDefault(s, 157, form, t, at("21:53:00"), null), true, "no Row done in the sitting");
+});
+await test("FR1 Partway default: pauses on both sides of the last Row done need the stored Row done seconds (074 craft_timers.last_done_seconds)", () => {
+  const s = states(157, 62), form = { from: 60, to: 62 };
+  // Ran 21:00–21:10, paused to 21:40, Row done 21:50 (1200 timed s), worked to 22:00 (1800), paused to 22:20, resumed, saved 22:20:30 (1830).
+  const t = { ...timedTimer({ running: true, running_since: at("22:20:00"), banked: 1800, last_done_seconds: 1200 }), elapsed_seconds: 1830 };
+  assert.equal(A.partwayDefault(s, 157, form, t, at("22:20:30"), at("21:50:00")), true, "630 s timed after the Row done");
+  // Without it the timer can't tell the two pauses apart: the lower bound (30 s, the running stretch) leaves it OFF.
+  assert.equal(A.partwayDefault(s, 157, form, { ...t, last_done_seconds: null }, at("22:20:30"), at("21:50:00")), false);
+});
 await test("Partway default with typed minutes (no timer): OFF while rows are saved, ON when none are (the minutes went into the row being worked)", () => {
   const s = states(157, 62);
   assert.equal(A.partwayDefault(s, 157, { from: 59, to: 62 }, null, NOW, null), false);
@@ -196,6 +231,16 @@ await test("View: the sitting's last Row done (any part) for the Partway default
   assert.equal(view.timer_last_done_at, "2026-11-12T22:30:00Z");
   assert.equal(A.partwayDefault(view.row_states, 157, { from: 60, to: 62 }, view.timer, view.server_now, view.timer_last_done_at), true, "30 min after row 62");
 });
+await test("FR1 View: the timer carries the timed seconds of the sitting's last Row done (074 last_done_seconds); a pause after it keeps Partway OFF", () => {
+  const v = blanketWithSittings();
+  // Ran 22:00–22:31 (1860 s banked), Row done at 22:30 (1800 timed s), resumed 22:59:30; the view is read at 23:00.
+  v.timer = { user_id: "u", project_id: "project", part_id: "Blanket", sitting_started_at: "2026-11-12T22:00:00Z", running_since: "2026-11-12T22:59:30Z", paused_at: null,
+    banked_seconds: 1860, adjust_seconds: 0, start_row: 61, start_quarter: 0, version: 5, last_done_seconds: 1800, created_at: "2026-11-12T22:00:00Z", updated_at: "2026-11-12T22:59:30Z" };
+  const view = buildCraftView(v);
+  assert.equal(view.timer.last_done_seconds, 1800);
+  assert.equal(view.timer.elapsed_seconds, 1890);
+  assert.equal(A.partwayDefault(view.row_states, 157, { from: 60, to: 62 }, view.timer, view.server_now, view.timer_last_done_at), false, "90 s timed after row 62, not 30 min");
+});
 
 // ── Rendered ──────────────────────────────────────────────────────────────────
 registerHooks({ load(url, context, nextLoad) {
@@ -245,7 +290,9 @@ await test("Undo sheet: Wrong count and Ripped back are two clearly named choice
   assert.match(html, /First row pulled out/);
   assert.match(html, /Left out of speed \(every row in them ripped\)[\s\S]*Nov 12 · 48 min[\s\S]*Nov 11 · 20 min/);
   assert.match(html, /Partly ripped: tick to leave out of speed too[\s\S]*<input type="checkbox"\/><span>Nov 9 · 35 min<\/span><small>keeps row 58<\/small>/);
-  assert.match(html, /There is no un-rip: to put rows back, use Fix count\./);
+  // FR1 (Fable f): one plain line, in the sticky foot right above Rip back (in view at 360 and 700), says rip-backs stay out of speed.
+  assert.match(html, /<div class="craft-sheet-foot"><p class="craft-sheet-hint craft-rip-after">Fix count puts the rows back; the sittings stay left out of speed\.<\/p>[\s\S]*>Rip back<\/button>/);
+  assert.doesNotMatch(html, /There is no un-rip/);
   assert.match(html, /Unticks rows 61–62 and takes the part of row 63 out of its sitting\. 2 sittings left out of speed\. Row 61 next\./);
   // The default is the last row only; that sitting (rows 61–62) is then only partly ripped.
   const one = renderToStaticMarkup(createElement(UndoRowsSheet, { open: true, onClose: () => {}, view, part: view.active_part, send, initialMode: "rip" }));
@@ -254,6 +301,7 @@ await test("Undo sheet: Wrong count and Ripped back are two clearly named choice
   assert.match(html, />Rip back</);
   const undo = renderToStaticMarkup(createElement(UndoRowsSheet, { open: true, onClose: () => {}, view, part: view.active_part, send }));
   assert.match(undo, /Ticked by mistake\? This unticks them\. Sittings and speed stay as they are \(like Fix count\)\./);
+  assert.doesNotMatch(undo, /Fix count puts the rows back/, "only the Ripped back choice says it");
 });
 await test("CSS (S3): tokens only, nothing under 12px, 48px+ rows for the new toggles and checkboxes", () => {
   const css = readFileSync(new URL("../src/components/craft/craft.css", import.meta.url), "utf8");

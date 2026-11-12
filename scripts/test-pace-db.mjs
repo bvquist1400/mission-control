@@ -56,6 +56,25 @@ const CRAFT_S2_ROLLBACK = readFileSync(new URL("../supabase/rollbacks/073_craft_
 // 074 (craft S3) replaces two 059 functions and adds work_session_items.in_progress: rolled back first, restored last.
 const CRAFT_S3_MIGRATION = readFileSync(new URL("../supabase/migrations/074_craft_progress.sql", import.meta.url), "utf8");
 const CRAFT_S3_ROLLBACK = readFileSync(new URL("../supabase/rollbacks/074_craft_progress.down.sql", import.meta.url), "utf8");
+// S3 FR1 (Fable 4): PACE_TEST_ON_074=1 runs every test on 074's work_session_create / work_session_update
+// bodies and its work_session_items.in_progress column (the "074 layer"), laid over each 059 apply, since
+// the craft schema that 074 sits on is rolled back for this suite. Without it the suite runs on 059's bodies.
+const ON_074 = process.env.PACE_TEST_ON_074 === "1";
+/** One `CREATE OR REPLACE FUNCTION <name>(` … `$$;` statement from a migration's text. */
+function functionStatement(sql, name) {
+  const match = sql.match(new RegExp(`CREATE OR REPLACE FUNCTION ${name}\\([\\s\\S]*?\\n\\$\\$;\\n`));
+  if (!match) throw new Error(`no CREATE OR REPLACE FUNCTION ${name} in the migration text`);
+  return match[0];
+}
+const LAYER_074 = ["BEGIN;", "ALTER TABLE work_session_items ADD COLUMN in_progress BOOLEAN NOT NULL DEFAULT false;",
+  functionStatement(CRAFT_S3_MIGRATION, "work_session_create"), functionStatement(CRAFT_S3_MIGRATION, "work_session_update"),
+  "COMMIT;", "NOTIFY pgrst, 'reload schema';"].join("\n");
+const UNLAYER_074 = ["BEGIN;", functionStatement(MIGRATION, "work_session_create"), functionStatement(MIGRATION, "work_session_update"),
+  "DELETE FROM work_session_items WHERE in_progress;", "ALTER TABLE work_session_items DROP COLUMN in_progress;", "COMMIT;", "NOTIFY pgrst, 'reload schema';"].join("\n");
+const layer074Present = () => psql("SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='work_session_items' AND column_name='in_progress';") === "1";
+function apply074Layer() {
+  if (ON_074 && psql("SELECT to_regclass('public.work_sessions') IS NOT NULL;") === "t" && !layer074Present()) psql(LAYER_074);
+}
 let craftS3WasRemoved = false;
 let craftS2WasRemoved = false;
 let craftSetupWasRemoved = false;
@@ -69,6 +88,7 @@ async function restorePace() {
   if (psql("SELECT to_regclass('public.work_sessions') IS NULL;") === "t") {
     psql(MIGRATION + "\nNOTIFY pgrst, 'reload schema';");
   }
+  apply074Layer();
   await waitForSchema(true);
 }
 
@@ -317,6 +337,16 @@ try {
     }
     psql(CRAFT_ROLLBACK);
     craftWasRemoved = true;
+  }
+  if (ON_074) {
+    apply074Layer();
+    await waitForSchema(true);
+    await test("074 layer: work_session_create / work_session_update are 074's bodies and work_session_items.in_progress exists (PACE_TEST_ON_074=1)", () => {
+      for (const fn of ["work_session_create(uuid,jsonb,uuid[],boolean)", "work_session_update(uuid,uuid,jsonb,uuid[])"]) {
+        assert.equal(psql(`SELECT pg_get_functiondef('${fn}'::regprocedure) LIKE '%in_progress_item_ids%';`), "t", fn);
+      }
+      assert.ok(layer074Present());
+    });
   }
   // ── Part 1: migration 059 ──────────────────────────────────────────────
   await test("059 rollback removes every table, column, trigger and function; re-apply restores them", async () => {
@@ -1161,6 +1191,8 @@ try {
   // test() records a restore failure without preventing fetch/user cleanup.
   await test("cleanup: restore 059 before the removed 071, 072, 073 and 074", async () => {
     await restorePace();
+    // The 074 layer comes off first (074 adds the column itself), leaving 059 exactly as its migration wrote it.
+    if (ON_074 && layer074Present()) psql(UNLAYER_074);
     if (craftWasRemoved) {
       psql(CRAFT_MIGRATION);
       craftWasRemoved = false;

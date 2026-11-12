@@ -146,7 +146,7 @@ const REPLACED = ["work_session_create(uuid,jsonb,uuid[],boolean)", "work_sessio
   "craft_log_sitting(uuid,uuid,boolean,integer,integer,date,timestamp with time zone,timestamp with time zone,integer,integer,integer,integer,text,text)", "craft_remove_blockers(uuid,uuid)"];
 /** Every craft_/work_session function's body and grants, work_session_items' columns, the craft tables and their policies: what 074's rollback must give back. */
 const schemaState = () => psql(`SELECT md5(string_agg(p.oid::regprocedure::text || ':' || md5(pg_get_functiondef(p.oid)) || ':' || coalesce(p.proacl::text, ''), ',' ORDER BY p.oid::regprocedure::text)) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND (p.proname LIKE 'craft_%' OR p.proname LIKE 'work_session%');
-SELECT string_agg(column_name || ':' || data_type || ':' || is_nullable || ':' || coalesce(column_default, ''), ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'work_session_items';
+SELECT string_agg(table_name || '.' || column_name || ':' || data_type || ':' || is_nullable || ':' || coalesce(column_default, ''), ',' ORDER BY table_name, ordinal_position) FROM information_schema.columns WHERE table_schema = 'public' AND table_name IN ('work_session_items', 'craft_timers');
 SELECT string_agg(tablename, ',' ORDER BY tablename) FROM pg_tables WHERE schemaname = 'public' AND (tablename LIKE 'craft_%' OR tablename LIKE 'work_session%');
 SELECT md5(coalesce(string_agg(tablename || ':' || policyname || ':' || cmd, ',' ORDER BY tablename, policyname), '')) FROM pg_policies WHERE schemaname = 'public' AND (tablename LIKE 'craft_%' OR tablename LIKE 'work_session%');
 SELECT md5(coalesce(string_agg(c.relname || ':' || coalesce(c.relacl::text, ''), ',' ORDER BY c.relname), '')) FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'r' AND (c.relname LIKE 'craft_%' OR c.relname LIKE 'work_session%');`);
@@ -190,6 +190,8 @@ try {
   // ── The migration ──────────────────────────────────────────────────────────
   await test("074 applies on 001..073: in_progress (NOT NULL, default false), craft_frogs with owner RLS and only SELECT/INSERT/UPDATE/DELETE for the API roles, new functions SECURITY INVOKER for authenticated + service_role only, replaced ones keep their signatures and grants", () => {
     assert.equal(psql("SELECT data_type || ':' || is_nullable || ':' || column_default FROM information_schema.columns WHERE table_name='work_session_items' AND column_name='in_progress';"), "boolean:NO:false");
+    // FR1 (Codex P3): the timer's timed seconds at the sitting's last Row done, NULL until one.
+    assert.equal(psql("SELECT data_type || ':' || is_nullable || ':' || coalesce(column_default, 'none') FROM information_schema.columns WHERE table_name='craft_timers' AND column_name='last_done_seconds';"), "integer:YES:none");
     assert.equal(psql("SELECT relrowsecurity FROM pg_class WHERE oid='public.craft_frogs'::regclass;"), "t");
     assert.equal(psql("SELECT string_agg(cmd, ',' ORDER BY cmd) FROM pg_policies WHERE tablename='craft_frogs' AND qual IS DISTINCT FROM NULL OR (tablename='craft_frogs' AND cmd='INSERT');"), "DELETE,INSERT,SELECT,UPDATE");
     for (const role of ["authenticated", "service_role"]) {
@@ -214,7 +216,9 @@ try {
     const s = blanket(a.id, 60), [part] = s.parts;
     await startTimerAgo(a, s, part, 48);
     await rowDone(a, s, part, 61, 62);
-    psql(`UPDATE task_checklist_items SET completed_at = now() - interval '20 minutes' WHERE craft_part_id='${part}' AND craft_row IN (61, 62);`);
+    // The two Row dones were 20 minutes ago: their tick times and (074 FR1) the timer's timed seconds then.
+    psql(`UPDATE task_checklist_items SET completed_at = now() - interval '20 minutes' WHERE craft_part_id='${part}' AND craft_row IN (61, 62);
+      UPDATE craft_timers SET last_done_seconds = ${(48 - 20) * 60} WHERE user_id='${a.id}';`);
     const view = await getView(a, s.projectId);
     const d = A.logSittingDefaults(view.row_states, 157, view.timer);
     assert.equal(A.partwayDefault(view.row_states, 157, d, view.timer, view.server_now, view.timer_last_done_at), true, "20 min after the last Row done");
@@ -407,6 +411,133 @@ try {
     assert.equal(craftPace.sessions[0].rows, "rows 61–62 · part of row 63");
   });
 
+  // ── Fix round 1 ───────────────────────────────────────────────────────────
+  await test("FR1 (Codex P3): parity with an earlier in-progress-only sitting: craft screen and API give the same EXACT speed (75 min over 390 st = 11.54 s/st), and dropping the in-progress links changes it (negative control)", async () => {
+    const opts = { now: new Date(), today: today() };
+    const speedOf = async (projectId) => (await getProjectForecast(a.client, a.id, projectId, opts)).forecast.measured_speeds.find((m) => m.work_type === "waffle");
+    const day = (n) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(Date.now() - n * 86_400_000));
+    // Craft screen: evening 1 only worked on row 61 (in progress, 20 min); evening 2 finished 61–62 and stopped partway into 63 (55 min).
+    const s = blanket(a.id, 60), [part] = s.parts;
+    psql(`UPDATE projects SET target_date = '2026-12-23' WHERE id='${s.projectId}';`);
+    const one = await typed(a, s, part, 60, 60, 61, 20, true, { date: day(1) });
+    const two = await typed(a, s, part, 60, 62, 61, 55, true);
+    for (const r of [one, two]) assert.equal(r.status, 201, JSON.stringify(r.body).slice(0, 300));
+    assert.deepEqual([links(one.body.result.session_id), links(two.body.result.session_id)], ["Blanket:61~", "Blanket:61,Blanket:62,Blanket:63~"]);
+    // The same two sittings through the API (project page / chat), then 059's update adds the in-progress links.
+    const t = blanket(a.id, 60);
+    psql(`UPDATE projects SET target_date = '2026-12-23' WHERE id='${t.projectId}';`);
+    const inProgress = async (id, row) => {
+      const u = await rpc(a, "work_session_update", { p_user_id: a.id, p_session_id: id, p_changes: { in_progress_item_ids: [t.items[`Blanket:${row}`]] }, p_item_ids: null });
+      assert.equal(u.error, null, u.error?.message);
+    };
+    const p1 = await logWorkSession(a.client, a.id, { task_id: t.tasks["Tree 2"], date: day(1), minutes: 20, idempotency_key: randomUUID() }, opts);
+    await inProgress(p1.session.id, 61);
+    const p2 = await logWorkSession(a.client, a.id, { task_id: t.tasks["Tree 2"], minutes: 55, rows: "61-62", idempotency_key: randomUUID() }, opts);
+    await inProgress(p2.session.id, 63);
+    assert.deepEqual([links(p1.session.id), links(p2.session.id)], ["Blanket:61~", "Blanket:61,Blanket:62,Blanket:63~"]);
+    // The engine reports s/st to 0.01: 4500 s / 390 st = 11.538… → 11.54.
+    const exact = { units: 195 * 2, minutes: 75, n_sessions: 2, seconds_per_unit: 11.54 };
+    for (const [label, id] of [["craft screen", s.projectId], ["API", t.projectId]]) {
+      const m = await speedOf(id);
+      assert.deepEqual({ units: m.units, minutes: m.minutes, n_sessions: m.n_sessions, seconds_per_unit: m.seconds_per_unit }, exact, label);
+    }
+    assert.deepEqual(strip(await getProjectForecast(a.client, a.id, s.projectId, opts)).forecast.measured_speeds, strip(await getProjectForecast(a.client, a.id, t.projectId, opts)).forecast.measured_speeds);
+    // Negative control: without the in-progress links the 20 min sitting has nothing to price and drops out of speed: 55 min over 390 st.
+    psql(`DELETE FROM work_session_items WHERE in_progress AND session_id IN ('${one.body.result.session_id}','${two.body.result.session_id}');`);
+    const dropped = await speedOf(s.projectId);
+    assert.notEqual(dropped.seconds_per_unit, exact.seconds_per_unit, "dropping the in-progress links must change the speed");
+    assert.deepEqual([dropped.minutes, dropped.units, dropped.n_sessions, dropped.seconds_per_unit], [55, 390, 1, 8.46], "3300 s / 390 st");
+  });
+
+  await test("FR1 (Fable 1): craft_frog's screen part with active_part_id NULL is the app's (the first unfinished part): Cuff finished, Hand on round 3 → rip-back on the Hand works, on the Cuff is refused other_part", async () => {
+    clearTimer(a.id);
+    const s = mittensTwo(a.id, 31), [cuff, hand] = s.parts;
+    await rowDone(a, s, hand, 1, 2);
+    psql(`UPDATE craft_projects SET active_part_id = NULL WHERE project_id='${s.projectId}';`);
+    const view = await getView(a, s.projectId);
+    assert.deepEqual([view.active_part.id, view.active_part.current_row], [hand, 3], "the app's screen part");
+    let r = await post(frogRoute, a, s.projectId, "frog", { part_id: cuff, expected_row: 32, from_row: 31, to_row: 31, idempotency_key: randomUUID() });
+    assert.deepEqual([r.status, r.body.reason], [409, "other_part"], JSON.stringify(r.body).slice(0, 200));
+    assert.equal(current(cuff), 32, "the Cuff is untouched");
+    r = await post(frogRoute, a, s.projectId, "frog", { part_id: hand, expected_row: 3, from_row: 2, to_row: 2, idempotency_key: randomUUID() });
+    assert.equal(r.status, 201, JSON.stringify(r.body).slice(0, 200));
+    assert.equal(current(hand), 2);
+    // Stored part finished (the Cuff): still the Hand, as on the screen.
+    psql(`UPDATE craft_projects SET active_part_id = '${cuff}' WHERE project_id='${s.projectId}';`);
+    assert.equal((await getView(a, s.projectId)).active_part.id, hand);
+    r = await post(frogRoute, a, s.projectId, "frog", { part_id: hand, expected_row: 2, from_row: 1, to_row: 1, idempotency_key: randomUUID() });
+    assert.equal(r.status, 201, JSON.stringify(r.body).slice(0, 200));
+    // Every part finished and nothing stored: the screen has no part, so there is nothing to rip back on.
+    const f = mittensTwo(a.id, 31);
+    psql(`UPDATE task_checklist_items SET is_done = true WHERE craft_part_id='${f.parts[1]}'; UPDATE craft_projects SET active_part_id = NULL WHERE project_id='${f.projectId}';`);
+    assert.equal((await getView(a, f.projectId)).active_part, null);
+    r = await post(frogRoute, a, f.projectId, "frog", { part_id: f.parts[1], expected_row: 46, from_row: 45, to_row: 45, idempotency_key: randomUUID() });
+    assert.deepEqual([r.status, r.body.reason], [409, "other_part"]);
+    // …and with the stored part finished too, that part (it reads "Finished"), as on the screen.
+    psql(`UPDATE craft_projects SET active_part_id = '${f.parts[1]}' WHERE project_id='${f.projectId}';`);
+    assert.equal((await getView(a, f.projectId)).active_part.id, f.parts[1]);
+    r = await post(frogRoute, a, f.projectId, "frog", { part_id: f.parts[1], expected_row: 46, from_row: 45, to_row: 45, idempotency_key: randomUUID() });
+    assert.equal(r.status, 201, JSON.stringify(r.body).slice(0, 200));
+  });
+
+  await test("FR1 (Codex P2): a sitting that finishes scarf row 100 (task A) and stops partway into row 101 (task B) has no task (multi-task, 059's rule): no minutes roll into A; in progress only on row 101 → task B; a rip-back leaves tasks and actual_minutes alone", async () => {
+    clearTimer(a.id);
+    const s = scarf(a.id, 99), [part] = s.parts;
+    const A1 = s.tasks["Scarf rows 1–100"], B1 = s.tasks["Scarf rows 101–200"];
+    const both = await typed(a, s, part, 99, 100, 100, 30, true);
+    assert.equal(both.status, 201, JSON.stringify(both.body).slice(0, 300));
+    assert.equal(links(both.body.result.session_id), "Body:100,Body:101~");
+    assert.equal(both.body.result.task_id, null, "rows of two tasks: no task");
+    assert.equal(psql(`SELECT coalesce(task_id::text, 'null') FROM work_sessions WHERE id='${both.body.result.session_id}';`), "null");
+    assert.deepEqual([minutesOf(A1), minutesOf(B1)], ["null", "null"], "a task-less sitting rolls up to no task");
+    const only = await typed(a, s, part, 100, 100, 101, 12, true);
+    assert.equal(only.status, 201, JSON.stringify(only.body).slice(0, 300));
+    assert.equal(links(only.body.result.session_id), "Body:101~");
+    assert.equal(only.body.result.task_id, B1, "in progress only: that row's task");
+    assert.deepEqual([minutesOf(A1), minutesOf(B1)], ["null", "12"]);
+    // Ripping back row 100 removes both sittings' links (row 100 and the current row 101); tasks and minutes stay.
+    const r = await post(frogRoute, a, s.projectId, "frog", { part_id: part, expected_row: 101, from_row: 100, to_row: 100, idempotency_key: randomUUID() });
+    assert.equal(r.status, 201, JSON.stringify(r.body).slice(0, 300));
+    assert.deepEqual([links(both.body.result.session_id), links(only.body.result.session_id)], ["", ""]);
+    assert.equal(psql(`SELECT string_agg(coalesce(task_id::text, 'null'), ',' ORDER BY minutes DESC) FROM work_sessions WHERE id IN ('${both.body.result.session_id}','${only.body.result.session_id}');`), `null,${B1}`);
+    assert.deepEqual([minutesOf(A1), minutesOf(B1)], ["null", "12"], "actual_minutes unchanged by the rip-back");
+    // One task finished + nothing in progress keeps that task (unchanged rule).
+    const plain = await typed(a, s, part, 98, 99, 100, 9, false);
+    assert.equal(plain.body.result.task_id, A1);
+  });
+
+  await test("FR1 (Codex P3): Row done stores the timer's timed seconds (last_done_seconds, + / − left out, no version bump); a pause after the last Row done keeps Partway OFF on the real view", async () => {
+    clearTimer(a.id);
+    const s = blanket(a.id, 60), [part] = s.parts;
+    await startTimerAgo(a, s, part, 60);
+    assert.equal(timerRow(a.id).last_done_seconds, null, "no Row done yet");
+    const v0 = version(a.id);
+    await rowDone(a, s, part, 61, 61);
+    const stored = timerRow(a.id).last_done_seconds;
+    assert.ok(stored >= 3598 && stored <= 3602, `about 3600 timed seconds, got ${stored}`);
+    assert.equal(version(a.id), v0, "Row done doesn't make the Log sitting sheet stale");
+    // Timeline: started 90.5 min ago, Row done 30.5 min ago (at 3600 timed s), paused 30 s later, resumed 30 s ago.
+    psql(`UPDATE task_checklist_items SET completed_at = now() - interval '30 minutes 30 seconds' WHERE craft_part_id='${part}' AND craft_row = 61;
+      UPDATE craft_timers SET sitting_started_at = now() - interval '90 minutes 30 seconds', last_done_seconds = 3600, banked_seconds = 3630, running_since = now() - interval '30 seconds', paused_at = NULL WHERE user_id='${a.id}';`);
+    const view = await getView(a, s.projectId);
+    assert.equal(view.timer.last_done_seconds, 3600);
+    const d = A.logSittingDefaults(view.row_states, 157, view.timer);
+    assert.equal(A.partwayDefault(view.row_states, 157, d, view.timer, view.server_now, view.timer_last_done_at), false, "about 60 s of timed work after the Row done");
+    // Undo leaves it; a paused Row done stores the banked seconds; Fix count ticking forward stores it too; another project's Row done doesn't.
+    assert.equal((await post(rowRoute, a, s.projectId, "row", { part_id: part, mode: "undo", expected_row: 62, to_row: 61 })).status, 200);
+    assert.equal(timerRow(a.id).last_done_seconds, 3600);
+    psql(`UPDATE craft_timers SET running_since = NULL, paused_at = now(), banked_seconds = 4000 WHERE user_id='${a.id}';`);
+    await rowDone(a, s, part, 61, 61);
+    assert.equal(timerRow(a.id).last_done_seconds, 4000);
+    psql(`UPDATE craft_timers SET banked_seconds = 4100 WHERE user_id='${a.id}';`);
+    assert.equal((await post(rowRoute, a, s.projectId, "row", { part_id: part, mode: "fix", expected_row: 62, to_row: 64 })).status, 200);
+    assert.equal(timerRow(a.id).last_done_seconds, 4100);
+    const other = blanket(a.id, 60);
+    await rowDone(a, other, other.parts[0], 61, 61);
+    assert.equal(timerRow(a.id).last_done_seconds, 4100, "a Row done on another project leaves this timer alone");
+    clearTimer(a.id);
+  });
+
   // ── Ripped back ────────────────────────────────────────────────────────────
   await test("Ripped back, all ripped: rows 61–62 unticked, every link to them and to row 63 removed, the sitting left out with \"ripped back rows 61–62\"; its minutes stay (daily time, actual_minutes); the frog is recorded", async () => {
     clearTimer(a.id);
@@ -593,6 +724,7 @@ try {
     assert.equal(schemaState(), fresh073);
     assert.equal(psql("SELECT to_regclass('public.craft_frogs') IS NULL;"), "t");
     assert.equal(psql("SELECT count(*) FROM information_schema.columns WHERE table_name='work_session_items' AND column_name='in_progress';"), "0");
+    assert.equal(psql("SELECT count(*) FROM information_schema.columns WHERE table_name='craft_timers' AND column_name='last_done_seconds';"), "0");
     for (const fn of NEW_FUNCTIONS) assert.equal(psql(`SELECT to_regprocedure('${fn}') IS NULL;`), "t", fn);
     assert.equal(sessions(), kept, "sittings (and the exclusions a rip-back made) stay");
     assert.equal(psql("SELECT count(*) FROM work_session_items;"), finished, "only the in-progress links went");
