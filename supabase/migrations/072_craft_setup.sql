@@ -124,7 +124,8 @@ BEGIN
       v_segments := v_segments + 1;
     END LOOP;
 
-    -- Every row is an unlinked item on one of this part's segment tasks, inside that segment's range.
+    -- Every row is an unlinked item on one of this part's segment tasks, inside that segment's range,
+    -- whose text starts with that number ("Rnd 15 (est.) · knit" is round 15).
     WITH r AS (
       SELECT (x->>'item_id')::uuid AS item_id, (x->>'row')::int AS row_number FROM jsonb_array_elements(v_part->'rows') x
     )
@@ -132,6 +133,7 @@ BEGIN
     FROM r
     WHERE i.id = r.item_id AND i.user_id = p_user_id AND i.craft_part_id IS NULL
       AND r.row_number BETWEEN 1 AND (v_part->>'total_rows')::int
+      AND ltrim(substring(i.text FROM '^(?:Row|Rnd|Round)\s+(\d+)'), '0') = r.row_number::text
       AND EXISTS (SELECT 1 FROM craft_segments s WHERE s.part_id = v_part_id AND s.task_id = i.task_id
                   AND r.row_number BETWEEN s.from_row AND s.to_row);
     GET DIAGNOSTICS v_count = ROW_COUNT;
