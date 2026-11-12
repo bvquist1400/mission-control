@@ -837,6 +837,7 @@ export type Database = {
           banked_seconds: number
           created_at: string
           part_id: string | null
+          paused_at: string | null
           project_id: string
           running_since: string | null
           sitting_started_at: string
@@ -851,6 +852,7 @@ export type Database = {
           banked_seconds?: number
           created_at?: string
           part_id?: string | null
+          paused_at?: string | null
           project_id: string
           running_since?: string | null
           sitting_started_at: string
@@ -865,6 +867,7 @@ export type Database = {
           banked_seconds?: number
           created_at?: string
           part_id?: string | null
+          paused_at?: string | null
           project_id?: string
           running_since?: string | null
           sitting_started_at?: string
@@ -3840,12 +3843,84 @@ export type Database = {
         Args: { p_reason?: string; p_task_id: string; p_user_id: string }
         Returns: Json
       }
+      craft_band_check: {
+        Args: { p_segment_id: string; p_user_id: string }
+        Returns: Json
+      }
+      craft_current_row: {
+        Args: { p_part_id: string; p_total: number; p_user_id: string }
+        Returns: number
+      }
+      craft_log_sitting: {
+        Args: {
+          p_date: string
+          p_ended_at: string
+          p_expected_row: number
+          p_from_row: number
+          p_idempotency_key: string
+          p_minutes: number
+          p_note: string
+          p_part_id: string
+          p_started_at: string
+          p_timer_version: number
+          p_to_quarter: number
+          p_to_row: number
+          p_use_timer: boolean
+          p_user_id: string
+        }
+        Returns: Json
+      }
+      craft_part_lock: {
+        Args: { p_part_id: string; p_user_id: string }
+        Returns: {
+          created_at: string
+          id: string
+          name: string
+          project_id: string
+          quarter: number
+          quarter_row: number | null
+          quarters: boolean
+          ridges: boolean
+          row_word: string
+          sort_order: number
+          stitch_count: number | null
+          total_rows: number
+          updated_at: string
+          user_id: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "craft_parts"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       craft_remove_blockers: {
         Args: { p_project_id: string; p_user_id: string }
         Returns: string[]
       }
       craft_remove_project: {
         Args: { p_project_id: string; p_user_id: string }
+        Returns: Json
+      }
+      craft_rows: {
+        Args: {
+          p_expected_row: number
+          p_mode: string
+          p_part_id: string
+          p_segment_id?: string
+          p_to_row: number
+          p_user_id: string
+        }
+        Returns: Json
+      }
+      craft_set_total: {
+        Args: {
+          p_expected_total: number
+          p_part_id: string
+          p_total: number
+          p_user_id: string
+        }
         Returns: Json
       }
       craft_setup_fingerprint: {
@@ -3867,6 +3942,31 @@ export type Database = {
           p_project_id: string
           p_user_id: string
         }
+        Returns: Json
+      }
+      craft_timer: {
+        Args: {
+          p_action: string
+          p_expected_version?: number
+          p_force?: boolean
+          p_minutes?: number
+          p_part_id?: string
+          p_project_id: string
+          p_user_id: string
+        }
+        Returns: Json
+      }
+      craft_timer_elapsed: {
+        Args: {
+          p_adjust: number
+          p_banked: number
+          p_now: string
+          p_running_since: string
+        }
+        Returns: number
+      }
+      craft_timer_state: {
+        Args: { p_now: string; p_user_id: string }
         Returns: Json
       }
       famcal_add_personal_task_comment: {
