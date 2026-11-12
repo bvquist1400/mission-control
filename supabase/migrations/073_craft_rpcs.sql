@@ -129,6 +129,8 @@ $$;
 --    whose task isn't Done, returns needs_check (the screen asks "Count is 195?").
 --  * undo: p_to_row < current; unticks the rows from p_to_row up to the current row.
 --  * fix:  p_to_row = the row to be on; ticks or unticks only between the old and new row.
+--    Undo or fix below the start row of the caller's timer on this part lowers that start row
+--    (and bumps the timer's version), so the rows done again belong to the timed sitting.
 --  * close (p_segment_id): every row of the band ticked → ticks its count item and sets the
 --    band task to Done (returns from_status so the route can record the transition).
 -- A stored quarter is cleared once its row is no longer the current row; the part becomes
@@ -232,6 +234,12 @@ BEGIN
   END IF;
 
   v_new := craft_current_row(p_user_id, p_part_id, v_part.total_rows);
+  -- FR1: Undo / Fix count below the timer's start row on this part lowers it, so the rows done
+  -- again are in the sitting (Log sitting saves from the timer's start row).
+  IF p_mode IN ('undo', 'fix') THEN
+    UPDATE craft_timers SET start_row = v_new, start_quarter = 0, version = version + 1
+      WHERE user_id = p_user_id AND part_id = p_part_id AND start_row > v_new;
+  END IF;
   IF (v_part.quarter <> 0 OR v_part.quarter_row IS NOT NULL) AND v_part.quarter_row IS DISTINCT FROM v_new THEN
     UPDATE craft_parts SET quarter = 0, quarter_row = NULL WHERE id = p_part_id AND user_id = p_user_id;
   END IF;
@@ -398,18 +406,29 @@ BEGIN
 END;
 $$;
 
--- Log sitting: one transaction. The rows finished in this sitting are (p_from_row, p_to_row]
--- (p_from_row = the last full row before it; with the timer and no p_from_row, its start
--- row − 1). Those rows are ticked; the ones not already in another sitting are linked;
--- rows after p_to_row up to the current row are unticked (the ± on "Last full row"). The
--- session is written by 059's work_session_create (p_mark_done true, source 'manual',
--- source_ref 'client:' || p_idempotency_key, as POST /api/work-sessions does), task_id =
--- the one task of the linked rows, else the current row's band task when nothing is
--- linked, else NULL (across two tasks). Then craft_sitting_details, the part's quarter
--- (p_to_quarter of the next row), the active part, and the timer is cleared.
--- With p_use_timer the minutes default to the timer's (rounded), start = the sitting's
--- start, end = now or when it was paused; minutes above end − start move the start back
--- (a "+13 min, forgot to start" fix). Without it, minutes are typed, times optional.
+-- Log sitting: one transaction. The sitting saves the rows actually finished while it ran, per
+-- part. On the part being saved (p_part_id, the screen's part) the rows are (from, p_to_row]:
+-- p_from_row when given; else, with the timer on this part, its start row − 1 (never past
+-- p_to_row); with the timer on an EARLIER part of this project (that part was finished during
+-- the sitting and the screen moved on), the row before the first row of this part ticked since
+-- the sitting started (else the current row − 1, never past p_to_row). Those rows are ticked;
+-- the ones not already in another sitting are linked; rows after p_to_row up to the current row
+-- are unticked (the ± on "Last full row"). With the timer on another part, the sitting ALSO
+-- links that part's rows from the timer's start row that are ticked and in no sitting, and the
+-- rows of the parts between it and this part ticked since the sitting started and in no
+-- sitting: never a zero-row sitting for this part while another part's rows are dropped.
+-- Every linked row must be one of this project's part rows, owned by the caller and ticked
+-- (else 23503, nothing saved). The session is written by 059's work_session_create
+-- (p_mark_done true, source 'manual', source_ref 'client:' || p_idempotency_key, as POST
+-- /api/work-sessions does), task_id = the one task of the linked rows, else the current row's
+-- band task when nothing is linked, else NULL (across two tasks). Then craft_sitting_details
+-- (this part; for a sitting across parts its from_row is this part's), the part's quarter
+-- (p_to_quarter of the next row), the active part, and the timer is cleared. Nothing that
+-- returns early or raises clears the timer.
+-- Minutes: with p_use_timer they default to the timer's (rounded), start = the sitting's start
+-- moved back by any time added on the timer with + (its "forgot to start" fix), end = now or
+-- when it was paused. Typed minutes follow the project page's rule (F0): less than start–end
+-- is fine (breaks), more than start–end + 1 is refused with F0's words; the start never moves.
 -- A key already used returns { status: 'duplicate' } for this project (409 elsewhere).
 CREATE FUNCTION craft_log_sitting(p_user_id UUID, p_part_id UUID, p_use_timer BOOLEAN, p_timer_version INTEGER, p_minutes INTEGER,
   p_date DATE, p_started_at TIMESTAMPTZ, p_ended_at TIMESTAMPTZ, p_from_row INTEGER, p_to_row INTEGER, p_to_quarter INTEGER,
@@ -424,18 +443,26 @@ DECLARE
   v_ref TEXT;
   v_existing RECORD;
   v_part craft_parts%ROWTYPE;
+  v_tpart craft_parts%ROWTYPE;
+  v_seen_part UUID;
+  v_cross BOOLEAN := false;
+  v_lock_tasks UUID[];
   v_t craft_timers%ROWTYPE;
   v_now TIMESTAMPTZ;
   v_today DATE;
   v_cur INTEGER;
   v_minutes INTEGER;
   v_raw_minutes INTEGER := NULL;
+  v_span NUMERIC;
   v_start TIMESTAMPTZ;
   v_end TIMESTAMPTZ;
   v_date DATE;
   v_from INTEGER;
+  v_first_new INTEGER;
   v_from_quarter INTEGER := 0;
   v_quarter INTEGER := COALESCE(p_to_quarter, 0);
+  v_other UUID[] := '{}';
+  v_other_rows JSONB := '[]'::jsonb;
   v_links UUID[];
   v_task UUID;
   v_tasks UUID[];
@@ -463,7 +490,43 @@ BEGIN
   END IF;
   v_ref := 'client:' || btrim(p_idempotency_key);
 
-  v_part := craft_part_lock(p_user_id, p_part_id);
+  -- Locks. With the timer on another part of this project the sitting reaches that part's rows
+  -- too, so every part of the project is locked in the same order as craft_part_lock: all their
+  -- tasks in id order (059), the craft project, then the parts in id order.
+  SELECT * INTO v_part FROM craft_parts WHERE id = p_part_id AND user_id = p_user_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'CRAFT_PART_NOT_FOUND' USING ERRCODE = 'P0002';
+  END IF;
+  IF p_use_timer THEN
+    SELECT part_id INTO v_seen_part FROM craft_timers WHERE user_id = p_user_id AND project_id = v_part.project_id;
+    v_cross := v_seen_part IS NOT NULL AND v_seen_part <> p_part_id;
+  END IF;
+  IF v_cross THEN
+    SELECT COALESCE(array_agg(DISTINCT x), '{}'::uuid[]) INTO v_lock_tasks FROM (
+      SELECT i.task_id AS x FROM task_checklist_items i JOIN craft_parts cp ON cp.id = i.craft_part_id
+        WHERE cp.project_id = v_part.project_id AND cp.user_id = p_user_id AND i.user_id = p_user_id
+      UNION
+      SELECT s.task_id FROM craft_segments s JOIN craft_parts cp ON cp.id = s.part_id
+        WHERE cp.project_id = v_part.project_id AND cp.user_id = p_user_id AND s.user_id = p_user_id AND s.task_id IS NOT NULL
+    ) s;
+    PERFORM work_sessions_lock_tasks(p_user_id, v_lock_tasks);
+    PERFORM 1 FROM craft_projects WHERE project_id = v_part.project_id AND user_id = p_user_id FOR NO KEY UPDATE;
+    PERFORM 1 FROM craft_parts WHERE project_id = v_part.project_id AND user_id = p_user_id ORDER BY id FOR UPDATE;
+    SELECT * INTO v_part FROM craft_parts WHERE id = p_part_id AND user_id = p_user_id;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'CRAFT_PART_NOT_FOUND' USING ERRCODE = 'P0002';
+    END IF;
+    IF EXISTS (SELECT 1 FROM task_checklist_items i JOIN craft_parts cp ON cp.id = i.craft_part_id
+               WHERE cp.project_id = v_part.project_id AND cp.user_id = p_user_id AND i.user_id = p_user_id AND NOT (i.task_id = ANY (v_lock_tasks)))
+       OR EXISTS (SELECT 1 FROM craft_segments s JOIN craft_parts cp ON cp.id = s.part_id
+               WHERE cp.project_id = v_part.project_id AND cp.user_id = p_user_id AND s.user_id = p_user_id AND s.task_id IS NOT NULL
+                 AND NOT (s.task_id = ANY (v_lock_tasks))) THEN
+      RAISE EXCEPTION 'CRAFT_BUSY: the rows changed while saving; try again' USING ERRCODE = '40001';
+    END IF;
+  ELSE
+    v_part := craft_part_lock(p_user_id, p_part_id);
+  END IF;
+
   SELECT id, project_id INTO v_existing FROM work_sessions WHERE user_id = p_user_id AND source_ref = v_ref;
   IF FOUND THEN
     IF v_existing.project_id <> v_part.project_id THEN
@@ -485,17 +548,47 @@ BEGIN
     IF NOT FOUND OR v_t.project_id <> v_part.project_id THEN
       RETURN jsonb_build_object('status', 'no_timer', 'part_id', p_part_id, 'current_row', v_cur);
     END IF;
-    IF p_timer_version IS DISTINCT FROM v_t.version THEN
+    -- A changed version, or a timer that moved to another part since the locks were chosen.
+    IF p_timer_version IS DISTINCT FROM v_t.version OR v_t.part_id IS DISTINCT FROM v_seen_part THEN
       RETURN jsonb_build_object('status', 'stale_timer', 'part_id', p_part_id, 'current_row', v_cur,
         'timer', craft_timer_state(p_user_id, v_now));
     END IF;
     v_raw_minutes := round(craft_timer_elapsed(v_t.banked_seconds, 0, v_t.running_since, v_now) / 60.0)::int;
     v_minutes := COALESCE(p_minutes, round(craft_timer_elapsed(v_t.banked_seconds, v_t.adjust_seconds, v_t.running_since, v_now) / 60.0)::int);
-    v_start := v_t.sitting_started_at;
     v_end := CASE WHEN v_t.running_since IS NOT NULL THEN v_now ELSE COALESCE(v_t.paused_at, v_now) END;
+    v_start := v_t.sitting_started_at - make_interval(secs => GREATEST(0, v_t.adjust_seconds));
     IF v_end <= v_start THEN v_end := v_start + interval '1 minute'; END IF;
-    v_from := COALESCE(p_from_row, v_t.start_row - 1);
-    v_from_quarter := CASE WHEN p_from_row IS NULL THEN v_t.start_quarter ELSE 0 END;
+    IF v_cross THEN
+      SELECT * INTO v_tpart FROM craft_parts WHERE id = v_t.part_id AND user_id = p_user_id AND project_id = v_part.project_id;
+      v_cross := FOUND;
+    END IF;
+    IF v_cross THEN
+      -- The timer's part: its rows from the start row, ticked, in no sitting.
+      SELECT COALESCE(array_agg(i.id ORDER BY i.craft_row), '{}') INTO v_other FROM task_checklist_items i
+        WHERE i.craft_part_id = v_tpart.id AND i.user_id = p_user_id AND i.is_done AND i.craft_row >= v_t.start_row
+          AND NOT EXISTS (SELECT 1 FROM work_session_items w WHERE w.checklist_item_id = i.id);
+      -- The parts between it and this one: rows ticked since the sitting started, in no sitting.
+      v_other := v_other || COALESCE((SELECT array_agg(i.id ORDER BY cp.sort_order, cp.id, i.craft_row)
+        FROM task_checklist_items i JOIN craft_parts cp ON cp.id = i.craft_part_id
+        WHERE cp.project_id = v_part.project_id AND cp.user_id = p_user_id AND i.user_id = p_user_id AND i.is_done
+          AND (cp.sort_order, cp.id) > (v_tpart.sort_order, v_tpart.id) AND (cp.sort_order, cp.id) < (v_part.sort_order, v_part.id)
+          AND i.completed_at >= v_t.sitting_started_at
+          AND NOT EXISTS (SELECT 1 FROM work_session_items w WHERE w.checklist_item_id = i.id)), '{}');
+      SELECT COALESCE(jsonb_agg(jsonb_build_object('part_id', g.part_id, 'rows', g.rows) ORDER BY g.sort_order, g.part_id), '[]'::jsonb)
+        INTO v_other_rows FROM (
+          SELECT cp.id AS part_id, cp.sort_order, jsonb_agg(i.craft_row ORDER BY i.craft_row) AS rows
+          FROM task_checklist_items i JOIN craft_parts cp ON cp.id = i.craft_part_id
+          WHERE i.id = ANY (v_other) GROUP BY cp.id, cp.sort_order) g;
+      -- This part: from the row before its first row ticked since the sitting started.
+      SELECT min(i.craft_row) INTO v_first_new FROM task_checklist_items i
+        WHERE i.craft_part_id = p_part_id AND i.user_id = p_user_id AND i.is_done AND i.completed_at >= v_t.sitting_started_at
+          AND NOT EXISTS (SELECT 1 FROM work_session_items w WHERE w.checklist_item_id = i.id);
+      v_from := COALESCE(p_from_row, GREATEST(0, LEAST(p_to_row, v_cur - 1, COALESCE(v_first_new, v_cur) - 1)));
+      v_from_quarter := 0;
+    ELSE
+      v_from := COALESCE(p_from_row, GREATEST(0, LEAST(v_t.start_row - 1, p_to_row)));
+      v_from_quarter := CASE WHEN p_from_row IS NULL AND v_t.start_row - 1 <= p_to_row THEN v_t.start_quarter ELSE 0 END;
+    END IF;
   ELSE
     IF p_minutes IS NULL THEN
       RAISE EXCEPTION 'minutes are required without the timer' USING ERRCODE = '22023';
@@ -517,9 +610,14 @@ BEGIN
   IF v_minutes > 1440 THEN
     RAISE EXCEPTION 'A sitting is at most 1440 minutes (24 hours); type the minutes you worked' USING ERRCODE = '22023';
   END IF;
-  -- Minutes over end − start + 1 (time added for a late start): the start moves back.
-  IF v_start IS NOT NULL AND v_end IS NOT NULL AND v_minutes > ceil(extract(epoch FROM v_end - v_start) / 60) + 1 THEN
-    v_start := v_end - make_interval(mins => v_minutes);
+  -- Typed minutes vs start–end: the project page's rule (F0). Less is breaks taken off; more
+  -- than start–end + 1 can't be right. The start never moves.
+  IF p_minutes IS NOT NULL AND v_start IS NOT NULL AND v_end IS NOT NULL THEN
+    v_span := extract(epoch FROM v_end - v_start) / 60.0;
+    IF p_minutes - v_span > 1 THEN
+      RAISE EXCEPTION 'minutes (%) are more than start–end (% min); minutes can be less (breaks taken off) but not more', p_minutes, round(v_span)
+        USING ERRCODE = '22023';
+    END IF;
   END IF;
   IF v_end IS NOT NULL AND v_end > v_now + interval '5 minutes' THEN
     RAISE EXCEPTION 'A sitting can''t end in the future' USING ERRCODE = '22023';
@@ -539,11 +637,12 @@ BEGIN
   END IF;
 
   -- Rows finished in this sitting; linked unless another sitting already has them.
-  SELECT COALESCE(array_agg(i.id ORDER BY i.craft_row), '{}'), COALESCE(array_agg(DISTINCT i.task_id), '{}')
-    INTO v_links, v_tasks
+  SELECT COALESCE(array_agg(i.id ORDER BY i.craft_row), '{}') INTO v_links
     FROM task_checklist_items i
    WHERE i.craft_part_id = p_part_id AND i.user_id = p_user_id AND i.craft_row > v_from AND i.craft_row <= p_to_row
      AND NOT EXISTS (SELECT 1 FROM work_session_items w WHERE w.checklist_item_id = i.id);
+  v_links := v_other || v_links;
+  SELECT COALESCE(array_agg(DISTINCT i.task_id), '{}') INTO v_tasks FROM task_checklist_items i WHERE i.id = ANY (v_links);
   IF cardinality(v_tasks) = 1 THEN
     v_task := v_tasks[1];
   ELSIF cardinality(v_tasks) = 0 THEN
@@ -568,6 +667,14 @@ BEGIN
     RETURNING craft_row
   ) SELECT COALESCE(array_agg(craft_row ORDER BY craft_row), '{}') INTO v_unticked FROM u;
 
+  -- Every linked row: a row of one of this project's parts, the caller's, ticked.
+  IF EXISTS (SELECT 1 FROM unnest(v_links) AS x(id)
+             WHERE NOT EXISTS (SELECT 1 FROM task_checklist_items i JOIN craft_parts cp ON cp.id = i.craft_part_id
+                               WHERE i.id = x.id AND i.user_id = p_user_id AND i.is_done
+                                 AND cp.user_id = p_user_id AND cp.project_id = v_part.project_id)) THEN
+    RAISE EXCEPTION 'a linked row is not a ticked row of this project' USING ERRCODE = '23503';
+  END IF;
+
   INSERT INTO craft_sitting_details (session_id, user_id, part_id, from_row, from_quarter, to_row, to_quarter, adjust_minutes)
   VALUES (v_session, p_user_id, p_part_id, v_from, v_from_quarter, p_to_row, v_quarter,
     CASE WHEN v_raw_minutes IS NULL THEN 0 ELSE v_minutes - v_raw_minutes END);
@@ -583,15 +690,17 @@ BEGIN
 
   RETURN jsonb_build_object('status', 'ok', 'session_id', v_session, 'part_id', p_part_id, 'project_id', v_part.project_id,
     'session_date', v_date, 'minutes', v_minutes, 'started_at', v_start, 'ended_at', v_end, 'task_id', v_task,
-    'rows_linked', cardinality(v_links), 'ticked', to_jsonb(v_ticked), 'unticked', to_jsonb(v_unticked),
+    'rows_linked', cardinality(v_links), 'from_row', v_from, 'other_rows', v_other_rows,
+    'ticked', to_jsonb(v_ticked), 'unticked', to_jsonb(v_unticked),
     'previous_row', v_cur, 'current_row', craft_current_row(p_user_id, p_part_id, v_part.total_rows));
 END;
 $$;
 
 -- Change total rows/rounds (the scarf's tape-measure ending). More: "Row N" / "Rnd N" /
 -- "Round N" items (the word of the part's last row item; else the part's row word) are
--- added at the end of that row's task, with the part's stitch count as unit_count and the
--- last row's work type; the segment ending at the old total is extended. Fewer: only
+-- added at the end of that row's task, with the part's stitch count as unit_count (a part
+-- with no stitch count, whose count changes: the last row's unit_count) and the last row's
+-- work type; the segment ending at the old total is extended. Fewer: only
 -- trailing rows that are unticked and in no sitting are removed (else { status:
 -- 'refused', reason: 'ticked' | 'in_sitting', rows }); segments past the new total are
 -- removed and the one across it is cut. Guarded by the total the screen showed.
@@ -626,7 +735,7 @@ BEGIN
   END IF;
 
   IF p_total > v_part.total_rows THEN
-    SELECT i.id, i.task_id, i.text, i.work_type, i.craft_row INTO v_last FROM task_checklist_items i
+    SELECT i.id, i.task_id, i.text, i.work_type, i.unit_count, i.craft_row INTO v_last FROM task_checklist_items i
       WHERE i.craft_part_id = p_part_id AND i.user_id = p_user_id ORDER BY i.craft_row DESC LIMIT 1;
     IF NOT FOUND THEN
       RETURN jsonb_build_object('status', 'refused', 'reason', 'no_rows', 'part_id', p_part_id, 'total', v_part.total_rows);
@@ -634,7 +743,7 @@ BEGIN
     v_word := COALESCE((regexp_match(v_last.text, '^(Row|Rnd|Round)[ \t]+[0-9]'))[1], CASE WHEN v_part.row_word = 'round' THEN 'Round' ELSE 'Row' END);
     SELECT COALESCE(max(sort_order), 0) INTO v_sort FROM task_checklist_items WHERE task_id = v_last.task_id AND user_id = p_user_id;
     INSERT INTO task_checklist_items (user_id, task_id, text, is_done, sort_order, unit_count, work_type, craft_part_id, craft_row)
-    SELECT p_user_id, v_last.task_id, v_word || ' ' || n, false, v_sort + (n - v_part.total_rows), v_part.stitch_count, v_last.work_type, p_part_id, n
+    SELECT p_user_id, v_last.task_id, v_word || ' ' || n, false, v_sort + (n - v_part.total_rows), COALESCE(v_part.stitch_count, v_last.unit_count), v_last.work_type, p_part_id, n
       FROM generate_series(v_part.total_rows + 1, p_total) AS n;
     GET DIAGNOSTICS v_added = ROW_COUNT;
     UPDATE craft_segments SET to_row = p_total
