@@ -8,10 +8,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Json } from "@/types/supabase.generated";
 import { chunks, pagedSelect } from "@/lib/supabase/batch";
 import {
-  CRAFT_SETUP_CHANGED, craftSetupPayload, parseCreateBody, planCraftSetup,
+  CRAFT_ROW_ITEM_MATCH, CRAFT_SETUP_CHANGED, canonicalUnitText, craftSetupPayload, parseCreateBody, planCraftSetup,
   type CraftSetupPlan, type SetupSnapshot,
 } from "@/lib/craft/setup";
 import { craftSetupFingerprint } from "@/lib/craft/setup-fingerprint";
+import { removeBlockersText } from "@/lib/craft";
 
 type Client = SupabaseClient<Database>;
 
@@ -39,9 +40,11 @@ export async function loadSetupSnapshot(client: Client, userId: string, projectI
     pagedSelect<SetupSnapshot["tasks"][number]>((from, to) => client.from("tasks").select("id, section_id, title, is_sample, created_at")
       .eq("user_id", userId).eq("project_id", projectId).order("id").range(from, to)),
   ]);
+  // unit_count as the database's numeric text, never through a JavaScript number (072 hashes trim_scale(unit_count)::text).
   const items = (await Promise.all(chunks(tasks.map((task) => task.id)).map((ids) => pagedSelect<SetupSnapshot["items"][number]>((from, to) => client
-    .from("task_checklist_items").select("id, task_id, text, is_done, sort_order, unit_count, craft_part_id")
-    .eq("user_id", userId).in("task_id", ids).order("id").range(from, to))))).flat();
+    .from("task_checklist_items").select("id, task_id, text, is_done, sort_order, unit_count::text, craft_part_id")
+    .eq("user_id", userId).in("task_id", ids).order("id").range(from, to))))).flat()
+    .map((item) => ({ ...item, unit_count: canonicalUnitText(item.unit_count === null || item.unit_count === undefined ? null : String(item.unit_count)) }));
   return { project: projectResult.data, on_craft_screen: craftResult.data !== null, sections, tasks, items };
 }
 
@@ -74,6 +77,8 @@ export async function createCraftSetup(client: Client, userId: string, projectId
     if (error.code === "23505") throw new CraftSetupRefusal(409, "This project is already on the craft screen.", "exists");
     if (error.code === "P0002") throw new CraftSetupRefusal(409, CRAFT_SETUP_CHANGED, "changed");
     if (error.code === "22023") throw new CraftSetupRefusal(400, "The setup plan was not accepted. Open the preview again.", "invalid");
+    // A deadlock or lock wait the database gave up on: nothing was written; the preview is the way back.
+    if (error.code === "40P01" || error.code === "55P03") throw new CraftSetupRefusal(409, CRAFT_SETUP_CHANGED, "changed");
     throw error;
   }
   return data as { project_id: string; parts: number; segments: number; rows_linked: number; active_part_id: string | null };
@@ -86,6 +91,11 @@ export async function removeCraftProject(client: Client, userId: string, project
   const { data, error } = await client.rpc("craft_remove_project", { p_user_id: userId, p_project_id: projectId });
   if (error) {
     if (error.code === "P0002") throw new CraftSetupRefusal(409, "This project is no longer on the craft screen.", "gone");
+    // 072 refuses when the project has things Set up can't make again (links, instructions, …): nothing changed.
+    if (error.code === "MC72R") {
+      const keys = String((error as { details?: string | null }).details ?? "").split(",").filter(Boolean);
+      throw new CraftSetupRefusal(409, `This project can’t be removed from the craft screen: it has ${removeBlockersText(keys)} that Set up can’t make again.`, "keeps");
+    }
     throw error;
   }
   return data as { project_id: string; items_unlinked: number; parts_removed: number; segments_removed: number };
@@ -97,7 +107,7 @@ export async function projectHasRowItems(client: Client, userId: string, project
     .eq("user_id", userId).eq("project_id", projectId).eq("is_sample", false).order("id").range(from, to));
   for (const ids of chunks(tasks.map((task) => task.id))) {
     const { data, error } = await client.from("task_checklist_items").select("id")
-      .eq("user_id", userId).in("task_id", ids).filter("text", "match", "^(Row|Rnd|Round)[[:space:]]+[0-9]").limit(1);
+      .eq("user_id", userId).in("task_id", ids).filter("text", "match", CRAFT_ROW_ITEM_MATCH).limit(1);
     if (error) throw error;
     if (data?.length) return true;
   }

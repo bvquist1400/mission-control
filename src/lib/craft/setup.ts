@@ -15,7 +15,8 @@ export interface SetupSnapshot {
   on_craft_screen: boolean;
   sections: { id: string; sort_order: number; created_at: string | null }[];
   tasks: { id: string; section_id: string | null; title: string; is_sample: boolean; created_at: string }[];
-  items: { id: string; task_id: string; text: string; is_done: boolean; sort_order: number; unit_count: number | null; craft_part_id: string | null }[];
+  /** unit_count is the database's numeric text (read as unit_count::text), canonical as canonicalUnitText() makes it. */
+  items: { id: string; task_id: string; text: string; is_done: boolean; sort_order: number; unit_count: string | null; craft_part_id: string | null }[];
 }
 
 export interface PlannedRow { item_id: string; row: number; is_done: boolean; text: string }
@@ -38,20 +39,51 @@ export interface PlannedPart {
   gap_notes: string[];
 }
 export interface PlainItem { id: string; task_id: string; task_title: string; text: string; is_done: boolean; swatch: boolean }
+/** A plain step that looks like a numbered row but doesn't match the rule (" Rnd 16", "rnd 31", "Rnd16"). */
+export interface NearMiss { id: string; task_id: string; task_title: string; text: string }
 export interface CraftSetupPlan {
   project: { id: string; name: string };
   ok: boolean;
   stops: string[];
   parts: PlannedPart[];
   plain_items: PlainItem[];
+  /** Listed on the preview under "Not counted as rounds/rows" so they can be fixed before Create; never a STOP. */
+  near_misses: NearMiss[];
   /** Index into parts of the first part with an unticked row (null when all are ticked or there are none). */
   active_part_index: number | null;
   default_craft: CraftKind;
 }
 
-const ROW_LABEL = /^(Row|Rnd|Round)\s+(\d+)\b/;
+/*
+ * The row rule, shared word for word with migration 072 (craft_setup_plan) so the preview and the
+ * database never disagree (FR1, F3): "Row", "Rnd" or "Round" as written, one or more spaces or tabs,
+ * ASCII digits, then a character that is not [0-9A-Za-z_] (or the end). NBSP, U+FEFF and other
+ * separators are not a row (they show up as near-misses instead).
+ */
+const ROW_LABEL = /^(Row|Rnd|Round)[ \t]+([0-9]+)(?![0-9A-Za-z_])/;
+/** JavaScript's \s, written out so 072 can use the same class (PostgreSQL's \s differs by locale). */
+export const CRAFT_WHITESPACE = "\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff";
 // A number followed by a dash, "to", "and", a comma or a decimal is a range or a fraction: never a single row.
-const RANGE_AFTER = /^(?:\s*(?:[-‐‑‒–—―−~/&,+]|to\b|through\b|thru\b|and\b)\s*\d|\.\d)/i;
+const RANGE_AFTER = new RegExp(`^(?:[${CRAFT_WHITESPACE}]*(?:[-‐‑‒–—―−~/&,+]|(?:to|through|thru|and)(?![0-9A-Za-z_]))[${CRAFT_WHITESPACE}]*[0-9]|\\.[0-9])`, "i");
+/** The project page's "Set up craft screen" check (a PostgREST `match`, PostgreSQL regex): the same rule. */
+export const CRAFT_ROW_ITEM_MATCH = "^(Row|Rnd|Round)[ \\t]+[0-9]+([^0-9A-Za-z_]|$)";
+// Looks numbered once leading blanks and invisible characters are dropped, in any case, with up to three
+// non-alphanumeric characters (or none) before the number: listed, never counted.
+const NEAR_MISS = /^(?:row|rnd|round)s?[^0-9A-Za-z]{0,3}[0-9]/i;
+const LEADING_BLANKS = new RegExp(`^[${CRAFT_WHITESPACE}\\u200b-\\u200d\\u2060]+`);
+
+/** unit_count as PostgreSQL's trim_scale(numeric)::text: "36.0" → "36", "36.500" → "36.5"; never exponent form. */
+export function canonicalUnitText(text: string | null): string | null {
+  if (text === null) return null;
+  const value = text.trim();
+  return /^-?[0-9]+\.[0-9]*$/.test(value) ? value.replace(/0+$/, "").replace(/\.$/, "") : value;
+}
+/** A stitch count is a whole number the integer column can hold. */
+function stitchCountOf(text: string | null | undefined): number | null {
+  if (text === null || text === undefined || !/^[1-9][0-9]{0,9}$/.test(text)) return null;
+  const n = Number(text);
+  return n <= 2147483647 ? n : null;
+}
 
 export type RowParse = { kind: "row"; word: RowWord; label: string; row: number } | { kind: "plain" } | { kind: "bad"; reason: "range" | "zero" | "too_big" };
 
@@ -143,9 +175,10 @@ export function planCraftSetup(snapshot: SetupSnapshot): CraftSetupPlan {
   }
   if (snapshot.on_craft_screen) stop("This project is already on the craft screen. Use Remove from craft screen there first if you want to set it up again.");
 
-  type Building = PlannedPart & { section_id: string | null; stitches: (number | null)[] };
+  type Building = PlannedPart & { section_id: string | null; stitches: (string | null)[] };
   const parts: Building[] = [];
   const plain_items: PlainItem[] = [];
+  const near_misses: NearMiss[] = [];
   const linked = snapshot.items.filter((item) => item.craft_part_id !== null);
   if (linked.length) {
     const first = linked[0], task = snapshot.tasks.find((t) => t.id === first.task_id);
@@ -166,6 +199,9 @@ export function planCraftSetup(snapshot: SetupSnapshot): CraftSetupPlan {
             : `${quote(item.text)} on ${quote(task.title)} has a row number that is too big.`);
       }
       plain_items.push({ id: item.id, task_id: task.id, task_title: task.title, text: item.text, is_done: item.is_done, swatch: task.is_sample });
+      if (parsed.kind === "plain" && !task.is_sample && NEAR_MISS.test(item.text.replace(LEADING_BLANKS, ""))) {
+        near_misses.push({ id: item.id, task_id: task.id, task_title: task.title, text: item.text });
+      }
     }
     if (!rowItems.length) continue;
     const words = new Set(rowItems.map((entry) => entry.word));
@@ -194,7 +230,7 @@ export function planCraftSetup(snapshot: SetupSnapshot): CraftSetupPlan {
     part.total_rows = Math.max(part.total_rows, highest);
     for (const entry of rowItems) {
       part.rows.push({ item_id: entry.item.id, row: entry.row, is_done: entry.item.is_done, text: entry.item.text });
-      part.stitches.push(entry.item.unit_count);
+      part.stitches.push(canonicalUnitText(entry.item.unit_count));
     }
   }
 
@@ -208,7 +244,7 @@ export function planCraftSetup(snapshot: SetupSnapshot): CraftSetupPlan {
     part.done_count = part.rows.filter((row) => row.is_done).length;
     part.current_row = part.rows.find((row) => !row.is_done)?.row ?? null;
     const first = stitches[0];
-    part.stitch_count = first !== null && first !== undefined && Number.isInteger(first) && first > 0 && stitches.every((count) => count === first) ? first : null;
+    part.stitch_count = stitches.every((count) => count === first) ? stitchCountOf(first) : null;
     part.gaps = part.total_rows > CRAFT_SETUP_MAX_ROWS ? [] : gapsOf(part.rows.map((row) => row.row), part.total_rows);
     part.gap_notes = part.gaps.map((gap) => gapNote(part.row_word, gap));
     return part;
@@ -220,6 +256,7 @@ export function planCraftSetup(snapshot: SetupSnapshot): CraftSetupPlan {
     stops,
     parts: finished,
     plain_items,
+    near_misses,
     active_part_index: active < 0 ? null : active,
     default_craft: defaultCraftKind(snapshot.project.tags),
   };
