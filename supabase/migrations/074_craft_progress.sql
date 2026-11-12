@@ -1,11 +1,13 @@
 -- Craft S3: rows in progress and "Ripped back" (frogs), plus the S2 review follow-ups F1–F3.
 --
--- Additive: one new column, one new table, four new functions, five functions replaced with the
+-- Additive: two new columns, one new table, four new functions, five functions replaced with the
 -- same signatures (CREATE OR REPLACE keeps their grants).
 --  * work_session_items.in_progress (new, NOT NULL DEFAULT false): a link that means "worked on
 --    in this sitting, not finished": the row is not ticked by it and adds no units; the pace engine
 --    gives it the sitting's minutes (its share) with 0 units. A row is never linked as in progress
 --    and finished in the same sitting (the primary key is (session_id, checklist_item_id)).
+--  * craft_timers.last_done_seconds (new, FR1, nullable): the timer's timed seconds at the sitting's last
+--    row ticked by craft_rows, so "Partway through" counts only timed time after the last Row done.
 --  * craft_frogs (new): "Ripped back" history, one row per rip-back: the rows, a note and the
 --    sittings this rip-back left out of speed (session_ids). Owner RLS and the four rights, like the
 --    other craft tables after 072; 071's ownership trigger checks the part.
@@ -18,6 +20,8 @@
 --  * craft_rows (073, replaced): mode 'undo_one' (F2): the Row done toast's Undo, server-side: it
 --    unticks exactly p_to_row and refuses with 'stale' when any row after it, below the current row,
 --    is ticked (a direct call can no longer untick 59–63 with the toast's body).
+--    FR1: Row done (and Fix count ticking forward) stores the timer's timed seconds in
+--    craft_timers.last_done_seconds when the timer is on this project (no version bump).
 --  * craft_save_sitting (new): Log sitting with p_in_progress ("Partway through row N"): the next
 --    row after "last full row" is linked in progress. Rows are linked unless another sitting already
 --    FINISHED them (an in-progress link elsewhere doesn't stop the finishing sitting linking it).
@@ -44,6 +48,11 @@ BEGIN;
 SET LOCAL lock_timeout = '10s';
 
 ALTER TABLE work_session_items ADD COLUMN in_progress BOOLEAN NOT NULL DEFAULT false;
+-- FR1: the timer's timed seconds (banked + the running stretch; time added or taken off with + / − left
+-- out) when craft_rows last ticked a row of the timer's project in this sitting (Row done, or Fix count
+-- ticking forward); NULL until then. The Partway default counts only timed time after the last Row done,
+-- which the timer can't tell apart from its pauses once it has been resumed. A new timer starts NULL.
+ALTER TABLE craft_timers ADD COLUMN last_done_seconds INTEGER CHECK (last_done_seconds >= 0);
 
 CREATE TABLE craft_frogs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -380,6 +389,12 @@ BEGIN
   END IF;
 
   v_new := craft_current_row(p_user_id, p_part_id, v_part.total_rows);
+  -- 074 FR1: a row ticked here (Row done, or Fix count forward) marks the timed seconds of the sitting's
+  -- last Row done on this project's timer, for the Partway default. Not a version change.
+  IF cardinality(v_ticked) > 0 THEN
+    UPDATE craft_timers SET last_done_seconds = craft_timer_elapsed(banked_seconds, 0, running_since, clock_timestamp())
+      WHERE user_id = p_user_id AND project_id = v_part.project_id;
+  END IF;
   -- FR1: Undo / Fix count below the timer's start row on this part lowers it, so the rows done
   -- again are in the sitting (Log sitting saves from the timer's start row).
   IF p_mode IN ('undo', 'undo_one', 'fix') THEN
@@ -436,8 +451,8 @@ $$;
 -- Every linked row must be one of this project's part rows, owned by the caller and ticked
 -- (else 23503, nothing saved). The session is written by 059's work_session_create
 -- (p_mark_done true, source 'manual', source_ref 'client:' || p_idempotency_key, as POST
--- /api/work-sessions does), task_id = the one task of the linked rows, else the current row's
--- band task when nothing is linked, else NULL (across two tasks). Then craft_sitting_details:
+-- /api/work-sessions does), task_id = the one task of the linked rows and the row in progress, else
+-- the current row's band task when nothing is linked, else NULL (across two tasks). Then craft_sitting_details:
 -- F1, the part the sitting ended on: this part when it saved rows here or is partway through a
 -- row here (from/to as above, in_progress_row), else the last other part it saved rows on (from =
 -- the row before its first, to = its last); then the part's quarter (p_to_quarter of the next
@@ -686,7 +701,10 @@ BEGIN
    WHERE i.craft_part_id = p_part_id AND i.user_id = p_user_id AND i.craft_row > v_from AND i.craft_row <= p_to_row
      AND NOT EXISTS (SELECT 1 FROM work_session_items w WHERE w.checklist_item_id = i.id AND NOT w.in_progress);
   v_links := v_other || v_mine;
-  SELECT COALESCE(array_agg(DISTINCT i.task_id), '{}') INTO v_tasks FROM task_checklist_items i WHERE i.id = ANY (v_links);
+  -- FR1: the row in progress counts too (worked on in this sitting): finish scarf row 100 (task A) and
+  -- stop partway into row 101 (task B) = two tasks = no task, 059's multi-task rule; only row 101 = task B.
+  SELECT COALESCE(array_agg(DISTINCT i.task_id), '{}') INTO v_tasks FROM task_checklist_items i
+    WHERE i.id = ANY (v_links || CASE WHEN v_ip_id IS NULL THEN '{}'::uuid[] ELSE ARRAY[v_ip_id] END);
   IF cardinality(v_tasks) = 1 THEN
     v_task := v_tasks[1];
   ELSIF cardinality(v_tasks) = 0 THEN
@@ -871,11 +889,14 @@ BEGIN
   IF p_expected_row <> v_cur THEN
     RETURN jsonb_build_object('status', 'stale', 'part_id', p_part_id, 'current_row', v_cur);
   END IF;
-  -- The screen's part: the stored active part while it is unfinished, else the first unfinished part.
+  -- The screen's part, the app's rule (pickActivePart in src/lib/craft.ts): the stored active part while
+  -- it is unfinished, else the first unfinished part by sort order, else the stored part (every part
+  -- finished), else none. FR1: COALESCE, because cp.id = NULL is NULL, not false, when nothing is stored.
   SELECT active_part_id INTO v_active FROM craft_projects WHERE project_id = v_part.project_id AND user_id = p_user_id;
   SELECT cp.id INTO v_screen FROM craft_parts cp WHERE cp.project_id = v_part.project_id AND cp.user_id = p_user_id
-    ORDER BY (cp.id = v_active AND craft_current_row(p_user_id, cp.id, cp.total_rows) <= cp.total_rows) DESC NULLS LAST,
-      (craft_current_row(p_user_id, cp.id, cp.total_rows) <= cp.total_rows) DESC, (cp.id = v_active) DESC NULLS LAST, cp.sort_order, cp.id
+      AND (COALESCE(cp.id = v_active, false) OR craft_current_row(p_user_id, cp.id, cp.total_rows) <= cp.total_rows)
+    ORDER BY COALESCE(cp.id = v_active AND craft_current_row(p_user_id, cp.id, cp.total_rows) <= cp.total_rows, false) DESC,
+      (craft_current_row(p_user_id, cp.id, cp.total_rows) <= cp.total_rows) DESC, COALESCE(cp.id = v_active, false) DESC, cp.sort_order, cp.id
     LIMIT 1;
   IF v_screen IS DISTINCT FROM p_part_id THEN
     RETURN jsonb_build_object('status', 'other_part', 'part_id', p_part_id, 'screen_part_id', v_screen, 'current_row', v_cur);

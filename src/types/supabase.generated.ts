@@ -880,6 +880,7 @@ export type Database = {
           adjust_seconds: number
           banked_seconds: number
           created_at: string
+          last_done_seconds: number | null
           part_id: string | null
           paused_at: string | null
           project_id: string
@@ -895,6 +896,7 @@ export type Database = {
           adjust_seconds?: number
           banked_seconds?: number
           created_at?: string
+          last_done_seconds?: number | null
           part_id?: string | null
           paused_at?: string | null
           project_id: string
@@ -910,6 +912,7 @@ export type Database = {
           adjust_seconds?: number
           banked_seconds?: number
           created_at?: string
+          last_done_seconds?: number | null
           part_id?: string | null
           paused_at?: string | null
           project_id?: string

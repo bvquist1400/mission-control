@@ -1,4 +1,5 @@
--- Removes only 074: craft_frogs (the "Ripped back" history), work_session_items.in_progress and the
+-- Removes only 074: craft_frogs (the "Ripped back" history), work_session_items.in_progress,
+-- craft_timers.last_done_seconds (FR1; a running timer keeps going, only the Partway hint goes) and the
 -- four new functions, and puts back 073's craft_rows, craft_log_sitting and craft_remove_blockers and
 -- 059's work_session_create and work_session_update exactly as they were written (CREATE OR REPLACE
 -- keeps their grants). Roll the app back first: the S3 screen calls craft_save_sitting and craft_frog.
@@ -541,5 +542,6 @@ $$;
 DROP TABLE craft_frogs;
 DELETE FROM work_session_items WHERE in_progress;
 ALTER TABLE work_session_items DROP COLUMN in_progress;
+ALTER TABLE craft_timers DROP COLUMN last_done_seconds;
 COMMIT;
 NOTIFY pgrst, 'reload schema';
