@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { CraftProjectOption, CraftView } from "@/lib/craft";
 import { buttonClasses } from "@/components/ui/Button";
 import { CraftProjectSwitcher } from "@/components/craft/CraftProjectSwitcher";
+import { CraftScreenMenu } from "@/components/craft/CraftScreenMenu";
 import "./craft.css";
 
 // projects comes from the loader (GET /api/craft); with fewer than two the title is plain text.
@@ -17,6 +18,7 @@ export function CraftScreen({ view }: { view: CraftView & { projects?: CraftProj
         <Link href={`/projects/${view.project.id}`} className={buttonClasses({ variant: "ghost", size: "icon" })} aria-label="Back to project">←</Link>
         <h1>Craft</h1>
         <span className="craft-readonly">Read only</span>
+        <CraftScreenMenu projectId={view.project.id} projectName={view.project.name} />
       </header>
       <div className="craft-columns">
         <section className="craft-front" aria-label="Current progress">
@@ -28,12 +30,12 @@ export function CraftScreen({ view }: { view: CraftView & { projects?: CraftProj
                 <>
                   <p className="craft-pf-lab">Part complete</p>
                   <p className="craft-finished">Finished</p>
-                  <p className="craft-pf-band"><strong>All rows ticked</strong> · {part.done_rows} of {part.total_rows} {part.row_word}s ticked</p>
+                  <p className="craft-pf-band"><strong>All rows ticked</strong> · {part.done_rows} of {part.row_count} {part.row_word}s ticked</p>
                 </>
               ) : (
                 <>
                   <div className="craft-pf-hd"><span className="craft-pf-lab">{part.quarter > 0 ? "Finish" : "Now"} · {part.row_word}</span><span className="craft-pf-num">{part.current_row}</span><span className="craft-pf-of">of {part.total_rows}{part.ridge !== null && <span className="craft-pf-ridge"> · ridge {part.ridge}</span>}</span></div>
-                  <p className="craft-pf-band"><strong>{view.current_segment?.name ?? "No band for this row"}</strong> · {part.done_rows} of {part.total_rows} {part.row_word}s ticked</p>
+                  <p className="craft-pf-band"><strong>{view.current_segment?.name ?? "No band for this row"}</strong> · {part.done_rows} of {part.row_count} {part.row_word}s ticked</p>
                   {part.quarter > 0 && <p className="craft-quarter">{["", "¼", "½", "¾"][part.quarter]} of this {part.row_word} done</p>}
                   <p className="craft-pf-now">{nowRow?.text ?? part.row_label}</p>
                   {upcoming.length > 0 && <ol className="craft-pf-then" aria-label={`Upcoming ${part.row_word}s`}>{upcoming.map((row) => <li key={row.id}><span>{part.row_word} {row.row}</span><p>{row.text}</p></li>)}</ol>}

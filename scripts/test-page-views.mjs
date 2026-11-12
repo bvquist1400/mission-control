@@ -51,6 +51,7 @@ const PAGES = {
   "/calendar/events/[id]": [`/calendar/events/${UUID}`, "/calendar/events/[id]"],
   "/craft": ["/craft", "/craft"],
   "/craft/[projectId]": [`/craft/${UUID}`, "/craft/[projectId]"],
+  "/craft/setup/[projectId]": [`/craft/setup/${UUID}`, "/craft/setup/[projectId]"],
   "/focus": ["/focus", "/focus"],
   "/implementations": ["/implementations", "/implementations"],
   "/implementations/[id]": [`/implementations/${UUID}`, "/implementations/[id]"],
@@ -107,6 +108,8 @@ for (const { route } of handlers) {
 for (const id of [UUID, UUID_UPPER, UUID_MIXED]) {
   eq(toRoutePattern(`/r/task/${id}`), "/r/task/[id]", `uuid case ${id}`);
   eq(toRoutePattern(`/craft/${id}`), "/craft/[projectId]");
+  eq(toRoutePattern(`/craft/setup/${id}`), "/craft/setup/[projectId]");
+  eq(toRoutePattern(`/craft/Setup/${id}?x=1`), "/craft/setup/[projectId]");
   eq(toRoutePattern(`/projects/${id}`), "/projects/[id]");
   eq(toRoutePattern(`/applications/${id}`), "/applications/[id]");
   eq(toRoutePattern(`/sprints/${id}`), "/sprints/[id]");

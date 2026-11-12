@@ -132,6 +132,11 @@ export function toRoutePattern(path: string): string | null {
     return `/calendar/events/${['[id]', ...collapseUnknown(segments.slice(3))].join('/')}`;
   }
 
+  // /craft/setup/<projectId> (S1C: the "Set up craft screen" preview)
+  if (root === 'craft' && segments.length >= 3 && segments[1].toLowerCase() === 'setup') {
+    return `/craft/setup/${['[projectId]', ...collapseUnknown(segments.slice(3))].join('/')}`;
+  }
+
   // /<root>/<id> pages (projects, applications, briefs, ...)
   const idPage = ID_PAGE_ROOTS[root];
   if (idPage && segments.length >= 2) {
