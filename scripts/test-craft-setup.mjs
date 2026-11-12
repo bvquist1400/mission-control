@@ -24,7 +24,6 @@ async function test(name, fn) {
   catch (e) { failed++; console.error(`FAIL - ${name}`, e); }
 }
 const { planCraftSetup, parseRowLabel, parseCreateBody, craftSetupPayload, orderSetupTasks } = setup;
-const clone = (x) => structuredClone(x);
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/craft/mittens.json", import.meta.url), "utf8"));
 const mittens = () => ({
   project: { id: fixture.project.id, name: fixture.project.name, tags: fixture.project.tags },
