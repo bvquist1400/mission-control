@@ -3840,6 +3840,27 @@ export type Database = {
         Args: { p_reason?: string; p_task_id: string; p_user_id: string }
         Returns: Json
       }
+      craft_remove_project: {
+        Args: { p_project_id: string; p_user_id: string }
+        Returns: Json
+      }
+      craft_setup_fingerprint: {
+        Args: { p_project_id: string; p_user_id: string }
+        Returns: string
+      }
+      craft_setup_lock: {
+        Args: { p_project_id: string; p_user_id: string }
+        Returns: boolean
+      }
+      craft_setup_project: {
+        Args: {
+          p_fingerprint: string
+          p_plan: Json
+          p_project_id: string
+          p_user_id: string
+        }
+        Returns: Json
+      }
       famcal_add_personal_task_comment: {
         Args: {
           p_content: string
