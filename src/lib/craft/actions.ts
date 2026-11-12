@@ -73,6 +73,9 @@ export function undoChoices(rows: RowState[], total: number, limit = UNDO_CHOICE
   return rows.filter((s) => s.done && s.row < current).map((s) => s.row).sort((a, b) => b - a).slice(0, limit);
 }
 
+/** The quarter picker's words: none, ¼, ½, ¾ (knitting only; S1's quarter chip uses the same marks). */
+export const quarterText = (quarter: number) => ["none", "¼", "½", "¾"][quarter] ?? "none";
+
 /** Garter: ridges done ↔ rows. "48 ridges done" = 96 rows done, so the current row is 97. */
 export const rowFromRidgesDone = (ridges: number) => ridges * 2 + 1;
 

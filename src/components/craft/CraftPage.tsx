@@ -17,5 +17,6 @@ export async function CraftPage({ projectId }: { projectId?: string }) {
     if (!(error instanceof CraftNotFoundError) && !isPostgrestNotFound(error as { code: string } | null)) throw error;
     return <main className="mx-auto max-w-xl px-4 py-8"><Link href="/projects" className={buttonClasses({ variant: "secondary", size: "sm" })}>← Back to projects</Link><h1 className="mt-8 text-2xl font-bold">No craft project yet</h1><p className="mt-3 text-muted-foreground">Craft projects will appear here once they are set up.</p></main>;
   }
-  return <CraftScreen view={view} />;
+  // Keyed by project: switching projects (a client navigation) starts the screen fresh from the server view.
+  return <CraftScreen key={view.project.id} view={view} />;
 }

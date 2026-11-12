@@ -3,6 +3,12 @@
 // the view model's timer / rows / band checks, the write routes' refusals before any database work, and the
 // S1C carry-overs that live in TypeScript (c: Remove's 40P01/55P03 → 409; d: one explicit section order). No network.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { registerHooks } from "node:module";
+import { fileURLToPath } from "node:url";
+import ts from "typescript";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { NextRequest } from "next/server";
 import { writeInternalAuthContext } from "../src/lib/supabase/internal-auth.ts";
 import { buildCraftView, bandCheckFor, removeBlockersText } from "../src/lib/craft.ts";
@@ -227,6 +233,105 @@ await test("Carry-over d: sections with one sort_order in the same whole second 
   ];
   const tasks = sections.map((s, i) => ({ id: `t${i}`, section_id: s.id, title: `T${i}`, is_sample: false, created_at: "2026-11-10T12:00:01Z" }));
   assert.deepEqual(orderSetupTasks({ sections, tasks }).map((t) => t.id), ["t2", "t1", "t0", "t3"], "null first, then 12:00:00.000, then .500 by id");
+});
+
+// ── The screen (server render: what shows before any script runs) ────────────
+registerHooks({ load(url, context, nextLoad) {
+  if (url.startsWith("file:") && url.endsWith(".css")) return { format: "module", source: "export {};", shortCircuit: true };
+  if (url.startsWith("file:") && url.endsWith(".tsx")) {
+    const fileName = fileURLToPath(url);
+    const result = ts.transpileModule(readFileSync(fileName, "utf8"), { fileName, compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } });
+    return { format: "module", source: result.outputText, shortCircuit: true };
+  }
+  return nextLoad(url, context);
+} });
+const { CraftScreen } = await import("../src/components/craft/CraftScreen.tsx");
+const screen = (data) => renderToStaticMarkup(createElement(CraftScreen, { view: buildCraftView(data) }));
+const timerCard = (html) => html.match(/<div class="craft-timer"[\s\S]*?(?=<div class="craft-actions">|<div class="craft-failure"|<section class="craft-today")/)?.[0] ?? "";
+await test("Screen: a running timer shows the server's elapsed time, the time it started, Pause and ± time; the Auto-Lock tip until the screen lock is held", () => {
+  const v = scarfInput(); v.timer = timer();
+  const html = screen(v), card = timerCard(html);
+  assert.match(card, /data-state="running"/);
+  assert.match(card, /aria-label="Timer 32:00">32:00</);
+  assert.match(card, /Timing since 12:20 PM/);
+  assert.match(card, />Pause<\/button>/);
+  assert.match(card, />± time<\/button>/);
+  assert.match(card, /Set Auto-Lock to Never while you craft/);
+  assert.doesNotMatch(html, /screen on</, "\"screen on\" only while the lock is held (never in the server render)");
+});
+await test("Screen: paused says when it stopped (\"stopped 20 min ago\") with Resume; a long run asks Was it left on?; idle says Not timing with Start", () => {
+  const v = scarfInput(); v.timer = timer({ running_since: null, paused_at: "2026-11-08T17:40:00Z" });
+  let card = timerCard(screen(v));
+  assert.match(card, /Paused · stopped 20 min ago/);
+  assert.match(card, />Resume<\/button>/);
+  v.timer = timer({ running_since: "2026-11-08T12:00:00Z", banked_seconds: 0, adjust_seconds: 0 });
+  card = timerCard(screen(v));
+  assert.match(card, /6 h on the timer\. Was it left on\?/);
+  assert.match(card, />Stopped earlier…<\/button>/);
+  card = timerCard(screen(scarfInput()));
+  assert.match(card, /data-state="idle"/);
+  assert.match(card, /Not timing/);
+  assert.match(card, />Start<\/button>/);
+});
+await test("Screen: another project's unsaved timer is named on the idle timer card", () => {
+  const v = blanketInput(); v.timer = timer({ project_id: "scarf-project" }); v.timer_project = { id: "scarf-project", name: "Mom's Scarf" };
+  assert.match(timerCard(screen(v)), /Mom&#x27;s Scarf&#x27;s timer is running \(32 min not saved\)/);
+});
+await test("Screen: Row done is the big button with the next existing row (gaps skipped); Undo rows…, Fix count… and Note under it; rounds say round", () => {
+  const gap = input([part("Cuff", 31, { row_word: "round" })], rows("Cuff", 31, 20).filter((r) => r.craft_row < 22 || r.craft_row > 28).map((r) => ({ ...r, text: `Rnd ${r.craft_row}` })));
+  const html = screen(gap);
+  assert.match(html, /<button type="button" class="craft-done"><span>✓ Round done<\/span><small>round 21 → 29<\/small><\/button>/);
+  assert.match(html, /<div class="craft-actions-more"><button type="button">Undo rounds…<\/button><button type="button">Fix count…<\/button><button type="button">Note<\/button><\/div>/);
+  const last = input([part("Body", 3)], rows("Body", 3, 2));
+  assert.match(screen(last), /<small>row 3 \(last\)<\/small>/);
+});
+await test("Screen: a pending band check is a button (\"Tree 2 is finished · Count is 195?\"); notes on the current row show in the pattern card and in Notes with Delete", () => {
+  const v = blanketInput();
+  v.band_tasks = v.segments.map((s) => ({ id: s.task_id, status: s.to_row <= 52 ? "Done" : "Planned", title: s.name }));
+  v.count_items = [{ id: "c4", task_id: "task-4", text: "Count the last row: 195 stitches", is_done: false, sort_order: 20 }];
+  v.items.forEach((row) => { if (row.craft_part_id === "Blanket" && row.craft_row <= 71) row.is_done = true; });
+  v.notes = [{ id: "n1", part_id: "Blanket", row: 72, text: "extra dc in the turning chain", session_id: null, created_at: "2026-11-08T17:00:00Z" }];
+  const html = screen(v);
+  assert.match(html, /<button type="button" class="craft-check"><strong>Tree 2 is finished<\/strong><span>Count is 195\? Confirm to close the band<\/span><\/button>/);
+  assert.match(html, /<ul class="craft-pf-notes" aria-label="Notes on row 72"><li>extra dc in the turning chain<\/li><\/ul>/);
+  assert.match(html, /<h2>Notes<\/h2>[\s\S]*Row 72 · 2026-11-08[\s\S]*aria-label="Delete note: extra dc in the turning chain">Delete<\/button>/);
+});
+await test("Screen copy: plain words, no vendor names; the header has no Read only label", () => {
+  const v = scarfInput(); v.timer = timer();
+  const html = screen(v);
+  assert.doesNotMatch(html, /Claude|Anthropic|OpenAI|ChatGPT|Read only/);
+  for (const file of ["../src/components/craft/CraftScreen.tsx", "../src/components/craft/CraftSheets.tsx", "../src/lib/craft/actions.ts", "../src/lib/craft/write-service.ts"]) {
+    assert.doesNotMatch(readFileSync(new URL(file, import.meta.url), "utf8"), /Claude|Anthropic|OpenAI|ChatGPT/, file);
+  }
+});
+await test("Screen wiring: every write goes to /api/craft/<id>/<row|timer|sittings|total|notes>; replies' view replaces the screen; re-read on show and every 30 s; Wake Lock re-asked on visibilitychange and resize", () => {
+  const src = readFileSync(new URL("../src/components/craft/CraftScreen.tsx", import.meta.url), "utf8");
+  assert.match(src, /fetch\(`\/api\/craft\/\$\{projectId\}\/\$\{kind\}`/);
+  assert.match(src, /if \(json && typeof json === "object" && "view" in json\) accept\(json\.view as Screen\)/);
+  assert.match(src, /setInterval\(\(\) => \{ void refresh\(\); \}, VIEW_REFRESH_MS\)/);
+  assert.match(src, /addEventListener\("visibilitychange", onVisibility\)/);
+  assert.match(src, /setTimeout\(\(\) => setToast\(\(t\) => \(t\?\.id === id \? null : t\)\), UNDO_TOAST_MS\)/);
+  const wake = readFileSync(new URL("../src/components/craft/useWakeLock.ts", import.meta.url), "utf8");
+  assert.match(wake, /document\.addEventListener\("visibilitychange", request\)/);
+  assert.match(wake, /window\.addEventListener\("resize", request\)/);
+  assert.match(wake, /request\("screen"\)/);
+  const sheets = readFileSync(new URL("../src/components/craft/CraftSheets.tsx", import.meta.url), "utf8");
+  for (const title of ["Log sitting", "Fix count", "Add a note", "Fix the time", "New day", "Another timer has time"]) assert.ok(sheets.includes(`title="${title}"`), title);
+  assert.match(sheets, /<form onSubmit=\{submit\}>/, "Enter saves");
+  assert.equal(A.VIEW_REFRESH_MS, 30_000);
+  assert.equal(A.UNDO_TOAST_MS, 5000);
+});
+await test("CSS (S2): tokens only, nothing under 12px, a sticky action bar above the home bar, 44px+ touch targets, focus shown on the hidden radios, reduced motion", () => {
+  const css = readFileSync(new URL("../src/components/craft/craft.css", import.meta.url), "utf8");
+  assert.doesNotMatch(css, /#[0-9a-f]{3,8}\b|rgba?\(|oklch\(/i);
+  assert.doesNotMatch(css, /font-size:\s*(\d|1[01])(\.\d+)?px/);
+  assert.match(css, /\.craft-actions \{ position: sticky; bottom: 0;[^}]*env\(safe-area-inset-bottom\)/);
+  assert.match(css, /\.craft-done \{[^}]*min-height: 64px;/);
+  assert.match(css, /\.craft-stepper button \{ min-height: 56px;/);
+  assert.match(css, /\.craft-stepper input \{[^}]*font-size: 30px;/);
+  assert.match(css, /label:has\(input:focus-visible\)/);
+  assert.match(css, /@media \(prefers-reduced-motion: no-preference\) \{ \.craft-toast/);
+  assert.match(css, /@media \(pointer: coarse\) \{ \.craft-actions-more button \{ min-height: 44px; \} \}/);
 });
 
 console.log(`\nCraft S2: ${passed} passed, ${failed} failed`);

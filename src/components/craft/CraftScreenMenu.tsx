@@ -25,8 +25,10 @@ export async function sendRemove(projectId: string, fetcher: typeof fetch = fetc
  * The craft screen's menu: a disclosure with "Remove from craft screen" behind a confirm sheet, offered only
  * when the server says nothing would be lost (canRemove); otherwise a plain line says why it isn't there.
  */
-export function CraftScreenMenu({ projectId, projectName, canRemove, partCount, blockers }: {
+export function CraftScreenMenu({ projectId, projectName, canRemove, partCount, blockers, actions }: {
   projectId: string; projectName: string; canRemove: boolean; partCount: number; blockers: string[] | null;
+  /** S2: the screen's own sheets (Undo rows…, Fix count…, Change total…, Add a note…), listed above Remove. */
+  actions?: { label: string; onSelect: () => void }[];
 }) {
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -56,6 +58,7 @@ export function CraftScreenMenu({ projectId, projectName, canRemove, partCount, 
     <div className="craft-menu" ref={wrap}>
       <Button ref={trigger} variant="ghost" size="icon" aria-label="Craft screen menu" aria-expanded={open} aria-controls={menuId} onClick={() => setOpen((v) => !v)}>⋯</Button>
       <div id={menuId} className="craft-menu-panel" hidden={!open}>
+        {actions?.map((action) => <button key={action.label} type="button" className="craft-menu-item" onClick={() => { setOpen(false); action.onSelect(); }}>{action.label}</button>)}
         {canRemove
           ? <button type="button" className="craft-menu-item" onClick={() => { setOpen(false); setConfirming(true); }}>Remove from craft screen</button>
           : <p className="craft-menu-note">{blockers?.length

@@ -1,24 +1,169 @@
+"use client";
 import Link from "next/link";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { CraftProjectOption, CraftView } from "@/lib/craft";
-import { buttonClasses } from "@/components/ui/Button";
+import { Button, buttonClasses } from "@/components/ui/Button";
 import { CraftProjectSwitcher } from "@/components/craft/CraftProjectSwitcher";
 import { CraftScreenMenu } from "@/components/craft/CraftScreenMenu";
+import {
+  BandCloseSheet, ChangeTotalSheet, FixCountSheet, LogSittingSheet, NewDaySheet, NoteSheet, TimerConflictSheet, TimerFixSheet, UndoRowsSheet,
+  type BandCheck, type OtherTimer, type Send, type SendReply,
+} from "@/components/craft/CraftSheets";
+import { useWakeLock } from "@/components/craft/useWakeLock";
+import {
+  UNDO_TOAST_MS, VIEW_REFRESH_MS, clockOffsetMs, clockText, minutesText, nextExistingRow, timerElapsedAt, writeFailureText,
+} from "@/lib/craft/actions";
 import "./craft.css";
 
-// projects comes from the loader (GET /api/craft); with fewer than two the title is plain text.
-export function CraftScreen({ view }: { view: CraftView & { projects?: CraftProjectOption[] } }) {
+type Screen = CraftView & { projects?: CraftProjectOption[] };
+type SheetName = "log" | "log-then-start" | "undo" | "fix" | "total" | "note" | "timer" | "new-day";
+interface Failure { text: string; retry: (() => void) | null }
+type Act = (label: string, kind: Parameters<Send>[0], body: Record<string, unknown>, onOk?: (reply: SendReply) => void, onNotOk?: (reply: SendReply) => boolean) => Promise<SendReply>;
+
+/**
+ * The craft screen. Pattern first (Brent 11/11): the current row's instructions lead; the compact timer and the big
+ * Row done sit under them. S2 (073): every button is one server write guarded by the count or timer version the
+ * screen showed, and each reply carries the fresh view, so the count on screen is always the server's. A failed
+ * write says "Not saved" with Retry; nothing is counted on the screen alone. Elapsed time is computed from the
+ * server's timestamps plus a clock offset, re-read when the page shows again and every 30 s while visible, so the
+ * timer survives a fold, a closed tab and a locked phone.
+ */
+export function CraftScreen({ view: initial }: { view: Screen }) {
+  const [view, setView] = useState<Screen>(initial);
+  const [offset, setOffset] = useState(0);
+  const [tick, setTick] = useState<number | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [failure, setFailure] = useState<Failure | null>(null);
+  const [toast, setToast] = useState<{ row: number; partId: string; word: string; current: number; id: number } | null>(null);
+  const [sheet, setSheet] = useState<SheetName | null>(null);
+  const [check, setCheck] = useState<BandCheck | null>(null);
+  const [conflict, setConflict] = useState<OtherTimer | null>(null);
+  const [leftOnOk, setLeftOnOk] = useState<string | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const projectId = view.project.id;
+
+  const accept = useCallback((next: Screen | undefined | null) => {
+    if (!next || next.project?.id !== projectId) return;
+    setView((previous) => ({ ...next, projects: next.projects ?? previous.projects }));
+    setOffset(clockOffsetMs(next.server_now, Date.now()));
+  }, [projectId]);
+
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/craft/${projectId}`, { cache: "no-store" });
+      if (res.ok) accept(await res.json());
+    } catch { /* the next refresh tries again; the screen keeps the last server view */ }
+  }, [projectId, accept]);
+
+  // Re-read on show, every 30 s while visible, and once on mount (exact clock offset).
+  useEffect(() => {
+    const first = setTimeout(() => { void refresh(); }, 0);
+    let interval: ReturnType<typeof setInterval> | null = null;
+    const start = () => { if (!interval) interval = setInterval(() => { void refresh(); }, VIEW_REFRESH_MS); };
+    const stop = () => { if (interval) { clearInterval(interval); interval = null; } };
+    const onVisibility = () => { if (document.visibilityState === "visible") { void refresh(); start(); } else stop(); };
+    if (document.visibilityState === "visible") start();
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pageshow", onVisibility);
+    return () => { clearTimeout(first); stop(); document.removeEventListener("visibilitychange", onVisibility); window.removeEventListener("pageshow", onVisibility); };
+  }, [refresh]);
+
+  // The clock ticks once a second while a timer runs (the digits only; nothing is counted here).
+  const running = Boolean(view.timer?.running);
+  useEffect(() => {
+    if (!running) return;
+    const id = setInterval(() => setTick(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [running]);
+
+  const send: Send = useCallback(async (kind, body, method = "POST") => {
+    let reply: SendReply;
+    try {
+      const res = await fetch(`/api/craft/${projectId}/${kind}`, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const json = await res.json().catch(() => null) as Record<string, unknown> | null;
+      if (json && typeof json === "object" && "view" in json) accept(json.view as Screen);
+      reply = { ok: res.ok, status: res.status, body: json, error: res.ok ? null : writeFailureText(res.status, json as { error?: string } | null) };
+    } catch {
+      reply = { ok: false, status: null, body: null, error: writeFailureText(null, null) };
+    }
+    return reply;
+  }, [projectId, accept]);
+
+  /** A write from the screen itself (not a sheet): a failure stays on screen with Retry. */
+  const actRef = useRef<Act | null>(null);
+  const act: Act = useCallback(async (label: string, kind: Parameters<Send>[0], body: Record<string, unknown>, onOk?: (reply: SendReply) => void, onNotOk?: (reply: SendReply) => boolean) => {
+    setBusy(label);
+    setFailure(null);
+    const reply = await send(kind, body);
+    setBusy(null);
+    if (reply.ok) { onOk?.(reply); return reply; }
+    if (onNotOk?.(reply)) return reply;
+    // A 409 means nothing was saved and the screen now shows the server's state: retrying the same body would be wrong.
+    setFailure({ text: reply.error ?? "Not saved, retry.", retry: reply.status === 409 || (reply.status ?? 0) === 400 ? null : () => { void actRef.current?.(label, kind, body, onOk, onNotOk); } });
+    return reply;
+  }, [send]);
+  useEffect(() => { actRef.current = act; }, [act]);
+
   const part = view.active_part;
   const allFinished = !part && view.parts.length > 0;
-  // The current row's own checklist text leads the screen; row_label stands in when that row has no item.
+  const word = part?.row_word ?? "row";
+  const Word = word === "round" ? "Round" : "Row";
   const nowRow = part && view.next_rows[0]?.row === part.current_row ? view.next_rows[0] : null;
   const upcoming = part ? view.next_rows.filter((row) => row.row > part.current_row).slice(0, 3) : [];
+  const nextRow = part && !part.finished ? nextExistingRow(view.row_states, part.current_row, part.total_rows) : null;
+  const timer = view.timer;
+  const nowMs = tick === null ? Date.parse(view.server_now) : tick + offset;
+  const elapsed = timer ? (tick === null ? timer.elapsed_seconds : timerElapsedAt(timer, nowMs)) : 0;
+  const screenOn = useWakeLock(running);
+  const rowNotes = part ? view.notes.filter((note) => note.part_id === part.id && note.row === part.current_row) : [];
+
+  function rowDone() {
+    if (!part || part.finished) return;
+    const row = part.current_row, partId = part.id;
+    void act("row", "row", { part_id: partId, mode: "done", expected_row: row }, (reply) => {
+      const result = reply.body?.result as { current_row: number; needs_check: BandCheck | null } | undefined;
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+      const id = Date.now();
+      setToast({ row, partId, word, current: result?.current_row ?? row + 1, id });
+      toastTimer.current = setTimeout(() => setToast((t) => (t?.id === id ? null : t)), UNDO_TOAST_MS);
+      if (result?.needs_check) setCheck(result.needs_check);
+    });
+  }
+  function undoToast() {
+    if (!toast) return;
+    const t = toast;
+    setToast(null);
+    void act("undo", "row", { part_id: t.partId, mode: "undo", expected_row: t.current, to_row: t.row });
+  }
+  const timerBody = (action: string, extra: Record<string, unknown> = {}) => ({ action, ...(part ? { part_id: part.id } : {}), ...(timer ? { expected_version: timer.version } : {}), ...extra });
+  const onTimerRefusal = (reply: SendReply) => {
+    const reason = reply.body?.reason;
+    const result = reply.body?.result as { other?: OtherTimer } | undefined;
+    if (reason === "conflict" && result?.other) { setConflict(result.other); return true; }
+    if (reason === "new_day") { setSheet("new-day"); return true; }
+    return false;
+  };
+  function timerButton() {
+    if (!timer) void act("timer", "timer", timerBody("start"), undefined, onTimerRefusal);
+    else void act("timer", "timer", timerBody(timer.running ? "pause" : "resume"), undefined, onTimerRefusal);
+  }
+
+  const timerState = !timer ? (view.other_timer ? `${view.other_timer.project_name}'s timer ${view.other_timer.running ? "is running" : "is paused"} (${minutesText(view.other_timer.elapsed_seconds / 60)} not saved)` : "Not timing")
+    : timer.running ? `Timing since ${new Date(timer.sitting_started_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" })}`
+    : `Paused${timer.paused_at ? ` · stopped ${minutesText(Math.max(0, (nowMs - Date.parse(timer.paused_at)) / 60000))} ago` : ""}`;
+  const leftOn = timer && timer.long_run && leftOnOk !== timer.sitting_started_at;
+
   return (
     <main className="craft-screen">
       <header className="craft-header">
         <Link href={`/projects/${view.project.id}`} className={buttonClasses({ variant: "ghost", size: "icon" })} aria-label="Back to project">←</Link>
         <h1>Craft</h1>
-        <span className="craft-readonly">Read only</span>
-        <CraftScreenMenu projectId={view.project.id} projectName={view.project.name} canRemove={view.can_remove} partCount={view.parts.length} blockers={view.remove_blockers} />
+        <span className="craft-awake" data-on={screenOn ? "true" : undefined}>{screenOn ? "screen on" : ""}</span>
+        <CraftScreenMenu projectId={view.project.id} projectName={view.project.name} canRemove={view.can_remove} partCount={view.parts.length} blockers={view.remove_blockers}
+          actions={part ? [
+            { label: `Undo ${word}s…`, onSelect: () => setSheet("undo") }, { label: "Fix count…", onSelect: () => setSheet("fix") },
+            { label: `Change total ${word}s…`, onSelect: () => setSheet("total") }, { label: "Add a note…", onSelect: () => setSheet("note") },
+          ] : undefined} />
       </header>
       <div className="craft-columns">
         <section className="craft-front" aria-label="Current progress">
@@ -38,12 +183,62 @@ export function CraftScreen({ view }: { view: CraftView & { projects?: CraftProj
                   <p className="craft-pf-band"><strong>{view.current_segment?.name ?? "No band for this row"}</strong> · {part.done_rows} of {part.row_count} {part.row_word}s ticked</p>
                   {part.quarter > 0 && <p className="craft-quarter">{["", "¼", "½", "¾"][part.quarter]} of this {part.row_word} done</p>}
                   <p className="craft-pf-now">{nowRow?.text ?? part.row_label}</p>
+                  {rowNotes.length > 0 && <ul className="craft-pf-notes" aria-label={`Notes on ${word} ${part.current_row}`}>{rowNotes.map((note) => <li key={note.id}>{note.text}</li>)}</ul>}
                   {upcoming.length > 0 && <ol className="craft-pf-then" aria-label={`Upcoming ${part.row_word}s`}>{upcoming.map((row) => <li key={row.id}><span>{part.row_word} {row.row}</span><p>{row.text}</p></li>)}</ol>}
                 </>
               )}
             </section>
           ) : <p className="craft-empty">{allFinished ? "Every part is finished. All rows are ticked." : "This project has no craft parts yet."}</p>}
-          <div className="craft-timer"><span aria-hidden="true">--:--</span><p>Timer arrives in the next update</p></div>
+          {view.pending_checks.length > 0 && part && (
+            <div className="craft-checks">{view.pending_checks.map((pending) => (
+              <button key={pending.segment_id} type="button" className="craft-check" onClick={() => setCheck(pending)}>
+                <strong>{pending.name} is finished</strong><span>{pending.count ? `Count is ${pending.count.toLocaleString("en-US")}? Confirm to close the band` : "Confirm the count to close the band"}</span>
+              </button>
+            ))}</div>
+          )}
+          <div className="craft-s2">
+            <div className="craft-timer" data-state={timer ? (timer.running ? "running" : "paused") : "idle"}>
+              <div className="craft-timer-main">
+                <span className="craft-timer-clock" role="timer" aria-label={`Timer ${clockText(elapsed)}`}>{clockText(elapsed)}</span>
+                <p className="craft-timer-state">{timer?.running && <span className="craft-dot" aria-hidden="true" />}{timerState}</p>
+              </div>
+              <div className="craft-timer-buttons">
+                {timer && <Button variant="secondary" size="md" onClick={() => setSheet("timer")} disabled={busy !== null}>± time</Button>}
+                <Button variant={timer?.running ? "secondary" : "primary"} size="lg" onClick={timerButton} disabled={busy !== null || !part} aria-busy={busy === "timer" || undefined}>
+                  {timer ? (timer.running ? "Pause" : "Resume") : "Start"}
+                </Button>
+              </div>
+              {leftOn && timer && (
+                <div className="craft-leftover" role="status">
+                  <p>{minutesText(elapsed / 60)} on the timer. Was it left on?</p>
+                  <Button variant="secondary" size="sm" onClick={() => setSheet("timer")}>Stopped earlier…</Button>
+                  <Button variant="ghost" size="sm" onClick={() => setLeftOnOk(timer.sitting_started_at)}>It&apos;s right</Button>
+                </div>
+              )}
+              {timer?.running && !screenOn && <p className="craft-tip">Set Auto-Lock to Never while you craft, so the screen stays on.</p>}
+            </div>
+            {failure && (
+              <div className="craft-failure" role="alert">
+                <p>{failure.text}</p>
+                {failure.retry && <Button variant="secondary" size="sm" onClick={failure.retry}>Retry</Button>}
+                <Button variant="ghost" size="sm" onClick={() => setFailure(null)} aria-label="Dismiss">×</Button>
+              </div>
+            )}
+            {part && (
+              <div className="craft-actions">
+                <Button variant="secondary" size="lg" className="craft-log" onClick={() => setSheet("log")} disabled={busy !== null}>Log sitting</Button>
+                <button type="button" className="craft-done" onClick={rowDone} disabled={busy !== null || part.finished} aria-busy={busy === "row" || undefined}>
+                  <span>✓ {Word} done</span>
+                  <small>{part.finished ? "all ticked" : `${word} ${part.current_row}${nextRow ? ` → ${nextRow}` : " (last)"}`}</small>
+                </button>
+                <div className="craft-actions-more">
+                  <button type="button" onClick={() => setSheet("undo")}>Undo {word}s…</button>
+                  <button type="button" onClick={() => setSheet("fix")}>Fix count…</button>
+                  <button type="button" onClick={() => setSheet("note")}>Note</button>
+                </div>
+              </div>
+            )}
+          </div>
           <section className="craft-today" aria-label="Today"><h3>Today</h3><p><strong>{view.today.rows}</strong> rows ticked <span>·</span> <strong>{view.today.minutes}</strong> min</p></section>
         </section>
         <aside className="craft-inside" aria-label="Project details">
@@ -53,8 +248,41 @@ export function CraftScreen({ view }: { view: CraftView & { projects?: CraftProj
           </section>
           <section><h2>Next rows</h2>{view.next_rows.length ? <ol className="craft-next">{view.next_rows.map((row) => <li key={row.id}>{row.text}</li>)}</ol> : <p>No unticked rows.</p>}</section>
           <section><h2>Recent sittings</h2>{view.recent_sittings.length ? <ol className="craft-sittings">{view.recent_sittings.map((sitting) => <li key={sitting.id}><div><time dateTime={sitting.date}>{sitting.date}</time><strong>{sitting.minutes} min</strong></div><p>{sitting.rows.length ? sitting.rows.map((row) => `${row.part_name}: ${row.row_word} ${row.row}`).join(" · ") : "No linked rows"}</p>{sitting.note && <p>{sitting.note}</p>}{sitting.excluded_from_stats && <p className="craft-meta">Excluded from pace stats</p>}</li>)}</ol> : <p>No sittings logged yet.</p>}</section>
+          {view.notes.length > 0 && <section><h2>Notes</h2><ul className="craft-notes">{view.notes.map((note) => <li key={note.id}><small>{note.row ? `${view.parts.find((p) => p.id === note.part_id)?.row_word === "round" ? "Round" : "Row"} ${note.row}` : "Project"} · {note.created_at.slice(0, 10)}</small><p>{note.text}</p>
+            <button type="button" aria-label={`Delete note: ${note.text.slice(0, 40)}`} onClick={() => { void act("note", "notes", { id: note.id }); }}>Delete</button></li>)}</ul></section>}
         </aside>
       </div>
+      {toast && (
+        <div className="craft-toast" role="status">
+          <span>{toast.word === "round" ? "Round" : "Row"} {toast.row} done</span>
+          <button type="button" onClick={undoToast}>Undo</button>
+        </div>
+      )}
+      {part && sheet === "log" && <LogSittingSheet open onClose={() => setSheet(null)} view={view} part={part} send={send} onSaved={() => setSheet(null)} />}
+      {part && sheet === "log-then-start" && <LogSittingSheet open thenStart onClose={() => setSheet(null)} view={view} part={part} send={send}
+        onSaved={() => { setSheet(null); void act("timer", "timer", { action: "start", part_id: part.id }, undefined, onTimerRefusal); }} />}
+      {part && sheet === "undo" && <UndoRowsSheet open onClose={() => setSheet(null)} view={view} part={part} send={send} />}
+      {part && sheet === "fix" && <FixCountSheet open onClose={() => setSheet(null)} view={view} part={part} send={send} />}
+      {part && sheet === "total" && <ChangeTotalSheet open onClose={() => setSheet(null)} view={view} part={part} send={send} />}
+      {sheet === "note" && <NoteSheet open onClose={() => setSheet(null)} part={part} send={send} />}
+      {sheet === "timer" && <TimerFixSheet open onClose={() => setSheet(null)} view={view} send={send} />}
+      {sheet === "new-day" && <NewDaySheet open onClose={() => setSheet(null)} view={view} onSaveFirst={() => setSheet("log-then-start")}
+        onKeepGoing={async () => {
+          const reply = await send("timer", timerBody("resume", { force: true }));
+          if (reply.ok) { setSheet(null); return null; }
+          return reply.error;
+        }} />}
+      {part && <BandCloseSheet key={check?.segment_id ?? "none"} check={check} onClose={() => setCheck(null)} part={part} send={send} />}
+      <TimerConflictSheet other={conflict} onClose={() => setConflict(null)} onDiscardAndStart={async () => {
+        if (!conflict) return null;
+        try {
+          const res = await fetch(`/api/craft/${conflict.project_id}/timer`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "discard", expected_version: conflict.version }) });
+          if (!res.ok) return writeFailureText(res.status, await res.json().catch(() => null));
+        } catch { return writeFailureText(null, null); }
+        setConflict(null);
+        await act("timer", "timer", { action: "start", ...(part ? { part_id: part.id } : {}) }, undefined, onTimerRefusal);
+        return null;
+      }} />
     </main>
   );
 }

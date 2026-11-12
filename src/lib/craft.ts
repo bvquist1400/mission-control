@@ -128,7 +128,8 @@ export function buildCraftView(input: CraftInput) {
     paused_at: (timerRow as { paused_at?: string | null }).paused_at ?? null,
     banked_seconds: timerRow.banked_seconds, adjust_seconds: timerRow.adjust_seconds, start_row: timerRow.start_row,
     start_quarter: timerRow.start_quarter, elapsed_seconds: elapsed, long_run: elapsed >= LONG_RUN_MINUTES * 60,
-    over_cap: elapsed > SITTING_MAX_MINUTES * 60, new_day: etDateOf(input.server_now) > etDateOf(timerRow.sitting_started_at),
+    over_cap: elapsed > SITTING_MAX_MINUTES * 60,
+    new_day: Boolean(timerRow.sitting_started_at) && etDateOf(input.server_now) > etDateOf(timerRow.sitting_started_at),
   } satisfies CraftTimerView : null;
   const timer = timerFacts && timerFacts.project_id === input.project.id ? timerFacts : null;
   const other_timer = timerFacts && timerFacts.project_id !== input.project.id ? {

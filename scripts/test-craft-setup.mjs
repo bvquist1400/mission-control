@@ -402,14 +402,21 @@ await test("FR1 view model (F1): can_remove comes from the server's remove_block
 });
 
 
-await test("Before/after: the blanket and scarf screens render byte for byte as at ca00c76, apart from the new header menu", () => {
+// S2 (073) changes exactly three places on these screens: the header's "Read only" label becomes the (empty until
+// held) "screen on" chip, and the timer placeholder becomes the timer card plus the action bar (Log sitting, Row
+// done, Undo/Fix/Note). Everything else must still render byte for byte as at ca00c76.
+const S1_TIMER = '<div class="craft-timer"><span aria-hidden="true">--:--</span><p>Timer arrives in the next update</p></div>';
+const S2_BLOCK = /<div class="craft-s2">[\s\S]*?(?=<section class="craft-today")/;
+await test("Before/after: the blanket and scarf screens render byte for byte as at ca00c76, apart from the header menu and S2's screen-on chip, timer card and action bar", () => {
   const pinned = JSON.parse(readFileSync(new URL("./fixtures/craft/screen-s1a.snapshot.json", import.meta.url), "utf8"));
   const now = pinnedInputs();
   assert.deepEqual(Object.keys(now), Object.keys(pinned));
   for (const [name, html] of Object.entries(pinned)) {
     const after = renderScreen(now[name]);
     assert.match(after, MENU, `${name}: menu`);
-    assert.equal(after.replace(MENU, ""), html, `${name} changed`);
+    assert.match(after, S2_BLOCK, `${name}: S2 controls`);
+    const s1 = after.replace(MENU, "").replace('<span class="craft-awake"></span>', '<span class="craft-readonly">Read only</span>').replace(S2_BLOCK, S1_TIMER);
+    assert.equal(s1, html, `${name} changed outside the S2 controls`);
   }
 });
 await test("SSR gaps: the craft screen says 21 of 24 rounds ticked, of 31, and lists 29–31 next", () => {
@@ -442,7 +449,7 @@ await test("FR1 Remove (F1): the menu offers Remove only when the server allows 
   assert.doesNotMatch(renderScreen(Object.assign(pinnedInputs().scarf, { remove_blockers: ["links", "instructions", "quarters", "ridges"] })), /Remove from craft screen<\/button>/);
   assert.match(renderScreen(mittensView(undefined, { remove_blockers: [] })), /<button type="button" class="craft-menu-item">Remove from craft screen<\/button>/);
   const source = readFileSync(new URL("../src/components/craft/CraftScreen.tsx", import.meta.url), "utf8");
-  assert.match(source, /<CraftScreenMenu projectId=\{view\.project\.id\} projectName=\{view\.project\.name\} canRemove=\{view\.can_remove\} partCount=\{view\.parts\.length\} blockers=\{view\.remove_blockers\} \/>/);
+  assert.match(source, /<CraftScreenMenu projectId=\{view\.project\.id\} projectName=\{view\.project\.name\} canRemove=\{view\.can_remove\} partCount=\{view\.parts\.length\} blockers=\{view\.remove_blockers\}/);
 });
 const renderSetup = (snap) => { const plan = planCraftSetup(snap); return renderToStaticMarkup(createElement(CraftSetupScreen, { projectId: snap.project.id, plan, fingerprint: craftSetupFingerprint(snap) })); };
 await test("SSR setup preview (mittens): 8 named parts as labelled inputs, facts, segments, plain steps, kind and Create", () => {
@@ -610,7 +617,7 @@ await test("POST Create: STOPs, bad bodies and every 072 refusal map to plain 4x
     if (reason) assert.equal((await res.json()).reason, reason);
   }
 });
-await test("DELETE Remove: 404 when not on the craft screen (PGRST116), one 072 call when it is, P0002 race is 409, errors 500", async () => {
+await test("DELETE Remove: 404 when not on the craft screen (PGRST116), one 072 call when it is, P0002 race is 409, 40P01 is 409 (S2 carry-over c), errors 500", async () => {
   const none = fakeDb(mittens());
   assert.equal((await craftDelete(req(none, "DELETE"), ctx())).status, 404);
   assert.equal(none.rpcCalls.length, 0);
@@ -621,7 +628,8 @@ await test("DELETE Remove: 404 when not on the craft screen (PGRST116), one 072 
   assert.equal((await res.json()).items_unlinked, 198);
   assert.ok(db.log.every((q) => q.filters.includes("eq user_id")));
   assert.equal((await craftDelete(req(fakeDb(mittens(), { craftRow: true, rpc: () => ({ data: null, error: { code: "P0002", message: "gone" } }) }), "DELETE"), ctx())).status, 409);
-  assert.equal((await quiet(() => craftDelete(req(fakeDb(mittens(), { craftRow: true, rpc: () => ({ data: null, error: { code: "40P01", message: "x" } }) }), "DELETE"), ctx()))).status, 500);
+  assert.equal((await craftDelete(req(fakeDb(mittens(), { craftRow: true, rpc: () => ({ data: null, error: { code: "40P01", message: "x" } }) }), "DELETE"), ctx())).status, 409);
+  assert.equal((await quiet(() => craftDelete(req(fakeDb(mittens(), { craftRow: true, rpc: () => ({ data: null, error: { code: "XX000", message: "x" } }) }), "DELETE"), ctx()))).status, 500);
   const keeps = await craftDelete(req(fakeDb(mittens(), { craftRow: true, rpc: () => ({ data: null, error: { code: "MC72R", message: "CRAFT_REMOVE_KEEPS", details: "links,notes" } }) }), "DELETE"), ctx());
   assert.equal(keeps.status, 409, "FR1: a project with things Set up can't remake is refused");
   assert.deepEqual(await keeps.json(), { error: "This project can’t be removed from the craft screen: it has links and notes that Set up can’t make again.", reason: "keeps" });

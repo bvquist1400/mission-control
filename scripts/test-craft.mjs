@@ -62,7 +62,8 @@ await test("ET day across spring and fall DST boundaries", () => { for (const [n
 await test("Today minutes include excluded sittings and use ET session_date", () => { const v = input(); v.sessions = [{ id: "old", session_date: "2026-11-07", created_at: "2026-11-08T04:59:00Z", minutes: 40, note: null, exclude_from_stats: false }, { id: "new", session_date: "2026-11-08", created_at: "2026-11-08T05:00:00Z", minutes: 25, note: "learning", exclude_from_stats: true }]; assert.equal(buildCraftView(v).today.minutes, 25); assert.equal(buildCraftView(v).recent_sittings[0].excluded_from_stats, true); });
 await test("Recent sittings: newest 10, linked row and note", () => { const v = structuredClone(scarf); v.sessions = Array.from({ length: 12 }, (_, i) => ({ id: `s${i}`, session_date: `2026-11-${String(i + 1).padStart(2, "0")}`, created_at: "2026-11-08T00:00:00Z", minutes: 10, note: `note ${i}`, exclude_from_stats: false })); v.session_items = [{ session_id: "s11", checklist_item_id: "Body-118" }]; const out = buildCraftView(v); assert.equal(out.recent_sittings.length, 10); assert.equal(out.recent_sittings[0].note, "note 11"); assert.equal(out.recent_sittings[0].rows[0].row, 118); });
 await test("Pure builder does not mutate input, server_now is echoed", () => { const before = JSON.stringify(scarf); assert.equal(buildCraftView(scarf).server_now, scarf.server_now); assert.equal(JSON.stringify(scarf), before); });
-await test("Stored timer does not expose a running timer in S1", () => { const v = structuredClone(scarf); v.timer = { running_since: "2026-11-08T17:00:00Z" }; assert.equal("timer" in buildCraftView(v), false); });
+// S2 changed this: the stored timer is the screen's timer now (it was hidden in S1).
+await test("S2: a stored timer on this project is the view's timer, at server_now", () => { const v = structuredClone(scarf); v.timer = { project_id: "project", part_id: "Body", sitting_started_at: "2026-11-08T17:00:00Z", running_since: "2026-11-08T17:00:00Z", paused_at: null, banked_seconds: 0, adjust_seconds: 0, start_row: 119, start_quarter: 0, version: 1 }; const out = buildCraftView(v); assert.equal(out.timer.running, true); assert.equal(out.timer.elapsed_seconds, 3600); });
 function errorClient(code) { return { from() { return { select() { return this; }, eq() { return this; }, single() { return Promise.resolve({ data: null, error: { code, message: "test failure" } }); } }; } }; }
 function request(db, path = "/api/craft/11111111-1111-4111-8111-111111111111") { const req = new NextRequest(`http://localhost${path}`); writeInternalAuthContext(req, { supabase: db, userId: "user", user: { id: "user" }, authSource: "session" }); return req; }
 await test("Real GET detail maps PGRST116 to 404 with no-store", async () => { const res = await detailGet(request(errorClient("PGRST116")), { params: Promise.resolve({ projectId: "11111111-1111-4111-8111-111111111111" }) }); assert.equal(res.status, 404); assert.equal(res.headers.get("cache-control"), "no-store"); });
@@ -92,12 +93,14 @@ registerHooks({ load(url, context, nextLoad) {
 const { CraftScreen } = await import("../src/components/craft/CraftScreen.tsx");
 const render = (data) => renderToStaticMarkup(createElement(CraftScreen, { view: buildCraftView(data) }));
 const withoutMenu = (html) => { const out = html.replace(/<div class="craft-menu">.*?<\/div><\/div>/, ""); assert.notEqual(out, html, "craft screen menu missing"); return out; };
-await test("SSR: read-only screen has row/ridge, timer placeholder, no write controls", () => {
+await test("SSR (S2): row/ridge, the timer card with Start, Log sitting and the big Row done (row 119 → 120); no fields on the screen itself", () => {
     const html = render(scarf);
     assert.match(html, /Row 119 · ridge 60/);
-    assert.match(html, /Timer arrives in the next update/);
-    // S1C: the header menu (Remove from craft screen) is the screen's only control; no row or timer writes.
-    assert.doesNotMatch(withoutMenu(html), /<button|<input|<textarea|<select|disabled=|Start timer|Log sitting/);
+    assert.match(html, /<span class="craft-timer-clock" role="timer" aria-label="Timer 0:00">0:00<\/span>/);
+    assert.match(html, />Start<\/button>/);
+    assert.match(html, />Log sitting<\/button>/);
+    assert.match(html, /<button type="button" class="craft-done"><span>✓ Row done<\/span><small>row 119 → 120<\/small><\/button>/);
+    assert.doesNotMatch(withoutMenu(html), /<input|<textarea|<select|Read only|Timer arrives/);
     assert.match(html, /aria-label="Back to project"/);
 });
 await test("SSR: blanket shows bands, next rows and separate border count", () => {
@@ -126,7 +129,7 @@ chartBlanket.items.forEach(row => { if (row.craft_part_id === "Blanket") row.tex
 await test("SSR pattern first: front order is title, part, pattern card, timer, Today", () => {
     const html = render(chartBlanket);
     const at = (needle) => { const i = html.indexOf(needle); assert.ok(i >= 0, `missing ${needle}`); return i; };
-    const order = [at("<h2>Sample</h2>"), at('class="craft-part"'), at('aria-label="Current row instructions"'), at("Timer arrives in the next update"), at('aria-label="Today"'), at('aria-label="Project details"')];
+    const order = [at("<h2>Sample</h2>"), at('class="craft-part"'), at('aria-label="Current row instructions"'), at('class="craft-timer"'), at('class="craft-done"'), at('aria-label="Today"'), at('aria-label="Project details"')];
     assert.deepEqual([...order].sort((a, b) => a - b), order);
 });
 await test("SSR pattern first: current row's own text is the card's big line, with NOW header and band", () => {
@@ -181,7 +184,8 @@ await test("SSR pattern first: finished active part shows Finished in the card, 
     assert.match(c, /<p class="craft-finished">Finished<\/p>/);
     assert.match(c, /All rows ticked<\/strong> · 519 of 519 rows ticked/);
     assert.doesNotMatch(c, /craft-pf-now|craft-pf-then|craft-pf-num/);
-    assert.ok(html.indexOf("craft-pf") < html.indexOf("Timer arrives in the next update"));
+    assert.ok(html.indexOf("craft-pf") < html.indexOf('class="craft-timer"'));
+    assert.match(html, /<button type="button" class="craft-done" disabled=""><span>✓ Row done<\/span><small>all ticked<\/small>/);
 });
 await test("SSR pattern first: no parts and all-finished have no card but keep the timer and Today", () => {
     const allDone = structuredClone(scarf);
@@ -189,8 +193,9 @@ await test("SSR pattern first: no parts and all-finished have no card but keep t
     for (const [data, text] of [[input(), "This project has no craft parts yet."], [allDone, "Every part is finished. All rows are ticked."]]) {
         const html = render(data);
         assert.doesNotMatch(html, /craft-pf/);
-        assert.ok(html.indexOf(text) >= 0 && html.indexOf(text) < html.indexOf("Timer arrives in the next update"));
-        assert.ok(html.indexOf("Timer arrives in the next update") < html.indexOf('aria-label="Today"'));
+        assert.ok(html.indexOf(text) >= 0 && html.indexOf(text) < html.indexOf('class="craft-timer"'));
+        assert.ok(html.indexOf('class="craft-timer"') < html.indexOf('aria-label="Today"'));
+        assert.doesNotMatch(html, /craft-done/, "no part, no Row done");
     }
 });
 await test("SSR pattern first: card is a labelled region with no headings; lists keep aria-current", () => {
@@ -284,7 +289,8 @@ await test("SSR switcher: two or more projects make the title a labelled select 
     ]);
     assert.equal((html.match(/<select/g) ?? []).length, 1);
     assert.equal((html.match(/<h2>/g) ?? []).length, 1 + 4, "one title heading plus the four inside headings");
-    assert.doesNotMatch(withoutMenu(html), /<button|<input|<textarea|<form|disabled=|Start timer|Log sitting/);
+    // S2: the only select is the switcher; Start / Row done are buttons, no fields on the screen itself.
+    assert.doesNotMatch(withoutMenu(html), /<input|<textarea|<form/);
 });
 await test("SSR switcher: the shown project is always an option even if the list missed it", () => {
     const list = craftModel.buildCraftProjectList(listInput()).filter((p) => p.id !== blanketId);
