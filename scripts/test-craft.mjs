@@ -309,9 +309,9 @@ await test("CSS switcher: invisible select covers the title, 16px (no iOS zoom),
     assert.doesNotMatch(css, /font-size:\s*(9|9\.5|10|10\.5|11|11\.5)px/);
 });
 // A fake PostgREST client over in-memory rows: applies eq/in filters, records every query.
-function fakeDb(tables) {
-    const log = [];
-    return { log, from(table) {
+function fakeDb(tables, { blockers = () => ({ data: [], error: null }) } = {}) {
+    const log = [], rpcCalls = [];
+    return { log, rpcCalls, rpc(name, args) { rpcCalls.push([name, args]); return Promise.resolve(name === "craft_remove_blockers" ? blockers(args) : { data: null, error: { code: "PGRST202", message: "no such function" } }); }, from(table) {
             const entry = { table, cols: null, filters: [] }, conds = [];
             log.push(entry);
             const rows = () => (tables[table] ?? []).filter((row) => conds.every((cond) => cond(row)));
@@ -368,6 +368,25 @@ await test("Real GET detail and last-used carry the projects list, with the same
     const last = await lastGet(request(fakeDb(dbRows()), "/api/craft"), { params: Promise.resolve({}) });
     assert.equal(last.status, 200);
     assert.equal((await last.json()).projects.length, 2);
+});
+await test("FR1 loader: can_remove and remove_blockers come from one craft_remove_blockers call for the shown project", async () => {
+    const db = fakeDb(dbRows(), { blockers: () => ({ data: ["links", "quarters"], error: null }) });
+    const view = await craftLoader.loadCraftView(db, "user", scarfId);
+    assert.deepEqual(db.rpcCalls, [["craft_remove_blockers", { p_user_id: "user", p_project_id: scarfId }]]);
+    assert.deepEqual([view.can_remove, view.remove_blockers], [false, ["links", "quarters"]]);
+    const clean = await craftLoader.loadCraftView(fakeDb(dbRows()), "user", scarfId);
+    assert.deepEqual([clean.can_remove, clean.remove_blockers], [true, []]);
+    // Before 072 is applied (function missing) the screen still loads, without Remove.
+    const original = console.error;
+    console.error = () => { };
+    try {
+        const missing = await craftLoader.loadCraftView(fakeDb(dbRows(), { blockers: () => ({ data: null, error: { code: "PGRST202", message: "missing" } }) }), "user", scarfId);
+        assert.deepEqual([missing.can_remove, missing.remove_blockers], [false, null]);
+        await assert.rejects(craftLoader.loadCraftView(fakeDb(dbRows(), { blockers: () => ({ data: null, error: { code: "XX000", message: "boom" } }) }), "user", scarfId));
+    }
+    finally {
+        console.error = original;
+    }
 });
 await test("Real GET: the view's own 404 wins when the list read fails too; a list failure alone is a 500", async () => {
     const res = await detailGet(request(errorClient("PGRST116")), { params: Promise.resolve({ projectId: scarfId }) });

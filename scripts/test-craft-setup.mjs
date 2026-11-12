@@ -10,7 +10,7 @@ import ts from "typescript";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { NextRequest } from "next/server";
-import { buildCraftView } from "../src/lib/craft.ts";
+import { buildCraftView, buildCraftProjectList, craftProjectOptionLabel } from "../src/lib/craft.ts";
 import * as setup from "../src/lib/craft/setup.ts";
 import { craftSetupFingerprint, craftSetupFingerprintText } from "../src/lib/craft/setup-fingerprint.ts";
 import { writeInternalAuthContext } from "../src/lib/supabase/internal-auth.ts";
@@ -30,7 +30,8 @@ const mittens = () => ({
   on_craft_screen: false,
   sections: fixture.sections.map(({ id, sort_order }) => ({ id, sort_order, created_at: null })),
   tasks: fixture.tasks.map(({ id, section_id, title, is_sample, created_at }) => ({ id, section_id, title, is_sample, created_at })),
-  items: fixture.items.map(({ id, task_id, text, is_done, sort_order, unit_count, craft_part_id }) => ({ id, task_id, text, is_done, sort_order, unit_count, craft_part_id })),
+  // The loader reads unit_count as the database's numeric text (FR1), never through a JS number.
+  items: fixture.items.map(({ id, task_id, text, is_done, sort_order, unit_count, craft_part_id }) => ({ id, task_id, text, is_done, sort_order, unit_count: unit_count === null ? null : String(unit_count), craft_part_id })),
 });
 const taskId = (snap, title) => snap.tasks.find((t) => t.title.startsWith(title)).id;
 const itemOf = (snap, title, text) => snap.items.find((i) => i.task_id === taskId(snap, title) && i.text.startsWith(text));
@@ -42,7 +43,7 @@ function snapOf(tasks, { sections = ["s1"], tags = ["knitting"] } = {}) {
   tasks.forEach((t, k) => {
     const task = { id: id("t"), section_id: t.section === null ? null : `sec-${t.section ?? sections[0]}`, title: t.title, is_sample: t.is_sample ?? false, created_at: `2026-11-02T00:00:${String(k).padStart(2, "0")}Z` };
     out.tasks.push(task);
-    t.rows.forEach(([text, done = false, units = null], j) => out.items.push({ id: id("i"), task_id: task.id, text, is_done: done, sort_order: j, unit_count: units, craft_part_id: null }));
+    t.rows.forEach(([text, done = false, units = null], j) => out.items.push({ id: id("i"), task_id: task.id, text, is_done: done, sort_order: j, unit_count: units === null ? null : String(units), craft_part_id: null }));
   });
   return out;
 }
@@ -228,6 +229,55 @@ await test("Long names: parts and segments are cut to 80 characters (code points
   assert.equal(setup.partNameFromTitle("Sock 2 · Heel flap"), "Sock 2 · Heel flap");
 });
 
+// ── Fix round 1: the row rule, units as text, near-misses ──────────────────
+await test("FR1 row rule (F3): spaces or tabs after the word, ASCII digits, then a non-word character or the end; NBSP, FEFF and other separators are plain", () => {
+  for (const [text, row] of [["Rnd 15", 15], ["Rnd\t15 · knit", 15], ["Round 5: knit", 5], ["Rnd 015 (est.)", 15], ["Row 7.", 7], ["Rnd 9·k", 9]]) {
+    const parsed = parseRowLabel(text);
+    assert.equal(parsed.kind, "row", JSON.stringify(text)); assert.equal(parsed.row, row, JSON.stringify(text));
+  }
+  for (const text of ["Rnd 15 · knit", "Rnd﻿15", "﻿Rnd 15", "Rnd 15", "Rnd 15", "Rnd\n15", "Rnd 15a", "Rnd 15_b", "Rnd16"]) {
+    assert.deepEqual(parseRowLabel(text), { kind: "plain" }, JSON.stringify(text));
+  }
+  // The range check keeps the same whitespace as before (JavaScript's \s), written out so 072 can use the same class.
+  for (const text of ["Rnd 3 – 5", "Rnd 3 to 5", "Rnd 3﻿-5", "Row 4 TO 6", "Row 4 thru 6", "Row 4.5"]) {
+    assert.deepEqual(parseRowLabel(text), { kind: "bad", reason: "range" }, JSON.stringify(text));
+  }
+  for (const text of ["Row 4 tonight 6", "Row 4 and then 6", "Row 4, k2"]) assert.equal(parseRowLabel(text).kind, "row", JSON.stringify(text));
+});
+await test("FR1 units (F3/F5): unit_count is the database's numeric text, canonical like trim_scale(); one value however it is written", () => {
+  const c = setup.canonicalUnitText;
+  assert.equal(typeof c, "function");
+  for (const [raw, want] of [["36", "36"], ["36.0", "36"], ["36.500", "36.5"], ["0", "0"], ["0.000", "0"], ["0.0000001", "0.0000001"], ["1000000000000000000000", "1000000000000000000000"], ["123456.789", "123456.789"], ["NaN", "NaN"], ["Infinity", "Infinity"], [null, null]]) {
+    assert.equal(c(raw), want, String(raw));
+  }
+  const tiny = mittens(); itemOf(tiny, "Mitten 1 · Cuff", "Rnd 15 ·").unit_count = "0.0000001";
+  assert.match(craftSetupFingerprintText(tiny), /\|0\.0000001\|\|[0-9a-f]{64}(\n|$)/, "never 1e-7");
+  const big = mittens(); itemOf(big, "Mitten 1 · Cuff", "Rnd 15 ·").unit_count = "1000000000000000000000";
+  assert.match(craftSetupFingerprintText(big), /\|1000000000000000000000\|\|/, "never 1e+21");
+  const a = mittens(), b = mittens();
+  itemOf(a, "Mitten 1 · Cuff", "Rnd 15 ·").unit_count = "36.0";
+  assert.equal(craftSetupFingerprint(a), craftSetupFingerprint(b), "36.0 and 36 are the same value");
+  const sc = (units) => planCraftSetup(snapOf([{ title: "P", rows: units.map((u, i) => [`Row ${i + 1}`, false, u]) }])).parts[0].stitch_count;
+  assert.equal(sc(["36.0", "36"]), 36);
+  assert.equal(sc(["2147483647", "2147483647"]), 2147483647);
+  assert.equal(sc(["2147483648", "2147483648"]), null, "above the integer column");
+  assert.equal(sc(["1000000000000000000000", "1000000000000000000000"]), null);
+  assert.equal(sc(["NaN", "NaN"]), null);
+  assert.equal(sc(["0.0000001", "0.0000001"]), null);
+});
+await test("FR1 near-misses (F4): items that look numbered but don't match the rule are listed with their task; mittens has none", () => {
+  assert.deepEqual(planCraftSetup(mittens()).near_misses, []);
+  const plan = planCraftSetup(snapOf([
+    { title: "Mitten 1 · Cuff: r", rows: [["Rnd 1 · knit"], [" Rnd 16 · knit"], ["rnd 31 · knit"], ["Rnd16 · knit"], ["Round5: knit"], ["ROUND 6: knit"], ["Rnd 7"], ["﻿Rnd 8"], ["Rnd 9a"], ["Rnd. 10"], ["Pick-up rnd · knit"], ["Cast on 36"], ["Rounding the top"], ["Row of purl"]] },
+    { title: "Swatch", is_sample: true, rows: [["rnd 1"]] },
+  ]));
+  assert.equal(plan.ok, true, plan.stops.join("; "));
+  assert.deepEqual(plan.parts.map((p) => [p.name, p.total_rows, p.row_count]), [["Mitten 1 · Cuff", 1, 1]]);
+  assert.deepEqual(plan.near_misses.map((n) => [n.text, n.task_title]), [" Rnd 16 · knit", "rnd 31 · knit", "Rnd16 · knit", "Round5: knit", "ROUND 6: knit", "Rnd 7", "﻿Rnd 8", "Rnd 9a", "Rnd. 10"].map((t) => [t, "Mitten 1 · Cuff: r"]));
+  assert.ok(plan.near_misses.every((n) => plan.plain_items.some((i) => i.id === n.id)), "near-misses are plain steps too");
+  assert.equal(plan.plain_items.length, 14, "13 on the cuff task plus the swatch item");
+});
+
 // ── The Create body and the fingerprint ─────────────────────────────────
 await test("Create body: fingerprint, craft and one name per part; anything else is refused", () => {
   const fp = "a".repeat(64);
@@ -250,7 +300,7 @@ await test("Fingerprint: stable, order-independent, and changed by any tick, tex
     (s) => { itemOf(s, "Mitten 1 · Cuff", "Rnd 15 ·").is_done = true; },
     (s) => { itemOf(s, "Mitten 1 · Cuff", "Rnd 15 ·").text += " "; },
     (s) => { itemOf(s, "Mitten 1 · Cuff", "Rnd 15 ·").sort_order = 99; },
-    (s) => { itemOf(s, "Mitten 1 · Cuff", "Rnd 15 ·").unit_count = 34; },
+    (s) => { itemOf(s, "Mitten 1 · Cuff", "Rnd 15 ·").unit_count = "34"; },
     (s) => { itemOf(s, "Mitten 1 · Cuff", "Rnd 15 ·").craft_part_id = "p"; },
     (s) => { s.tasks[0].title += "!"; },
     (s) => { s.tasks[0].section_id = s.sections[1].id; },
@@ -305,6 +355,53 @@ const { CraftScreenMenu, REMOVE_KEEPS, sendRemove } = await import("../src/compo
 const renderScreen = (data) => renderToStaticMarkup(createElement(CraftScreen, { view: buildCraftView(data) }));
 const MENU = /<div class="craft-menu">.*?<\/div><\/div>/;
 
+// The mittens as the craft screen would read them after Create: parts p0..p7, stored active part = Mitten 1 · Cuff.
+function mittensView(tick = () => false, extra = {}) {
+  const plan = planCraftSetup(mittens());
+  const data = input(plan.parts.map((p, i) => part(`p${i}`, p.total_rows, { name: p.name, sort_order: i, row_word: p.row_word, stitch_count: p.stitch_count })),
+    plan.parts.flatMap((p, i) => p.rows.map((r) => ({ id: r.item_id, craft_part_id: `p${i}`, craft_row: r.row, text: r.text, is_done: r.is_done || tick(i, r.row), completed_at: null }))));
+  data.project = { id: PID_MITTENS, name: fixture.project.name };
+  data.segments = plan.parts.flatMap((p, i) => p.segments.map((g, k) => ({ id: `s${i}-${k}`, part_id: `p${i}`, task_id: g.task_id, name: g.name, from_row: g.from_row, to_row: g.to_row, sort_order: k, close_check: false })));
+  data.craft_project.active_part_id = "p0";
+  return Object.assign(data, extra);
+}
+const PID_MITTENS = fixture.project.id;
+const listOf = (data) => buildCraftProjectList({ craft_projects: [{ project_id: data.project.id, craft: "knit", active_part_id: data.craft_project.active_part_id }],
+  projects: [data.project], parts: data.parts.map((p) => ({ ...p, project_id: data.project.id })), items: data.items.filter((i) => !i.is_done) })[0];
+await test("FR1 active part (F2): a finished stored part gives way to the first unfinished part; the switcher label follows", () => {
+  const before = buildCraftView(mittensView());
+  assert.deepEqual([before.active_part.name, before.active_part.current_row], ["Mitten 1 · Cuff", 15]);
+  const cuffDone = mittensView((i) => i === 0);
+  const v = buildCraftView(cuffDone);
+  assert.deepEqual([v.active_part.id, v.active_part.name, v.active_part.current_row, v.active_part.row_label, v.active_part.finished], ["p1", "Mitten 1 · Hand", 1, "Round 1", false]);
+  assert.equal(v.current_segment.name, "Mitten 1 · Thumb gusset: rnds 1–17");
+  assert.equal(v.parts[0].row_label, "Finished", "the cuff itself still reads Finished in the parts list");
+  assert.equal(cuffDone.craft_project.active_part_id, "p0", "the stored value is not changed (S2 writes it)");
+  assert.equal(listOf(cuffDone).progress, "round 1");
+  assert.equal(craftProjectOptionLabel(listOf(cuffDone)), `${fixture.project.name} · round 1`);
+  const html = renderToStaticMarkup(createElement(CraftScreen, { view: v }));
+  assert.match(html, /<h3>Mitten 1 · Hand<\/h3>/);
+  assert.match(html, /<span class="craft-pf-num">1<\/span><span class="craft-pf-of">of 45<\/span>/);
+  // A stored part that is not finished still wins, even with an earlier unfinished part.
+  const stored = mittensView(); stored.craft_project.active_part_id = "p2";
+  assert.equal(buildCraftView(stored).active_part.name, "Mitten 1 · Top decreases");
+  // Everything ticked: Finished / done as before.
+  const all = mittensView(() => true);
+  assert.deepEqual([buildCraftView(all).active_part.id, buildCraftView(all).active_part.row_label], ["p0", "Finished"]);
+  assert.equal(listOf(all).progress, "done");
+  const none = mittensView(() => true); none.craft_project.active_part_id = null;
+  assert.equal(buildCraftView(none).active_part, null);
+  assert.equal(listOf(none).progress, "done");
+});
+await test("FR1 view model (F1): can_remove comes from the server's remove_blockers; unknown means no", () => {
+  assert.deepEqual([buildCraftView(mittensView(undefined, { remove_blockers: [] })).can_remove, buildCraftView(mittensView(undefined, { remove_blockers: [] })).remove_blockers], [true, []]);
+  const kept = buildCraftView(mittensView(undefined, { remove_blockers: ["links", "instructions"] }));
+  assert.deepEqual([kept.can_remove, kept.remove_blockers], [false, ["links", "instructions"]]);
+  assert.equal(buildCraftView(mittensView()).can_remove, false, "no answer from the server: Remove is not offered");
+  assert.equal(buildCraftView(pinnedInputs().scarf).can_remove, false);
+});
+
+
 await test("Before/after: the blanket and scarf screens render byte for byte as at ca00c76, apart from the new header menu", () => {
   const pinned = JSON.parse(readFileSync(new URL("./fixtures/craft/screen-s1a.snapshot.json", import.meta.url), "utf8"));
   const now = pinnedInputs();
@@ -322,14 +419,30 @@ await test("SSR gaps: the craft screen says 21 of 24 rounds ticked, of 31, and l
   assert.match(html, /<li><span>round 30<\/span><p>Rnd 30 · knit<\/p><\/li><li><span>round 31<\/span>/);
 });
 await test("SSR menu: a labelled disclosure (closed) with Remove from craft screen; the sheet says what stays", () => {
-  const html = renderToStaticMarkup(createElement(CraftScreenMenu, { projectId: "p1", projectName: "Mittens" }));
+  const html = renderToStaticMarkup(createElement(CraftScreenMenu, { projectId: "p1", projectName: "Mittens", canRemove: true, partCount: 8, blockers: [] }));
   assert.match(html, /aria-label="Craft screen menu" aria-expanded="false" aria-controls="([^"]+)">⋯<\/button><div id="\1" class="craft-menu-panel" hidden="">/);
   assert.match(html, /<button type="button" class="craft-menu-item">Remove from craft screen<\/button>/);
   assert.equal(REMOVE_KEEPS, "Your ticks, stitch counts and sittings stay.");
   const source = readFileSync(new URL("../src/components/craft/CraftScreenMenu.tsx", import.meta.url), "utf8");
   assert.match(source, /<Modal open=\{confirming\} onClose=\{close\} title="Remove from craft screen\?">/);
   assert.match(source, /<strong>\{REMOVE_KEEPS\}<\/strong>/);
+  assert.match(source, /\{removeGoes\(partCount\)\}/);
   assert.match(source, /variant="danger"[^>]*>\{state\.busy \? "Removing…" : "Remove"\}/);
+});
+await test("FR1 Remove (F1): the menu offers Remove only when the server allows it; the sheet says exactly what goes", async () => {
+  const menu = await import("../src/components/craft/CraftScreenMenu.tsx");
+  assert.equal(menu.removeGoes(8), "Removes the craft screen setup for this project: 8 parts and their row links.");
+  assert.equal(menu.removeGoes(1), "Removes the craft screen setup for this project: 1 part and its row links.");
+  assert.equal(`${menu.removeGoes(8)} ${REMOVE_KEEPS}`, "Removes the craft screen setup for this project: 8 parts and their row links. Your ticks, stitch counts and sittings stay.");
+  const kept = renderToStaticMarkup(createElement(CraftScreenMenu, { projectId: "p1", projectName: "Scarf", canRemove: false, partCount: 1, blockers: ["links", "instructions", "quarters", "ridges"] }));
+  assert.doesNotMatch(kept, /Remove from craft screen<\/button>/);
+  assert.match(kept, /<p class="craft-menu-note">Remove from craft screen isn’t offered here: this project has links, instructions, quarter rows and ridge counts that Set up can’t make again\.<\/p>/);
+  // On the real screen: the scarf (S1 setup, no answer or blockers) has no Remove; the mittens after Create do.
+  assert.doesNotMatch(renderScreen(pinnedInputs().scarf), /Remove from craft screen<\/button>/);
+  assert.doesNotMatch(renderScreen(Object.assign(pinnedInputs().scarf, { remove_blockers: ["links", "instructions", "quarters", "ridges"] })), /Remove from craft screen<\/button>/);
+  assert.match(renderScreen(mittensView(undefined, { remove_blockers: [] })), /<button type="button" class="craft-menu-item">Remove from craft screen<\/button>/);
+  const source = readFileSync(new URL("../src/components/craft/CraftScreen.tsx", import.meta.url), "utf8");
+  assert.match(source, /<CraftScreenMenu projectId=\{view\.project\.id\} projectName=\{view\.project\.name\} canRemove=\{view\.can_remove\} partCount=\{view\.parts\.length\} blockers=\{view\.remove_blockers\} \/>/);
 });
 const renderSetup = (snap) => { const plan = planCraftSetup(snap); return renderToStaticMarkup(createElement(CraftSetupScreen, { projectId: snap.project.id, plan, fingerprint: craftSetupFingerprint(snap) })); };
 await test("SSR setup preview (mittens): 8 named parts as labelled inputs, facts, segments, plain steps, kind and Create", () => {
@@ -364,6 +477,16 @@ await test("SSR setup preview: gaps are named, swatch items marked, and a STOP s
   assert.match(html, /<input maxLength="100" disabled="" value="Mitten 1 · Cuff"\/>/);
   const set = renderSetup({ ...mittens(), on_craft_screen: true });
   assert.match(set, /href="\/craft\/6c30a08d-9210-54f1-a43a-78ef6e472f95">Open craft screen<\/a>/);
+});
+await test("FR1 SSR near-misses (F4): listed under “Not counted as rounds/rows” with their task; absent for the mittens", () => {
+  assert.doesNotMatch(renderSetup(mittens()), /Not counted as rounds\/rows/);
+  const snap = mittens();
+  itemOf(snap, "Mitten 2 · Cuff", "Rnd 31 ").text = "rnd 31 · knit";
+  itemOf(snap, "Mitten 2 · Thumb gusset", "Rnd 16 ").text = " Rnd 16 · knit";
+  const html = renderSetup(snap);
+  assert.match(html, /<section class="craft-setup-section" aria-labelledby="craft-setup-near"><h2 id="craft-setup-near">Not counted as rounds\/rows <span class="craft-setup-count">2<\/span><\/h2>/);
+  assert.match(html, /<ul class="craft-setup-near"><li><span>rnd 31 · knit<\/span><small>Mitten 2 · Cuff: cast on \+ rnds 1–31<\/small><\/li><li><span> Rnd 16 · knit<\/span><small>Mitten 2 · Thumb gusset: rnds 1–17<\/small><\/li><\/ul>/);
+  assert.match(html, /Create 8 parts on the craft screen/, "near-misses don't stop Create");
 });
 await test("partFacts, sendCreate and sendRemove turn replies into plain words", async () => {
   assert.equal(partFacts({ ...planCraftSetup(mittens()).parts[3], current_row: null }), "Rounds · 15 in all · all ticked · 14 stitches · 0 of 15 rounds ticked");
@@ -480,7 +603,7 @@ await test("POST Create: STOPs, bad bodies and every 072 refusal map to plain 4x
   assert.match((await set.json()).error, /already on the craft screen/);
   assert.equal((await setupPost(req(fakeDb(mittens()), "POST", "{not json"), ctx())).status, 400);
   assert.equal((await setupPost(req(fakeDb(mittens()), "POST", { ...createBody(mittens()), craft: "weave" }), ctx())).status, 400);
-  for (const [code, status, reason] of [["MC072", 409, "changed"], ["23505", 409, "exists"], ["P0002", 409, "changed"], ["22023", 400, "invalid"], ["XX000", 500, undefined], ["42501", 500, undefined]]) {
+  for (const [code, status, reason] of [["MC072", 409, "changed"], ["23505", 409, "exists"], ["P0002", 409, "changed"], ["22023", 400, "invalid"], ["40P01", 409, "changed"], ["55P03", 409, "changed"], ["XX000", 500, undefined], ["42501", 500, undefined]]) {
     const db = fakeDb(mittens(), { rpc: () => ({ data: null, error: { code, message: "db" } }) });
     const res = await quiet(() => setupPost(req(db, "POST", createBody(mittens())), ctx()));
     assert.equal(res.status, status, code);
@@ -499,6 +622,9 @@ await test("DELETE Remove: 404 when not on the craft screen (PGRST116), one 072 
   assert.ok(db.log.every((q) => q.filters.includes("eq user_id")));
   assert.equal((await craftDelete(req(fakeDb(mittens(), { craftRow: true, rpc: () => ({ data: null, error: { code: "P0002", message: "gone" } }) }), "DELETE"), ctx())).status, 409);
   assert.equal((await quiet(() => craftDelete(req(fakeDb(mittens(), { craftRow: true, rpc: () => ({ data: null, error: { code: "40P01", message: "x" } }) }), "DELETE"), ctx()))).status, 500);
+  const keeps = await craftDelete(req(fakeDb(mittens(), { craftRow: true, rpc: () => ({ data: null, error: { code: "MC72R", message: "CRAFT_REMOVE_KEEPS", details: "links,notes" } }) }), "DELETE"), ctx());
+  assert.equal(keeps.status, 409, "FR1: a project with things Set up can't remake is refused");
+  assert.deepEqual(await keeps.json(), { error: "This project can’t be removed from the craft screen: it has links and notes that Set up can’t make again.", reason: "keeps" });
   assert.equal((await craftDelete(req(fakeDb(mittens()), "DELETE"), ctx("bad"))).status, 400);
 });
 await test("Wiring: project page offers Set up only with row items and no craft row; setup page and routes exist", () => {
@@ -509,7 +635,8 @@ await test("Wiring: project page offers Set up only with row items and no craft 
   assert.match(page, /\{hasCraft && \([\s\S]*?Open craft screen/);
   const service = readFileSync(new URL("../src/lib/craft/setup-service.ts", import.meta.url), "utf8");
   assert.match(service, /\.eq\("is_sample", false\)/);
-  assert.match(service, /\.filter\("text", "match", "\^\(Row\|Rnd\|Round\)\[\[:space:\]\]\+\[0-9\]"\)\.limit\(1\)/);
+  assert.match(service, /\.filter\("text", "match", CRAFT_ROW_ITEM_MATCH\)\.limit\(1\)/);
+  assert.equal(setup.CRAFT_ROW_ITEM_MATCH, "^(Row|Rnd|Round)[ \\t]+[0-9]+([^0-9A-Za-z_]|$)", "the button uses the same rule as the planner and 072");
   assert.equal(setup.craftSetupHref("abc"), "/craft/setup/abc");
   const setupPage = readFileSync(new URL("../src/app/craft/setup/[projectId]/page.tsx", import.meta.url), "utf8");
   assert.match(setupPage, /key=\{preview\.fingerprint\}/);
