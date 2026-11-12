@@ -22,7 +22,11 @@ export interface CraftInput {
 
 type ProgressItem = Pick<CraftItem, "craft_part_id" | "craft_row" | "is_done">;
 
-/** One part's progress from its ticks: the lowest unticked row is the current row. */
+/**
+ * One part's progress from its ticks: the lowest unticked row is the current row. Row numbers may have
+ * gaps (S1C: an "(est.)" round deleted once a measurement lands early), so counts use the rows that
+ * exist (row_count), "next rows" skip missing numbers, and a part is finished when no row is unticked.
+ */
 function partProgress<P extends CraftPart>(part: P, items: ProgressItem[]) {
   const rows = items.filter((item) => item.craft_part_id === part.id && item.craft_row !== null && item.craft_row <= part.total_rows);
   const undone = rows.filter((item) => !item.is_done).map((item) => item.craft_row as number);
@@ -35,6 +39,7 @@ function partProgress<P extends CraftPart>(part: P, items: ProgressItem[]) {
     row_label: finished ? "Finished" : `${row_word === "round" ? "Round" : "Row"} ${current_row}${ridge === null ? "" : ` · ridge ${ridge}`}`,
     quarter: !finished && part.quarters && part.quarter_row === current_row ? part.quarter : 0,
     done_rows: rows.filter((item) => item.is_done).length,
+    row_count: rows.length,
   };
 }
 
