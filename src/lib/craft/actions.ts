@@ -265,15 +265,42 @@ export function partwayRow(rows: RowState[], total: number, to: number): number 
  * Row done (or the sitting has no Row done at all), OFF otherwise. Without a timer it starts OFF unless
  * no rows are saved (the minutes went into the row being worked). Always OFF with no row to be partway through.
  * `lastDoneAt`: the newest Row done of this project's rows since the timer's sitting started (any part).
+ * FR1 (Codex P3): only TIMED time after the last Row done counts, never a pause (`timedSinceLastDone`).
  */
 export function partwayDefault(rows: RowState[], total: number, form: { from: number; to: number },
-  timer: { running: boolean; paused_at: string | null; elapsed_seconds: number } | null, nowIso: string, lastDoneAt: string | null): boolean {
+  timer: PartwayTimer | null, nowIso: string, lastDoneAt: string | null): boolean {
   if (partwayRow(rows, total, form.to) === null) return false;
   if (!timer) return form.to <= form.from;
   if (!lastDoneAt) return true;
-  const stopMs = timer.running || !timer.paused_at ? Date.parse(nowIso) : Date.parse(timer.paused_at);
-  const after = Math.min(Math.max(0, (stopMs - Date.parse(lastDoneAt)) / 1000), timer.elapsed_seconds);
-  return after > PARTWAY_IDLE_SECONDS;
+  return timedSinceLastDone(timer, nowIso, lastDoneAt) > PARTWAY_IDLE_SECONDS;
+}
+
+/** What the Partway default reads from the timer (the view's CraftTimerView has all of it; older callers may pass less). */
+export interface PartwayTimer {
+  running: boolean; paused_at: string | null; elapsed_seconds: number;
+  running_since?: string | null; banked_seconds?: number; sitting_started_at?: string; last_done_seconds?: number | null;
+}
+
+/**
+ * Seconds the timer ran (pauses left out, + / − left out) after the sitting's last Row done.
+ * 074 FR1 stores the timer's timed seconds at that Row done (`last_done_seconds`, written by craft_rows), so
+ * this is timed-now minus that. Without it (a timer from before 074, or rows ticked outside the craft screen)
+ * the timer can't tell its pauses apart once resumed, so the lower bound is used: the larger of the running
+ * stretch after the Row done and the timed seconds less all the time before it since the sitting started
+ * (exact when every pause is on one side of the Row done). Never more than the clock or the timer allows.
+ */
+export function timedSinceLastDone(timer: PartwayTimer, nowIso: string, lastDoneAt: string): number {
+  const now = Date.parse(nowIso), done = Date.parse(lastDoneAt);
+  const runningSince = timer.running && timer.running_since ? Date.parse(timer.running_since) : null;
+  const timed = timer.banked_seconds === undefined ? timer.elapsed_seconds
+    : timer.banked_seconds + (runningSince === null ? 0 : Math.max(0, Math.floor((now - runningSince) / 1000)));
+  if (timer.last_done_seconds !== undefined && timer.last_done_seconds !== null) return Math.max(0, timed - timer.last_done_seconds);
+  const stop = timer.running || !timer.paused_at ? now : Date.parse(timer.paused_at);
+  const upper = Math.min(Math.max(0, (stop - done) / 1000), timed);
+  if (!timer.sitting_started_at) return upper;
+  const stretch = runningSince === null ? 0 : Math.max(0, (now - Math.max(done, runningSince)) / 1000);
+  const beforeDone = Math.max(0, (done - Date.parse(timer.sitting_started_at)) / 1000);
+  return Math.min(upper, Math.max(stretch, timed - beforeDone, 0));
 }
 
 /**

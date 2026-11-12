@@ -38,11 +38,12 @@ function ErrorLine({ text }: { text: string | null }) {
  * The sheet's foot, sticky at the bottom of the sheet (FR1, Fable: at 360 px the "Saves…" line sat
  * out of view above Save): the changed-underneath line, what Save will do, a failure, then the buttons.
  */
-function Foot({ changed, summary, summaryWarn, error, ...actions }: { changed: string | null; summary: ReactNode; summaryWarn?: boolean; error: string | null;
+function Foot({ changed, hint, summary, summaryWarn, error, ...actions }: { changed: string | null; hint?: string | null; summary: ReactNode; summaryWarn?: boolean; error: string | null;
   busy: boolean; onCancel: () => void; saveLabel: string; disabled?: boolean }) {
   return (
     <div className="craft-sheet-foot">
       {changed && <p className="craft-sheet-warn craft-sheet-changed" role="status">{changed}</p>}
+      {hint && <p className="craft-sheet-hint craft-rip-after">{hint}</p>}
       {summary !== null && summary !== undefined && <p className={summaryWarn ? "craft-sheet-warn" : "craft-sheet-preview"}>{summary}</p>}
       <ErrorLine text={error} />
       <Actions {...actions} />
@@ -298,10 +299,10 @@ export function UndoRowsSheet({ open, onClose, view: live, part: livePart, send,
               <label htmlFor="craft-rip-note">Note<span>optional</span></label>
               <textarea id="craft-rip-note" rows={2} maxLength={1000} value={note} placeholder="e.g. dropped a stitch at row 58" onChange={(e) => setNote(e.target.value)} />
             </div>
-            <p className="craft-sheet-hint">There is no un-rip: to put {word}s back, use Fix count.</p>
           </>
         )}
         <Foot changed={notice} error={state.error}
+          hint={mode === "rip" ? `Fix count puts the ${word}s back; the sittings stay left out of speed.` : null}
           summary={mode === "rip" ? ripSummary : plan && plan.untick.length ? `Unticks ${rowsText(word, plan.untick)}. ${wordTitle(word)} ${plan.next} next.` : null}
           busy={state.busy} onCancel={onClose} saveLabel={changed ? CHANGED_LABEL : mode === "rip" ? "Rip back" : "Undo"}
           disabled={!changed && (mode === "rip" ? !frog || !frog.ripped.length : !plan || !plan.untick.length)} />

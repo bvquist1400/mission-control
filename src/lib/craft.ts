@@ -60,6 +60,8 @@ export interface CraftTimerView {
   new_day: boolean;
   /** FR1: false when the timer is on another part than the screen's (that part was finished during the sitting). */
   on_active_part: boolean;
+  /** S3 FR1 (074): the timer's timed seconds (no + / −) at the sitting's last Row done; null until one (or before 074). */
+  last_done_seconds: number | null;
 }
 
 type ProgressItem = Pick<CraftItem, "craft_part_id" | "craft_row" | "is_done">;
@@ -155,6 +157,7 @@ export function buildCraftView(input: CraftInput) {
     over_cap: elapsed > SITTING_MAX_MINUTES * 60,
     new_day: Boolean(timerRow.sitting_started_at) && etDateOf(input.server_now) > etDateOf(timerRow.sitting_started_at),
     on_active_part: !timerRow.part_id || !active_part || timerRow.part_id === active_part.id || !parts.some((p) => p.id === timerRow.part_id),
+    last_done_seconds: (timerRow as { last_done_seconds?: number | null }).last_done_seconds ?? null,
   } satisfies CraftTimerView : null;
   const timer = timerFacts && timerFacts.project_id === input.project.id ? timerFacts : null;
   // S3: the sitting's last Row done on any of this project's parts (the "Partway through" default).
