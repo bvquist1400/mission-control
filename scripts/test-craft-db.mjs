@@ -19,6 +19,9 @@ const down072 = readFileSync(new URL("../supabase/rollbacks/072_craft_setup.down
 // 073 (S2) sits on 072: rolled back first and re-applied last.
 const migration073 = readFileSync(new URL("../supabase/migrations/073_craft_rpcs.sql", import.meta.url), "utf8");
 const down073 = readFileSync(new URL("../supabase/rollbacks/073_craft_rpcs.down.sql", import.meta.url), "utf8");
+// 074 (S3) sits on 073: rolled back before it and re-applied after it.
+const migration074 = readFileSync(new URL("../supabase/migrations/074_craft_progress.sql", import.meta.url), "utf8");
+const down074 = readFileSync(new URL("../supabase/rollbacks/074_craft_progress.down.sql", import.meta.url), "utf8");
 const psql = (sql) => execFileSync("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"], { input: sql, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
 const asyncSql = (sql, dbUser = "postgres") => new Promise(resolve => { const child = spawn("docker", ["exec", "-i", container, "psql", "-U", dbUser, "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"]); let stdout = "", stderr = ""; child.stdout.on("data", c => stdout += c); child.stderr.on("data", c => stderr += c); child.on("close", code => resolve({ code, stdout, stderr })); child.stdin.end(sql); });
 // Interactive sessions make the reviewed lock order reproducible, without timing luck.
@@ -515,6 +518,8 @@ ROLLBACK;`, target === "auth user" ? "supabase_admin" : "postgres");
         const before = fingerprint();
         const had072 = psql("SELECT to_regprocedure('craft_setup_project(uuid,uuid,jsonb,text)') IS NOT NULL") === "t";
         const had073 = psql("SELECT to_regprocedure('craft_rows(uuid,uuid,integer,integer,text,uuid)') IS NOT NULL") === "t";
+        const had074 = psql("SELECT to_regclass('public.craft_frogs') IS NOT NULL") === "t";
+        if (had074) psql(down074);
         if (had073) psql(down073);
         if (had072) psql(down072);
         psql(down);
@@ -526,8 +531,9 @@ ROLLBACK;`, target === "auth user" ? "supabase_admin" : "postgres");
         psql(migration);
         if (had072) psql(migration072);
         if (had073) psql(migration073);
+        if (had074) psql(migration074);
         assert.equal(fingerprint(), before);
-        assert.equal(psql("SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'craft_%'"), "9");
+        assert.equal(psql("SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'craft_%'"), had074 ? "10" : "9");
     });
 }
 finally {

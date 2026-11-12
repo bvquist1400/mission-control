@@ -425,6 +425,50 @@ export type Database = {
           },
         ]
       }
+      craft_frogs: {
+        Row: {
+          created_at: string
+          from_row: number
+          id: string
+          idempotency_key: string | null
+          note: string | null
+          part_id: string
+          session_ids: string[]
+          to_row: number
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          from_row: number
+          id?: string
+          idempotency_key?: string | null
+          note?: string | null
+          part_id: string
+          session_ids?: string[]
+          to_row: number
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          from_row?: number
+          id?: string
+          idempotency_key?: string | null
+          note?: string | null
+          part_id?: string
+          session_ids?: string[]
+          to_row?: number
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "craft_frogs_part_id_fkey"
+            columns: ["part_id"]
+            isOneToOne: false
+            referencedRelation: "craft_parts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       craft_instructions: {
         Row: {
           created_at: string
@@ -3680,18 +3724,21 @@ export type Database = {
         Row: {
           checklist_item_id: string
           created_at: string
+          in_progress: boolean
           session_id: string
           user_id: string
         }
         Insert: {
           checklist_item_id: string
           created_at?: string
+          in_progress?: boolean
           session_id: string
           user_id: string
         }
         Update: {
           checklist_item_id?: string
           created_at?: string
+          in_progress?: boolean
           session_id?: string
           user_id?: string
         }
@@ -3851,6 +3898,19 @@ export type Database = {
         Args: { p_part_id: string; p_total: number; p_user_id: string }
         Returns: number
       }
+      craft_frog: {
+        Args: {
+          p_exclude_session_ids: string[]
+          p_expected_row: number
+          p_from_row: number
+          p_idempotency_key: string
+          p_note: string
+          p_part_id: string
+          p_to_row: number
+          p_user_id: string
+        }
+        Returns: Json
+      }
       craft_log_sitting: {
         Args: {
           p_date: string
@@ -3914,6 +3974,26 @@ export type Database = {
         }
         Returns: Json
       }
+      craft_save_sitting: {
+        Args: {
+          p_date: string
+          p_ended_at: string
+          p_expected_row: number
+          p_from_row: number
+          p_idempotency_key: string
+          p_in_progress: boolean
+          p_minutes: number
+          p_note: string
+          p_part_id: string
+          p_started_at: string
+          p_timer_version: number
+          p_to_quarter: number
+          p_to_row: number
+          p_use_timer: boolean
+          p_user_id: string
+        }
+        Returns: Json
+      }
       craft_set_total: {
         Args: {
           p_expected_total: number
@@ -3942,6 +4022,10 @@ export type Database = {
           p_project_id: string
           p_user_id: string
         }
+        Returns: Json
+      }
+      craft_sitting_rows: {
+        Args: { p_part_id: string; p_session_id: string; p_user_id: string }
         Returns: Json
       }
       craft_timer: {

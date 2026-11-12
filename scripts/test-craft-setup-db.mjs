@@ -22,6 +22,10 @@ const down071 = readFileSync(new URL("../supabase/rollbacks/071_add_craft_tables
 const up073 = readFileSync(new URL("../supabase/migrations/073_craft_rpcs.sql", import.meta.url), "utf8");
 const down073 = readFileSync(new URL("../supabase/rollbacks/073_craft_rpcs.down.sql", import.meta.url), "utf8");
 const has073 = () => psql("SELECT to_regprocedure('craft_rows(uuid,uuid,integer,integer,text,uuid)') IS NOT NULL;") === "t";
+// 074 (S3) sits on 073: rolled back before any 073 rollback and re-applied after 073.
+const up074 = readFileSync(new URL("../supabase/migrations/074_craft_progress.sql", import.meta.url), "utf8");
+const down074 = readFileSync(new URL("../supabase/rollbacks/074_craft_progress.down.sql", import.meta.url), "utf8");
+const has074 = () => psql("SELECT to_regclass('public.craft_frogs') IS NOT NULL;") === "t";
 const psql = (sql) => execFileSync("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"], { input: sql, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function connection(label) {
@@ -153,6 +157,7 @@ let rights071, functions071;
 try {
   // FR1 (F5): the 071 state is captured from a FRESH 071 apply (071 down, 071 up), never from after 072's down.
   await test("072 applies on top of a fresh 071; the 071 rights are captured from that fresh apply", () => {
+    if (has074()) psql(down074);
     if (has073()) psql(down073);
     if (functionNames().includes("craft_setup_project")) psql(down072);
     psql(down071); psql(up071);
@@ -160,8 +165,9 @@ try {
     assert.equal(functions071, "craft_check_ownership,craft_checklist_clear_deleted_part");
     psql(up072);
     assert.equal(functionNames(), FUNCTIONS_072);
-    // The rest runs on what ships: 072 with 073 over it.
+    // The rest runs on what ships: 072 with 073 and 074 over it.
     psql(up073);
+    psql(up074);
   });
   await test("072 functions: SECURITY INVOKER, EXECUTE for authenticated and service_role only (not anon, not PUBLIC)", () => {
     for (const fn of FUNCTIONS) {
@@ -656,6 +662,7 @@ try {
   await test("072 down returns the schema to 071 (functions and rights), keeps craft rows; 072 re-applies", () => {
     const data = () => psql(`SELECT count(*) FROM craft_parts; SELECT count(*) FROM task_checklist_items WHERE craft_part_id IS NOT NULL;`);
     const kept = data();
+    psql(down074);
     psql(down073);
     psql(down072);
     assert.equal(functionNames(), functions071);
@@ -663,6 +670,7 @@ try {
     assert.equal(data(), kept);
     psql(up072);
     psql(up073);
+    psql(up074);
     assert.ok(functionNames().includes("craft_setup_project"));
     assert.equal(psql("SELECT has_table_privilege('authenticated','craft_parts','TRUNCATE');"), "f");
   });
@@ -670,6 +678,7 @@ try {
     const narrow = "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE TRUNCATE, MAINTAIN ON TABLES FROM service_role;";
     const widen = "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT TRUNCATE, MAINTAIN ON TABLES TO service_role;";
     try {
+      if (has074()) psql(down074);
       if (has073()) psql(down073);
       psql(down072); psql(down071); psql(narrow); psql(up071);
       const fresh = rights();
@@ -680,12 +689,14 @@ try {
       assert.equal(rights(), fresh, "down restored exactly the fresh 071 rights");
     } finally {
       psql(widen);
+      if (has074()) psql(down074);
       if (has073()) psql(down073);
       if (functionNames().includes("craft_setup_project")) psql(down072);
       psql(down071); psql(up071); psql(up072);
     }
     assert.equal(functionNames(), FUNCTIONS_072);
     psql(up073);
+    psql(up074);
     assert.equal(psql("SELECT has_table_privilege('service_role','craft_parts','SELECT') AND NOT has_table_privilege('service_role','craft_parts','TRUNCATE');"), "t", "the stack is left with 072 applied over a fresh 071");
   });
 } finally {

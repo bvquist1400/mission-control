@@ -18,6 +18,9 @@ const up072 = readFileSync(new URL("../supabase/migrations/072_craft_setup.sql",
 const down072 = readFileSync(new URL("../supabase/rollbacks/072_craft_setup.down.sql", import.meta.url), "utf8");
 const up073 = readFileSync(new URL("../supabase/migrations/073_craft_rpcs.sql", import.meta.url), "utf8");
 const down073 = readFileSync(new URL("../supabase/rollbacks/073_craft_rpcs.down.sql", import.meta.url), "utf8");
+// 074 (S3) sits on 073: rolled back before 073's rollback and re-applied after it.
+const up074 = readFileSync(new URL("../supabase/migrations/074_craft_progress.sql", import.meta.url), "utf8");
+const down074 = readFileSync(new URL("../supabase/rollbacks/074_craft_progress.down.sql", import.meta.url), "utf8");
 const psql = (sql) => execFileSync("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"], { input: sql, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function connection(label) {
@@ -587,7 +590,8 @@ try {
     assert.equal(linkedRows(r.body.result.session_id), range("Cuff", 15, 31));
     assert.deepEqual([r.body.result.minutes, r.body.result.task_id, r.body.result.rows_linked], [35, s.tasks.Cuff, 17]);
     assert.deepEqual(r.body.result.other_rows, [{ part_id: cuff, rows: Array.from({ length: 17 }, (_, i) => 15 + i) }]);
-    assert.equal(psql(`SELECT part_id || ':' || from_row || ':' || to_row FROM craft_sitting_details WHERE session_id='${r.body.result.session_id}';`), `${hand}:0:0`);
+    // S3 (074) F1: the details name the part the sitting ended on: no Hand rows, so the Cuff's 15–31 (S2 wrote Hand 0–0).
+    assert.equal(psql(`SELECT part_id || ':' || from_row || ':' || to_row FROM craft_sitting_details WHERE session_id='${r.body.result.session_id}';`), `${cuff}:14:31`);
     assert.equal(timerRow(a.id), null);
     assert.equal(psql(`SELECT actual_minutes FROM tasks WHERE id='${s.tasks.Cuff}';`), "35");
   });
@@ -675,7 +679,8 @@ try {
     const r = await post(sittingsRoute, a, s.projectId, "sittings", { part_id: s.parts[1], use_timer: true, timer_version: 1, to_row: 0, expected_row: 1, idempotency_key: randomUUID() });
     assert.deepEqual([r.status, r.body.reason], [409, "no_timer"]);
     assert.notEqual(timerRow(a.id), null, "the other project's timer and its minutes stay");
-    assert.match(psql("SELECT pg_get_functiondef('craft_log_sitting(uuid,uuid,boolean,integer,integer,date,timestamp with time zone,timestamp with time zone,integer,integer,integer,integer,text,text)'::regprocedure);"),
+    // S3 (074): the body moved to craft_save_sitting (craft_log_sitting calls it).
+    assert.match(psql("SELECT pg_get_functiondef('craft_save_sitting(uuid,uuid,boolean,integer,integer,date,timestamp with time zone,timestamp with time zone,integer,integer,integer,integer,text,text,boolean)'::regprocedure);"),
       /a linked row is not a ticked row of this project' USING ERRCODE = '23503'/);
     clearTimer(a.id);
   });
@@ -912,6 +917,7 @@ INSERT INTO task_checklist_items (user_id, task_id, text, sort_order) SELECT '${
   await test("073 down returns the schema to 072 exactly (every craft function's body and grants, craft_timers' columns) on a fresh 072 capture; craft rows and sittings stay; 073 re-applies", () => {
     const keep = () => psql("SELECT md5(coalesce(string_agg(to_jsonb(s)::text, ',' ORDER BY s.id), '')) FROM work_sessions s; SELECT md5(coalesce(string_agg(to_jsonb(d)::text, ',' ORDER BY d.session_id), '')) FROM craft_sitting_details d; SELECT md5(coalesce(string_agg((to_jsonb(i) - 'is_done' - 'completed_at')::text, ',' ORDER BY i.id), '')) FROM task_checklist_items i;");
     const rows = keep();
+    psql(down074);
     psql(down073);
     psql(down072);
     psql(up072);
@@ -924,6 +930,7 @@ INSERT INTO task_checklist_items (user_id, task_id, text, sort_order) SELECT '${
     assert.equal(keep(), rows);
     psql(up073);
     assert.equal(keep(), rows);
+    psql(up074);
     for (const fn of FUNCTIONS_073) assert.equal(psql(`SELECT has_function_privilege('authenticated', '${fn}', 'EXECUTE');`), "t", fn);
   });
 } finally {
