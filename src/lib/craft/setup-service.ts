@@ -16,6 +16,9 @@ import { removeBlockersText } from "@/lib/craft";
 
 type Client = SupabaseClient<Database>;
 
+/** Remove met a lock it couldn't wait for (40P01 / 55P03): nothing was removed. */
+export const CRAFT_REMOVE_BUSY = "The project was busy and nothing was removed. Try again in a moment.";
+
 /** A refusal with plain words for the screen; the route answers with this status. */
 export class CraftSetupRefusal extends Error {
   status: 400 | 409;
@@ -96,6 +99,8 @@ export async function removeCraftProject(client: Client, userId: string, project
       const keys = String((error as { details?: string | null }).details ?? "").split(",").filter(Boolean);
       throw new CraftSetupRefusal(409, `This project can’t be removed from the craft screen: it has ${removeBlockersText(keys)} that Set up can’t make again.`, "keeps");
     }
+    // S1C re-check (073 carry-over c): a deadlock or lock wait the database gave up on, like Create: nothing changed.
+    if (error.code === "40P01" || error.code === "55P03") throw new CraftSetupRefusal(409, CRAFT_REMOVE_BUSY, "busy");
     throw error;
   }
   return data as { project_id: string; items_unlinked: number; parts_removed: number; segments_removed: number };

@@ -118,16 +118,26 @@ export function partNameFromTitle(title: string): string {
 const msOf = (iso: string | null) => { const t = iso === null ? NaN : Date.parse(iso); return Number.isFinite(t) ? t : null; };
 const byId = (a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
-/** The project page's order: sections by sort_order then creation, tasks by creation then id, unsectioned last. */
+/**
+ * The project page's order: sections by sort_order, then creation in whole milliseconds (none first), then id; tasks by
+ * creation in whole milliseconds, then id; unsectioned last. 073's craft_setup_plan sorts by exactly these keys (S1C
+ * re-check: comparing the timestamps as text put "…:00+00:00" after "…:00.5+00:00" with localeCompare, unlike SQL).
+ */
 export function orderSetupTasks(snapshot: Pick<SetupSnapshot, "sections" | "tasks">) {
-  const sections = [...snapshot.sections].sort((a, b) => a.sort_order - b.sort_order
-    || (a.created_at ?? "").localeCompare(b.created_at ?? "") || byId(a, b));
+  const sections = [...snapshot.sections].sort((a, b) => {
+    if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
+    const at = msOf(a.created_at), bt = msOf(b.created_at);
+    if (at === null && bt !== null) return -1;
+    if (at !== null && bt === null) return 1;
+    if (at !== null && bt !== null && at !== bt) return at - bt;
+    return byId(a, b);
+  });
   const taskOrder = (a: SetupSnapshot["tasks"][number], b: SetupSnapshot["tasks"][number]) => {
     const at = msOf(a.created_at), bt = msOf(b.created_at);
     if (at !== null && bt !== null && at !== bt) return at - bt;
     if (at !== null && bt === null) return -1;
     if (at === null && bt !== null) return 1;
-    return a.id.localeCompare(b.id);
+    return byId(a, b);
   };
   const known = new Set(sections.map((section) => section.id));
   return [

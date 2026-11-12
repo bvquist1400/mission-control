@@ -1,5 +1,6 @@
 /** Pure read model. Checklist ticks are the only source of row progress. */
 import { etDateOf } from "@/lib/work-sessions/parse";
+import { LONG_RUN_MINUTES, SITTING_MAX_MINUTES, countFromCheckText, isCountItemText, timerElapsedAt, type RowState } from "@/lib/craft/actions";
 import type { Database } from "@/types/supabase.generated";
 
 type Row<T extends keyof Database["public"]["Tables"]> = Database["public"]["Tables"][T]["Row"];
@@ -20,6 +21,27 @@ export interface CraftInput {
   server_now: string;
   /** From 072's craft_remove_blockers: what Remove would lose that Set up can't make again. Absent or null = unknown (no Remove). */
   remove_blockers?: string[] | null;
+  /** S2: when the caller's one timer is on another project, that project (for "Save or discard the scarf's 23 min first?"). */
+  timer_project?: { id: string; name: string } | null;
+  /** S2: the tasks of close_check segments (status for the band close) and their plain "Count …" items. */
+  band_tasks?: { id: string; status: string; title: string }[];
+  count_items?: { id: string; task_id: string; text: string; is_done: boolean; sort_order: number }[];
+  /** S2: notes on a row or the project, newest first. */
+  notes?: Pick<Row<"craft_notes">, "id" | "part_id" | "row" | "text" | "created_at" | "session_id">[];
+}
+
+/** The craft timer as the screen shows it, at the view's server_now (073: one per user). */
+export interface CraftTimerView {
+  project_id: string; part_id: string | null; running: boolean; version: number;
+  sitting_started_at: string; running_since: string | null; paused_at: string | null;
+  banked_seconds: number; adjust_seconds: number; start_row: number; start_quarter: number;
+  elapsed_seconds: number;
+  /** Over LONG_RUN_MINUTES: "Was it left on?". */
+  long_run: boolean;
+  /** Over 1,440 minutes: a sitting can't hold it all. */
+  over_cap: boolean;
+  /** The sitting started on an earlier ET day than server_now. */
+  new_day: boolean;
 }
 
 type ProgressItem = Pick<CraftItem, "craft_part_id" | "craft_row" | "is_done">;
@@ -90,6 +112,37 @@ export function buildCraftView(input: CraftInput) {
     .sort((a, b) => (a.craft_row as number) - (b.craft_row as number)).slice(0, 5)
     .map((item) => ({ id: item.id, row: item.craft_row as number, text: item.text })) : [];
   const partIds = new Set(parts.map((part) => part.id));
+  const linkedItems = new Set(input.session_items.map((link) => link.checklist_item_id));
+  // S2: the active part's rows (numbers that exist, gaps left out) for the Undo, Fix count, Log sitting and total previews.
+  const row_states: RowState[] = active_part ? input.items.filter((item) => item.craft_part_id === active_part.id && item.craft_row !== null)
+    .map((item) => ({ row: item.craft_row as number, done: item.is_done, linked: linkedItems.has(item.id),
+      today: Boolean(item.is_done && item.completed_at && etDateOf(item.completed_at) === today) }))
+    .sort((a, b) => a.row - b.row) : [];
+  const timerRow = input.timer;
+  const nowMs = Date.parse(input.server_now);
+  const elapsed = timerRow ? timerElapsedAt(timerRow, nowMs) : 0;
+  const timerFacts = timerRow ? {
+    project_id: timerRow.project_id, part_id: timerRow.part_id, running: timerRow.running_since !== null, version: timerRow.version,
+    sitting_started_at: timerRow.sitting_started_at, running_since: timerRow.running_since,
+    paused_at: (timerRow as { paused_at?: string | null }).paused_at ?? null,
+    banked_seconds: timerRow.banked_seconds, adjust_seconds: timerRow.adjust_seconds, start_row: timerRow.start_row,
+    start_quarter: timerRow.start_quarter, elapsed_seconds: elapsed, long_run: elapsed >= LONG_RUN_MINUTES * 60,
+    over_cap: elapsed > SITTING_MAX_MINUTES * 60, new_day: etDateOf(input.server_now) > etDateOf(timerRow.sitting_started_at),
+  } satisfies CraftTimerView : null;
+  const timer = timerFacts && timerFacts.project_id === input.project.id ? timerFacts : null;
+  const other_timer = timerFacts && timerFacts.project_id !== input.project.id ? {
+    project_id: timerFacts.project_id, project_name: input.timer_project?.name ?? "another project",
+    elapsed_seconds: timerFacts.elapsed_seconds, running: timerFacts.running, version: timerFacts.version,
+  } : null;
+  // S2 band close (073's craft_band_check): close_check bands whose rows are all ticked and whose task isn't Done.
+  const taskById = new Map((input.band_tasks ?? []).map((task) => [task.id, task]));
+  const pending_checks = active_part ? segments.filter((segment) => segment.close_check && segment.task_id && taskById.get(segment.task_id)
+    && taskById.get(segment.task_id)?.status !== "Done").flatMap((segment) => {
+    const bandRows = row_states.filter((state) => state.row >= segment.from_row && state.row <= segment.to_row);
+    if (!bandRows.length || bandRows.some((state) => !state.done)) return [];
+    const check = bandCheckFor(segment.task_id as string, input.count_items ?? [], active_part.stitch_count);
+    return [{ segment_id: segment.id, name: segment.name, from_row: segment.from_row, to_row: segment.to_row, ...check }];
+  }) : [];
   const craftItems = input.items.filter((item) => item.craft_part_id && partIds.has(item.craft_part_id));
   const itemById = new Map(craftItems.map((item) => [item.id, item]));
   const recent_sittings = [...input.sessions].sort((a, b) => b.session_date.localeCompare(a.session_date)
@@ -112,12 +165,29 @@ export function buildCraftView(input: CraftInput) {
       minutes: input.sessions.filter((session) => session.session_date === today).reduce((sum, session) => sum + session.minutes, 0),
     },
     recent_sittings, server_now: input.server_now,
+    timer, other_timer, row_states, pending_checks,
+    notes: [...(input.notes ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at) || a.id.localeCompare(b.id)).slice(0, 50),
     // Remove is offered only when the server said nothing would be lost (072 refuses otherwise too).
     can_remove: Array.isArray(input.remove_blockers) && input.remove_blockers.length === 0,
     remove_blockers: input.remove_blockers ?? null,
   };
 }
 export type CraftView = ReturnType<typeof buildCraftView>;
+
+/**
+ * The count to confirm when a band closes, as 073's craft_band_check reads it: the band task's first plain item
+ * starting "Count" (unticked first, then sort order, then id); the number is the first number in its text, else the
+ * part's stitch count.
+ */
+export function bandCheckFor(taskId: string, countItems: NonNullable<CraftInput["count_items"]>, stitchCount: number | null) {
+  const item = countItems.filter((entry) => entry.task_id === taskId && isCountItemText(entry.text))
+    .sort((a, b) => Number(a.is_done) - Number(b.is_done) || a.sort_order - b.sort_order || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))[0] ?? null;
+  const fromText = item ? countFromCheckText(item.text) : null;
+  return {
+    task_id: taskId, item_id: item?.id ?? null, item_text: item?.text ?? null,
+    count: fromText ?? stitchCount, count_source: fromText !== null ? "item" as const : stitchCount !== null ? "part" as const : null,
+  };
+}
 
 /** One entry per craft project for the title switcher: "row 61", "round 1", "done", or null with no parts. */
 export interface CraftProjectOption { id: string; name: string; craft: string; progress: string | null }

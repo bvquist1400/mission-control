@@ -58,13 +58,22 @@ async function loadOneCraftView(client: SupabaseClient<Database>, userId: string
   ]);
   if (projectResult.error) throw projectResult.error;
   if (craftResult.error) throw craftResult.error;
-  const [parts, sessions, timerResult, remove_blockers] = await Promise.all([
+  // S2: the caller's one timer, whichever project it is on (a timer elsewhere is the "unsaved time" conflict).
+  const [parts, sessions, timerResult, remove_blockers, notes] = await Promise.all([
     pagedSelect<Tables["craft_parts"]["Row"]>((from, to) => client.from("craft_parts").select("*").eq("user_id", userId).eq("project_id", id).order("id").range(from, to)),
     pagedSelect<Tables["work_sessions"]["Row"]>((from, to) => client.from("work_sessions").select("*").eq("user_id", userId).eq("project_id", id).order("id").range(from, to)),
-    client.from("craft_timers").select("*").eq("user_id", userId).eq("project_id", id).maybeSingle(),
+    client.from("craft_timers").select("*").eq("user_id", userId).maybeSingle(),
     removeBlockers(client, userId, id),
+    pagedSelect<NonNullable<CraftInput["notes"]>[number]>((from, to) => client.from("craft_notes").select("id, part_id, row, text, created_at, session_id")
+      .eq("user_id", userId).eq("project_id", id).order("id").range(from, to)),
   ]);
   if (timerResult.error) throw timerResult.error;
+  let timer_project: CraftInput["timer_project"] = null;
+  if (timerResult.data && timerResult.data.project_id !== id) {
+    const other = await client.from("projects").select("id, name").eq("user_id", userId).eq("id", timerResult.data.project_id).maybeSingle();
+    if (other.error) throw other.error;
+    timer_project = other.data;
+  }
   const items: CraftInput["items"] = [], segments: CraftInput["segments"] = [];
   const session_items: CraftInput["session_items"] = [], sitting_details: CraftInput["sitting_details"] = [];
   for (const ids of chunks(parts.map((part) => part.id))) {
@@ -74,6 +83,19 @@ async function loadOneCraftView(client: SupabaseClient<Database>, userId: string
     ]);
     items.push(...partItems); segments.push(...partSegments);
   }
+  // S2 band close: the tasks of close_check segments and their plain "Count …" items (only bands with a check are read).
+  const checkTaskIds = [...new Set(segments.filter((segment) => segment.close_check && segment.task_id).map((segment) => segment.task_id as string))];
+  const band_tasks: NonNullable<CraftInput["band_tasks"]> = [], count_items: NonNullable<CraftInput["count_items"]> = [];
+  for (const ids of chunks(checkTaskIds)) {
+    const [tasks, checkItems] = await Promise.all([
+      pagedSelect<NonNullable<CraftInput["band_tasks"]>[number]>((from, to) => client.from("tasks").select("id, status, title").eq("user_id", userId).in("id", ids).order("id").range(from, to)),
+      pagedSelect<Tables["task_checklist_items"]["Row"]>((from, to) => client.from("task_checklist_items").select("id, task_id, text, is_done, sort_order, craft_part_id")
+        .eq("user_id", userId).in("task_id", ids).order("id").range(from, to)),
+    ]);
+    band_tasks.push(...tasks);
+    count_items.push(...checkItems.filter((item) => item.craft_part_id === null && /^\s*count/i.test(item.text))
+      .map(({ id: itemId, task_id, text, is_done, sort_order }) => ({ id: itemId, task_id, text, is_done, sort_order })));
+  }
   for (const ids of chunks(sessions.map((session) => session.id))) {
     const [links, details] = await Promise.all([
       pagedSelect<Tables["work_session_items"]["Row"]>((from, to) => client.from("work_session_items").select("*").eq("user_id", userId).in("session_id", ids).order("session_id").order("checklist_item_id").range(from, to)),
@@ -82,7 +104,8 @@ async function loadOneCraftView(client: SupabaseClient<Database>, userId: string
     session_items.push(...links); sitting_details.push(...details);
   }
   return buildCraftView({ project: projectResult.data, craft_project: craftResult.data, parts, segments, items,
-    sessions, session_items, sitting_details, timer: timerResult.data, server_now: now.toISOString(), remove_blockers });
+    sessions, session_items, sitting_details, timer: timerResult.data, server_now: now.toISOString(), remove_blockers,
+    timer_project, band_tasks, count_items, notes });
 }
 
 /** 072's rule for Remove, asked once per view. Before 072 is applied (no such function) the screen loads without Remove. */
