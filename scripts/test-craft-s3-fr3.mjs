@@ -211,6 +211,10 @@ await test("Change total sheet on a finished part (Mitten 1's Cuff from the Part
   assert.match(src, /<Select id="craft-total-type" value=\{type\}/);
   assert.match(src, /\.\.\.\(plan\.kind === "add" \? \{ text: text\.trim\(\) \|\| null, work_type: type \|\| null \} : \{\}\)/);
   assert.deepEqual(view.work_types, ["rib", "stockinette"]);
+  const raise = renderToStaticMarkup(createElement(ChangeTotalSheet, { open: true, onClose: () => {}, view, part: cuff, send, initial: { total: 27, text: "knit (US 7)", type: "stockinette" } }));
+  assert.match(raise, /<label for="craft-total-text">Pattern text for the new rounds<\/label><input[^>]*id="craft-total-text"[^>]*value="knit \(US 7\)"/);
+  assert.match(raise, /<select[^>]*id="craft-total-type"[\s\S]*<option value="stockinette" selected="">stockinette<\/option>/);
+  assert.match(raise, /<p class="craft-sheet-preview">Adds Rnd 25–27 · knit \(US 7\) at the end \(stockinette\), 36 stitches each\. The screen moves to this part\.<\/p>/);
 });
 await test("CSS (FR3): tokens only, nothing under 12px, check cards and Done at least 48px", () => {
   const css = readFileSync(new URL("../src/components/craft/craft.css", import.meta.url), "utf8");

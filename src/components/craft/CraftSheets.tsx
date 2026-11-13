@@ -398,7 +398,9 @@ export function BandCloseSheet({ check, onClose, part, send }: { check: BandChec
  * drops only unticked "(est.)" (or blank) rows and renumbers the rows after them; with "(est.)" rows the sheet asks
  * "Last (est.) round needed" and the total follows. Raising adds rows with the text and work type given.
  */
-export function ChangeTotalSheet({ open, onClose, view: live, part: livePart, send }: { open: boolean; onClose: () => void; view: CraftView; part: CraftView["parts"][number]; send: Send }) {
+export function ChangeTotalSheet({ open, onClose, view: live, part: livePart, send, initial }: { open: boolean; onClose: () => void; view: CraftView; part: CraftView["parts"][number]; send: Send;
+  /** A starting total / text / work type (the sheet otherwise starts on the part's own total and its last row's text and type). */
+  initial?: { total?: number; text?: string; type?: string } }) {
   const [snap, setSnap] = useState(() => ({ view: live, part: livePart }));
   const { view, part } = snap;
   const word = part.row_word as RowWord;
@@ -409,11 +411,11 @@ export function ChangeTotalSheet({ open, onClose, view: live, part: livePart, se
   const label = rowLabelOf(rows, word);
   const last = rows.length ? rows[rows.length - 1] : null;
   const est = estRange(rows, part.total_rows);
-  const [mode, setMode] = useState<"est" | "total">(est ? "est" : "total");
-  const [value, setValue] = useState<number | null>(part.total_rows);
+  const [mode, setMode] = useState<"est" | "total">(est && initial?.total === undefined ? "est" : "total");
+  const [value, setValue] = useState<number | null>(initial?.total ?? part.total_rows);
   const [lastEst, setLastEst] = useState<number | null>(est ? Math.min(est.max, Math.max(est.min, part.current_row - 1)) : null);
-  const [text, setText] = useState(rowDescription(last?.text));
-  const [type, setType] = useState(last?.type ?? "");
+  const [text, setText] = useState(initial?.text ?? rowDescription(last?.text));
+  const [type, setType] = useState(initial?.type ?? last?.type ?? "");
   const [state, setState] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
   const target = mode === "est" && est ? (lastEst === null ? null : totalForLastEst(rows, part.total_rows, lastEst)) : value;
   const plan = target === null ? null : setTotalPlan(rows, part.total_rows, target);
@@ -453,7 +455,7 @@ export function ChangeTotalSheet({ open, onClose, view: live, part: livePart, se
         {plan?.kind === "add" && (
           <>
             <div className="craft-field">
-              <label htmlFor="craft-total-text">Pattern text for the new {word}s<span>{label} {plan.add[0]} · …</span></label>
+              <label htmlFor="craft-total-text">Pattern text for the new {word}s</label>
               <Input id="craft-total-text" value={text} maxLength={200} placeholder="e.g. knit (US 7)" onChange={(e) => setText(e.target.value)} />
             </div>
             <div className="craft-field">
