@@ -460,7 +460,7 @@ export function ChangeTotalSheet({ open, onClose, view: live, part: livePart, se
   const addLine = plan?.kind !== "add" ? null
     : !textOk ? `Type the pattern text for the new ${word}s${defaults.same ? `, or pick “Same as ${word} ${defaults.same.row}”` : ""}.`
     : !placeOk ? `Pick where the new ${word}s go: before or after ${steps.length === 1 ? "the step" : "the steps"} after ${label} ${last?.row}.`
-    : raiseSummary({ label, add: plan.add, last: last?.row ?? null, text: typed, type, units, onScreen, steps, place });
+    : raiseSummary({ label, add: plan.add, lastRow: last?.row ?? null, text: typed, type, units, onScreen, steps, place });
   const canSave = Boolean(plan && (plan.kind === "remove" || (plan.kind === "add" && textOk && placeOk)));
   return (
     <Sheet open={open} onClose={onClose} title={`Change total ${word}s`}>

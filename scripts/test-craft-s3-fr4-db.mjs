@@ -6,7 +6,7 @@
 // the step after the last row, an Undo below a ticked check, the ticked cuff check after the repair (Fable R14) and the
 // payload. Fake data shaped like the mittens and the scarf only. Destructive only to this local stack.
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -17,27 +17,6 @@ if (!url || !anon || !key || container !== "supabase_db_mc-pace" || !["127.0.0.1
 }
 const admin = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
 const psql = (sql) => execFileSync("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"], { input: sql, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-function connection(label) {
-  const child = spawn("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"]);
-  let output = "";
-  child.stdout.on("data", (c) => { output += c; });
-  child.stderr.on("data", (c) => { output += c; });
-  const closed = new Promise((resolve) => child.on("close", resolve));
-  return {
-    send: (sql) => child.stdin.write(sql + "\n"),
-    output: () => output,
-    async wait(marker) { for (let i = 0; i < 400; i++) { if (output.includes(marker) || output.includes("ERROR:")) return; await sleep(25); } throw new Error(`${label}: missing ${marker}: ${output}`); },
-    async end() { child.stdin.end(); await closed; },
-  };
-}
-async function waitingOnLock(label) {
-  for (let i = 0; i < 200; i++) {
-    if (psql(`SELECT count(*) FROM pg_stat_activity WHERE application_name='${label}' AND wait_event_type='Lock';`) === "1") return true;
-    await sleep(25);
-  }
-  return false;
-}
 let passed = 0, failed = 0;
 const only = process.env.CRAFT_FR4_ONLY ? new RegExp(process.env.CRAFT_FR4_ONLY) : null;
 async function test(name, fn) {
@@ -66,8 +45,6 @@ const { writeInternalAuthContext } = await import("../src/lib/supabase/internal-
 const rowRoute = await import("../src/app/api/craft/[projectId]/row/route.ts");
 const totalRoute = await import("../src/app/api/craft/[projectId]/total/route.ts");
 const checkRoute = await import("../src/app/api/craft/[projectId]/check/route.ts");
-const partRoute = await import("../src/app/api/craft/[projectId]/part/route.ts");
-const timerRoute = await import("../src/app/api/craft/[projectId]/timer/route.ts");
 const detailRoute = await import("../src/app/api/craft/[projectId]/route.ts");
 const A = await import("../src/lib/craft/actions.ts");
 const C = await import("../src/lib/craft.ts");
@@ -132,9 +109,6 @@ INSERT INTO craft_segments (id, user_id, part_id, task_id, name, from_row, to_ro
 const mittenOne = (owner) => seedMitten(owner, { castOnDone: true, cuffDone: 24, active: "gusset", cuffRows: Array.from({ length: 24 }, (_, i) => [i + 1, i < 21 ? `Rnd ${i + 1} · k1, p1 rib` : `Rnd ${i + 1} (est.) · k1, p1 rib`, "rib"]) });
 const cuffText = (m) => psql(`SELECT string_agg(craft_row || '=' || text || '/' || coalesce(work_type, '-') || '/' || is_done, ' | ' ORDER BY craft_row) FROM task_checklist_items WHERE craft_part_id='${m.cuff}';`);
 const itemsHash = (m) => psql(`SELECT md5(string_agg(id || ':' || coalesce(craft_row::text, '-') || ':' || text || ':' || is_done, ',' ORDER BY id)) FROM task_checklist_items WHERE task_id IN ('${m.cuffTask}','${m.gussetTask}');`);
-const rowOf = (itemId) => psql(`SELECT coalesce(craft_row::text, 'gone') FROM task_checklist_items WHERE id='${itemId}' UNION ALL SELECT 'gone' WHERE NOT EXISTS (SELECT 1 FROM task_checklist_items WHERE id='${itemId}') LIMIT 1;`);
-const rowStates = (partId) => JSON.parse(psql(`SELECT coalesce(json_agg(json_build_object('row', craft_row, 'done', is_done, 'linked', EXISTS (SELECT 1 FROM work_session_items w WHERE w.checklist_item_id = i.id AND NOT w.in_progress), 'in_progress', EXISTS (SELECT 1 FROM work_session_items w WHERE w.checklist_item_id = i.id AND w.in_progress), 'today', false, 'text', text) ORDER BY craft_row), '[]') FROM task_checklist_items i WHERE craft_part_id='${partId}';`));
-const today = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
 
 
 /** A scarf-like part on one task: rows 1..n bare "Row N" (sort 2r), steps after rows (sort 2r+1). */
@@ -156,9 +130,9 @@ UPDATE craft_projects SET active_part_id = '${part}' WHERE project_id = '${proje
   return out;
 }
 
-let a, b;
+let a;
 try {
-  a = await user(); b = await user();
+  a = await user();
   process.env.MISSION_CONTROL_USER_ID = a.id;
 
   await test("FR4 074: craft_set_total(uuid,uuid,integer,integer,text,text,text) is SECURITY INVOKER, EXECUTE for authenticated and service_role only; no 6-argument one; p_how other than after_row / after_steps / take_back, or the wrong way round, is 22023 (the route: 400 before the database)", async () => {
