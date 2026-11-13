@@ -1,6 +1,6 @@
 -- Removes only 074: craft_frogs (the "Ripped back" history), work_session_items.in_progress,
 -- craft_timers.last_done_seconds (FR1; a running timer keeps going, only the Partway hint goes) and the
--- seven new functions (FR3: craft_screen_part, craft_check, craft_pick_part and the 6-argument
+-- seven new functions (FR3: craft_screen_part, craft_check, craft_pick_part and the 7-argument
 -- craft_set_total), and puts back 073's 4-argument craft_set_total (and its grants), craft_timer, craft_rows,
 -- craft_log_sitting and craft_remove_blockers and
 -- 059's work_session_create and work_session_update exactly as they were written (CREATE OR REPLACE
@@ -10,11 +10,11 @@
 BEGIN;
 SET LOCAL lock_timeout = '10s';
 DROP FUNCTION craft_frog(UUID, UUID, INTEGER, INTEGER, INTEGER, TEXT, UUID[], TEXT);
--- FR3: the check card's and "Work on this part"'s functions, 074's Change total (6 arguments) and the screen-part
+-- FR3: the check card's and "Work on this part"'s functions, 074's Change total (7 arguments, FR4) and the screen-part
 -- rule go; 073's 4-argument craft_set_total (with its grants) and craft_timer are put back as written in 073.
 DROP FUNCTION craft_pick_part(UUID, UUID, UUID);
 DROP FUNCTION craft_check(UUID, UUID, UUID[]);
-DROP FUNCTION craft_set_total(UUID, UUID, INTEGER, INTEGER, TEXT, TEXT);
+DROP FUNCTION craft_set_total(UUID, UUID, INTEGER, INTEGER, TEXT, TEXT, TEXT);
 CREATE FUNCTION craft_set_total(p_user_id UUID, p_part_id UUID, p_total INTEGER, p_expected_total INTEGER)
 RETURNS JSONB
 LANGUAGE plpgsql

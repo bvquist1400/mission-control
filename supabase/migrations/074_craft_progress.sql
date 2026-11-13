@@ -1171,16 +1171,22 @@ END;
 $$;
 
 -- Change total rows/rounds (FR3: never drops a pattern row, and renumbers instead of cutting the tail).
--- More: "Row N" / "Rnd N" / "Round N" items (the word of the part's last row item; else the part's row word) at the
--- end of that row's task, with p_text after the label ("Rnd 25 · knit (US 7)"; the last row's separator, else " · ";
+-- More: "Row N" / "Rnd N" / "Round N" items (the word of the part's last row item; else the part's row word) on that
+-- row's task, with p_text after the label ("Rnd 25 · knit (US 7)"; the last row's separator, else " · ";
 -- none = the bare label, as 073), p_work_type (none = the last row's work type), the part's stitch count as
 -- unit_count (none: the last row's unit_count); the segment ending at the old total is extended, and the part
--- becomes the screen's part (adding rows to a finished part brings it back).
+-- becomes the screen's part (adding rows to a finished part brings it back). FR4: where they go on that task:
+-- p_how NULL or 'after_row' = right after the part's last row (a step after it, e.g. "Bind off", moves after the
+-- new rows: every item after the last row moves down by the rows added); 'after_steps' = after every item of the
+-- task (a step after the last row, e.g. Mitten 1's "switch to US 7" check, then comes before the new rows).
 -- Fewer by k: only the k highest rows that may be dropped: rows whose text says "(est.)", or that are only their
 -- label ("Row 456", the scarf's tape-measure ending), unticked and in no sitting (finished or in progress). Else
 -- { status: 'refused', reason: 'not_est' (fewer than k such rows; rows = those there are) | 'ticked' | 'in_sitting', rows }.
+-- FR4, p_how 'take_back' (the screen asks a second time first, naming them): instead drops every row above the
+-- new total, whatever its text (rows a raise added by mistake), still never a ticked row or one in a sitting.
 -- Every row after a dropped one moves down by the rows dropped below it: craft_row and the leading "Rnd N" of its
--- text are renumbered; its text, work type, units, tick and sitting links stay (they hang on the item). Shifted the
+-- text are renumbered (FR4: any case, "rnd 6" / "RND 6"; a leading range "Rnd 4–6" as a whole; numbers later in
+-- the text are left alone); its text, work type, units, tick and sitting links stay (they hang on the item). Shifted the
 -- same way: segments (a segment left with no row goes), notes (a note on a dropped row moves to the row before it),
 -- ripped-back history, instructions, sitting details, the timer's start row (version bumped) and the quarter row.
 -- Guarded by the total the screen showed. Locks: craft_part_lock (the part's tasks in id order, the craft project,
@@ -1190,7 +1196,7 @@ $$;
 -- with four still resolves to it.
 DROP FUNCTION craft_set_total(UUID, UUID, INTEGER, INTEGER);
 CREATE FUNCTION craft_set_total(p_user_id UUID, p_part_id UUID, p_total INTEGER, p_expected_total INTEGER,
-  p_text TEXT DEFAULT NULL, p_work_type TEXT DEFAULT NULL)
+  p_text TEXT DEFAULT NULL, p_work_type TEXT DEFAULT NULL, p_how TEXT DEFAULT NULL)
 RETURNS JSONB
 LANGUAGE plpgsql
 SET search_path = public
@@ -1222,6 +1228,9 @@ BEGIN
   IF char_length(v_text) > 200 THEN
     RAISE EXCEPTION 'the text for new rows must be 200 characters or fewer' USING ERRCODE = '22023';
   END IF;
+  IF p_how IS NOT NULL AND p_how NOT IN ('after_row', 'after_steps', 'take_back') THEN
+    RAISE EXCEPTION 'how must be after_row, after_steps or take_back' USING ERRCODE = '22023';
+  END IF;
   v_part := craft_part_lock(p_user_id, p_part_id);
   IF v_part.total_rows <> p_expected_total THEN
     RETURN jsonb_build_object('status', 'stale', 'part_id', p_part_id, 'total', v_part.total_rows);
@@ -1230,8 +1239,12 @@ BEGIN
     RETURN jsonb_build_object('status', 'ok', 'part_id', p_part_id, 'total', p_total, 'added', 0, 'removed', 0, 'renumbered', 0, 'dropped', '[]'::jsonb);
   END IF;
 
+  IF (p_how = 'take_back' AND p_total > v_part.total_rows) OR (p_how IN ('after_row', 'after_steps') AND p_total < v_part.total_rows) THEN
+    RAISE EXCEPTION 'take_back only lowers a total; after_row and after_steps only raise one' USING ERRCODE = '22023';
+  END IF;
+
   IF p_total > v_part.total_rows THEN
-    SELECT i.id, i.task_id, i.text, i.work_type, i.unit_count, i.craft_row INTO v_last FROM task_checklist_items i
+    SELECT i.id, i.task_id, i.text, i.work_type, i.unit_count, i.craft_row, i.sort_order INTO v_last FROM task_checklist_items i
       WHERE i.craft_part_id = p_part_id AND i.user_id = p_user_id ORDER BY i.craft_row DESC LIMIT 1;
     IF NOT FOUND THEN
       RETURN jsonb_build_object('status', 'refused', 'reason', 'no_rows', 'part_id', p_part_id, 'total', v_part.total_rows);
@@ -1239,7 +1252,14 @@ BEGIN
     v_word := COALESCE((regexp_match(v_last.text, '^(Row|Rnd|Round)[ \t]+[0-9]'))[1], CASE WHEN v_part.row_word = 'round' THEN 'Round' ELSE 'Row' END);
     v_sep := COALESCE((regexp_match(v_last.text, '^(?:Row|Rnd|Round)[ \t]+[0-9]+(?:[ \t]+\(est\.\))?([ \t]*[·:–-][ \t]*)[^ \t]'))[1], ' · ');
     v_type := COALESCE(NULLIF(btrim(p_work_type), ''), v_last.work_type);
-    SELECT COALESCE(max(sort_order), 0) INTO v_sort FROM task_checklist_items WHERE task_id = v_last.task_id AND user_id = p_user_id;
+    IF p_how = 'after_steps' THEN
+      SELECT COALESCE(max(sort_order), 0) INTO v_sort FROM task_checklist_items WHERE task_id = v_last.task_id AND user_id = p_user_id;
+    ELSE
+      -- Right after the last row: the task's items after it move down to make room (their order is kept).
+      v_sort := COALESCE(v_last.sort_order, 0);
+      UPDATE task_checklist_items SET sort_order = sort_order + (p_total - v_part.total_rows)
+        WHERE task_id = v_last.task_id AND user_id = p_user_id AND sort_order > v_sort;
+    END IF;
     INSERT INTO task_checklist_items (user_id, task_id, text, is_done, sort_order, unit_count, work_type, craft_part_id, craft_row)
     SELECT p_user_id, v_last.task_id, v_word || ' ' || n || COALESCE(v_sep || v_text, ''), false, v_sort + (n - v_part.total_rows),
       COALESCE(v_part.stitch_count, v_last.unit_count), v_type, p_part_id, n
@@ -1252,12 +1272,18 @@ BEGIN
       WHERE project_id = v_part.project_id AND user_id = p_user_id AND active_part_id IS DISTINCT FROM p_part_id;
   ELSE
     v_need := v_part.total_rows - p_total;
-    SELECT COALESCE(array_agg(craft_row ORDER BY craft_row), '{}') INTO v_drop FROM (
-      SELECT i.craft_row FROM task_checklist_items i
-      WHERE i.craft_part_id = p_part_id AND i.user_id = p_user_id AND i.craft_row <= v_part.total_rows
-        AND (position('(est.)' IN lower(i.text)) > 0 OR i.text ~ '^(Row|Rnd|Round)[ \t]+[0-9]+[ \t]*$')
-      ORDER BY i.craft_row DESC LIMIT v_need) x;
-    IF cardinality(v_drop) < v_need THEN
+    IF p_how = 'take_back' THEN
+      -- FR4: every row above the new total, whatever its text (the sheet named them and asked first).
+      SELECT COALESCE(array_agg(craft_row ORDER BY craft_row), '{}') INTO v_drop FROM task_checklist_items
+        WHERE craft_part_id = p_part_id AND user_id = p_user_id AND craft_row > p_total;
+    ELSE
+      SELECT COALESCE(array_agg(craft_row ORDER BY craft_row), '{}') INTO v_drop FROM (
+        SELECT i.craft_row FROM task_checklist_items i
+        WHERE i.craft_part_id = p_part_id AND i.user_id = p_user_id AND i.craft_row <= v_part.total_rows
+          AND (position('(est.)' IN lower(i.text)) > 0 OR i.text ~ '^(Row|Rnd|Round)[ \t]+[0-9]+[ \t]*$')
+        ORDER BY i.craft_row DESC LIMIT v_need) x;
+    END IF;
+    IF p_how IS DISTINCT FROM 'take_back' AND cardinality(v_drop) < v_need THEN
       RETURN jsonb_build_object('status', 'refused', 'reason', 'not_est', 'rows', to_jsonb(v_drop), 'need', v_need,
         'part_id', p_part_id, 'total', v_part.total_rows);
     END IF;
@@ -1272,18 +1298,24 @@ BEGIN
     IF cardinality(v_rows) > 0 THEN
       RETURN jsonb_build_object('status', 'refused', 'reason', 'in_sitting', 'rows', to_jsonb(v_rows), 'part_id', p_part_id, 'total', v_part.total_rows);
     END IF;
-    v_first := v_drop[1];
+    v_first := COALESCE(v_drop[1], p_total + 1);
     DELETE FROM task_checklist_items WHERE craft_part_id = p_part_id AND user_id = p_user_id AND craft_row = ANY (v_drop);
     GET DIAGNOSTICS v_removed = ROW_COUNT;
     -- Two steps, so no row lands on a number still in use (one row per number per part).
     UPDATE task_checklist_items SET craft_row = craft_row + 1000000
       WHERE craft_part_id = p_part_id AND user_id = p_user_id AND craft_row > v_first;
+    -- The leading label is renumbered in any case ("rnd 6", "RND 6"), a leading range ("Rnd 4–6") as a whole (it
+    -- keeps its width); numbers later in the text are left alone.
     UPDATE task_checklist_items i SET craft_row = n.new_row,
-      text = CASE WHEN i.text ~ '^(Row|Rnd|Round)[ \t]+[0-9]+'
-        THEN (regexp_match(i.text, '^((?:Row|Rnd|Round)[ \t]+)'))[1] || n.new_row
-          || substr(i.text, char_length((regexp_match(i.text, '^((?:Row|Rnd|Round)[ \t]+[0-9]+)'))[1]) + 1)
-        ELSE i.text END
-      FROM (SELECT x.id, (x.craft_row - 1000000) - (SELECT count(*)::int FROM unnest(v_drop) d WHERE d < x.craft_row - 1000000) AS new_row
+      text = CASE WHEN n.m IS NULL THEN i.text
+        ELSE n.m[1] || n.new_row
+          || CASE WHEN n.m[4] IS NULL THEN ''
+                  WHEN n.m[4]::numeric >= n.m[2]::numeric THEN n.m[3] || (n.new_row + (n.m[4]::numeric - n.m[2]::numeric))::text
+                  ELSE n.m[3] || n.m[4] END
+          || substr(i.text, char_length(n.m[1]) + char_length(n.m[2]) + COALESCE(char_length(n.m[3]) + char_length(n.m[4]), 0) + 1)
+        END
+      FROM (SELECT x.id, (x.craft_row - 1000000) - (SELECT count(*)::int FROM unnest(v_drop) d WHERE d < x.craft_row - 1000000) AS new_row,
+              regexp_match(x.text, '^((?:row|rnd|round)[ \t]+)([0-9]+)(?:([–-])([0-9]+))?', 'i') AS m
             FROM task_checklist_items x WHERE x.craft_part_id = p_part_id AND x.user_id = p_user_id AND x.craft_row > 1000000) n
       WHERE i.id = n.id;
     GET DIAGNOSTICS v_moved = ROW_COUNT;
@@ -1415,11 +1447,11 @@ GRANT EXECUTE ON FUNCTION craft_sitting_rows(UUID, UUID, UUID) TO authenticated,
 GRANT EXECUTE ON FUNCTION craft_save_sitting(UUID, UUID, BOOLEAN, INTEGER, INTEGER, DATE, TIMESTAMPTZ, TIMESTAMPTZ, INTEGER, INTEGER, INTEGER, INTEGER, TEXT, TEXT, BOOLEAN) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION craft_frog(UUID, UUID, INTEGER, INTEGER, INTEGER, TEXT, UUID[], TEXT) TO authenticated, service_role;
 REVOKE ALL ON FUNCTION craft_screen_part(UUID, UUID) FROM PUBLIC, anon;
-REVOKE ALL ON FUNCTION craft_set_total(UUID, UUID, INTEGER, INTEGER, TEXT, TEXT) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION craft_set_total(UUID, UUID, INTEGER, INTEGER, TEXT, TEXT, TEXT) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION craft_check(UUID, UUID, UUID[]) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION craft_pick_part(UUID, UUID, UUID) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION craft_screen_part(UUID, UUID) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION craft_set_total(UUID, UUID, INTEGER, INTEGER, TEXT, TEXT) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION craft_set_total(UUID, UUID, INTEGER, INTEGER, TEXT, TEXT, TEXT) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION craft_check(UUID, UUID, UUID[]) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION craft_pick_part(UUID, UUID, UUID) TO authenticated, service_role;
 
