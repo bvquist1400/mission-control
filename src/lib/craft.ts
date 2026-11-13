@@ -148,7 +148,7 @@ export function placeChecks(parts: { id: string; name: string; row_word: string;
   for (const item of rows) if (item.task_id) byTask.set(item.task_id, [...(byTask.get(item.task_id) ?? []), item]);
   for (const list of byTask.values()) list.sort(byKey);
   const bandTasks = new Set(segments.filter((segment) => segment.close_check && segment.task_id).map((segment) => segment.task_id as string));
-  const placed: (CraftCheck & { at: number })[] = [];
+  const placed: { at: number; check: CraftCheck }[] = [];
   for (const check of plain) {
     if (check.is_done || (bandTasks.has(check.task_id) && isCountItemText(check.text))) continue;
     const onTask = byTask.get(check.task_id);
@@ -158,12 +158,11 @@ export function placeChecks(parts: { id: string; name: string; row_word: string;
     if (!anchor) continue;
     const own = (before ?? anchor).craft_part_id as string;
     const part = sortedParts[partIndex.get(anchor.craft_part_id as string) as number];
-    placed.push({ id: check.id, task_id: check.task_id, text: check.text, part_id: part.id, part_name: part.name,
-      row_word: part.row_word === "round" ? "round" : "row", row: anchor.craft_row as number, other_part: own !== part.id,
-      at: order.get(anchor.id) as number });
+    placed.push({ at: order.get(anchor.id) as number, check: { id: check.id, task_id: check.task_id, text: check.text, part_id: part.id, part_name: part.name,
+      row_word: part.row_word === "round" ? "round" : "row", row: anchor.craft_row as number, other_part: own !== part.id } });
   }
-  return placed.sort((a, b) => a.at - b.at || (a.other_part === b.other_part ? 0 : a.other_part ? -1 : 1) || a.id.localeCompare(b.id))
-    .map(({ at: _at, ...check }) => check);
+  return placed.sort((a, b) => a.at - b.at || (a.check.other_part === b.check.other_part ? 0 : a.check.other_part ? -1 : 1) || a.check.id.localeCompare(b.check.id))
+    .map((entry) => entry.check);
 }
 
 /**
