@@ -268,3 +268,19 @@
 .craft-check-list small { font-family: var(--font-plex-mono); font-size: 12px; color: var(--muted-foreground); }
 .craft-check-list p { margin-top: 2px; font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
 .craft-total-mode > * { flex: 1 1 0; }
+/* S3 FR4: earlier steps not ticked (one quiet line, a list), the raise's "Same as" and where-the-rows-go choices, the take-back question. */
+.craft-earlier { margin-top: 10px; border: 1px solid var(--stroke); background: var(--panel-muted); }
+.craft-earlier-line { display: flex; width: 100%; min-height: 44px; align-items: center; justify-content: space-between; gap: 8px; padding: 0 12px; background: transparent; color: var(--muted-foreground); font-size: 14px; font-weight: 600; text-align: left; }
+.craft-earlier-list { display: flex; flex-direction: column; gap: 6px; padding: 0 10px 10px; }
+.craft-earlier-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 8px 8px 8px 10px; border-left: 3px solid var(--stroke); background: var(--panel); }
+.craft-earlier-list small { font-family: var(--font-plex-mono); font-size: 12px; color: var(--muted-foreground); }
+.craft-earlier-list p { margin-top: 2px; font-size: 15px; line-height: 1.35; overflow-wrap: anywhere; }
+.craft-earlier-list li > button { min-width: 72px; min-height: 44px; }
+#craft-earlier-list > button { margin: 0 10px 10px; min-height: 44px; }
+.craft-total-same { margin-top: 6px; }
+.craft-total-same > button { max-width: 100%; white-space: normal; text-align: left; overflow-wrap: anywhere; }
+.craft-total-place .craft-toggle > * { flex: 1 1 0; }
+.craft-total-step { font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; }
+.craft-take-back-offer { margin-top: 8px; }
+.craft-take-back-offer > button { max-width: 100%; white-space: normal; text-align: left; }
+.craft-take-back .craft-check-q { font-size: 22px; overflow-wrap: anywhere; }

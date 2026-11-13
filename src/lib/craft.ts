@@ -125,6 +125,12 @@ export interface CraftCheck {
   part_id: string; part_name: string; row_word: "row" | "round"; row: number;
   /** The check's own task holds another part's rows (it sits after that part's last row): name the part. */
   other_part: boolean;
+  /** FR4: the check's own sort order on its task (checks at one row keep it). */
+  sort_order: number;
+  /** FR4: the row just before it on its task (null: none, it comes before the task's first row). */
+  after_part_id: string | null; after_row: number | null;
+  /** FR4: it comes after the project's very last row ("Bind off"): `row` is that last row, shown once it is ticked. */
+  after_last: boolean;
 }
 
 /**
@@ -132,8 +138,8 @@ export interface CraftCheck {
  * the project's parts; a close_check band's "Count …" item is the band close's (S2), not a check. Its place is by the
  * task's sort order: after the task's row just before it, so it comes before the next row in pattern order (parts by
  * sort order, rows by number; the next part's first row when that row was its part's last); with no row before it on
- * its task, before the task's first row after it. A check after the project's very last row has no row to come before
- * and isn't shown.
+ * its task, before the task's first row after it. FR4: a check after the project's very last row ("Bind off") comes
+ * after that row (`after_last`); checks at one place keep their own sort order (id only breaks a tie).
  */
 export function placeChecks(parts: { id: string; name: string; row_word: string; sort_order: number; total_rows: number }[], items: CraftItem[],
   plain: CraftPlainItem[], segments: Pick<CraftSegment, "task_id" | "close_check">[]): CraftCheck[] {
@@ -154,14 +160,20 @@ export function placeChecks(parts: { id: string; name: string; row_word: string;
     const onTask = byTask.get(check.task_id);
     if (!onTask?.length) continue;
     const before = onTask.filter((item) => byKey(item, check) < 0).at(-1);
-    const anchor = before ? rows[(order.get(before.id) as number) + 1] : onTask.find((item) => byKey(item, check) > 0);
+    const next = before ? rows[(order.get(before.id) as number) + 1] : onTask.find((item) => byKey(item, check) > 0);
+    // FR4 (Astra 2): after the project's very last row there is no row to come before: it comes after that row.
+    const anchor = next ?? before;
     if (!anchor) continue;
+    const afterLast = !next;
     const own = (before ?? anchor).craft_part_id as string;
     const part = sortedParts[partIndex.get(anchor.craft_part_id as string) as number];
-    placed.push({ at: order.get(anchor.id) as number, check: { id: check.id, task_id: check.task_id, text: check.text, part_id: part.id, part_name: part.name,
-      row_word: part.row_word === "round" ? "round" : "row", row: anchor.craft_row as number, other_part: own !== part.id } });
+    placed.push({ at: afterLast ? rows.length : order.get(anchor.id) as number, check: { id: check.id, task_id: check.task_id, text: check.text, part_id: part.id, part_name: part.name,
+      row_word: part.row_word === "round" ? "round" : "row", row: anchor.craft_row as number, other_part: own !== part.id, sort_order: check.sort_order ?? 0,
+      after_part_id: before?.craft_part_id ?? null, after_row: before?.craft_row ?? null, after_last: afterLast } });
   }
-  return placed.sort((a, b) => a.at - b.at || (a.check.other_part === b.check.other_part ? 0 : a.check.other_part ? -1 : 1) || a.check.id.localeCompare(b.check.id))
+  // FR4 (Astra 1): at one place, a step from the previous part's task first, then by the check's own sort order, id last.
+  return placed.sort((a, b) => a.at - b.at || (a.check.other_part === b.check.other_part ? 0 : a.check.other_part ? -1 : 1)
+    || a.check.sort_order - b.check.sort_order || a.check.id.localeCompare(b.check.id))
     .map((entry) => entry.check);
 }
 
@@ -173,16 +185,44 @@ export type UpcomingEntry = { kind: "row"; id: string; row: number; text: string
 export function upcomingWithChecks(rows: { id: string; row: number; text: string }[], checks: CraftCheck[], partId: string): UpcomingEntry[] {
   const out: UpcomingEntry[] = [];
   for (const row of rows) {
-    for (const check of checks) if (check.part_id === partId && check.row === row.row) out.push({ kind: "check", check });
+    for (const check of checks) if (check.part_id === partId && check.row === row.row && !check.after_last) out.push({ kind: "check", check });
     out.push({ kind: "row", ...row });
   }
+  // FR4: a step after the part's (and project's) last row comes after its rows.
+  for (const check of checks) if (check.part_id === partId && check.after_last) out.push({ kind: "check", check });
   for (const check of checks) if (check.part_id !== partId) out.push({ kind: "check", check });
   return out;
 }
 
-/** "Before Round 25:", "Before Round 1 (Thumb gusset):" (FR3). */
-export const checkBeforeText = (check: Pick<CraftCheck, "row_word" | "row" | "other_part" | "part_name">) =>
-  `Before ${check.row_word === "round" ? "Round" : "Row"} ${check.row}${check.other_part ? ` (${check.part_name})` : ""}:`;
+/**
+ * "Before Round 25:", "Before Round 1 (Thumb gusset):" (FR3); FR4: "After the last round:" for a step after the
+ * project's last row ("After the last round (Cuff):" when the screen is on another part).
+ */
+export const checkBeforeText = (check: Pick<CraftCheck, "row_word" | "row" | "other_part" | "part_name"> & { after_last?: boolean; part_id?: string }, screenPartId?: string | null) =>
+  check.after_last
+    ? `After the last ${check.row_word}${screenPartId !== undefined && screenPartId !== check.part_id ? ` (${check.part_name})` : ""}:`
+    : `Before ${check.row_word === "round" ? "Round" : "Row"} ${check.row}${check.other_part ? ` (${check.part_name})` : ""}:`;
+
+/** FR4: "1 earlier step not ticked", "3 earlier steps not ticked". */
+export const earlierStepsText = (n: number) => `${n} earlier ${n === 1 ? "step" : "steps"} not ticked`;
+
+/**
+ * FR4 (Fable 5): a part's rows from the view. The screen's part is sent once, as `row_states`; `part_rows` holds the
+ * other parts' rows.
+ */
+export const partRowsOf = (view: { active_part: { id: string } | null; row_states: RowState[]; part_rows: Record<string, RowState[]> }, partId: string): RowState[] =>
+  (view.active_part?.id === partId ? view.row_states : view.part_rows[partId]) ?? [];
+
+/**
+ * FR4: the unticked steps right after a part's last row on that row's task (Mitten 1's "switch to US 7" check, a
+ * scarf's "Bind off"): a raise asks whether the new rows go before or after them.
+ */
+export function trailingStepsOf(view: { checks: CraftCheck[]; active_part: { id: string } | null; row_states: RowState[]; part_rows: Record<string, RowState[]> }, partId: string) {
+  const rows = partRowsOf(view, partId);
+  if (!rows.length) return [];
+  const last = Math.max(...rows.map((state) => state.row));
+  return view.checks.filter((check) => check.after_part_id === partId && check.after_row === last).map((check) => ({ id: check.id, text: check.text }));
+}
 
 export function buildCraftView(input: CraftInput) {
   const today = etDateOf(input.server_now);
@@ -216,16 +256,24 @@ export function buildCraftView(input: CraftInput) {
       since_timer: sinceTimer(item), done_at: item.is_done ? item.completed_at : null, units: item.unit_count ?? null, type: item.work_type ?? null, text: item.text }))
     .sort((a, b) => a.row - b.row);
   const row_states: RowState[] = active_part ? rowStatesOf(active_part.id) : [];
-  // S3 FR3: every part's rows, for Change total… on any part (the Parts list), finished ones too.
-  const part_rows: Record<string, RowState[]> = Object.fromEntries(parts.map((part) => [part.id, part.id === active_part?.id ? row_states : rowStatesOf(part.id)]));
+  // S3 FR3: the other parts' rows, for Change total… on any part (the Parts list), finished ones too. FR4 (Fable 5): the
+  // screen's part is sent once, as row_states (`partRowsOf` reads either).
+  const part_rows: Record<string, RowState[]> = Object.fromEntries(parts.filter((part) => part.id !== active_part?.id).map((part) => [part.id, rowStatesOf(part.id)]));
+  const rowsOfPart = (partId: string) => (partId === active_part?.id ? row_states : part_rows[partId] ?? []);
   const checks = placeChecks(parts, input.items, input.plain_items ?? [], input.segments);
-  // A check shows as a card once its row is reached on the screen's part: before the current row, or passed by Fix count.
-  const due_checks = active_part && !active_part.finished ? checks.filter((check) => check.part_id === active_part.id && check.row <= active_part.current_row) : [];
+  // FR4 (Fable 3): only a check at the current row is a card that Row done asks about; older ones passed unticked (Fix
+  // count, "Not yet") are the quiet "N earlier steps not ticked" list; a step after the project's last row shows once
+  // that row is ticked ("After the last round").
+  const onScreen = (check: CraftCheck) => active_part !== null && check.part_id === active_part.id && !check.after_last;
+  const due_checks = active_part && !active_part.finished ? checks.filter((check) => onScreen(check) && check.row === active_part.current_row) : [];
+  const earlier_checks = active_part ? checks.filter((check) => onScreen(check) && check.row < active_part.current_row) : [];
+  const after_last_checks = checks.filter((check) => check.after_last && rowsOfPart(check.part_id).some((state) => state.row === check.row && state.done));
   // Checks coming up: on rows after the current one, and before the next part's first row once this part's last few rows are left.
   const nextPart = active_part ? parts.slice(parts.findIndex((part) => part.id === active_part.id) + 1).find((part) => part.row_count > 0) : undefined;
   const rowsLeft = active_part ? row_states.filter((state) => !state.done && state.row <= active_part.total_rows).length : 0;
-  const upcoming_checks = active_part && !active_part.finished ? checks.filter((check) => (check.part_id === active_part.id && check.row > active_part.current_row)
-    || (nextPart !== undefined && rowsLeft <= 3 && check.part_id === nextPart.id && check.row === Math.min(...(part_rows[nextPart.id] ?? []).map((state) => state.row)))) : [];
+  const upcoming_checks = active_part && !active_part.finished ? checks.filter((check) => (onScreen(check) && check.row > active_part.current_row)
+    || (check.after_last && check.part_id === active_part.id && rowsLeft <= 3)
+    || (nextPart !== undefined && rowsLeft <= 3 && check.part_id === nextPart.id && !check.after_last && check.row === Math.min(...rowsOfPart(nextPart.id).map((state) => state.row)))) : [];
   const work_types = [...new Set(input.items.filter((item) => item.craft_part_id && partIds.has(item.craft_part_id) && item.work_type).map((item) => item.work_type as string))].sort();
   const nowMs = Date.parse(input.server_now);
   const elapsed = timerRow ? timerElapsedAt(timerRow, nowMs) : 0;
@@ -328,7 +376,7 @@ export function buildCraftView(input: CraftInput) {
     recent_sittings, server_now: input.server_now,
     timer, other_timer, row_states, pending_checks, timer_rows, timer_last_done_at, rip_sittings, frogs,
     // S3 FR3: checks in pattern order, the ones due on the screen's part, every part's rows, the work types in use.
-    checks, due_checks, upcoming_checks, part_rows, work_types,
+    checks, due_checks, earlier_checks, after_last_checks, upcoming_checks, part_rows, work_types,
     notes: [...(input.notes ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at) || a.id.localeCompare(b.id)).slice(0, 50),
     // Remove is offered only when the server said nothing would be lost (072 refuses otherwise too).
     can_remove: Array.isArray(input.remove_blockers) && input.remove_blockers.length === 0,

@@ -232,7 +232,7 @@ export async function writeFrog(client: Client, userId: string, projectId: strin
 // ── Change total rows/rounds ─────────────────────────────────────────────────
 export async function writeTotal(client: Client, userId: string, projectId: string, raw: unknown) {
   const body = record(raw);
-  onlyKeys(body, ["part_id", "total", "expected_total", "text", "work_type"]);
+  onlyKeys(body, ["part_id", "total", "expected_total", "text", "work_type", "how"]);
   const partId = uuid(body.part_id, "part_id");
   const total = int(body.total, "total", 1, 2000);
   const expected = int(body.expected_total, "expected_total", 1, 100_000);
@@ -242,9 +242,16 @@ export async function writeTotal(client: Client, userId: string, projectId: stri
   if ([...text].length > 200) bad("text must be 200 characters or fewer");
   if (body.work_type !== undefined && body.work_type !== null && (typeof body.work_type !== "string" || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(body.work_type))) bad("work_type must be a lowercase work type (letters, numbers, dashes)");
   const workType = typeof body.work_type === "string" ? body.work_type : null;
+  // S3 FR4: where raised rows go ("after_row" = right after the part's last row, before a step after it; "after_steps" =
+  // after that step), or "take_back" = a lowering that drops the rows above the new total whatever their text (the
+  // sheet named them and asked a second time). None = the default rules.
+  if (body.how !== undefined && body.how !== null && !["after_row", "after_steps", "take_back"].includes(body.how as string)) bad("how must be after_row, after_steps or take_back");
+  const how = typeof body.how === "string" ? body.how : null;
+  if (how === "take_back" && total >= expected) bad("take_back only lowers a total");
+  if ((how === "after_row" || how === "after_steps") && total <= expected) bad("after_row and after_steps only raise a total");
   const part = await partIn(client, userId, projectId, partId);
   const { data, error } = await client.rpc("craft_set_total", { p_user_id: userId, p_part_id: partId, p_total: total, p_expected_total: expected,
-    ...(text ? { p_text: text } : {}), ...(workType ? { p_work_type: workType } : {}) });
+    ...(text ? { p_text: text } : {}), ...(workType ? { p_work_type: workType } : {}), ...(how ? { p_how: how } : {}) });
   if (error) rpcFailure(error);
   const result = data as RpcResult;
   const fresh = await view(client, userId, projectId);

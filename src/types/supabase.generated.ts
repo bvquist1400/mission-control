@@ -4012,6 +4012,7 @@ export type Database = {
       craft_set_total: {
         Args: {
           p_expected_total: number
+          p_how?: string
           p_part_id: string
           p_text?: string
           p_total: number

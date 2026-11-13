@@ -127,13 +127,25 @@ export const isEstRowText = (text: string | undefined) => text !== undefined && 
 export const isBareRowText = (text: string | undefined) => text === undefined || /^(Row|Rnd|Round)[ \t]+[0-9]+[ \t]*$/.test(text);
 /** The rows lowering a total may drop (074's craft_set_total): "(est.)" or bare rows. */
 export const isDroppableRow = (state: Pick<RowState, "text">) => isEstRowText(state.text) || isBareRowText(state.text);
-const LABEL = /^(Row|Rnd|Round)[ \t]+[0-9]+(?:[ \t]+\(est\.\))?[ \t]*(?:[·:–-][ \t]*)?/;
+// FR4: labels in any case ("rnd 6", "RND 6") and a leading range ("Rnd 4–6") count as the label.
+const LABEL = /^(Row|Rnd|Round)[ \t]+[0-9]+(?:[–-][0-9]+)?(?:[ \t]+\(est\.\))?[ \t]*(?:[·:–-][ \t]*)?/i;
 /** A row's pattern text after its label ("Rnd 24 (est.) · k1, p1 rib" → "k1, p1 rib"; "Row 519" → ""). */
 export const rowDescription = (text: string | undefined) => (text ?? "").replace(LABEL, "").trim();
 /** The label word a part's rows are written with ("Rnd"), else the part's word. */
 export function rowLabelOf(rows: Pick<RowState, "text">[], word: RowWord): string {
-  for (const state of rows) { const m = state.text?.match(/^(Row|Rnd|Round)[ \t]+[0-9]/); if (m) return m[1]; }
+  for (const state of rows) { const m = state.text?.match(/^(Row|Rnd|Round)[ \t]+[0-9]/i); if (m) return m[1]; }
   return wordTitle(word);
+}
+/**
+ * FR4: a moved row's text, as 074's craft_set_total writes it: the leading label's number becomes the new row, in any
+ * case ("rnd 6" → "rnd 5"); a leading range moves as a whole and keeps its width ("Rnd 4–6" → "Rnd 3–5"); numbers
+ * later in the text ("as Rnd 4", "(see Rnd 3)") are left alone; text with no leading label is kept as it is.
+ */
+export function renumberRowText(text: string, newRow: number): string {
+  const m = text.match(/^((?:row|rnd|round)[ \t]+)([0-9]+)(?:([–-])([0-9]+))?/i);
+  if (!m) return text;
+  const range = m[4] === undefined ? "" : BigInt(m[4]) >= BigInt(m[2]) ? `${m[3]}${BigInt(newRow) + BigInt(m[4]) - BigInt(m[2])}` : `${m[3]}${m[4]}`;
+  return `${m[1]}${newRow}${range}${text.slice(m[0].length)}`;
 }
 
 /**
@@ -157,6 +169,73 @@ export function setTotalPlan(rows: RowState[], total: number, next: number): Set
   const moves = rows.filter((s) => s.row > dropped[0] && !dropped.includes(s.row)).sort((a, b) => a.row - b.row)
     .map((s) => ({ from: s.row, to: s.row - dropped.filter((d) => d < s.row).length }));
   return { kind: "remove", total: next, remove: dropped, moves };
+}
+
+/**
+ * FR4, "take back": lowering to `next` by dropping every row above it, whatever its text (rows a raise added by
+ * mistake). Offered only beside the default plan, never instead of it silently: the sheet names the rows and asks a
+ * second time ("Also remove pattern rounds 25–27 · knit (US 7)?"). Still never a ticked row or one in a sitting.
+ * Null when it isn't a lowering, there is nothing above `next`, or it would drop exactly what the default plan drops.
+ */
+export function takeBackPlan(rows: RowState[], total: number, next: number):
+  | { kind: "remove"; total: number; remove: number[]; moves: [] }
+  | { kind: "refused"; total: number; reason: "ticked" | "in_sitting"; rows: number[] } | null {
+  if (!Number.isInteger(next) || next < 1 || next >= total) return null;
+  const above = rows.filter((s) => s.row > next).sort((a, b) => a.row - b.row);
+  if (!above.length) return null;
+  const remove = above.map((s) => s.row);
+  const usual = setTotalPlan(rows, total, next);
+  if (usual.kind === "remove" && usual.remove.length === remove.length && usual.remove.every((r, i) => r === remove[i])) return null;
+  const ticked = above.filter((s) => s.done).map((s) => s.row);
+  if (ticked.length) return { kind: "refused", total: next, reason: "ticked", rows: ticked };
+  const linked = above.filter((s) => s.linked || s.in_progress).map((s) => s.row);
+  if (linked.length) return { kind: "refused", total: next, reason: "in_sitting", rows: linked };
+  return { kind: "remove", total: next, remove, moves: [] };
+}
+/** "pattern rounds 25–27 · knit (US 7)", grouped by run and text (more than three groups: "pattern rounds 25–40"). */
+export function takeBackRowsText(word: RowWord, rows: RowState[], remove: number[]): string {
+  const byRow = new Map(rows.map((s) => [s.row, s]));
+  const groups: { rows: number[]; desc: string }[] = [];
+  for (const row of [...remove].sort((a, b) => a - b)) {
+    const desc = rowDescription(byRow.get(row)?.text);
+    const last = groups.at(-1);
+    if (last && last.desc === desc && last.rows.at(-1) === row - 1) last.rows.push(row);
+    else groups.push({ rows: [row], desc });
+  }
+  const many = (n: number) => (n === 1 ? word : `${word}s`);
+  if (groups.length > 3) return `pattern ${many(remove.length)} ${runsText(remove)}`;
+  return `pattern ${groups.map((g, i) => `${i === 0 ? `${many(remove.length)} ` : ""}${runsText(g.rows)}${g.desc ? ` · ${g.desc}` : ""}`).join(" and ")}`;
+}
+
+/**
+ * FR4: what a raise starts from. Never prefilled from an "(est.)" row: `same` is the last row whose text has no
+ * "(est.)" (the "Same as round 21: k1, p1 rib" choice; its description may be "" for a bare label), and the work type
+ * picker starts on that row's type. Null without such a row.
+ */
+export function raiseDefaults(rows: RowState[]): { same: { row: number; text: string } | null; type: string | null } {
+  const last = [...rows].filter((s) => !isEstRowText(s.text)).sort((a, b) => b.row - a.row)[0];
+  return last ? { same: { row: last.row, text: rowDescription(last.text) }, type: last.type ?? null } : { same: null, type: null };
+}
+
+/** A step (plain checklist item) right after the part's last row on its task: a raise asks where the new rows go. */
+export interface TrailingStep { id: string; text: string }
+const quoted = (steps: TrailingStep[]) => steps.map((step) => `“${step.text}”`).join(" and ");
+/**
+ * FR4: the raise's line before Save. "Adds Rnd 25–27 · knit (US 7) at the end (stockinette), 36 stitches each. The
+ * screen moves to this part." With a step after the last row it says where the rows go: right after the last row
+ * (before the step, which then comes after them) or after the step (which then comes before the first new row).
+ */
+export function raiseSummary(args: { label: string; add: number[]; lastRow: number | null; text: string; type: string; units: number | null; onScreen: boolean;
+  steps: TrailingStep[]; place: "after_row" | "after_steps" | null }): string {
+  const { label, add, lastRow, text, type, units, onScreen, steps, place } = args;
+  const what = `${label} ${runsText(add)}${text ? ` · ${text}` : ""}`;
+  const typeText = type ? ` (${type})` : "";
+  const each = units !== null ? `${units.toLocaleString("en-US")} stitches each` : "no stitch count";
+  const move = onScreen ? "" : " The screen moves to this part.";
+  const step = `${steps.length === 1 ? "The step" : "The steps"} ${quoted(steps)}`;
+  if (steps.length && place === "after_row") return `Adds ${what} right after ${label} ${lastRow}${typeText}, ${each}. ${step} ${steps.length === 1 ? "moves" : "move"} after ${label} ${add.at(-1)}.${move}`;
+  const stays = steps.length && place === "after_steps" ? ` ${step} ${steps.length === 1 ? "stays" : "stay"} before ${label} ${add[0]}.` : "";
+  return `Adds ${what} at the end${typeText}, ${each}.${stays}${move}`;
 }
 
 /** "25–28", "3, 5–7" (numbers only). */

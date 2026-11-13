@@ -6,7 +6,7 @@ import { Button, buttonClasses } from "@/components/ui/Button";
 import { CraftProjectSwitcher } from "@/components/craft/CraftProjectSwitcher";
 import { CraftScreenMenu } from "@/components/craft/CraftScreenMenu";
 import {
-  BandCloseSheet, ChangeTotalSheet, CheckFirstSheet, FixCountSheet, LogSittingSheet, NewDaySheet, NoteSheet, PartsList, PartsSheet, TimerConflictSheet, TimerFixSheet, UndoRowsSheet,
+  BandCloseSheet, ChangeTotalSheet, CheckFirstSheet, EarlierSteps, FixCountSheet, LogSittingSheet, NewDaySheet, NoteSheet, PartsList, PartsSheet, TimerConflictSheet, TimerFixSheet, UndoRowsSheet,
   type BandCheck, type OtherTimer, type Send, type SendReply,
 } from "@/components/craft/CraftSheets";
 import { useWakeLock } from "@/components/craft/useWakeLock";
@@ -120,7 +120,10 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
   const upcoming: UpcomingEntry[] = part ? upcomingWithChecks(view.next_rows.filter((row) => row.row > part.current_row).slice(0, 3), view.upcoming_checks ?? [], part.id) : [];
   // The inside screen's "Next rows": the current row's due checks first, then each check before its row.
   const nextEntries: UpcomingEntry[] = part ? upcomingWithChecks(view.next_rows, [...(view.due_checks ?? []).filter((check) => check.row === part.current_row), ...(view.upcoming_checks ?? [])], part.id) : [];
+  // FR4: only a check at the current row is asked about on Row done; older unticked ones are one quiet line.
   const dueChecks = view.due_checks ?? [];
+  const earlierChecks = view.earlier_checks ?? [];
+  const afterLast = view.after_last_checks ?? [];
   const totalPart = view.parts.find((entry) => entry.id === (totalPartId ?? part?.id)) ?? null;
   const nextRow = part && !part.finished ? nextExistingRow(view.row_states, part.current_row, part.total_rows) : null;
   const timer = view.timer;
@@ -218,6 +221,16 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
           <div className="craft-project"><p className="craft-eyebrow">{view.craft === "knit" ? "Knitting" : view.craft === "crochet" ? "Crochet" : "Craft"}</p>{(view.projects?.length ?? 0) > 1 ? <CraftProjectSwitcher currentId={view.project.id} currentName={view.project.name} projects={view.projects ?? []} /> : <h2>{view.project.name}</h2>}{view.gear && <p>{view.gear}</p>}</div>
           <div className="craft-part"><span className="craft-eyebrow">{allFinished ? "Project progress" : "Active part"}</span><h3>{part?.name ?? (allFinished ? "All parts finished" : "No parts yet")}</h3>{part?.stitch_count !== null && part?.stitch_count !== undefined && <p>{part.stitch_count} stitches</p>}
             {view.parts.length > 0 && <button type="button" className="craft-parts-open" onClick={() => setSheet("parts")} aria-label={`Parts (${view.parts.length}): work on another part or change a total`}>Parts</button>}</div>
+          {afterLast.length > 0 && (
+            <ul className="craft-due-checks" aria-label="After the last row">{afterLast.map((check) => (
+              <li key={check.id} className="craft-due-check">
+                <div><small>{checkBeforeText(check, part?.id ?? null)}</small><p>{check.text}</p></div>
+                <Button variant="primary" size="md" disabled={busy !== null} aria-busy={busy === `check-${check.id}` || undefined} aria-label={`Done: ${check.text}`}
+                  onClick={() => { void act(`check-${check.id}`, "check", { item_ids: [check.id] }); }}>Done</Button>
+              </li>
+            ))}</ul>
+          )}
+          <EarlierSteps checks={earlierChecks} busy={busy} onDone={(label, ids) => { void act(label, "check", { item_ids: ids }); }} />
           {part && !part.finished && dueChecks.length > 0 && (
             <ul className="craft-due-checks" aria-label="Checks before this row">{dueChecks.map((check) => (
               <li key={check.id} className="craft-due-check">
@@ -350,7 +363,7 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
       {part && sheet === "fix" && <FixCountSheet open onClose={() => setSheet(null)} view={view} part={part} send={send} />}
       {totalPart && sheet === "total" && <ChangeTotalSheet key={totalPart.id} open onClose={() => setSheet(null)} view={view} part={totalPart} send={send} />}
       {sheet === "parts" && <PartsSheet open onClose={() => setSheet(null)} view={view} send={send} onChangeTotal={(partId) => openTotal(partId)} />}
-      {sheet === "check-first" && <CheckFirstSheet checks={dueChecks} onClose={() => setSheet(null)} onYes={checksThenRow} />}
+      {sheet === "check-first" && <CheckFirstSheet checks={dueChecks} onClose={() => setSheet(null)} onYes={checksThenRow} onNotYet={() => { setSheet(null); rowDoneNow(); }} />}
       {sheet === "note" && <NoteSheet open onClose={() => setSheet(null)} part={part} send={send} />}
       {sheet === "timer" && <TimerFixSheet open onClose={() => setSheet(null)} view={view} send={send} />}
       {sheet === "new-day" && <NewDaySheet open onClose={() => setSheet(null)} view={view} onSaveFirst={() => setSheet("log-then-start")}
