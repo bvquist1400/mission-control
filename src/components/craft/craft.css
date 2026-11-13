@@ -280,7 +280,11 @@
 .craft-total-same { margin-top: 6px; }
 .craft-total-same > button { max-width: 100%; white-space: normal; text-align: left; overflow-wrap: anywhere; }
 .craft-total-place .craft-toggle > * { flex: 1 1 0; }
+/* A deliberate pick with nothing chosen yet: the choices need an outline to read as buttons. */
+.craft-total-same > button, .craft-total-place .craft-toggle > button { border: 1px solid var(--stroke); }
 .craft-total-step { font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; }
 .craft-take-back-offer { margin-top: 8px; }
 .craft-take-back-offer > button { max-width: 100%; white-space: normal; text-align: left; }
 .craft-take-back .craft-check-q { font-size: 22px; overflow-wrap: anywhere; }
+/* FR4: Change total's line before Save names the rows and the step around them: room for all of it at 360 px. */
+.craft-total-form .craft-sheet-foot .craft-sheet-preview, .craft-total-form .craft-sheet-foot .craft-sheet-warn { max-height: 13em; }

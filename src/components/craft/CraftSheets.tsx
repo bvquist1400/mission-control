@@ -464,7 +464,7 @@ export function ChangeTotalSheet({ open, onClose, view: live, part: livePart, se
   const canSave = Boolean(plan && (plan.kind === "remove" || (plan.kind === "add" && textOk && placeOk)));
   return (
     <Sheet open={open} onClose={onClose} title={`Change total ${word}s`}>
-      <form onSubmit={submit}>
+      <form onSubmit={submit} className="craft-total-form">
         <p className="craft-sheet-sub">{part.name}: {part.total_rows} {word}s now{part.finished ? ", all ticked" : `, on ${word} ${part.current_row}`}. Only unticked (est.) {word}s can be dropped; the {word}s after them move up to close the gap.</p>
         {est && (
           <div className="craft-toggle craft-total-mode" role="group" aria-label="Set by">
