@@ -165,7 +165,7 @@ try {
     const usual = await post(totalRoute, a, m.projectId, "total", { part_id: m.cuff, total: 24, expected_total: 27 });
     assert.deepEqual([usual.status, usual.body.reason], [409, "ticked"]);
     // FR5: the real blocker in plain words (no "Undo" of knitted rows), and that the raised rows can be taken back.
-    assert.equal(usual.body.error, "Rounds 22–24 are ticked; no unticked (est.) rounds are left to drop. Rounds 25–27 were added by a raise and can be taken back instead.");
+    assert.equal(usual.body.error, "Can't remove rounds 22–24: they are ticked; no unticked (est.) rounds are left to drop. Rounds 25–27 were added by a raise and can be taken back instead.");
     // The sheet's take-back plan names exactly these rows.
     const tb = A.takeBackPlan(C.partRowsOf(usual.body.view, m.cuff), 27, 24);
     assert.deepEqual(tb, { kind: "remove", total: 24, remove: [25, 26, 27], moves: [] });

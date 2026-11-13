@@ -167,7 +167,7 @@ await test("FR4 1 take-back sheet: the refusal, then \"Remove the last 3 rounds 
   const cuff = view.active_part;
   const html = renderToStaticMarkup(createElement(ChangeTotalSheet, { open: true, onClose: () => {}, view, part: cuff, send, initial: { total: 24 } }));
   // FR5: the refusal names what is ticked and never says to undo knitted rounds.
-  assert.match(html, /<p class="craft-sheet-warn">Rounds 22–24 are ticked; no unticked \(est\.\) rounds are left to drop\.<\/p>/);
+  assert.match(html, /<p class="craft-sheet-warn">Can&#x27;t remove rounds 22–24: they are ticked; no unticked \(est\.\) rounds are left to drop\.<\/p>/);
   assert.match(html, />Remove the last 3 rounds instead \(Rnd 25–27\)…<\/button>/);
   assert.match(html, /<button type="submit"[^>]*disabled=""[^>]*>Save total<\/button>/, "the usual Save can't do it");
   const ask = renderToStaticMarkup(createElement(ChangeTotalSheet, { open: true, onClose: () => {}, view, part: cuff, send, initial: { total: 24, takeBack: true } }));

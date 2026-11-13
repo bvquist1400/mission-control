@@ -158,7 +158,7 @@ try {
     assert.equal(cuffText(m).split(" | ").slice(24).join(" | "), "25=Rnd 25 · knit (US 7)/stockinette/false | 26=Rnd 26 · knit (US 7)/stockinette/false | 27=Rnd 27 · knit (US 7)/stockinette/false");
   });
 
-  await test("FR5 1 Mitten 2 at total 24: take_back refused not_raised (route and direct; Rnd 29–31 survive); the usual lowering's refusal says \"Rounds 22–24 are ticked; drop only (est.) rounds 25–28 → total 27.\" and that total saves", async () => {
+  await test("FR5 1 Mitten 2 at total 24: take_back refused not_raised (route and direct; Rnd 29–31 survive); the usual lowering's refusal says \"Can't remove rounds 22–24: they are ticked; drop only (est.) rounds 25–28 → total 27.\" and that total saves", async () => {
     const m = mittenTwo(a.id);
     const rows = C.partRowsOf(await getView(a, m.projectId), m.cuff);
     assert.equal(A.takeBackPlan(rows, 31, 24), null);
@@ -169,7 +169,7 @@ try {
     const direct = await a.client.rpc("craft_set_total", { p_user_id: a.id, p_part_id: m.cuff, p_total: 24, p_expected_total: 31, p_how: "take_back" });
     assert.deepEqual([direct.data?.status, direct.data?.reason], ["refused", "not_raised"]);
     const usual = await post(totalRoute, a, m.projectId, "total", { part_id: m.cuff, total: 24, expected_total: 31 });
-    assert.deepEqual([usual.status, usual.body.reason, usual.body.error], [409, "ticked", "Rounds 22–24 are ticked; drop only (est.) rounds 25–28 → total 27."]);
+    assert.deepEqual([usual.status, usual.body.reason, usual.body.error], [409, "ticked", "Can't remove rounds 22–24: they are ticked; drop only (est.) rounds 25–28 → total 27."]);
     assert.equal(itemsHash(m), before, "nothing changed");
     assert.equal(knitIds(m), knit);
     // A service-role caller (the API path) is held to the same rule.

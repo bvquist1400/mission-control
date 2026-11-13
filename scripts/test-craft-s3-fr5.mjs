@@ -118,14 +118,14 @@ await test("FR5 1 Mitten 2 at total 27: the usual lowering (drop Rnd 25–28 (es
   // Even asked for directly (a stale screen), the confirm can't appear.
   assert.doesNotMatch(sheet(view, view.active_part, { total: 27, takeBack: true }), /Also remove|Yes, remove them/);
 });
-await test("FR5 1 Mitten 2 at total 24: no take-back (\"Remove the last 7 rounds instead (Rnd 25–31)\" is gone); the sheet says \"Rounds 22–24 are ticked; drop only (est.) rounds 25–28 → total 27.\" and offers Use total 27, which is the usual plan", () => {
+await test("FR5 1 Mitten 2 at total 24: no take-back (\"Remove the last 7 rounds instead (Rnd 25–31)\" is gone); the sheet says \"Can't remove rounds 22–24: they are ticked; drop only (est.) rounds 25–28 → total 27.\" and offers Use total 27, which is the usual plan", () => {
   const view = mittenTwo(), rows = C.partRowsOf(view, "cuff");
   assert.equal(A.takeBackPlan(rows, 31, 24), null);
   for (const next of [30, 29, 28, 26, 25, 24, 23, 20, 1]) assert.equal(A.takeBackPlan(rows, 31, next), null, `never for set-up rows (total ${next})`);
   assert.deepEqual(A.lowestTotalPlan(rows, 31), { total: 27, rows: [25, 26, 27, 28] });
-  assert.deepEqual(A.lowerRefusal("round", rows, 31, 24), { text: "Rounds 22–24 are ticked; drop only (est.) rounds 25–28 → total 27.", suggest: 27 });
+  assert.deepEqual(A.lowerRefusal("round", rows, 31, 24), { text: "Can't remove rounds 22–24: they are ticked; drop only (est.) rounds 25–28 → total 27.", suggest: 27 });
   const html = sheet(view, view.active_part, { total: 24 });
-  assert.match(html, /<p class="craft-sheet-warn">Rounds 22–24 are ticked; drop only \(est\.\) rounds 25–28 → total 27\.<\/p>/);
+  assert.match(html, /<p class="craft-sheet-warn">Can&#x27;t remove rounds 22–24: they are ticked; drop only \(est\.\) rounds 25–28 → total 27\.<\/p>/);
   assert.match(html, />Use total 27<\/button>/);
   assert.doesNotMatch(html, /instead|Remove the last|Undo/);
   assert.match(html, /<button type="submit"[^>]*disabled=""[^>]*>Save total<\/button>/);
@@ -135,7 +135,7 @@ await test("FR5 1 Mitten 2 at total 24: no take-back (\"Remove the last 7 rounds
   assert.equal(A.lowerRefusal("round", rows, 31, 20).text, "Can't drop 11 rounds: only rounds 22–28 are (est.) or blank rounds. Rounds with pattern steps are never dropped. Drop only (est.) rounds 25–28 → total 27.");
   // Rows in a sitting: named, and the total above them.
   const sat = rows.map((s) => (s.row === 26 ? { ...s, in_progress: true } : s));
-  assert.deepEqual(A.lowerRefusal("round", sat, 31, 28), { text: "Round 26 is part of a saved sitting; drop only (est.) rounds 27–28 → total 29.", suggest: 29 });
+  assert.deepEqual(A.lowerRefusal("round", sat, 31, 28), { text: "Can't remove round 26: it is part of a saved sitting; drop only (est.) rounds 27–28 → total 29.", suggest: 29 });
   const src = readFileSync(new URL("../src/components/craft/CraftSheets.tsx", import.meta.url), "utf8");
   assert.match(src, /onClick=\{\(\) => \{ const n = refusal\.suggest as number; setMode\("total"\); setValue\(n\); \}\}>Use total \{refusal\.suggest\}/);
 });
@@ -174,12 +174,15 @@ await test("FR5 2 after the wrong raise with Rnd 25 ticked, lowering to 24 names
   // In a sitting instead: named the same way.
   const sat = rows.map((s) => (s.row === 25 ? { ...s, done: false } : s.row === 27 ? { ...s, linked: true } : s));
   assert.equal(A.lowerRefusal("round", sat, 27, 24).text, "Can't take back rounds 25–27, added by a raise: round 27 is part of a saved sitting.");
+  // A blocker ABOVE the new total is named as the usual lowering names it (S2's words, no "Undo"): raised bare rows 11–15, 13 ticked, 15 → 12.
+  const bare = Array.from({ length: 15 }, (_, i) => ({ row: i + 1, done: i + 1 <= 5 || i + 1 === 13, linked: false, today: false, text: `Row ${i + 1}`, ...(i + 1 > 10 ? { raised: true } : {}) }));
+  assert.deepEqual(A.lowerRefusal("row", bare, 15, 12), { text: "Can't remove row 13: it is ticked; drop only rows 14–15 → total 13.", suggest: 13 });
   // The route's words for 074's not_raised.
   assert.equal(A.setTotalRefusalText("round", { reason: "not_raised", rows: [28, 29, 30, 31], remove: [28, 29, 30, 31] }),
     "Can't take back rounds 28–31: rounds 28–31 weren't added by a raise or are (est.). Only rounds a raise added can be taken back; (est.) rounds go with the usual lowering.");
   // The route (no button there) adds that raised rows can be taken back.
   const plain = C.partRowsOf(C.buildCraftView(mittenOneWrongRaise()), "cuff");
-  assert.equal(A.lowerRefusal("round", plain, 27, 24, true).text, "Rounds 22–24 are ticked; no unticked (est.) rounds are left to drop. Rounds 25–27 were added by a raise and can be taken back instead.");
+  assert.equal(A.lowerRefusal("round", plain, 27, 24, true).text, "Can't remove rounds 22–24: they are ticked; no unticked (est.) rounds are left to drop. Rounds 25–27 were added by a raise and can be taken back instead.");
 });
 
 // ── 3. P2: a raise with no `how` before a step ───────────────────────────────────

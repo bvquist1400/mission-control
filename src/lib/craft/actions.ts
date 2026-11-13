@@ -237,8 +237,8 @@ export function lowestTotalPlan(rows: RowState[], total: number): { total: numbe
   return { total: total - free.length, rows: free.sort((a, b) => a - b) };
 }
 /**
- * FR5: why lowering to `next` can't be saved, naming the real blocker, and the total it CAN reach ("Rounds 22–24 are
- * ticked; drop only (est.) rounds 25–28 → total 27."). When the rows above `next` were all added by a raise, the
+ * FR5: why lowering to `next` can't be saved, naming the real blocker, and the total it CAN reach ("Can't remove rounds
+ * 22–24: they are ticked; drop only (est.) rounds 25–28 → total 27."). When the rows above `next` were all added by a raise, the
  * take-back's blocker is named instead ("Can't take back rounds 25–27, added by a raise: round 25 is ticked."), never
  * the ticked set-up rows below them. Ticked rows are knitted rows: it never suggests unticking them. `suggest` is the
  * reachable total to offer ("Use total 27"), null when there is none. `takeBackHint` (the route, no button there)
@@ -249,14 +249,17 @@ export function lowerRefusal(word: RowWord, rows: RowState[], total: number, nex
   if (plan.kind !== "refused") return null;
   if (plan.reason === "range") return { text: setTotalRefusalText(word, plan), suggest: null };
   const back = takeBackPlan(rows, total, next);
-  if (back?.kind === "refused") return { text: takeBackRefusalText(word, back), suggest: null };
+  // The take-back's blocker is the real one when the usual lowering would have to reach the rows kept below the new
+  // total (Mitten 1's ticked 22–24 under a wrong raise) or can't reach far enough; a blocker above it is named as is.
+  if (back?.kind === "refused" && (plan.reason === "not_est" || plan.rows.some((r) => r <= next))) return { text: takeBackRefusalText(word, back), suggest: null };
   const low = lowestTotalPlan(rows, total);
   const byRow = new Map(rows.map((s) => [s.row, s]));
   const est = low.rows.every((r) => isEstRowText(byRow.get(r)?.text)) ? "(est.) " : "";
   const reach = low.rows.length ? `drop only ${est}${rowsText(word, low.rows)} → total ${low.total}.` : `no unticked (est.) ${word}s are left to drop.`;
   const one = plan.rows.length === 1;
-  const head = plan.reason === "ticked" ? `${capital(rowsText(word, plan.rows))} ${one ? "is" : "are"} ticked; ${reach}`
-    : plan.reason === "in_sitting" ? `${capital(rowsText(word, plan.rows))} ${one ? "is" : "are"} part of a saved sitting; ${reach}`
+  // S2's words up to the semicolon ("Can't remove row 140: it is ticked"), without its "Undo them first".
+  const head = plan.reason === "ticked" ? `Can't remove ${rowsText(word, plan.rows)}: ${one ? "it is" : "they are"} ticked; ${reach}`
+    : plan.reason === "in_sitting" ? `Can't remove ${rowsText(word, plan.rows)}: ${one ? "it is" : "they are"} part of a saved sitting; ${reach}`
     : `${setTotalRefusalText(word, plan)}${low.rows.length ? ` ${capital(reach)}` : ""}`;
   const hint = takeBackHint && back?.kind === "remove" ? ` ${capital(rowsText(word, back.remove))} ${back.remove.length === 1 ? "was" : "were"} added by a raise and can be taken back instead.` : "";
   return { text: `${head}${hint}`, suggest: low.rows.length && low.total < total && low.total !== next ? low.total : null };
