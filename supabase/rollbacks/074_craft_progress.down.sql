@@ -1,6 +1,8 @@
 -- Removes only 074: craft_frogs (the "Ripped back" history), work_session_items.in_progress,
 -- craft_timers.last_done_seconds (FR1; a running timer keeps going, only the Partway hint goes) and the
--- four new functions, and puts back 073's craft_rows, craft_log_sitting and craft_remove_blockers and
+-- seven new functions (FR3: craft_screen_part, craft_check, craft_pick_part and the 6-argument
+-- craft_set_total), and puts back 073's 4-argument craft_set_total (and its grants), craft_timer, craft_rows,
+-- craft_log_sitting and craft_remove_blockers and
 -- 059's work_session_create and work_session_update exactly as they were written (CREATE OR REPLACE
 -- keeps their grants). Roll the app back first: the S3 screen calls craft_save_sitting and craft_frog.
 -- In-progress links are deleted (those minutes fall back out of speed, as before 074); sittings a
@@ -8,6 +10,219 @@
 BEGIN;
 SET LOCAL lock_timeout = '10s';
 DROP FUNCTION craft_frog(UUID, UUID, INTEGER, INTEGER, INTEGER, TEXT, UUID[], TEXT);
+-- FR3: the check card's and "Work on this part"'s functions, 074's Change total (6 arguments) and the screen-part
+-- rule go; 073's 4-argument craft_set_total (with its grants) and craft_timer are put back as written in 073.
+DROP FUNCTION craft_pick_part(UUID, UUID, UUID);
+DROP FUNCTION craft_check(UUID, UUID, UUID[]);
+DROP FUNCTION craft_set_total(UUID, UUID, INTEGER, INTEGER, TEXT, TEXT);
+CREATE FUNCTION craft_set_total(p_user_id UUID, p_part_id UUID, p_total INTEGER, p_expected_total INTEGER)
+RETURNS JSONB
+LANGUAGE plpgsql
+SET search_path = public
+SET lock_timeout = '5s'
+AS $$
+DECLARE
+  v_part craft_parts%ROWTYPE;
+  v_last RECORD;
+  v_word TEXT;
+  v_sort INTEGER;
+  v_rows INTEGER[];
+  v_added INTEGER := 0;
+  v_removed INTEGER := 0;
+BEGIN
+  PERFORM work_sessions_assert_caller(p_user_id);
+  IF p_part_id IS NULL OR p_total IS NULL OR p_expected_total IS NULL THEN
+    RAISE EXCEPTION 'part id, total and expected total are required' USING ERRCODE = '22023';
+  END IF;
+  IF p_total NOT BETWEEN 1 AND 2000 THEN
+    RAISE EXCEPTION 'total must be 1 to 2000' USING ERRCODE = '22023';
+  END IF;
+  v_part := craft_part_lock(p_user_id, p_part_id);
+  IF v_part.total_rows <> p_expected_total THEN
+    RETURN jsonb_build_object('status', 'stale', 'part_id', p_part_id, 'total', v_part.total_rows);
+  END IF;
+  IF p_total = v_part.total_rows THEN
+    RETURN jsonb_build_object('status', 'ok', 'part_id', p_part_id, 'total', p_total, 'added', 0, 'removed', 0);
+  END IF;
+
+  IF p_total > v_part.total_rows THEN
+    SELECT i.id, i.task_id, i.text, i.work_type, i.unit_count, i.craft_row INTO v_last FROM task_checklist_items i
+      WHERE i.craft_part_id = p_part_id AND i.user_id = p_user_id ORDER BY i.craft_row DESC LIMIT 1;
+    IF NOT FOUND THEN
+      RETURN jsonb_build_object('status', 'refused', 'reason', 'no_rows', 'part_id', p_part_id, 'total', v_part.total_rows);
+    END IF;
+    v_word := COALESCE((regexp_match(v_last.text, '^(Row|Rnd|Round)[ \t]+[0-9]'))[1], CASE WHEN v_part.row_word = 'round' THEN 'Round' ELSE 'Row' END);
+    SELECT COALESCE(max(sort_order), 0) INTO v_sort FROM task_checklist_items WHERE task_id = v_last.task_id AND user_id = p_user_id;
+    INSERT INTO task_checklist_items (user_id, task_id, text, is_done, sort_order, unit_count, work_type, craft_part_id, craft_row)
+    SELECT p_user_id, v_last.task_id, v_word || ' ' || n, false, v_sort + (n - v_part.total_rows), COALESCE(v_part.stitch_count, v_last.unit_count), v_last.work_type, p_part_id, n
+      FROM generate_series(v_part.total_rows + 1, p_total) AS n;
+    GET DIAGNOSTICS v_added = ROW_COUNT;
+    UPDATE craft_segments SET to_row = p_total
+      WHERE id = (SELECT id FROM craft_segments WHERE part_id = p_part_id AND user_id = p_user_id AND to_row >= v_last.craft_row
+                  ORDER BY to_row DESC, sort_order DESC, id DESC LIMIT 1);
+  ELSE
+    SELECT COALESCE(array_agg(craft_row ORDER BY craft_row), '{}') INTO v_rows FROM task_checklist_items
+      WHERE craft_part_id = p_part_id AND user_id = p_user_id AND craft_row > p_total AND is_done;
+    IF cardinality(v_rows) > 0 THEN
+      RETURN jsonb_build_object('status', 'refused', 'reason', 'ticked', 'rows', to_jsonb(v_rows), 'part_id', p_part_id, 'total', v_part.total_rows);
+    END IF;
+    SELECT COALESCE(array_agg(i.craft_row ORDER BY i.craft_row), '{}') INTO v_rows FROM task_checklist_items i
+      WHERE i.craft_part_id = p_part_id AND i.user_id = p_user_id AND i.craft_row > p_total
+        AND EXISTS (SELECT 1 FROM work_session_items w WHERE w.checklist_item_id = i.id);
+    IF cardinality(v_rows) > 0 THEN
+      RETURN jsonb_build_object('status', 'refused', 'reason', 'in_sitting', 'rows', to_jsonb(v_rows), 'part_id', p_part_id, 'total', v_part.total_rows);
+    END IF;
+    DELETE FROM task_checklist_items WHERE craft_part_id = p_part_id AND user_id = p_user_id AND craft_row > p_total;
+    GET DIAGNOSTICS v_removed = ROW_COUNT;
+    PERFORM 1 FROM craft_segments WHERE part_id = p_part_id AND user_id = p_user_id ORDER BY id FOR UPDATE;
+    DELETE FROM craft_segments WHERE part_id = p_part_id AND user_id = p_user_id AND from_row > p_total;
+    UPDATE craft_segments SET to_row = p_total WHERE part_id = p_part_id AND user_id = p_user_id AND to_row > p_total;
+  END IF;
+  UPDATE craft_parts SET total_rows = p_total,
+    quarter = CASE WHEN v_part.quarter_row > p_total THEN 0 ELSE quarter END,
+    quarter_row = CASE WHEN v_part.quarter_row > p_total THEN NULL ELSE quarter_row END
+  WHERE id = p_part_id AND user_id = p_user_id;
+  RETURN jsonb_build_object('status', 'ok', 'part_id', p_part_id, 'total', p_total, 'previous_total', v_part.total_rows,
+    'added', v_added, 'removed', v_removed, 'current_row', craft_current_row(p_user_id, p_part_id, p_total));
+END;
+$$;
+REVOKE ALL ON FUNCTION craft_set_total(UUID, UUID, INTEGER, INTEGER) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION craft_set_total(UUID, UUID, INTEGER, INTEGER) TO authenticated, service_role;
+CREATE OR REPLACE FUNCTION craft_timer(p_user_id UUID, p_action TEXT, p_project_id UUID, p_part_id UUID DEFAULT NULL,
+  p_minutes INTEGER DEFAULT NULL, p_expected_version INTEGER DEFAULT NULL, p_force BOOLEAN DEFAULT false)
+RETURNS JSONB
+LANGUAGE plpgsql
+SET search_path = public
+SET lock_timeout = '5s'
+AS $$
+DECLARE
+  v_t craft_timers%ROWTYPE;
+  v_found BOOLEAN;
+  v_part craft_parts%ROWTYPE;
+  v_active UUID;
+  v_now TIMESTAMPTZ;
+  v_action TEXT := p_action;
+  v_elapsed INTEGER;
+  v_stop TIMESTAMPTZ;
+  v_row INTEGER;
+  v_name TEXT;
+BEGIN
+  PERFORM work_sessions_assert_caller(p_user_id);
+  IF p_project_id IS NULL OR p_action IS NULL
+     OR p_action NOT IN ('start', 'pause', 'resume', 'toggle', 'discard', 'adjust', 'stopped_ago') THEN
+    RAISE EXCEPTION 'project id and an action (start, pause, resume, toggle, discard, adjust, stopped_ago) are required' USING ERRCODE = '22023';
+  END IF;
+  SELECT active_part_id INTO v_active FROM craft_projects WHERE project_id = p_project_id AND user_id = p_user_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'CRAFT_PROJECT_NOT_FOUND' USING ERRCODE = 'P0002';
+  END IF;
+  IF p_part_id IS NOT NULL THEN
+    SELECT * INTO v_part FROM craft_parts WHERE id = p_part_id AND project_id = p_project_id AND user_id = p_user_id;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'CRAFT_PART_NOT_FOUND' USING ERRCODE = 'P0002';
+    END IF;
+  END IF;
+
+  SELECT * INTO v_t FROM craft_timers WHERE user_id = p_user_id FOR UPDATE;
+  v_found := FOUND;
+  v_now := clock_timestamp();
+
+  IF v_action = 'toggle' THEN
+    v_action := CASE WHEN NOT v_found OR v_t.project_id <> p_project_id THEN 'start'
+      WHEN v_t.running_since IS NOT NULL THEN 'pause' ELSE 'resume' END;
+  END IF;
+  -- An explicit start on this project's paused timer is a resume.
+  IF v_action = 'start' AND v_found AND v_t.project_id = p_project_id THEN
+    IF v_t.running_since IS NOT NULL THEN
+      RETURN jsonb_build_object('status', 'ok', 'action', v_action, 'server_now', v_now,
+        'timer', craft_timer_state(v_t.user_id, v_now));
+    END IF;
+    v_action := 'resume';
+  ELSIF v_action <> 'start' THEN
+    -- Changes to an existing timer: it must be this project's, at the version the screen saw.
+    IF NOT v_found OR v_t.project_id <> p_project_id THEN
+      IF v_action = 'discard' THEN
+        RETURN jsonb_build_object('status', 'ok', 'action', v_action, 'server_now', v_now, 'timer', NULL);
+      END IF;
+      RETURN jsonb_build_object('status', 'none', 'action', v_action, 'server_now', v_now, 'timer', NULL);
+    END IF;
+    IF p_expected_version IS DISTINCT FROM v_t.version THEN
+      RETURN jsonb_build_object('status', 'stale', 'action', v_action, 'server_now', v_now,
+        'timer', craft_timer_state(v_t.user_id, v_now));
+    END IF;
+  END IF;
+
+  IF v_action = 'start' THEN
+    IF v_found THEN
+      v_elapsed := craft_timer_elapsed(v_t.banked_seconds, v_t.adjust_seconds, v_t.running_since, v_now);
+      IF v_elapsed > 0 THEN
+        SELECT name INTO v_name FROM projects WHERE id = v_t.project_id AND user_id = p_user_id;
+        RETURN jsonb_build_object('status', 'conflict', 'action', v_action, 'server_now', v_now, 'timer', NULL,
+          'other', jsonb_build_object('project_id', v_t.project_id, 'project_name', v_name, 'elapsed_seconds', v_elapsed,
+            'version', v_t.version, 'running', v_t.running_since IS NOT NULL));
+      END IF;
+      DELETE FROM craft_timers WHERE user_id = p_user_id;
+    END IF;
+    IF p_part_id IS NULL THEN
+      SELECT * INTO v_part FROM craft_parts WHERE project_id = p_project_id AND user_id = p_user_id
+        ORDER BY (id = v_active) DESC, sort_order, id LIMIT 1;
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'this project has no craft parts' USING ERRCODE = '22023';
+      END IF;
+    END IF;
+    v_row := craft_current_row(p_user_id, v_part.id, v_part.total_rows);
+    INSERT INTO craft_timers (user_id, project_id, part_id, sitting_started_at, running_since, paused_at, banked_seconds,
+      adjust_seconds, start_row, start_quarter, version)
+    VALUES (p_user_id, p_project_id, v_part.id, v_now, v_now, NULL, 0, 0, LEAST(v_row, v_part.total_rows),
+      CASE WHEN v_part.quarters AND v_part.quarter_row = v_row THEN v_part.quarter ELSE 0 END, 1)
+    ON CONFLICT (user_id) DO NOTHING;
+    IF NOT FOUND THEN
+      RETURN jsonb_build_object('status', 'stale', 'action', v_action, 'server_now', v_now, 'timer', craft_timer_state(p_user_id, v_now));
+    END IF;
+  ELSIF v_action = 'pause' THEN
+    IF v_t.running_since IS NOT NULL THEN
+      UPDATE craft_timers SET banked_seconds = banked_seconds + GREATEST(0, floor(extract(epoch FROM v_now - running_since)))::int,
+        running_since = NULL, paused_at = v_now, version = version + 1
+      WHERE user_id = p_user_id;
+    END IF;
+  ELSIF v_action = 'resume' THEN
+    IF v_t.running_since IS NULL THEN
+      IF (v_now AT TIME ZONE 'America/New_York')::date > (v_t.sitting_started_at AT TIME ZONE 'America/New_York')::date AND NOT COALESCE(p_force, false) THEN
+        RETURN jsonb_build_object('status', 'new_day', 'action', v_action, 'server_now', v_now,
+          'started_on', (v_t.sitting_started_at AT TIME ZONE 'America/New_York')::date, 'timer', craft_timer_state(p_user_id, v_now));
+      END IF;
+      UPDATE craft_timers SET running_since = v_now, paused_at = NULL, version = version + 1 WHERE user_id = p_user_id;
+    END IF;
+  ELSIF v_action = 'discard' THEN
+    DELETE FROM craft_timers WHERE user_id = p_user_id;
+  ELSIF v_action = 'adjust' THEN
+    IF p_minutes IS NULL OR p_minutes = 0 OR p_minutes NOT BETWEEN -1440 AND 1440 THEN
+      RAISE EXCEPTION 'minutes to add or take off must be a whole number from -1440 to 1440, not 0' USING ERRCODE = '22023';
+    END IF;
+    IF craft_timer_elapsed(v_t.banked_seconds, v_t.adjust_seconds, v_t.running_since, v_now) + p_minutes * 60 < 0 THEN
+      RAISE EXCEPTION 'That takes off more time than the timer shows' USING ERRCODE = '22023';
+    END IF;
+    UPDATE craft_timers SET adjust_seconds = adjust_seconds + p_minutes * 60, version = version + 1 WHERE user_id = p_user_id;
+  ELSIF v_action = 'stopped_ago' THEN
+    IF v_t.running_since IS NULL THEN
+      RETURN jsonb_build_object('status', 'not_running', 'action', v_action, 'server_now', v_now, 'timer', craft_timer_state(p_user_id, v_now));
+    END IF;
+    IF p_minutes IS NULL OR p_minutes NOT BETWEEN 1 AND 1440 THEN
+      RAISE EXCEPTION 'minutes ago must be a whole number from 1 to 1440' USING ERRCODE = '22023';
+    END IF;
+    v_stop := v_now - make_interval(mins => p_minutes);
+    IF v_stop < v_t.running_since THEN
+      RAISE EXCEPTION 'The timer has only run % min since it was last started', floor(extract(epoch FROM v_now - v_t.running_since) / 60)::int
+        USING ERRCODE = '22023';
+    END IF;
+    UPDATE craft_timers SET banked_seconds = banked_seconds + GREATEST(0, floor(extract(epoch FROM v_stop - running_since)))::int,
+      running_since = NULL, paused_at = v_stop, version = version + 1
+    WHERE user_id = p_user_id;
+  END IF;
+  RETURN jsonb_build_object('status', 'ok', 'action', v_action, 'server_now', v_now, 'timer', craft_timer_state(p_user_id, v_now));
+END;
+$$;
+DROP FUNCTION craft_screen_part(UUID, UUID);
 CREATE OR REPLACE FUNCTION craft_log_sitting(p_user_id UUID, p_part_id UUID, p_use_timer BOOLEAN, p_timer_version INTEGER, p_minutes INTEGER,
   p_date DATE, p_started_at TIMESTAMPTZ, p_ended_at TIMESTAMPTZ, p_from_row INTEGER, p_to_row INTEGER, p_to_quarter INTEGER,
   p_expected_row INTEGER, p_note TEXT, p_idempotency_key TEXT)
