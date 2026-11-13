@@ -407,6 +407,11 @@ await test("FR1 view model (F1): can_remove comes from the server's remove_block
 // done, Undo/Fix/Note). Everything else must still render byte for byte as at ca00c76.
 const S1_TIMER = '<div class="craft-timer"><span aria-hidden="true">--:--</span><p>Timer arrives in the next update</p></div>';
 const S2_BLOCK = /<div class="craft-s2">[\s\S]*?(?=<section class="craft-today")/;
+// S3 FR3 adds the Parts button by the part's name and, in the inside Parts list, each part's "Work on this part" /
+// "Change total…" buttons and "on the screen" (these fixtures have no checks, so nothing else may change).
+const s3fr3 = (html) => html.replace(/<button type="button" class="craft-parts-open"[^>]*>Parts<\/button>/, "")
+  .replace('<ul class="craft-parts craft-parts-act">', '<ul class="craft-parts">').replace(/<div class="craft-part-buttons">[\s\S]*?<\/div>/g, "")
+  .replace(/ · on the screen<\/span>/g, "</span>");
 await test("Before/after: the blanket and scarf screens render byte for byte as at ca00c76, apart from the header menu and S2's screen-on chip, timer card and action bar", () => {
   const pinned = JSON.parse(readFileSync(new URL("./fixtures/craft/screen-s1a.snapshot.json", import.meta.url), "utf8"));
   const now = pinnedInputs();
@@ -415,7 +420,7 @@ await test("Before/after: the blanket and scarf screens render byte for byte as 
     const after = renderScreen(now[name]);
     assert.match(after, MENU, `${name}: menu`);
     assert.match(after, S2_BLOCK, `${name}: S2 controls`);
-    const s1 = after.replace(MENU, "").replace('<span class="craft-awake"></span>', '<span class="craft-readonly">Read only</span>').replace(S2_BLOCK, S1_TIMER);
+    const s1 = s3fr3(after.replace(MENU, "").replace('<span class="craft-awake"></span>', '<span class="craft-readonly">Read only</span>').replace(S2_BLOCK, S1_TIMER));
     assert.equal(s1, html, `${name} changed outside the S2 controls`);
   }
 });

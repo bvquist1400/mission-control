@@ -146,6 +146,9 @@ const total = (partId) => Number(psql(`SELECT total_rows FROM craft_parts WHERE 
 const FUNCTIONS_073 = ["craft_timer_elapsed(integer,integer,timestamp with time zone,timestamp with time zone)", "craft_current_row(uuid,uuid,integer)", "craft_part_lock(uuid,uuid)", "craft_band_check(uuid,uuid)",
   "craft_rows(uuid,uuid,integer,integer,text,uuid)", "craft_timer_state(uuid,timestamp with time zone)", "craft_timer(uuid,text,uuid,uuid,integer,integer,boolean)",
   "craft_log_sitting(uuid,uuid,boolean,integer,integer,date,timestamp with time zone,timestamp with time zone,integer,integer,integer,integer,text,text)", "craft_set_total(uuid,uuid,integer,integer)"];
+// S3 FR3: 074 replaces 073's 4-argument craft_set_total with a 6-argument one (text and work type for added rows), so
+// on a stack with 074 on top that is the one to check; 073's own list still holds while 074 is rolled back.
+const FUNCTIONS_073_UNDER_074 = FUNCTIONS_073.map((fn) => (fn === "craft_set_total(uuid,uuid,integer,integer)" ? "craft_set_total(uuid,uuid,integer,integer,text,text)" : fn));
 /** Every craft function's definition and grants, and craft_timers' columns: the schema 073's rollback must give back. */
 const schemaState = () => psql(`SELECT md5(string_agg(p.oid::regprocedure::text || ':' || md5(pg_get_functiondef(p.oid)) || ':' || coalesce(p.proacl::text, ''), ',' ORDER BY p.oid::regprocedure::text)) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'craft_%';
 SELECT string_agg(column_name || ':' || data_type, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'craft_timers';`);
@@ -157,7 +160,7 @@ try {
 
   // ── The migration ──────────────────────────────────────────────────────────
   await test("073 applies on 001..072: nine functions, SECURITY INVOKER, EXECUTE for authenticated and service_role only; craft_timers.paused_at added", () => {
-    for (const fn of FUNCTIONS_073) {
+    for (const fn of FUNCTIONS_073_UNDER_074) {
       assert.equal(psql(`SELECT to_regprocedure('${fn}') IS NOT NULL;`), "t", fn);
       assert.equal(psql(`SELECT prosecdef FROM pg_proc WHERE oid = '${fn}'::regprocedure;`), "f", `${fn} must be SECURITY INVOKER`);
       for (const [role, can] of [["authenticated", "t"], ["service_role", "t"], ["anon", "f"]]) assert.equal(psql(`SELECT has_function_privilege('${role}', '${fn}', 'EXECUTE');`), can, `${fn} ${role}`);
@@ -931,7 +934,7 @@ INSERT INTO task_checklist_items (user_id, task_id, text, sort_order) SELECT '${
     psql(up073);
     assert.equal(keep(), rows);
     psql(up074);
-    for (const fn of FUNCTIONS_073) assert.equal(psql(`SELECT has_function_privilege('authenticated', '${fn}', 'EXECUTE');`), "t", fn);
+    for (const fn of FUNCTIONS_073_UNDER_074) assert.equal(psql(`SELECT has_function_privilege('authenticated', '${fn}', 'EXECUTE');`), "t", fn);
   });
 } finally {
   // Big fake projects (519-row scarves) make GoTrue's own cascade slow: remove the projects first, as the database owner.

@@ -141,9 +141,12 @@ const sessionRoute = await import("../src/app/api/work-sessions/[id]/route.ts");
 const sessionsRoute = await import("../src/app/api/work-sessions/route.ts");
 const A = await import("../src/lib/craft/actions.ts");
 const NEW_FUNCTIONS = ["craft_sitting_rows(uuid,uuid,uuid)", "craft_frog(uuid,uuid,integer,integer,integer,text,uuid[],text)",
-  "craft_save_sitting(uuid,uuid,boolean,integer,integer,date,timestamp with time zone,timestamp with time zone,integer,integer,integer,integer,text,text,boolean)"];
+  "craft_save_sitting(uuid,uuid,boolean,integer,integer,date,timestamp with time zone,timestamp with time zone,integer,integer,integer,integer,text,text,boolean)",
+  // FR3: the screen-part rule, the check card, Work on this part, and Change total with text and work type (replaces 073's 4-argument one).
+  "craft_screen_part(uuid,uuid)", "craft_check(uuid,uuid,uuid[])", "craft_pick_part(uuid,uuid,uuid)", "craft_set_total(uuid,uuid,integer,integer,text,text)"];
 const REPLACED = ["work_session_create(uuid,jsonb,uuid[],boolean)", "work_session_update(uuid,uuid,jsonb,uuid[])", "craft_rows(uuid,uuid,integer,integer,text,uuid)",
-  "craft_log_sitting(uuid,uuid,boolean,integer,integer,date,timestamp with time zone,timestamp with time zone,integer,integer,integer,integer,text,text)", "craft_remove_blockers(uuid,uuid)"];
+  "craft_log_sitting(uuid,uuid,boolean,integer,integer,date,timestamp with time zone,timestamp with time zone,integer,integer,integer,integer,text,text)", "craft_remove_blockers(uuid,uuid)",
+  "craft_timer(uuid,text,uuid,uuid,integer,integer,boolean)"];
 /** Every craft_/work_session function's body and grants, work_session_items' columns, the craft tables and their policies: what 074's rollback must give back. */
 const schemaState = () => psql(`SELECT md5(string_agg(p.oid::regprocedure::text || ':' || md5(pg_get_functiondef(p.oid)) || ':' || coalesce(p.proacl::text, ''), ',' ORDER BY p.oid::regprocedure::text)) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND (p.proname LIKE 'craft_%' OR p.proname LIKE 'work_session%');
 SELECT string_agg(table_name || '.' || column_name || ':' || data_type || ':' || is_nullable || ':' || coalesce(column_default, ''), ',' ORDER BY table_name, ordinal_position) FROM information_schema.columns WHERE table_schema = 'public' AND table_name IN ('work_session_items', 'craft_timers');
@@ -832,6 +835,7 @@ try {
     assert.equal(psql("SELECT count(*) FROM information_schema.columns WHERE table_name='work_session_items' AND column_name='in_progress';"), "0");
     assert.equal(psql("SELECT count(*) FROM information_schema.columns WHERE table_name='craft_timers' AND column_name='last_done_seconds';"), "0");
     for (const fn of NEW_FUNCTIONS) assert.equal(psql(`SELECT to_regprocedure('${fn}') IS NULL;`), "t", fn);
+    assert.equal(psql("SELECT has_function_privilege('authenticated', 'craft_set_total(uuid,uuid,integer,integer)', 'EXECUTE') AND NOT has_function_privilege('anon', 'craft_set_total(uuid,uuid,integer,integer)', 'EXECUTE');"), "t", "073's Change total is back with its grants");
     assert.equal(sessions(), kept, "sittings (and the exclusions a rip-back made) stay");
     assert.equal(psql("SELECT count(*) FROM work_session_items;"), finished, "only the in-progress links went");
     psql(up074);

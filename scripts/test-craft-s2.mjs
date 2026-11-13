@@ -243,9 +243,11 @@ await test("FR1 stale sheets (Astra 1, pure): a sheet opened on row 62 keeps sen
   assert.equal(A.sheetChangeText(before, { ...before, total: 160 }, { total: true }), "Your total changed on another screen (now 160 rows). Check and save again.");
   assert.equal(A.sheetChangeText(before, { ...before, part_id: "Border", part_name: "Border", word: "round", current_row: 1 }), "Your count changed on another screen (now Border round 1). Check and save again.");
   const src = readFileSync(new URL("../src/components/craft/CraftSheets.tsx", import.meta.url), "utf8");
-  for (const sheet of ["LogSittingSheet", "UndoRowsSheet", "FixCountSheet", "ChangeTotalSheet"]) {
+  for (const sheet of ["LogSittingSheet", "UndoRowsSheet", "FixCountSheet"]) {
     assert.match(src, new RegExp(`export function ${sheet}\\([^)]*view: live, part: livePart[\\s\\S]*?useSheetSnapshot\\(live, livePart`), `${sheet} captures its view`);
   }
+  // S3 FR3: Change total works on any part (the Parts list), so it captures that part and watches that part's total.
+  assert.match(src, /export function ChangeTotalSheet\([^)]*view: live, part: livePart[\s\S]*?useState\(\(\) => \(\{ view: live, part: livePart \}\)\)[\s\S]*?nowPart\.total_rows !== part\.total_rows/, "ChangeTotalSheet captures its view");
   assert.match(src, /logSittingBody\(part, timer, \{ \.\.\.form, partway \}, shownMinutes\)/, "Log sitting sends the captured part and timer (S3: and Partway through)");
 });
 await test("FR1 Undo toast (Fable F2 / R3, pure): Row done 59 with rows 60–63 already ticked opens Undo rows… on row 59 (never unticks 59–63 by itself); the usual case unticks only row 59", () => {
@@ -274,7 +276,8 @@ await test("FR1 Change total (Fable R9, pure): new rows copy the last row's stit
   assert.equal(A.addedRowsText("row", [], 30), null);
   const v = input([part("Hand", 3)], rows("Hand", 3, 1).map((x) => ({ ...x, unit_count: 40, work_type: "rib" })));
   assert.deepEqual(buildCraftView(v).row_states.map((s) => [s.units, s.type]), [[40, "rib"], [40, "rib"], [40, "rib"]]);
-  assert.match(readFileSync(new URL("../src/components/craft/CraftSheets.tsx", import.meta.url), "utf8"), /addedRowsText\(word, view\.row_states, part\.stitch_count\)/);
+  // S3 FR3: the sheet now says it with the text and work type typed for the new rows (same units rule).
+  assert.match(readFileSync(new URL("../src/components/craft/CraftSheets.tsx", import.meta.url), "utf8"), /const units = part\.stitch_count \?\? last\?\.units \?\? null;/);
 });
 await test("FR1 Log sitting at 360 px: the Saves… line, a changed-underneath line and any failure share the sticky foot with Save (right above it)", () => {
   const css = readFileSync(new URL("../src/components/craft/craft.css", import.meta.url), "utf8");
