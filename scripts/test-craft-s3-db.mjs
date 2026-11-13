@@ -143,7 +143,7 @@ const A = await import("../src/lib/craft/actions.ts");
 const NEW_FUNCTIONS = ["craft_sitting_rows(uuid,uuid,uuid)", "craft_frog(uuid,uuid,integer,integer,integer,text,uuid[],text)",
   "craft_save_sitting(uuid,uuid,boolean,integer,integer,date,timestamp with time zone,timestamp with time zone,integer,integer,integer,integer,text,text,boolean)",
   // FR3: the screen-part rule, the check card, Work on this part, and Change total with text and work type (replaces 073's 4-argument one).
-  "craft_screen_part(uuid,uuid)", "craft_check(uuid,uuid,uuid[])", "craft_pick_part(uuid,uuid,uuid)", "craft_set_total(uuid,uuid,integer,integer,text,text)"];
+  "craft_screen_part(uuid,uuid)", "craft_check(uuid,uuid,uuid[])", "craft_pick_part(uuid,uuid,uuid)", "craft_set_total(uuid,uuid,integer,integer,text,text,text)"];
 const REPLACED = ["work_session_create(uuid,jsonb,uuid[],boolean)", "work_session_update(uuid,uuid,jsonb,uuid[])", "craft_rows(uuid,uuid,integer,integer,text,uuid)",
   "craft_log_sitting(uuid,uuid,boolean,integer,integer,date,timestamp with time zone,timestamp with time zone,integer,integer,integer,integer,text,text)", "craft_remove_blockers(uuid,uuid)",
   "craft_timer(uuid,text,uuid,uuid,integer,integer,boolean)"];

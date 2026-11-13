@@ -146,9 +146,9 @@ const total = (partId) => Number(psql(`SELECT total_rows FROM craft_parts WHERE 
 const FUNCTIONS_073 = ["craft_timer_elapsed(integer,integer,timestamp with time zone,timestamp with time zone)", "craft_current_row(uuid,uuid,integer)", "craft_part_lock(uuid,uuid)", "craft_band_check(uuid,uuid)",
   "craft_rows(uuid,uuid,integer,integer,text,uuid)", "craft_timer_state(uuid,timestamp with time zone)", "craft_timer(uuid,text,uuid,uuid,integer,integer,boolean)",
   "craft_log_sitting(uuid,uuid,boolean,integer,integer,date,timestamp with time zone,timestamp with time zone,integer,integer,integer,integer,text,text)", "craft_set_total(uuid,uuid,integer,integer)"];
-// S3 FR3: 074 replaces 073's 4-argument craft_set_total with a 6-argument one (text and work type for added rows), so
+// S3 FR3: 074 replaces 073's 4-argument craft_set_total with a 6-argument one (text and work type for added rows; FR4: 7, with p_how), so
 // on a stack with 074 on top that is the one to check; 073's own list still holds while 074 is rolled back.
-const FUNCTIONS_073_UNDER_074 = FUNCTIONS_073.map((fn) => (fn === "craft_set_total(uuid,uuid,integer,integer)" ? "craft_set_total(uuid,uuid,integer,integer,text,text)" : fn));
+const FUNCTIONS_073_UNDER_074 = FUNCTIONS_073.map((fn) => (fn === "craft_set_total(uuid,uuid,integer,integer)" ? "craft_set_total(uuid,uuid,integer,integer,text,text,text)" : fn));
 /** Every craft function's definition and grants, and craft_timers' columns: the schema 073's rollback must give back. */
 const schemaState = () => psql(`SELECT md5(string_agg(p.oid::regprocedure::text || ':' || md5(pg_get_functiondef(p.oid)) || ':' || coalesce(p.proacl::text, ''), ',' ORDER BY p.oid::regprocedure::text)) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'craft_%';
 SELECT string_agg(column_name || ':' || data_type, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'craft_timers';`);
