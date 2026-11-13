@@ -3963,7 +3963,11 @@ export type Database = {
         }
       }
       craft_pick_part: {
-        Args: { p_expected_part_id: string; p_part_id: string; p_user_id: string }
+        Args: {
+          p_expected_part_id: string
+          p_part_id: string
+          p_user_id: string
+        }
         Returns: Json
       }
       craft_remove_blockers: {
