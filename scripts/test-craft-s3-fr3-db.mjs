@@ -192,7 +192,8 @@ try {
     const before = itemsHash(m);
     const tooFar = await post(totalRoute, a, m.projectId, "total", { part_id: m.cuff, total: 20, expected_total: 31 });
     assert.deepEqual([tooFar.status, tooFar.body.reason, tooFar.body.result.rows, tooFar.body.result.need], [409, "not_est", [22, 23, 24, 25, 26, 27, 28], 11]);
-    assert.equal(tooFar.body.error, "Can't drop 11 rounds: only rounds 22–28 are (est.) or blank rounds. Rounds with pattern steps are never dropped.");
+    // FR5: the route adds the total that can be reached (the ticked 22–24 stay).
+    assert.equal(tooFar.body.error, "Can't drop 11 rounds: only rounds 22–28 are (est.) or blank rounds. Rounds with pattern steps are never dropped. Drop only (est.) rounds 25–28 → total 27.");
     assert.deepEqual(A.setTotalPlan(rowStates(m.cuff), 31, 20), { kind: "refused", total: 20, reason: "not_est", rows: [22, 23, 24, 25, 26, 27, 28], need: 11 });
     const ticked = await post(totalRoute, a, m.projectId, "total", { part_id: m.cuff, total: 25, expected_total: 31 });
     assert.deepEqual([ticked.status, ticked.body.reason, ticked.body.result.rows], [409, "ticked", [23, 24]]);
