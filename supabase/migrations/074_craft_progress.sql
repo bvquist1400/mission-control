@@ -8,6 +8,7 @@
 --    and finished in the same sitting (the primary key is (session_id, checklist_item_id)).
 --  * craft_timers.last_done_seconds (new, FR1, nullable): the timer's timed seconds at the sitting's last
 --    row ticked by craft_rows, so "Partway through" counts only timed time after the last Row done.
+--    FR2: any untick (craft_rows' Undo / toast Undo / Fix count back, craft_frog) sets it back to NULL.
 --  * craft_frogs (new): "Ripped back" history, one row per rip-back: the rows, a note and the
 --    sittings this rip-back left out of speed (session_ids). Owner RLS and the four rights, like the
 --    other craft tables after 072; 071's ownership trigger checks the part.
@@ -21,7 +22,8 @@
 --    unticks exactly p_to_row and refuses with 'stale' when any row after it, below the current row,
 --    is ticked (a direct call can no longer untick 59–63 with the toast's body).
 --    FR1: Row done (and Fix count ticking forward) stores the timer's timed seconds in
---    craft_timers.last_done_seconds when the timer is on this project (no version bump).
+--    craft_timers.last_done_seconds when the timer is on this project (no version bump); FR2: a call
+--    that unticks rows (Undo, undo_one, Fix count back) clears it (NULL; no version bump).
 --  * craft_save_sitting (new): Log sitting with p_in_progress ("Partway through row N"): the next
 --    row after "last full row" is linked in progress. Rows are linked unless another sitting already
 --    FINISHED them (an in-progress link elsewhere doesn't stop the finishing sitting linking it).
@@ -50,7 +52,8 @@ SET LOCAL lock_timeout = '10s';
 ALTER TABLE work_session_items ADD COLUMN in_progress BOOLEAN NOT NULL DEFAULT false;
 -- FR1: the timer's timed seconds (banked + the running stretch; time added or taken off with + / − left
 -- out) when craft_rows last ticked a row of the timer's project in this sitting (Row done, or Fix count
--- ticking forward); NULL until then. The Partway default counts only timed time after the last Row done,
+-- ticking forward); NULL until then, and NULL again after any untick (FR2: craft_rows, craft_frog), when the
+-- app falls back to its lower bound. The Partway default counts only timed time after the last Row done,
 -- which the timer can't tell apart from its pauses once it has been resumed. A new timer starts NULL.
 ALTER TABLE craft_timers ADD COLUMN last_done_seconds INTEGER CHECK (last_done_seconds >= 0);
 
@@ -394,6 +397,12 @@ BEGIN
   IF cardinality(v_ticked) > 0 THEN
     UPDATE craft_timers SET last_done_seconds = craft_timer_elapsed(banked_seconds, 0, running_since, clock_timestamp())
       WHERE user_id = p_user_id AND project_id = v_part.project_id;
+  END IF;
+  -- FR2: a row unticked here (Undo, the toast's Undo, Fix count back) may be the Row done the stored seconds
+  -- belong to, so they are cleared: the app falls back to its lower bound from the last Row done left.
+  IF cardinality(v_unticked) > 0 THEN
+    UPDATE craft_timers SET last_done_seconds = NULL
+      WHERE user_id = p_user_id AND project_id = v_part.project_id AND last_done_seconds IS NOT NULL;
   END IF;
   -- FR1: Undo / Fix count below the timer's start row on this part lowers it, so the rows done
   -- again are in the sitting (Log sitting saves from the timer's start row).
@@ -838,6 +847,7 @@ DECLARE
   v_already UUID[] := '{}';
   v_removed INTEGER := 0;
   v_count INTEGER;
+  v_unticked_count INTEGER;
   v_changes JSONB;
 BEGIN
   PERFORM work_sessions_assert_caller(p_user_id);
@@ -954,6 +964,13 @@ BEGIN
   END LOOP;
 
   UPDATE task_checklist_items SET is_done = false WHERE id = ANY (v_items) AND user_id = p_user_id AND is_done;
+  GET DIAGNOSTICS v_unticked_count = ROW_COUNT;
+  -- FR2: the ripped rows may hold the Row done the timer's stored seconds belong to: cleared, like craft_rows'
+  -- untick (no version bump).
+  IF v_unticked_count > 0 THEN
+    UPDATE craft_timers SET last_done_seconds = NULL
+      WHERE user_id = p_user_id AND project_id = v_part.project_id AND last_done_seconds IS NOT NULL;
+  END IF;
   v_new := craft_current_row(p_user_id, p_part_id, v_part.total_rows);
   UPDATE craft_timers SET start_row = v_new, start_quarter = 0, version = version + 1
     WHERE user_id = p_user_id AND part_id = p_part_id AND start_row > v_new;
