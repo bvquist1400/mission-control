@@ -77,10 +77,11 @@ await test("Due checks: before the current row and after the last ticked row (gu
   assert.equal(C.checkBeforeText(at17.due_checks[0]), "Before Round 17:");
   const at15 = C.buildCraftView(mitten({ castOnDone: true, cuffDone: 31, gussetDone: 14, active: "gusset" }));
   assert.deepEqual(ids(at15.due_checks), []);
-  // Fix count 15 → 18 ticks 15, 16, 17: the check stays unticked and on the screen.
+  // Fix count 15 → 18 ticks 15, 16, 17: the check stays unticked and on the screen (FR4: as an earlier step, not a card).
   const fixed = C.buildCraftView(mitten({ castOnDone: true, cuffDone: 31, gussetDone: 17, active: "gusset" }));
   assert.equal(fixed.active_part.current_row, 18);
-  assert.deepEqual(ids(fixed.due_checks), ["check-gus"]);
+  assert.deepEqual(ids(fixed.due_checks), []);
+  assert.deepEqual(ids(fixed.earlier_checks), ["check-gus"]);
 });
 await test("Upcoming rows list checks in order with their text, a row ahead (round 28 now: the check comes before round 29); the inside list too", () => {
   const view = C.buildCraftView(mitten({ castOnDone: true, cuffDone: 27 }));
@@ -107,7 +108,7 @@ await test("A band close's \"Count …\" item (S2) is not a check: it never show
 // ── Change total: lowering ───────────────────────────────────────────────────
 await test("Lowering Mitten 2's Cuff to 27 drops Rnd 25–28 (est.) and renumbers 29–31 to 25–27; the sheet says exactly that; \"Last (est.) round needed: 24\" gives the same total", () => {
   const view = C.buildCraftView(mitten({ castOnDone: true, cuffDone: 24 }));
-  const rows = view.part_rows.cuff;
+  const rows = C.partRowsOf(view, "cuff");
   const plan = A.setTotalPlan(rows, 31, 27);
   assert.deepEqual(plan, { kind: "remove", total: 27, remove: [25, 26, 27, 28], moves: [{ from: 29, to: 25 }, { from: 30, to: 26 }, { from: 31, to: 27 }] });
   assert.equal(A.renumberText("round", rows, plan), "Drops Rnd 25–28 (est.). Rnd 29–31 · knit (US 7) become Rnd 25–27. New total 27.");
@@ -116,7 +117,7 @@ await test("Lowering Mitten 2's Cuff to 27 drops Rnd 25–28 (est.) and renumber
   assert.equal(A.totalForLastEst(rows, 31, 28), 31);
 });
 await test("Lowering refuses what would drop a pattern row (not_est), a ticked (est.) row (ticked) or one in a sitting (in_sitting), in plain words", () => {
-  const rows = C.buildCraftView(mitten({ castOnDone: true, cuffDone: 24 })).part_rows.cuff;
+  const rows = C.partRowsOf(C.buildCraftView(mitten({ castOnDone: true, cuffDone: 24 })), "cuff");
   const tooFar = A.setTotalPlan(rows, 31, 20);
   assert.deepEqual(tooFar, { kind: "refused", total: 20, reason: "not_est", rows: [22, 23, 24, 25, 26, 27, 28], need: 11 });
   assert.equal(A.setTotalRefusalText("round", tooFar), "Can't drop 11 rounds: only rounds 22–28 are (est.) or blank rounds. Rounds with pattern steps are never dropped.");
@@ -181,7 +182,8 @@ await test("Row done with a check showing asks first: \"Not done yet\" lists the
   const view = C.buildCraftView(mittenOneNow());
   const html = renderToStaticMarkup(createElement(CheckFirstSheet, { checks: view.due_checks, onClose: () => {}, onYes: async () => null }));
   assert.match(html, /aria-label="Not done yet"[\s\S]*<small>Before Round 1 \(Thumb gusset\):<\/small><p>Check: cuff 4 in/);
-  assert.match(html, /Done it\?[\s\S]*Yes ticks the check, then the round\. Not yet leaves both as they are\.[\s\S]*>Not yet<\/button>[\s\S]*>Yes, done<\/button>/);
+  // FR4: Not yet ticks the row only; the check stays, as an earlier step.
+  assert.match(html, /Done it\?[\s\S]*Yes ticks the step, then round 1\. Not yet ticks round 1 only; the step stays on the list of earlier steps not ticked\.[\s\S]*>Not yet<\/button>[\s\S]*>Yes, done<\/button>/);
 });
 await test("Parts sheet: each part has Work on this part (unfinished, not on the screen) and Change total… (finished parts too)", () => {
   const view = C.buildCraftView(mittenOneNow());
@@ -194,7 +196,12 @@ await test("Parts sheet: each part has Work on this part (unfinished, not on the
 });
 await test("Change total sheet, lowering Mitten 2 at round 25: \"Last (est.) round needed\" (24) and the exact renumber line before Save", () => {
   const view = C.buildCraftView(mitten({ castOnDone: true, cuffDone: 24 }));
-  const html = renderToStaticMarkup(createElement(ChangeTotalSheet, { open: true, onClose: () => {}, view, part: view.active_part, send }));
+  // FR4: it opens on no change (Total rounds 31, Save disabled); "Last (est.) round needed" is one tap away.
+  const opened = renderToStaticMarkup(createElement(ChangeTotalSheet, { open: true, onClose: () => {}, view, part: view.active_part, send }));
+  assert.match(opened, /aria-pressed="true"[^>]*>Total rounds<\/button>/);
+  assert.match(opened, /Same as now\./);
+  assert.match(opened, /<button type="submit"[^>]*disabled=""[^>]*>Save total<\/button>/);
+  const html = renderToStaticMarkup(createElement(ChangeTotalSheet, { open: true, onClose: () => {}, view, part: view.active_part, send, initial: { mode: "est", lastEst: 24 } }));
   assert.match(html, /aria-pressed="true"[^>]*>Last \(est\.\) round needed<\/button>/);
   assert.match(html, /<label for="craft-total-est">Last \(est\.\) round needed<span>total 27<\/span><\/label>[\s\S]*value="24"/);
   assert.match(html, /<p class="craft-sheet-preview">Drops Rnd 25–28 \(est\.\)\. Rnd 29–31 · knit \(US 7\) become Rnd 25–27\. New total 27\.<\/p>/);
@@ -207,14 +214,16 @@ await test("Change total sheet on a finished part (Mitten 1's Cuff from the Part
   assert.match(html, /<label for="craft-total">Total rounds<\/label>/);
   assert.match(html, /Same as now\./);
   const src = readFileSync(new URL("../src/components/craft/CraftSheets.tsx", import.meta.url), "utf8");
-  assert.match(src, /<Input id="craft-total-text" value=\{text\} maxLength=\{200\} placeholder="e\.g\. knit \(US 7\)"/);
+  // FR4: the text starts empty (placeholder only); the body carries the typed text, the work type and where the rows go.
+  assert.match(src, /<Input id="craft-total-text" value=\{text\.value\} maxLength=\{200\} placeholder="e\.g\. knit \(US 7\)"/);
   assert.match(src, /<Select id="craft-total-type" value=\{type\}/);
-  assert.match(src, /\.\.\.\(plan\.kind === "add" \? \{ text: text\.trim\(\) \|\| null, work_type: type \|\| null \} : \{\}\)/);
+  assert.match(src, /\.\.\.\(plan\.kind === "add" \? \{ text: typed \|\| null, work_type: type \|\| null, \.\.\.\(steps\.length && place \? \{ how: place \} : \{\}\) \} : \{\}\)/);
   assert.deepEqual(view.work_types, ["rib", "stockinette"]);
-  const raise = renderToStaticMarkup(createElement(ChangeTotalSheet, { open: true, onClose: () => {}, view, part: cuff, send, initial: { total: 27, text: "knit (US 7)", type: "stockinette" } }));
+  const raise = renderToStaticMarkup(createElement(ChangeTotalSheet, { open: true, onClose: () => {}, view, part: cuff, send, initial: { total: 27, text: "knit (US 7)", type: "stockinette", place: "after_steps" } }));
   assert.match(raise, /<label for="craft-total-text">Pattern text for the new rounds<\/label><input[^>]*id="craft-total-text"[^>]*value="knit \(US 7\)"/);
   assert.match(raise, /<select[^>]*id="craft-total-type"[\s\S]*<option value="stockinette" selected="">stockinette<\/option>/);
-  assert.match(raise, /<p class="craft-sheet-preview">Adds Rnd 25–27 · knit \(US 7\) at the end \(stockinette\), 36 stitches each\. The screen moves to this part\.<\/p>/);
+  // FR4: the US 7 check sits right after Rnd 24, so the line says the new rounds go after it (the repair's pick).
+  assert.match(raise, /<p class="craft-sheet-preview">Adds Rnd 25–27 · knit \(US 7\) at the end \(stockinette\), 36 stitches each\. The step “Check: cuff 4 in from cast-on\? Then switch to US 7” stays before Rnd 25\. The screen moves to this part\.<\/p>/);
 });
 await test("CSS (FR3): tokens only, nothing under 12px, check cards and Done at least 48px", () => {
   const css = readFileSync(new URL("../src/components/craft/craft.css", import.meta.url), "utf8");

@@ -134,14 +134,15 @@ const rowOf = (itemId) => psql(`SELECT coalesce(craft_row::text, 'gone') FROM ta
 const rowStates = (partId) => JSON.parse(psql(`SELECT coalesce(json_agg(json_build_object('row', craft_row, 'done', is_done, 'linked', EXISTS (SELECT 1 FROM work_session_items w WHERE w.checklist_item_id = i.id AND NOT w.in_progress), 'in_progress', EXISTS (SELECT 1 FROM work_session_items w WHERE w.checklist_item_id = i.id AND w.in_progress), 'today', false, 'text', text) ORDER BY craft_row), '[]') FROM task_checklist_items i WHERE craft_part_id='${partId}';`));
 const today = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
 
-const NEW = ["craft_screen_part(uuid,uuid)", "craft_set_total(uuid,uuid,integer,integer,text,text)", "craft_check(uuid,uuid,uuid[])", "craft_pick_part(uuid,uuid,uuid)"];
+// FR4: craft_set_total takes a 7th argument (p_how).
+const NEW = ["craft_screen_part(uuid,uuid)", "craft_set_total(uuid,uuid,integer,integer,text,text,text)", "craft_check(uuid,uuid,uuid[])", "craft_pick_part(uuid,uuid,uuid)"];
 
 let a, b;
 try {
   a = await user(); b = await user();
   process.env.MISSION_CONTROL_USER_ID = a.id;
 
-  await test("074 FR3: craft_screen_part, the 6-argument craft_set_total, craft_check and craft_pick_part are SECURITY INVOKER with EXECUTE for authenticated and service_role only; 073's 4-argument craft_set_total is gone; craft_timer keeps its signature", () => {
+  await test("074 FR3: craft_screen_part, the 7-argument (FR4) craft_set_total, craft_check and craft_pick_part are SECURITY INVOKER with EXECUTE for authenticated and service_role only; 073's 4-argument craft_set_total is gone; craft_timer keeps its signature", () => {
     for (const fn of NEW) {
       assert.equal(psql(`SELECT to_regprocedure('${fn}') IS NOT NULL;`), "t", fn);
       assert.equal(psql(`SELECT prosecdef FROM pg_proc WHERE oid = '${fn}'::regprocedure;`), "f", `${fn} SECURITY INVOKER`);
@@ -212,7 +213,8 @@ try {
     const m = mittenOne(a.id);
     const bad = await post(totalRoute, a, m.projectId, "total", { part_id: m.cuff, total: 27, expected_total: 24, text: "knit (US 7)", work_type: "Stocking Stitch" });
     assert.equal(bad.status, 400);
-    const r = await post(totalRoute, a, m.projectId, "total", { part_id: m.cuff, total: 27, expected_total: 24, text: "knit (US 7)", work_type: "stockinette" });
+    // FR4: "after the check" is the sheet's "New rounds after it" (how after_steps); the default goes right after Rnd 24.
+    const r = await post(totalRoute, a, m.projectId, "total", { part_id: m.cuff, total: 27, expected_total: 24, text: "knit (US 7)", work_type: "stockinette", how: "after_steps" });
     assert.equal(r.status, 200, JSON.stringify(r.body).slice(0, 300));
     assert.equal(psql(`SELECT string_agg(text || '/' || work_type || '/' || is_done || '/' || trim_scale(unit_count)::text || '/' || (sort_order > 29), ' | ' ORDER BY craft_row) FROM task_checklist_items WHERE craft_part_id='${m.cuff}' AND craft_row > 24;`),
       "Rnd 25 · knit (US 7)/stockinette/false/36/true | Rnd 26 · knit (US 7)/stockinette/false/36/true | Rnd 27 · knit (US 7)/stockinette/false/36/true");
@@ -233,7 +235,8 @@ try {
     assert.equal(cuffPart.finished, true);
     const plan = A.setTotalPlan(first.part_rows[m.cuff], 24, 27);
     assert.deepEqual(plan, { kind: "add", total: 27, add: [25, 26, 27] });
-    const r = await post(totalRoute, a, m.projectId, "total", { part_id: m.cuff, total: 27, expected_total: 24, text: "knit (US 7)", work_type: "stockinette" });
+    // FR4: the sheet asks where the new rounds go (the check sits right after Rnd 24): Brent picks "New rounds after it".
+    const r = await post(totalRoute, a, m.projectId, "total", { part_id: m.cuff, total: 27, expected_total: 24, text: "knit (US 7)", work_type: "stockinette", how: "after_steps" });
     assert.equal(r.status, 200, JSON.stringify(r.body).slice(0, 300));
     const v = r.body.view;
     assert.deepEqual([v.active_part.name, v.active_part.current_row, v.active_part.total_rows], ["Cuff", 25, 27]);
@@ -270,7 +273,9 @@ try {
     const fix = await post(rowRoute, a, g.projectId, "row", { part_id: g.gusset, mode: "fix", expected_row: 15, to_row: 18 });
     assert.equal(fix.status, 200);
     assert.equal(fix.body.view.active_part.current_row, 18);
-    assert.deepEqual(fix.body.view.due_checks.map((c) => c.text), [GUSSET_CHECK], "Fix count past it: still unticked and showing");
+    // FR4: passed, it is no longer a card that Row done asks about; it shows on the "earlier steps not ticked" list.
+    assert.deepEqual(fix.body.view.due_checks, []);
+    assert.deepEqual(fix.body.view.earlier_checks.map((c) => c.text), [GUSSET_CHECK], "Fix count past it: still unticked and showing");
     assert.equal(psql(`SELECT is_done FROM task_checklist_items WHERE id='${g.items.gussetCheck}';`), "f");
   });
 
