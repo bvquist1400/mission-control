@@ -26,16 +26,17 @@ function mitten({ cuffDone = 0, gussetDone = 0, cuff = null, castOnDone = false,
     ...Array.from({ length: 3 }, (_, i) => [i + 29, `Rnd ${i + 29} · knit (US 7)`, "stockinette"]),
   ];
   const sortOf = (row) => (row <= 28 ? row : row + 1);
+  // FR5: the rows' items were made before the set-up made the parts (set-up links items that already exist).
   const items = cuffRows.map(([row, text, type, done]) => ({ id: `cuff-${row}`, task_id: "cuff-task", sort_order: sortOf(row), craft_part_id: "cuff", craft_row: row, text,
-    is_done: done ?? row <= cuffDone, completed_at: (done ?? row <= cuffDone) ? "2026-11-10T22:00:00Z" : null, unit_count: 36, work_type: type }));
+    is_done: done ?? row <= cuffDone, completed_at: (done ?? row <= cuffDone) ? "2026-11-10T22:00:00Z" : null, unit_count: 36, work_type: type, created_at: "2026-11-01T12:00:00.123456+00:00" }));
   for (let row = 1; row <= 20; row++) items.push({ id: `gus-${row}`, task_id: "gusset-task", sort_order: row <= 16 ? row - 1 : row, craft_part_id: "gusset", craft_row: row,
     text: row === 1 ? "Rnd 1 (set-up) · k1, M1R, k1, pm" : `Rnd ${row} · gusset`, is_done: row <= gussetDone, completed_at: row <= gussetDone ? "2026-11-12T22:00:00Z" : null, unit_count: 36, work_type: "stockinette" });
   const total = Math.max(...cuffRows.map(([row]) => row));
   return {
     project: { id: "project", name: "Fake Mittens" }, craft_project: { craft: "knit", gear: null, active_part_id: active },
     parts: [
-      { id: "cuff", name: "Cuff", total_rows: total, row_word: "round", sort_order: 0, quarters: false, quarter: 0, quarter_row: null, ridges: false, stitch_count: 36 },
-      { id: "gusset", name: "Thumb gusset", total_rows: 20, row_word: "round", sort_order: 1, quarters: false, quarter: 0, quarter_row: null, ridges: false, stitch_count: null },
+      { id: "cuff", name: "Cuff", total_rows: total, row_word: "round", sort_order: 0, quarters: false, quarter: 0, quarter_row: null, ridges: false, stitch_count: 36, created_at: "2026-11-11T20:00:00.5+00:00" },
+      { id: "gusset", name: "Thumb gusset", total_rows: 20, row_word: "round", sort_order: 1, quarters: false, quarter: 0, quarter_row: null, ridges: false, stitch_count: null, created_at: "2026-11-11T20:00:00.5+00:00" },
     ],
     items, segments: [{ id: "seg-cuff", part_id: "cuff", task_id: "cuff-task", name: "Mitten 1 · Cuff", from_row: 1, to_row: total, sort_order: 0, close_check: false },
       { id: "seg-gus", part_id: "gusset", task_id: "gusset-task", name: "Mitten 1 · Thumb gusset", from_row: 1, to_row: 20, sort_order: 0, close_check: false }],
@@ -55,7 +56,7 @@ const mittenOneWrongRaise = () => {
     ...Array.from({ length: 24 }, (_, i) => [i + 1, i < 21 ? `Rnd ${i + 1} · k1, p1 rib` : `Rnd ${i + 1} (est.) · k1, p1 rib`, "rib", true]),
     ...Array.from({ length: 3 }, (_, i) => [i + 25, `Rnd ${i + 25} · k1, p1 rib`, "rib", false]),
   ] });
-  for (const item of v.items) if (item.craft_part_id === "cuff" && item.craft_row >= 25) item.sort_order = item.craft_row + 5; // after the check (29)
+  for (const item of v.items) if (item.craft_part_id === "cuff" && item.craft_row >= 25) { item.sort_order = item.craft_row + 5; item.created_at = "2026-11-12T23:30:00.000001+00:00"; } // after the check (29), made by the raise
   return v;
 };
 /** A scarf: rows 1..n bare "Row N" (sort 2r) on one task, steps after given rows (sort 2r+1). */
@@ -153,8 +154,8 @@ await test("FR4 1 take back (Fable R13): after the wrong raise the usual lowerin
   assert.deepEqual(plan, { kind: "remove", total: 24, remove: [25, 26, 27], moves: [] });
   assert.equal(A.takeBackRowsText("round", rows, plan.remove), "pattern rounds 25–27 · k1, p1 rib");
   // Never a ticked row or one in a sitting.
-  assert.deepEqual(A.takeBackPlan(rows.map((s) => (s.row === 26 ? { ...s, done: true } : s)), 27, 24), { kind: "refused", total: 24, reason: "ticked", rows: [26] });
-  assert.deepEqual(A.takeBackPlan(rows.map((s) => (s.row === 27 ? { ...s, in_progress: true } : s)), 27, 24), { kind: "refused", total: 24, reason: "in_sitting", rows: [27] });
+  assert.deepEqual(A.takeBackPlan(rows.map((s) => (s.row === 26 ? { ...s, done: true } : s)), 27, 24), { kind: "refused", total: 24, reason: "ticked", rows: [26], remove: [25, 26, 27] });
+  assert.deepEqual(A.takeBackPlan(rows.map((s) => (s.row === 27 ? { ...s, in_progress: true } : s)), 27, 24), { kind: "refused", total: 24, reason: "in_sitting", rows: [27], remove: [25, 26, 27] });
   // Not offered when it is what the usual lowering does (the scarf's blank tail) or for a raise.
   const s = C.partRowsOf(C.buildCraftView(scarf({ n: 519, done: 300 })), "scarf");
   assert.equal(A.takeBackPlan(s, 519, 455), null);
@@ -165,12 +166,13 @@ await test("FR4 1 take-back sheet: the refusal, then \"Remove the last 3 rounds 
   const view = C.buildCraftView(mittenOneWrongRaise());
   const cuff = view.active_part;
   const html = renderToStaticMarkup(createElement(ChangeTotalSheet, { open: true, onClose: () => {}, view, part: cuff, send, initial: { total: 24 } }));
-  assert.match(html, /<p class="craft-sheet-warn">Can&#x27;t remove rounds 22–24: they are ticked\. Undo them first if that was a mistake\.<\/p>/);
+  // FR5: the refusal names what is ticked and never says to undo knitted rounds.
+  assert.match(html, /<p class="craft-sheet-warn">Rounds 22–24 are ticked; no unticked \(est\.\) rounds are left to drop\.<\/p>/);
   assert.match(html, />Remove the last 3 rounds instead \(Rnd 25–27\)…<\/button>/);
   assert.match(html, /<button type="submit"[^>]*disabled=""[^>]*>Save total<\/button>/, "the usual Save can't do it");
   const ask = renderToStaticMarkup(createElement(ChangeTotalSheet, { open: true, onClose: () => {}, view, part: cuff, send, initial: { total: 24, takeBack: true } }));
   assert.match(ask, /<p class="craft-check-q">Also remove pattern rounds 25–27 · k1, p1 rib\?<\/p>/);
-  assert.match(ask, /They are unticked and in no sitting, but they are not \(est\.\) rounds: their text goes with them\. New total 24\./);
+  assert.match(ask, /A raise added them; they are unticked and in no sitting\. Their pattern text goes with them\. New total 24\./);
   assert.match(ask, />Keep them<\/button>[\s\S]*<button type="submit"[^>]*>Yes, remove them<\/button>/);
   const src = readFileSync(new URL("../src/components/craft/CraftSheets.tsx", import.meta.url), "utf8");
   assert.match(src, /void save\(asking \? "take_back" : null\);/);

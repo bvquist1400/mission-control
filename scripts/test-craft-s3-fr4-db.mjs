@@ -89,7 +89,8 @@ INSERT INTO craft_segments (id, user_id, part_id, task_id, name, from_row, to_ro
   ('${randomUUID()}','${owner}','${cuff}','${cuffTask}','Mitten · Cuff',1,${cuffTotal},0), ('${randomUUID()}','${owner}','${gusset}','${gussetTask}','Mitten · Thumb gusset',1,20,0);\n`;
   const add = (keyName, task, text, sort, done, partId = null, row = null, type = null, units = null) => {
     const id = randomUUID(); out.items[keyName] = id;
-    sql += `INSERT INTO task_checklist_items (id, user_id, task_id, text, is_done, completed_at, sort_order, unit_count, work_type, craft_part_id, craft_row) VALUES ('${id}','${owner}','${task}',${lit(text)},${done},${done ? "'2026-11-10T23:00:00Z'" : "NULL"},${sort},${units ?? "NULL"},${type ? lit(type) : "NULL"},${partId ? `'${partId}'` : "NULL"},${row ?? "NULL"});\n`;
+    // FR5: the items were made before the set-up made the parts (as live: set-up links items that already exist).
+    sql += `INSERT INTO task_checklist_items (id, user_id, task_id, text, is_done, completed_at, sort_order, unit_count, work_type, craft_part_id, craft_row, created_at) VALUES ('${id}','${owner}','${task}',${lit(text)},${done},${done ? "'2026-11-10T23:00:00Z'" : "NULL"},${sort},${units ?? "NULL"},${type ? lit(type) : "NULL"},${partId ? `'${partId}'` : "NULL"},${row ?? "NULL"},'2026-11-01T00:00:00Z');\n`;
   };
   add("castOn", cuffTask, "Cast on 36 (long-tail, US 5), place BOR, join", 0, castOnDone);
   for (const [row, text, type] of rowsOf) add(`cuff:${row}`, cuffTask, text, row <= 28 ? row : row + 1, row <= cuffDone, cuff, row, type, 36);
@@ -121,8 +122,8 @@ INSERT INTO craft_projects (project_id, user_id, craft, active_part_id) VALUES (
 INSERT INTO craft_parts (id, user_id, project_id, name, sort_order, total_rows, row_word, quarters, ridges, stitch_count) VALUES ('${part}','${owner}','${projectId}','Scarf',0,${n},'row',true,true,40);
 INSERT INTO tasks (id, user_id, project_id, section_id, title, status) VALUES ('${task}','${owner}','${projectId}','${sectionId}','Scarf rows','Planned');
 INSERT INTO craft_segments (id, user_id, part_id, task_id, name, from_row, to_row, sort_order) VALUES ('${randomUUID()}','${owner}','${part}','${task}','Scarf rows',1,${n},0);
-INSERT INTO task_checklist_items (user_id, task_id, text, is_done, completed_at, sort_order, unit_count, work_type, craft_part_id, craft_row)
-  SELECT '${owner}','${task}','Row ' || r, r <= ${done}, CASE WHEN r <= ${done} THEN '2026-11-05T23:00:00Z'::timestamptz END, 2 * r, 40, 'garter', '${part}', r FROM generate_series(1, ${n}) r;
+INSERT INTO task_checklist_items (user_id, task_id, text, is_done, completed_at, sort_order, unit_count, work_type, craft_part_id, craft_row, created_at)
+  SELECT '${owner}','${task}','Row ' || r, r <= ${done}, CASE WHEN r <= ${done} THEN '2026-11-05T23:00:00Z'::timestamptz END, 2 * r, 40, 'garter', '${part}', r, '2026-11-01T00:00:00Z' FROM generate_series(1, ${n}) r;
 UPDATE craft_projects SET active_part_id = '${part}' WHERE project_id = '${projectId}';\n`;
   for (const [after, text] of steps) { const id = randomUUID(); out.steps[text] = id;
     sql += `INSERT INTO task_checklist_items (id, user_id, task_id, text, is_done, sort_order) VALUES ('${id}','${owner}','${task}',${lit(text)},false,${2 * after + 1});\n`; }
@@ -163,7 +164,8 @@ try {
     assert.equal(cuffText(m).split(" | ").slice(24).join(" | "), "25=Rnd 25 · k1, p1 rib/rib/false | 26=Rnd 26 · k1, p1 rib/rib/false | 27=Rnd 27 · k1, p1 rib/rib/false");
     const usual = await post(totalRoute, a, m.projectId, "total", { part_id: m.cuff, total: 24, expected_total: 27 });
     assert.deepEqual([usual.status, usual.body.reason], [409, "ticked"]);
-    assert.equal(usual.body.error, "Can't remove rounds 22–24: they are ticked. Undo them first if that was a mistake.");
+    // FR5: the real blocker in plain words (no "Undo" of knitted rows), and that the raised rows can be taken back.
+    assert.equal(usual.body.error, "Rounds 22–24 are ticked; no unticked (est.) rounds are left to drop. Rounds 25–27 were added by a raise and can be taken back instead.");
     // The sheet's take-back plan names exactly these rows.
     const tb = A.takeBackPlan(C.partRowsOf(usual.body.view, m.cuff), 27, 24);
     assert.deepEqual(tb, { kind: "remove", total: 24, remove: [25, 26, 27], moves: [] });
@@ -200,9 +202,9 @@ try {
     assert.equal(itemsHash(m), before);
   });
 
-  await test("FR4 6 a raise goes right after the part's last ROW by default: a trailing step (Bind off) moves after the new rows and the view shows it after the new last row; how after_steps keeps it before them", async () => {
+  await test("FR4 6 a raise with how after_row goes right after the part's last ROW: a trailing step (Bind off) moves after the new rows and the view shows it after the new last row; how after_steps keeps it before them (FR5: with no how it is refused, see test-craft-s3-fr5-db)", async () => {
     const s = seedScarf(a.id, { n: 455, done: 300, steps: [[455, "Bind off loosely"]] });
-    let r = await post(totalRoute, a, s.projectId, "total", { part_id: s.part, total: 458, expected_total: 455, text: "knit", work_type: "garter" });
+    let r = await post(totalRoute, a, s.projectId, "total", { part_id: s.part, total: 458, expected_total: 455, text: "knit", work_type: "garter", how: "after_row" });
     assert.equal(r.status, 200, JSON.stringify(r.body).slice(0, 300));
     assert.equal(psql(`SELECT string_agg(coalesce(craft_row::text, text) || '@' || sort_order, ',' ORDER BY sort_order) FROM task_checklist_items WHERE task_id='${s.task}' AND sort_order > 908;`),
       "455@910,456@911,457@912,458@913,Bind off loosely@914");
