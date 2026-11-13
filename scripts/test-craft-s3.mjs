@@ -81,6 +81,22 @@ await test("FR1 Partway default: pauses on both sides of the last Row done need 
   // Without it the timer can't tell the two pauses apart: the lower bound (30 s, the running stretch) leaves it OFF.
   assert.equal(A.partwayDefault(s, 157, form, { ...t, last_done_seconds: null }, at("22:20:30"), at("21:50:00")), false);
 });
+await test("FR2 Partway default after an untick (074 sets last_done_seconds NULL): the lower bound from the last Row done left gives ON at ~1,260 s, OFF under 2 timed min", () => {
+  // Repro (Opus FR1 re-check 1): ran 21:00–22:00 with no pause; row 59 done 21:39 (2,340 timed s); a mis-tapped
+  // Row done on 60 at 21:59 (3,540), the toast's Undo, save at 22:00. Row 60 is unticked, so the last Row done left is 59.
+  const s = states(157, 59), form = { from: 58, to: 59 };
+  const t = { ...timedTimer({ running: true, running_since: at("21:00:00"), banked: 0, last_done_seconds: null }), elapsed_seconds: 3600 };
+  assert.equal(A.timedSinceLastDone(t, at("22:00:00"), at("21:39:00")), 1260);
+  assert.equal(A.partwayDefault(s, 157, form, t, at("22:00:00"), at("21:39:00")), true, "NULL: ~1,260 s since row 59 → ON");
+  // What 95efd6e read: the undone row 60's stored 3,540 s → 60 s → OFF (the bug).
+  assert.equal(A.partwayDefault(s, 157, form, { ...t, last_done_seconds: 3540 }, at("22:00:00"), at("21:39:00")), false, "stale value: OFF");
+  // A pause BEFORE the Row done left (21:10–21:20): the running stretch since 21:20 still bounds it at 1,260 s.
+  const paused = { ...timedTimer({ running: true, running_since: at("21:20:00"), banked: 600, last_done_seconds: null }), elapsed_seconds: 3000 };
+  assert.equal(A.timedSinceLastDone(paused, at("22:00:00"), at("21:39:00")), 1260);
+  assert.equal(A.partwayDefault(s, 157, form, paused, at("22:00:00"), at("21:39:00")), true);
+  // The last Row done left is 90 timed s old → OFF.
+  assert.equal(A.partwayDefault(s, 157, form, t, at("22:00:00"), at("21:58:30")), false, "90 s → OFF");
+});
 await test("Partway default with typed minutes (no timer): OFF while rows are saved, ON when none are (the minutes went into the row being worked)", () => {
   const s = states(157, 62);
   assert.equal(A.partwayDefault(s, 157, { from: 59, to: 62 }, null, NOW, null), false);

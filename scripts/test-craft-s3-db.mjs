@@ -523,9 +523,10 @@ try {
     assert.equal(view.timer.last_done_seconds, 3600);
     const d = A.logSittingDefaults(view.row_states, 157, view.timer);
     assert.equal(A.partwayDefault(view.row_states, 157, d, view.timer, view.server_now, view.timer_last_done_at), false, "about 60 s of timed work after the Row done");
-    // Undo leaves it; a paused Row done stores the banked seconds; Fix count ticking forward stores it too; another project's Row done doesn't.
+    // FR2: Undo clears it (NULL: the app falls back to its lower bound); a paused Row done stores the banked seconds;
+    // Fix count ticking forward stores it too; another project's Row done doesn't.
     assert.equal((await post(rowRoute, a, s.projectId, "row", { part_id: part, mode: "undo", expected_row: 62, to_row: 61 })).status, 200);
-    assert.equal(timerRow(a.id).last_done_seconds, 3600);
+    assert.equal(timerRow(a.id).last_done_seconds, null, "Undo clears it (NULL)");
     psql(`UPDATE craft_timers SET running_since = NULL, paused_at = now(), banked_seconds = 4000 WHERE user_id='${a.id}';`);
     await rowDone(a, s, part, 61, 61);
     assert.equal(timerRow(a.id).last_done_seconds, 4000);
@@ -535,6 +536,111 @@ try {
     const other = blanket(a.id, 60);
     await rowDone(a, other, other.parts[0], 61, 61);
     assert.equal(timerRow(a.id).last_done_seconds, 4100, "a Row done on another project leaves this timer alone");
+    clearTimer(a.id);
+  });
+
+  await test("FR2 (Opus re-check 1): an untick clears last_done_seconds (NULL): the toast's Undo, Undo, Fix count back, Ripped back; Fix count forward-only still stores it; a stale Undo or another project's untick leaves it; no version bump", async () => {
+    clearTimer(a.id);
+    const s = blanket(a.id, 58), [part] = s.parts;
+    await startTimerAgo(a, s, part, 60);
+    const stored = () => timerRow(a.id).last_done_seconds;
+    const set = (n) => psql(`UPDATE craft_timers SET last_done_seconds = ${n} WHERE user_id='${a.id}';`);
+    await rowDone(a, s, part, 59, 61);
+    assert.ok(stored() >= 3598, `stored after Row done, got ${stored()}`);
+    const v0 = version(a.id);
+    // The toast's Undo (undo_one) on row 61.
+    let r = await post(rowRoute, a, s.projectId, "row", { part_id: part, mode: "undo_one", to_row: 61, expected_row: 62 });
+    assert.deepEqual([r.status, r.body.result.unticked], [200, [61]]);
+    assert.equal(stored(), null, "the toast's Undo clears it");
+    assert.equal(version(a.id), v0, "no version bump (the Log sitting sheet isn't made stale by it)");
+    // A stale toast Undo unticks nothing and leaves it.
+    set(3500);
+    r = await post(rowRoute, a, s.projectId, "row", { part_id: part, mode: "undo_one", to_row: 60, expected_row: 62 });
+    assert.deepEqual([r.status, r.body.reason], [409, "stale"]);
+    assert.equal(stored(), 3500, "nothing unticked: kept");
+    // Fix count forward only (61 → 63) stores it again.
+    set("NULL");
+    r = await post(rowRoute, a, s.projectId, "row", { part_id: part, mode: "fix", expected_row: 61, to_row: 63 });
+    assert.deepEqual([r.status, r.body.result.ticked, r.body.result.unticked], [200, [61, 62], []]);
+    assert.ok(stored() >= 3598, `Fix count forward stores it, got ${stored()}`);
+    // Fix count backward (63 → 62) clears it.
+    r = await post(rowRoute, a, s.projectId, "row", { part_id: part, mode: "fix", expected_row: 63, to_row: 62 });
+    assert.deepEqual([r.status, r.body.result.unticked], [200, [62]]);
+    assert.equal(stored(), null, "Fix count back clears it");
+    // Undo rows (sheet) clears it.
+    set(3500);
+    r = await post(rowRoute, a, s.projectId, "row", { part_id: part, mode: "undo", expected_row: 62, to_row: 61 });
+    assert.deepEqual([r.status, r.body.result.unticked], [200, [61]]);
+    assert.equal(stored(), null, "Undo clears it");
+    // Ripped back (row 60) clears it.
+    set(3500);
+    r = await post(frogRoute, a, s.projectId, "frog", { part_id: part, expected_row: 61, from_row: 60, to_row: 60, idempotency_key: randomUUID() });
+    assert.equal(r.status, 201, JSON.stringify(r.body).slice(0, 300));
+    assert.equal(stored(), null, "Ripped back clears it");
+    // An untick on another project leaves this project's timer alone.
+    set(3500);
+    const other = blanket(a.id, 60);
+    await rowDone(a, other, other.parts[0], 61, 61);
+    assert.equal((await post(rowRoute, a, other.projectId, "row", { part_id: other.parts[0], mode: "undo_one", to_row: 61, expected_row: 62 })).status, 200);
+    assert.equal(stored(), 3500, "another project's Undo leaves it");
+    clearTimer(a.id);
+  });
+
+  await test("FR2 repro (Opus re-check 1, Codex Sol follow-up 1): row 59 done 21 timed min ago, a mis-tapped Row done on 60 a minute ago, the toast's Undo → the Partway default on the real view is ON (~1,260 s); the save links row 60 in progress. OFF when the last Row done left is under 2 timed min old. Same after a rip-back", async () => {
+    clearTimer(a.id);
+    const s = blanket(a.id, 58), [part] = s.parts;
+    // Timer running for 60 min, no pause. Row 59 done 21 min ago (at 2,340 timed s); row 60 done a minute ago (at 3,540).
+    const timeline = (doneAgo) => {
+      const rows = Object.entries(doneAgo).map(([row, secs]) => `UPDATE task_checklist_items SET completed_at = now() - interval '${secs} seconds' WHERE craft_part_id='${part}' AND craft_row = ${row};`).join("\n");
+      const last = Math.min(...Object.values(doneAgo));
+      psql(`${rows}\nUPDATE craft_timers SET sitting_started_at = now() - interval '60 minutes', running_since = now() - interval '60 minutes', banked_seconds = 0, paused_at = NULL, last_done_seconds = ${3600 - last} WHERE user_id='${a.id}';`);
+    };
+    const partway = async () => {
+      const view = await getView(a, s.projectId);
+      const d = A.logSittingDefaults(view.row_states, 157, view.timer);
+      return { view, d, on: A.partwayDefault(view.row_states, 157, d, view.timer, view.server_now, view.timer_last_done_at) };
+    };
+    await startTimerAgo(a, s, part, 60);
+    await rowDone(a, s, part, 59, 59);
+    const beforeTap = (await getView(a, s.projectId)).row_states;
+    await rowDone(a, s, part, 60, 60);
+    timeline({ 59: 21 * 60, 60: 60 });
+    const toast = A.toastUndo(beforeTap, 157, 60, 61);
+    assert.equal(toast.kind, "one");
+    assert.equal((await post(rowRoute, a, s.projectId, "row", { part_id: part, ...toast.body })).status, 200);
+    let p = await partway();
+    assert.equal(p.view.timer_last_done_at === null, false, "row 59's Row done is the last one left");
+    const secs = A.timedSinceLastDone(p.view.timer, p.view.server_now, p.view.timer_last_done_at);
+    assert.equal(p.on, true, `Partway ON after the toast's Undo (timed since the last Row done: ${secs} s)`);
+    assert.ok(secs >= 1255 && secs <= 1270, `about 1,260 timed s since row 59, got ${secs}`);
+    assert.equal(p.view.timer.last_done_seconds, null);
+    const saved = await post(sittingsRoute, a, s.projectId, "sittings", A.logSittingBody(p.view.active_part, p.view.timer, { ...p.d, quarter: 0, note: "", key: randomUUID(), minutesTouched: false, partway: p.on }, p.d.minutes));
+    assert.equal(saved.status, 201, JSON.stringify(saved.body).slice(0, 300));
+    assert.equal(links(saved.body.result.session_id), "Blanket:59,Blanket:60~", "row 60 linked in progress, as a8dc99f's rule gave");
+
+    // OFF: row 60 (left in progress, not ticked) done 90 s ago, a mis-tapped 61 30 s ago, the toast's Undo: the last
+    // Row done left is 90 timed s old.
+    assert.equal(current(part), 60);
+    await startTimerAgo(a, s, part, 60);
+    await rowDone(a, s, part, 60, 60);
+    const tap2 = (await getView(a, s.projectId)).row_states;
+    await rowDone(a, s, part, 61, 61);
+    timeline({ 59: 40 * 60, 60: 90, 61: 30 });
+    assert.equal((await post(rowRoute, a, s.projectId, "row", { part_id: part, ...A.toastUndo(tap2, 157, 61, 62).body })).status, 200);
+    p = await partway();
+    assert.equal(p.view.timer.last_done_seconds, null);
+    assert.equal(p.on, false, "the last Row done left is under 2 timed minutes old");
+    clearTimer(a.id);
+
+    // Rip-back: rows 61–64 done (63 at 21 min, 64 a minute ago); 64 ripped back → ON.
+    await startTimerAgo(a, s, part, 60);
+    await rowDone(a, s, part, 61, 64);
+    timeline({ 59: 40 * 60, 60: 35 * 60, 61: 30 * 60, 62: 25 * 60, 63: 21 * 60, 64: 60 });
+    const rip = await post(frogRoute, a, s.projectId, "frog", { part_id: part, expected_row: 65, from_row: 64, to_row: 64, idempotency_key: randomUUID() });
+    assert.equal(rip.status, 201, JSON.stringify(rip.body).slice(0, 300));
+    p = await partway();
+    assert.equal(p.on, true, "Partway ON after the rip-back (21 timed min since row 63)");
+    assert.equal(p.view.timer.last_done_seconds, null);
     clearTimer(a.id);
   });
 
