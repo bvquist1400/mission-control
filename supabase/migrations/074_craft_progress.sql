@@ -1176,14 +1176,22 @@ $$;
 -- none = the bare label, as 073), p_work_type (none = the last row's work type), the part's stitch count as
 -- unit_count (none: the last row's unit_count); the segment ending at the old total is extended, and the part
 -- becomes the screen's part (adding rows to a finished part brings it back). FR4: where they go on that task:
--- p_how NULL or 'after_row' = right after the part's last row (a step after it, e.g. "Bind off", moves after the
+-- p_how 'after_row' = right after the part's last row (a step after it, e.g. "Bind off", moves after the
 -- new rows: every item after the last row moves down by the rows added); 'after_steps' = after every item of the
 -- task (a step after the last row, e.g. Mitten 1's "switch to US 7" check, then comes before the new rows).
+-- FR5: p_how NULL = 'after_row' only when no step follows the last row; with an unticked step right after it (a
+-- plain item on that task before its next row, not a band's "Count …" item) it is { status: 'refused', reason:
+-- 'where', steps (their text), after_row }: the caller must say before or after the step (the S2 four-argument
+-- call and the API too); nothing is guessed.
 -- Fewer by k: only the k highest rows that may be dropped: rows whose text says "(est.)", or that are only their
 -- label ("Row 456", the scarf's tape-measure ending), unticked and in no sitting (finished or in progress). Else
 -- { status: 'refused', reason: 'not_est' (fewer than k such rows; rows = those there are) | 'ticked' | 'in_sitting', rows }.
 -- FR4, p_how 'take_back' (the screen asks a second time first, naming them): instead drops every row above the
 -- new total, whatever its text (rows a raise added by mistake), still never a ticked row or one in a sitting.
+-- FR5: ONLY rows a raise added: every row above the new total must have been made after the part (its item's
+-- created_at is later than the part's; set-up links items that already exist, a raise inserts new ones) and must
+-- not say "(est.)"; else { status: 'refused', reason: 'not_raised', rows (those that aren't), above (every row
+-- above the new total) } and nothing changes: a set-up pattern row (Mitten 2's Rnd 29–31) is never taken back.
 -- Every row after a dropped one moves down by the rows dropped below it: craft_row and the leading "Rnd N" of its
 -- text are renumbered (FR4: any case, "rnd 6" / "RND 6"; a leading range "Rnd 4–6" as a whole; numbers later in
 -- the text are left alone); its text, work type, units, tick and sitting links stay (they hang on the item). Shifted the
@@ -1217,6 +1225,7 @@ DECLARE
   v_added INTEGER := 0;
   v_removed INTEGER := 0;
   v_moved INTEGER := 0;
+  v_steps JSONB;
 BEGIN
   PERFORM work_sessions_assert_caller(p_user_id);
   IF p_part_id IS NULL OR p_total IS NULL OR p_expected_total IS NULL THEN
@@ -1252,6 +1261,21 @@ BEGIN
     v_word := COALESCE((regexp_match(v_last.text, '^(Row|Rnd|Round)[ \t]+[0-9]'))[1], CASE WHEN v_part.row_word = 'round' THEN 'Round' ELSE 'Row' END);
     v_sep := COALESCE((regexp_match(v_last.text, '^(?:Row|Rnd|Round)[ \t]+[0-9]+(?:[ \t]+\(est\.\))?([ \t]*[·:–-][ \t]*)[^ \t]'))[1], ' · ');
     v_type := COALESCE(NULLIF(btrim(p_work_type), ''), v_last.work_type);
+    IF p_how IS NULL THEN
+      -- FR5: an unticked step right after the last row (before the task's next row; a band's "Count …" item is the
+      -- band close's, not a step): the caller must say before or after it.
+      SELECT COALESCE(jsonb_agg(s.text ORDER BY s.sort_order, s.id), '[]'::jsonb) INTO v_steps FROM task_checklist_items s
+        WHERE s.task_id = v_last.task_id AND s.user_id = p_user_id AND s.craft_part_id IS NULL AND NOT s.is_done
+          AND (s.sort_order, s.id) > (v_last.sort_order, v_last.id)
+          AND NOT EXISTS (SELECT 1 FROM task_checklist_items r WHERE r.task_id = v_last.task_id AND r.user_id = p_user_id
+                          AND r.craft_part_id IS NOT NULL AND (r.sort_order, r.id) > (v_last.sort_order, v_last.id) AND (r.sort_order, r.id) < (s.sort_order, s.id))
+          AND NOT (s.text ~* '^[[:space:]]*count' AND EXISTS (SELECT 1 FROM craft_segments g
+                   WHERE g.task_id = s.task_id AND g.user_id = p_user_id AND g.close_check));
+      IF jsonb_array_length(v_steps) > 0 THEN
+        RETURN jsonb_build_object('status', 'refused', 'reason', 'where', 'steps', v_steps, 'after_row', v_last.craft_row,
+          'part_id', p_part_id, 'total', v_part.total_rows);
+      END IF;
+    END IF;
     IF p_how = 'after_steps' THEN
       SELECT COALESCE(max(sort_order), 0) INTO v_sort FROM task_checklist_items WHERE task_id = v_last.task_id AND user_id = p_user_id;
     ELSE
@@ -1282,6 +1306,16 @@ BEGIN
         WHERE i.craft_part_id = p_part_id AND i.user_id = p_user_id AND i.craft_row <= v_part.total_rows
           AND (position('(est.)' IN lower(i.text)) > 0 OR i.text ~ '^(Row|Rnd|Round)[ \t]+[0-9]+[ \t]*$')
         ORDER BY i.craft_row DESC LIMIT v_need) x;
+    END IF;
+    IF p_how = 'take_back' THEN
+      -- FR5: only rows a raise added (made after the part) and none "(est.)".
+      SELECT COALESCE(array_agg(craft_row ORDER BY craft_row), '{}') INTO v_rows FROM task_checklist_items
+        WHERE craft_part_id = p_part_id AND user_id = p_user_id AND craft_row = ANY (v_drop)
+          AND (created_at <= v_part.created_at OR position('(est.)' IN lower(text)) > 0);
+      IF cardinality(v_rows) > 0 THEN
+        RETURN jsonb_build_object('status', 'refused', 'reason', 'not_raised', 'rows', to_jsonb(v_rows), 'above', to_jsonb(v_drop),
+          'part_id', p_part_id, 'total', v_part.total_rows);
+      END IF;
     END IF;
     IF p_how IS DISTINCT FROM 'take_back' AND cardinality(v_drop) < v_need THEN
       RETURN jsonb_build_object('status', 'refused', 'reason', 'not_est', 'rows', to_jsonb(v_drop), 'need', v_need,
@@ -1375,8 +1409,8 @@ DECLARE
   v_ticked UUID[];
 BEGIN
   PERFORM work_sessions_assert_caller(p_user_id);
-  IF p_project_id IS NULL OR cardinality(v_ids) NOT BETWEEN 1 AND 50 THEN
-    RAISE EXCEPTION 'project id and 1 to 50 check items are required' USING ERRCODE = '22023';
+  IF p_project_id IS NULL OR cardinality(v_ids) NOT BETWEEN 1 AND 500 THEN
+    RAISE EXCEPTION 'project id and 1 to 500 check items are required' USING ERRCODE = '22023';
   END IF;
   PERFORM 1 FROM craft_projects WHERE project_id = p_project_id AND user_id = p_user_id;
   IF NOT FOUND THEN
