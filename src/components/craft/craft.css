@@ -288,3 +288,9 @@
 .craft-take-back .craft-check-q { font-size: 22px; overflow-wrap: anywhere; }
 /* FR4: Change total's line before Save names the rows and the step around them: room for all of it at 360 px. */
 .craft-total-form .craft-sheet-foot .craft-sheet-preview, .craft-total-form .craft-sheet-foot .craft-sheet-warn { max-height: 13em; }
+/* FR5 (Opus 3-4, Sol 3; scroll clearance): what scrolls into view (the earlier-steps list, the Now card, a focused field)
+   stops above the sticky timer and Row done bar, never under it; in the Change total sheet, a field scrolled to stops
+   above the sticky foot (summary + Save), and the summary is capped so the fields above it keep most of a 780 px screen. */
+.craft-front .craft-earlier, .craft-front .craft-pf, .craft-front .craft-due-checks { scroll-margin-bottom: 196px; scroll-margin-top: 12px; }
+.craft-total-form .craft-field, .craft-total-form .craft-toggle { scroll-margin-bottom: 220px; }
+.craft-total-form .craft-sheet-foot .craft-sheet-preview, .craft-total-form .craft-sheet-foot .craft-sheet-warn { max-height: min(13em, 22dvh); }

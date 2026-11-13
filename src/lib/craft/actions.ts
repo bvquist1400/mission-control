@@ -16,6 +16,14 @@ export const UNDO_TOAST_MS = 5000;
 export const VIEW_REFRESH_MS = 30_000;
 /** The "Undo rows…" sheet lists at most this many ticked rows. */
 export const UNDO_CHOICES = 12;
+/** FR5 (Sol 2): one Done or "Mark all done" ticks at most this many checks per call (074's craft_check and the route). */
+export const CRAFT_CHECK_IDS_MAX = 500;
+/** FR5: check ids in calls of at most CRAFT_CHECK_IDS_MAX ("Mark all done" with more sends several, in order). */
+export function checkBatches(ids: string[], size = CRAFT_CHECK_IDS_MAX): string[][] {
+  const out: string[][] = [];
+  for (let i = 0; i < ids.length; i += size) out.push(ids.slice(i, i + size));
+  return out;
+}
 /** Change total: the setup's part limit. */
 export const CRAFT_MAX_ROWS = 2000;
 
@@ -35,6 +43,12 @@ export interface RowState {
   done_at?: string | null;
   /** S3 FR3: the row item's text ("Rnd 29 · knit (US 7)"); absent = a bare "Row N" label. */
   text?: string;
+  /**
+   * S3 FR5: added by a raise (Change total), i.e. its checklist item was made after the part was set up (the item's
+   * created_at is later than the part's; set-up only links items that already exist). Only these can be taken back.
+   * Absent = a row from the part's set-up.
+   */
+  raised?: boolean;
 }
 
 export type RowWord = "row" | "round";
@@ -175,23 +189,79 @@ export function setTotalPlan(rows: RowState[], total: number, next: number): Set
  * FR4, "take back": lowering to `next` by dropping every row above it, whatever its text (rows a raise added by
  * mistake). Offered only beside the default plan, never instead of it silently: the sheet names the rows and asks a
  * second time ("Also remove pattern rounds 25–27 · knit (US 7)?"). Still never a ticked row or one in a sitting.
- * Null when it isn't a lowering, there is nothing above `next`, or it would drop exactly what the default plan drops.
+ * FR5 (the 11/12 loss on Mitten 2): ONLY rows a raise added (`raised`) that are still at the end: null (not offered)
+ * when any row above `next` came with the part's set-up or is an "(est.)" row (the default lowering handles those),
+ * when it isn't a lowering, when there is nothing above `next`, or when it would drop exactly what the default drops.
+ * A ticked raised row or one in a sitting gives `refused` (the sheet names that row as the blocker).
  */
 export function takeBackPlan(rows: RowState[], total: number, next: number):
   | { kind: "remove"; total: number; remove: number[]; moves: [] }
-  | { kind: "refused"; total: number; reason: "ticked" | "in_sitting"; rows: number[] } | null {
+  | { kind: "refused"; total: number; reason: "ticked" | "in_sitting"; rows: number[]; remove: number[] } | null {
   if (!Number.isInteger(next) || next < 1 || next >= total) return null;
   const above = rows.filter((s) => s.row > next).sort((a, b) => a.row - b.row);
   if (!above.length) return null;
+  if (above.some((s) => !s.raised || isEstRowText(s.text))) return null;
   const remove = above.map((s) => s.row);
   const usual = setTotalPlan(rows, total, next);
   if (usual.kind === "remove" && usual.remove.length === remove.length && usual.remove.every((r, i) => r === remove[i])) return null;
   const ticked = above.filter((s) => s.done).map((s) => s.row);
-  if (ticked.length) return { kind: "refused", total: next, reason: "ticked", rows: ticked };
+  if (ticked.length) return { kind: "refused", total: next, reason: "ticked", rows: ticked, remove };
   const linked = above.filter((s) => s.linked || s.in_progress).map((s) => s.row);
-  if (linked.length) return { kind: "refused", total: next, reason: "in_sitting", rows: linked };
+  if (linked.length) return { kind: "refused", total: next, reason: "in_sitting", rows: linked, remove };
   return { kind: "remove", total: next, remove, moves: [] };
 }
+/**
+ * FR5: why a take-back can't be saved, naming the real blocker: "Can't take back rounds 25–27, added by a raise: round
+ * 25 is ticked." / "…: round 27 is part of a saved sitting."; 074's `not_raised` (a caller asked to take back rows
+ * that came with the set-up or are "(est.)"): "Can't take back rounds 28–31: rounds 28–31 weren't added by a raise …".
+ */
+export function takeBackRefusalText(word: RowWord, plan: { reason: string; rows: number[]; remove: number[] }): string {
+  const one = plan.rows.length === 1;
+  if (plan.reason === "not_raised") {
+    return `Can't take back ${rowsText(word, plan.remove)}: ${rowsText(word, plan.rows)} ${one ? "wasn't" : "weren't"} added by a raise or ${one ? "is" : "are"} (est.). Only ${word}s a raise added can be taken back; (est.) ${word}s go with the usual lowering.`;
+  }
+  const why = plan.reason === "ticked" ? `${one ? "is" : "are"} ticked` : `${one ? "is" : "are"} part of a saved sitting`;
+  return `Can't take back ${rowsText(word, plan.remove)}, added by a raise: ${rowsText(word, plan.rows)} ${why}.`;
+}
+/**
+ * FR5: the lowest total the usual lowering can reach now: the highest droppable rows ("(est.)" or blank) that are
+ * unticked and in no sitting, taken from the top down to the first one that isn't (lowering always takes the
+ * highest droppable rows first). `rows` = those rows; total = the part's total less them.
+ */
+export function lowestTotalPlan(rows: RowState[], total: number): { total: number; rows: number[] } {
+  const free: number[] = [];
+  for (const state of rows.filter((s) => s.row <= total && isDroppableRow(s)).sort((a, b) => b.row - a.row)) {
+    if (state.done || state.linked || state.in_progress) break;
+    free.push(state.row);
+  }
+  return { total: total - free.length, rows: free.sort((a, b) => a - b) };
+}
+/**
+ * FR5: why lowering to `next` can't be saved, naming the real blocker, and the total it CAN reach ("Rounds 22–24 are
+ * ticked; drop only (est.) rounds 25–28 → total 27."). When the rows above `next` were all added by a raise, the
+ * take-back's blocker is named instead ("Can't take back rounds 25–27, added by a raise: round 25 is ticked."), never
+ * the ticked set-up rows below them. Ticked rows are knitted rows: it never suggests unticking them. `suggest` is the
+ * reachable total to offer ("Use total 27"), null when there is none. `takeBackHint` (the route, no button there)
+ * adds that the raised rows can be taken back. Null when the usual lowering can be saved.
+ */
+export function lowerRefusal(word: RowWord, rows: RowState[], total: number, next: number, takeBackHint = false): { text: string; suggest: number | null } | null {
+  const plan = setTotalPlan(rows, total, next);
+  if (plan.kind !== "refused") return null;
+  if (plan.reason === "range") return { text: setTotalRefusalText(word, plan), suggest: null };
+  const back = takeBackPlan(rows, total, next);
+  if (back?.kind === "refused") return { text: takeBackRefusalText(word, back), suggest: null };
+  const low = lowestTotalPlan(rows, total);
+  const byRow = new Map(rows.map((s) => [s.row, s]));
+  const est = low.rows.every((r) => isEstRowText(byRow.get(r)?.text)) ? "(est.) " : "";
+  const reach = low.rows.length ? `drop only ${est}${rowsText(word, low.rows)} → total ${low.total}.` : `no unticked (est.) ${word}s are left to drop.`;
+  const one = plan.rows.length === 1;
+  const head = plan.reason === "ticked" ? `${capital(rowsText(word, plan.rows))} ${one ? "is" : "are"} ticked; ${reach}`
+    : plan.reason === "in_sitting" ? `${capital(rowsText(word, plan.rows))} ${one ? "is" : "are"} part of a saved sitting; ${reach}`
+    : `${setTotalRefusalText(word, plan)}${low.rows.length ? ` ${capital(reach)}` : ""}`;
+  const hint = takeBackHint && back?.kind === "remove" ? ` ${capital(rowsText(word, back.remove))} ${back.remove.length === 1 ? "was" : "were"} added by a raise and can be taken back instead.` : "";
+  return { text: `${head}${hint}`, suggest: low.rows.length && low.total < total && low.total !== next ? low.total : null };
+}
+const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 /** "pattern rounds 25–27 · knit (US 7)", grouped by run and text (more than three groups: "pattern rounds 25–40"). */
 export function takeBackRowsText(word: RowWord, rows: RowState[], remove: number[]): string {
   const byRow = new Map(rows.map((s) => [s.row, s]));
@@ -289,7 +359,7 @@ export function totalForLastEst(rows: RowState[], total: number, lastNeeded: num
   return total - rows.filter((s) => s.row <= total && s.row > lastNeeded && isDroppableRow(s)).length;
 }
 
-export function setTotalRefusalText(word: RowWord, plan: { reason: string; rows: number[]; need?: number }): string {
+export function setTotalRefusalText(word: RowWord, plan: { reason: string; rows: number[]; need?: number; remove?: number[] }): string {
   if (plan.reason === "range") return `The total has to be a whole number from 1 to ${CRAFT_MAX_ROWS.toLocaleString("en-US")}.`;
   const what = rowsText(word, plan.rows);
   if (plan.reason === "ticked") return `Can't remove ${what}: ${plan.rows.length === 1 ? "it is" : "they are"} ticked. Undo ${plan.rows.length === 1 ? "it" : "them"} first if that was a mistake.`;
@@ -301,7 +371,17 @@ export function setTotalRefusalText(word: RowWord, plan: { reason: string; rows:
       : `Can't drop ${need} ${plural(word, need)}: this part has no (est.) or blank ${word}s left. ${wordTitle(word)}s with pattern steps are never dropped.`;
   }
   if (plan.reason === "no_rows") return `This part has no ${word}s to add after.`;
+  if (plan.reason === "not_raised") return takeBackRefusalText(word, { reason: plan.reason, rows: plan.rows, remove: plan.remove ?? plan.rows });
   return "That total can't be saved.";
+}
+/**
+ * FR5 (Sol 1): a raise with no `how` while a step follows the part's last row (074 refuses it, `where`): "Not saved:
+ * the step “Check: …” comes after Rnd 24. Say whether the new rounds go before or after the step." The craft screen
+ * always asks first; this is for any other caller (the S2 four-argument call, the API).
+ */
+export function raiseWhereText(word: RowWord, steps: string[], afterRow: number | null): string {
+  const quotedSteps = steps.map((text) => `“${text}”`).join(" and ");
+  return `Not saved: ${steps.length === 1 ? "the step" : "the steps"} ${quotedSteps} ${steps.length === 1 ? "comes" : "come"} after ${word} ${afterRow ?? "the last"}. Say whether the new ${word}s go before or after ${steps.length === 1 ? "the step" : "the steps"}.`;
 }
 
 // ── Timer ─────────────────────────────────────────────────────────────────────

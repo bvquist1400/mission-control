@@ -4,7 +4,7 @@
  * fixes, the timer conflict and the new-day question. Each shows what it will change before saving, saves through
  * the screen's `send` (one 073 call; the reply carries the fresh view), and Enter saves (a form submit).
  */
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
@@ -15,7 +15,7 @@ import {
   CRAFT_MAX_ROWS, SITTING_MAX_MINUTES, clockText, fixCountPlan, frogBody, frogPlan, keepsText, logSittingBody, logSittingDefaults, minutesText,
   newIdempotencyKey, partwayDefault, partwayRow, quarterText, retakeLogForm, rowFromRidgesDone, rowsText, setTotalPlan, setTotalRefusalText, sheetChangeText,
   sheetFactsOf, sittingCountText, sittingPlan, sittingSummary, timerMinutes, undoChoices, wordTitle, type LogForm, type RowWord, type SheetFacts,
-  estRange, raiseDefaults, raiseSummary, renumberText, rowLabelOf, runsText, takeBackPlan, takeBackRowsText, totalForLastEst,
+  estRange, lowerRefusal, raiseDefaults, raiseSummary, renumberText, rowLabelOf, runsText, takeBackPlan, takeBackRowsText, totalForLastEst,
 } from "@/lib/craft/actions";
 
 export type Send = (kind: "row" | "timer" | "sittings" | "total" | "notes" | "frog" | "check" | "part", body: Record<string, unknown>, method?: "POST" | "DELETE") => Promise<SendReply>;
@@ -400,7 +400,8 @@ export function BandCloseSheet({ check, onClose, part, send }: { check: BandChec
  * waits for one). Raising never prefills: the text starts empty and Save waits for text or a deliberate "Same as
  * round N"; the work type starts on the last non-(est.) row's; with a step right after the last row it asks whether
  * the new rows go before or after it. Lowering can take back the last rows whatever their text (rows a raise added by
- * mistake) only after naming them and asking a second time.
+ * mistake) only after naming them and asking a second time. FR5: only rows a raise added (never a set-up pattern row
+ * or an "(est.)" row); a lowering that can't be saved names the real blocker and offers the total it can reach.
  */
 export function ChangeTotalSheet({ open, onClose, view: live, part: livePart, send, initial }: { open: boolean; onClose: () => void; view: CraftView; part: CraftView["parts"][number]; send: Send;
   /** A starting state (screenshots and tests): total, text, work type, where raised rows go, the take-back question open, the mode. */
@@ -430,6 +431,8 @@ export function ChangeTotalSheet({ open, onClose, view: live, part: livePart, se
   const plan = target === null ? null : setTotalPlan(rows, part.total_rows, target);
   const takeBack = target === null ? null : takeBackPlan(rows, part.total_rows, target);
   const asking = asked !== null && asked === target && takeBack?.kind === "remove";
+  // FR5: a lowering that can't be saved names the real blocker and offers the total it can reach ("Use total 27").
+  const refusal = target === null || plan?.kind !== "refused" ? null : lowerRefusal(word, rows, part.total_rows, target);
   const types = [...new Set([...(view.work_types ?? []), ...(defaults.type ? [defaults.type] : [])])].sort();
   const onScreen = view.active_part?.id === part.id;
   const typed = text.value.trim();
@@ -477,6 +480,16 @@ export function ChangeTotalSheet({ open, onClose, view: live, part: livePart, se
           : <Stepper id="craft-total" label={`Total ${word}s`} min={1} max={CRAFT_MAX_ROWS} value={value} onChange={setValue} />}
         {plan?.kind === "add" && (
           <>
+            {/* FR5 (Opus 3-4, Sol 3): where the new rows go comes first, right under the total, so it is in view above the sticky foot at 360 px. */}
+            {steps.length > 0 && (
+              <div className="craft-field craft-total-place">
+                <p className="craft-total-step">After {label} {last?.row} comes {steps.length === 1 ? "the step" : "the steps"} {steps.map((step) => `“${step.text}”`).join(" and ")}.</p>
+                <div className="craft-toggle" role="group" aria-label={`Where the new ${word}s go`}>
+                  <Button type="button" variant="toggle" size="sm" active={place === "after_row"} onClick={() => setPlace("after_row")}>New {word}s before it</Button>
+                  <Button type="button" variant="toggle" size="sm" active={place === "after_steps"} onClick={() => setPlace("after_steps")}>New {word}s after it</Button>
+                </div>
+              </div>
+            )}
             <div className="craft-field">
               <label htmlFor="craft-total-text">Pattern text for the new {word}s</label>
               <Input id="craft-total-text" value={text.value} maxLength={200} placeholder="e.g. knit (US 7)" onChange={(e) => setText({ value: e.target.value, same: false })} />
@@ -494,22 +507,13 @@ export function ChangeTotalSheet({ open, onClose, view: live, part: livePart, se
                 {types.map((entry) => <option key={entry} value={entry}>{entry}</option>)}
               </Select>
             </div>
-            {steps.length > 0 && (
-              <div className="craft-field craft-total-place">
-                <p className="craft-total-step">After {label} {last?.row} comes {steps.length === 1 ? "the step" : "the steps"} {steps.map((step) => `“${step.text}”`).join(" and ")}.</p>
-                <div className="craft-toggle" role="group" aria-label={`Where the new ${word}s go`}>
-                  <Button type="button" variant="toggle" size="sm" active={place === "after_row"} onClick={() => setPlace("after_row")}>New {word}s before it</Button>
-                  <Button type="button" variant="toggle" size="sm" active={place === "after_steps"} onClick={() => setPlace("after_steps")}>New {word}s after it</Button>
-                </div>
-              </div>
-            )}
           </>
         )}
         {asking && takeBack?.kind === "remove" ? (
           <div className="craft-sheet-foot craft-take-back" role="group" aria-label="Take back">
             {changed && <p className="craft-sheet-warn craft-sheet-changed" role="status">{changed}</p>}
             <p className="craft-check-q">Also remove {takeBackRowsText(word, rows, takeBack.remove)}?</p>
-            <p className="craft-sheet-sub">They are unticked and in no sitting, but they are not (est.) {word}s: their text goes with them. New total {takeBack.total}.</p>
+            <p className="craft-sheet-sub">A raise added them; they are unticked and in no sitting. Their pattern text goes with them. New total {takeBack.total}.</p>
             <ErrorLine text={state.error} />
             <div className="craft-sheet-actions">
               <Button type="button" variant="secondary" size="lg" onClick={() => setAsked(null)} disabled={state.busy}>Keep them</Button>
@@ -518,6 +522,11 @@ export function ChangeTotalSheet({ open, onClose, view: live, part: livePart, se
           </div>
         ) : (
           <>
+            {refusal?.suggest !== null && refusal?.suggest !== undefined && (
+              <p className="craft-take-back-offer">
+                <Button type="button" variant="ghost" size="sm" onClick={() => { const n = refusal.suggest as number; setMode("total"); setValue(n); }}>Use total {refusal.suggest}</Button>
+              </p>
+            )}
             {takeBack?.kind === "remove" && (
               <p className="craft-take-back-offer">
                 <Button type="button" variant="ghost" size="sm" onClick={() => setAsked(target)}>Remove the last {takeBack.remove.length === 1 ? word : `${takeBack.remove.length} ${word}s`} instead ({label} {runsText(takeBack.remove)})…</Button>
@@ -525,7 +534,7 @@ export function ChangeTotalSheet({ open, onClose, view: live, part: livePart, se
             )}
             <Foot changed={changed} error={state.error} summaryWarn={plan?.kind === "refused"}
               summary={!plan ? "Type a number." : plan.kind === "same" ? "Same as now." : plan.kind === "add" ? addLine
-                : plan.kind === "remove" ? renumberText(word, rows, plan) : setTotalRefusalText(word, plan)}
+                : plan.kind === "remove" ? renumberText(word, rows, plan) : refusal?.text ?? setTotalRefusalText(word, plan)}
               busy={state.busy} onCancel={onClose} saveLabel={changed ? CHANGED_LABEL : "Save total"} disabled={!changed && !canSave} />
           </>
         )}
@@ -609,9 +618,12 @@ export function CheckFirstSheet({ checks, onClose, onYes, onNotYet }: { checks: 
  */
 export function EarlierSteps({ checks, busy, onDone, defaultOpen = false }: { checks: CraftView["earlier_checks"]; busy: string | null; onDone: (label: string, ids: string[]) => void; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
+  const box = useRef<HTMLDivElement | null>(null);
+  // FR5: opening the list brings it into view above the sticky timer and Row done bar (craft.css: scroll-margin-bottom).
+  useEffect(() => { if (open && !defaultOpen) box.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [open, defaultOpen]);
   if (!checks.length) return null;
   return (
-    <div className="craft-earlier">
+    <div className="craft-earlier" ref={box}>
       <button type="button" className="craft-earlier-line" aria-expanded={open} aria-controls="craft-earlier-list" onClick={() => setOpen(!open)}>
         <span>{earlierStepsText(checks.length)}</span><span aria-hidden="true">{open ? "▴" : "▾"}</span>
       </button>

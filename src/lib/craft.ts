@@ -4,10 +4,11 @@ import { LONG_RUN_MINUTES, SITTING_MAX_MINUTES, countFromCheckText, isCountItemT
 import type { Database } from "@/types/supabase.generated";
 
 type Row<T extends keyof Database["public"]["Tables"]> = Database["public"]["Tables"][T]["Row"];
-export type CraftPart = Pick<Row<"craft_parts">, "id" | "name" | "sort_order" | "total_rows" | "row_word" | "quarters" | "quarter" | "quarter_row" | "ridges" | "stitch_count">;
+export type CraftPart = Pick<Row<"craft_parts">, "id" | "name" | "sort_order" | "total_rows" | "row_word" | "quarters" | "quarter" | "quarter_row" | "ridges" | "stitch_count">
+  & Partial<Pick<Row<"craft_parts">, "created_at">>;
 export type CraftSegment = Pick<Row<"craft_segments">, "id" | "part_id" | "task_id" | "name" | "from_row" | "to_row" | "sort_order" | "close_check">;
 export type CraftItem = Pick<Row<"task_checklist_items">, "id" | "craft_part_id" | "craft_row" | "text" | "is_done" | "completed_at">
-  & Partial<Pick<Row<"task_checklist_items">, "unit_count" | "work_type" | "task_id" | "sort_order">>;
+  & Partial<Pick<Row<"task_checklist_items">, "unit_count" | "work_type" | "task_id" | "sort_order" | "created_at">>;
 /** S3 FR3: a plain checklist item (no craft row) on a task that holds rows of the project's parts. */
 export type CraftPlainItem = Pick<Row<"task_checklist_items">, "id" | "task_id" | "text" | "is_done" | "sort_order">;
 export type CraftSession = Pick<Row<"work_sessions">, "id" | "session_date" | "created_at" | "minutes" | "note" | "exclude_from_stats">
@@ -224,6 +225,17 @@ export function trailingStepsOf(view: { checks: CraftCheck[]; active_part: { id:
   return view.checks.filter((check) => check.after_part_id === partId && check.after_row === last).map((check) => ({ id: check.id, text: check.text }));
 }
 
+/**
+ * FR5: a Postgres timestamp in microseconds since 1970 ("2026-11-13T08:01:02.123456+00:00"), so two made in one
+ * millisecond still compare as the database compares them. NaN-safe: an unreadable one is 0.
+ */
+export function timestampMicros(text: string): number {
+  const m = text.match(/^(.*T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(.*)$/);
+  const ms = Date.parse(m ? `${m[1]}${m[3] || "Z"}` : text);
+  if (Number.isNaN(ms)) return 0;
+  return ms * 1000 + (m?.[2] ? Number(m[2].slice(0, 6).padEnd(6, "0")) : 0);
+}
+
 export function buildCraftView(input: CraftInput) {
   const today = etDateOf(input.server_now);
   const parts = sortedProgress(input.parts, input.items);
@@ -249,11 +261,18 @@ export function buildCraftView(input: CraftInput) {
   // FR1: "ticked since this project's timer sitting started" (073 compares completed_at with sitting_started_at).
   const sittingStartMs = timerRow && timerRow.project_id === input.project.id ? Date.parse(timerRow.sitting_started_at) : null;
   const sinceTimer = (item: CraftItem) => sittingStartMs !== null && item.is_done && Boolean(item.completed_at) && Date.parse(item.completed_at as string) >= sittingStartMs;
+  // FR5: a row a raise added = its item was made after the part (074's craft_set_total take_back uses the same rule).
+  const partMade = new Map(input.parts.map((part) => [part.id, part.created_at ? timestampMicros(part.created_at) : null]));
+  const raisedItem = (item: CraftItem) => {
+    const made = partMade.get(item.craft_part_id as string);
+    return made !== null && made !== undefined && Boolean(item.created_at) && timestampMicros(item.created_at as string) > made;
+  };
   // S2: the active part's rows (numbers that exist, gaps left out) for the Undo, Fix count, Log sitting and total previews.
   const rowStatesOf = (partId: string): RowState[] => input.items.filter((item) => item.craft_part_id === partId && item.craft_row !== null)
     .map((item) => ({ row: item.craft_row as number, done: item.is_done, linked: linkedItems.has(item.id), in_progress: inProgressItems.has(item.id),
       today: Boolean(item.is_done && item.completed_at && etDateOf(item.completed_at) === today),
-      since_timer: sinceTimer(item), done_at: item.is_done ? item.completed_at : null, units: item.unit_count ?? null, type: item.work_type ?? null, text: item.text }))
+      since_timer: sinceTimer(item), done_at: item.is_done ? item.completed_at : null, units: item.unit_count ?? null, type: item.work_type ?? null, text: item.text,
+      ...(raisedItem(item) ? { raised: true } : {}) }))
     .sort((a, b) => a.row - b.row);
   const row_states: RowState[] = active_part ? rowStatesOf(active_part.id) : [];
   // S3 FR3: the other parts' rows, for Change total… on any part (the Parts list), finished ones too. FR4 (Fable 5): the

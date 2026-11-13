@@ -11,7 +11,7 @@ import {
 } from "@/components/craft/CraftSheets";
 import { useWakeLock } from "@/components/craft/useWakeLock";
 import {
-  UNDO_TOAST_MS, VIEW_REFRESH_MS, clockOffsetMs, clockText, frogReason, minutesText, nextExistingRow, rowsText, savedSittingText, timerElapsedAt, toastUndo,
+  UNDO_TOAST_MS, VIEW_REFRESH_MS, checkBatches, clockOffsetMs, clockText, frogReason, minutesText, nextExistingRow, rowsText, savedSittingText, timerElapsedAt, toastUndo,
   writeFailureText,
 } from "@/lib/craft/actions";
 import "./craft.css";
@@ -111,6 +111,10 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
     return reply;
   }, [send]);
   useEffect(() => { actRef.current = act; }, [act]);
+  // FR5 (Sol 2): "Mark all done" ticks any number of steps: calls of at most CRAFT_CHECK_IDS_MAX, in order; stops at the first that isn't saved.
+  const markChecks = useCallback(async (label: string, ids: string[]) => {
+    for (const batch of checkBatches(ids)) if (!(await act(label, "check", { item_ids: batch })).ok) return;
+  }, [act]);
 
   const part = view.active_part;
   const allFinished = !part && view.parts.length > 0;
@@ -230,7 +234,6 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
               </li>
             ))}</ul>
           )}
-          <EarlierSteps checks={earlierChecks} busy={busy} onDone={(label, ids) => { void act(label, "check", { item_ids: ids }); }} />
           {part && !part.finished && dueChecks.length > 0 && (
             <ul className="craft-due-checks" aria-label="Checks before this row">{dueChecks.map((check) => (
               <li key={check.id} className="craft-due-check">
@@ -262,6 +265,8 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
               )}
             </section>
           ) : <p className="craft-empty">{allFinished ? "Every part is finished. All rows are ticked." : "This project has no craft parts yet."}</p>}
+          {/* FR5 (Opus 3-4, Sol 3): the quiet earlier-steps line comes after the Now card, so opening its list never pushes Now under the timer and Row done bar. */}
+          <EarlierSteps checks={earlierChecks} busy={busy} onDone={(label, ids) => { void markChecks(label, ids); }} />
           {view.pending_checks.length > 0 && part && (
             <div className="craft-checks">{view.pending_checks.map((pending) => (
               <button key={pending.segment_id} type="button" className="craft-check" onClick={() => setCheck(pending)}>

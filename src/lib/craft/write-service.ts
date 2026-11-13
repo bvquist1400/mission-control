@@ -7,7 +7,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/supabase.generated";
 import { loadCraftView } from "@/lib/craft/loader";
-import { setTotalRefusalText, type RowWord } from "@/lib/craft/actions";
+import { partRowsOf } from "@/lib/craft";
+import { CRAFT_CHECK_IDS_MAX, lowerRefusal, raiseWhereText, setTotalRefusalText, takeBackRefusalText, type RowWord } from "@/lib/craft/actions";
 import { queueTaskStatusTransition } from "@/lib/task-status-transitions";
 
 type Client = SupabaseClient<Database>;
@@ -258,8 +259,17 @@ export async function writeTotal(client: Client, userId: string, projectId: stri
   if (result.status === "ok") return { result, view: fresh };
   if (result.status === "stale") throw new CraftWriteError(409, "Not saved: the total changed on another screen. The screen now shows it.", "stale", { result, view: fresh });
   const word: RowWord = part.row_word === "round" ? "round" : "row";
-  throw new CraftWriteError(409, setTotalRefusalText(word, { reason: String(result.reason), rows: (result.rows as number[] | undefined) ?? [], need: result.need as number | undefined }),
-    String(result.reason ?? "refused"), { result, view: fresh });
+  const reason = String(result.reason ?? "refused"), rows = (result.rows as number[] | undefined) ?? [];
+  // FR5: the real blocker in plain words. A raise with no `how` while a step follows the last row says to pick before
+  // or after it; a take-back names the raised row that blocks it (or that the rows weren't added by a raise); a usual
+  // lowering names what is ticked or in a sitting and the total it can reach, never "undo" a knitted row.
+  const freshRows = partRowsOf(fresh, partId), freshPart = fresh.parts.find((entry) => entry.id === partId);
+  const lowered = how === null && total < expected && freshPart ? lowerRefusal(word, freshRows, freshPart.total_rows, total, true) : null;
+  const message = reason === "where" ? raiseWhereText(word, ((result.steps as string[] | undefined) ?? []), (result.after_row as number | undefined) ?? null)
+    : how === "take_back" ? takeBackRefusalText(word, { reason, rows, remove: (result.above as number[] | undefined) ?? freshRows.filter((s) => s.row > total).map((s) => s.row) })
+    : lowered ? lowered.text
+    : setTotalRefusalText(word, { reason, rows, need: result.need as number | undefined });
+  throw new CraftWriteError(409, message, reason, { result, view: fresh });
 }
 
 // ── Checks (S3 FR3) ──────────────────────────────────────────────────────────
@@ -268,7 +278,8 @@ export async function writeCheck(client: Client, userId: string, projectId: stri
   const body = record(raw);
   onlyKeys(body, ["item_ids"]);
   const raws = body.item_ids;
-  if (!Array.isArray(raws) || raws.length < 1 || raws.length > 50) bad("item_ids must be a list of 1 to 50 check ids");
+  // FR5 (Sol 2): "Mark all done" can send more than 50 (074's craft_check takes up to 500; the screen sends batches).
+  if (!Array.isArray(raws) || raws.length < 1 || raws.length > CRAFT_CHECK_IDS_MAX) bad(`item_ids must be a list of 1 to ${CRAFT_CHECK_IDS_MAX} check ids`);
   const ids = [...new Set((raws as unknown[]).map((v) => uuid(v, "item_ids[]")))];
   const craft = await client.from("craft_projects").select("project_id").eq("user_id", userId).eq("project_id", projectId).single();
   if (craft.error) throw craft.error;
