@@ -7,7 +7,9 @@ type Row<T extends keyof Database["public"]["Tables"]> = Database["public"]["Tab
 export type CraftPart = Pick<Row<"craft_parts">, "id" | "name" | "sort_order" | "total_rows" | "row_word" | "quarters" | "quarter" | "quarter_row" | "ridges" | "stitch_count">;
 export type CraftSegment = Pick<Row<"craft_segments">, "id" | "part_id" | "task_id" | "name" | "from_row" | "to_row" | "sort_order" | "close_check">;
 export type CraftItem = Pick<Row<"task_checklist_items">, "id" | "craft_part_id" | "craft_row" | "text" | "is_done" | "completed_at">
-  & Partial<Pick<Row<"task_checklist_items">, "unit_count" | "work_type">>;
+  & Partial<Pick<Row<"task_checklist_items">, "unit_count" | "work_type" | "task_id" | "sort_order">>;
+/** S3 FR3: a plain checklist item (no craft row) on a task that holds rows of the project's parts. */
+export type CraftPlainItem = Pick<Row<"task_checklist_items">, "id" | "task_id" | "text" | "is_done" | "sort_order">;
 export type CraftSession = Pick<Row<"work_sessions">, "id" | "session_date" | "created_at" | "minutes" | "note" | "exclude_from_stats">
   & Partial<Pick<Row<"work_sessions">, "exclude_reason" | "extra_units">>;
 /** S3 (074): one rip-back, as the history list shows it. */
@@ -35,6 +37,8 @@ export interface CraftInput {
   notes?: Pick<Row<"craft_notes">, "id" | "part_id" | "row" | "text" | "created_at" | "session_id">[];
   /** S3: "Ripped back" history of the project's parts. */
   frogs?: CraftFrog[];
+  /** S3 FR3: plain items on the tasks that hold the project's rows (the checks). */
+  plain_items?: CraftPlainItem[];
 }
 
 /** S3: how far back the "Ripped back" sheet offers rows (the rows it lists, newest first). */
@@ -115,6 +119,72 @@ export function removeBlockersText(keys: string[]): string {
   return words.length === 1 ? words[0] : `${words.slice(0, -1).join(", ")} and ${words.at(-1)}`;
 }
 
+/** S3 FR3: an unticked check placed in pattern order, before the row it comes ahead of (its anchor). */
+export interface CraftCheck {
+  id: string; task_id: string; text: string;
+  part_id: string; part_name: string; row_word: "row" | "round"; row: number;
+  /** The check's own task holds another part's rows (it sits after that part's last row): name the part. */
+  other_part: boolean;
+}
+
+/**
+ * Checks in pattern order (FR3). A check is a plain checklist item (no craft row), not ticked, on a task holding rows of
+ * the project's parts; a close_check band's "Count …" item is the band close's (S2), not a check. Its place is by the
+ * task's sort order: after the task's row just before it, so it comes before the next row in pattern order (parts by
+ * sort order, rows by number; the next part's first row when that row was its part's last); with no row before it on
+ * its task, before the task's first row after it. A check after the project's very last row has no row to come before
+ * and isn't shown.
+ */
+export function placeChecks(parts: { id: string; name: string; row_word: string; sort_order: number; total_rows: number }[], items: CraftItem[],
+  plain: CraftPlainItem[], segments: Pick<CraftSegment, "task_id" | "close_check">[]): CraftCheck[] {
+  const sortedParts = [...parts].sort((a, b) => a.sort_order - b.sort_order || a.id.localeCompare(b.id));
+  const partIndex = new Map(sortedParts.map((part, i) => [part.id, i]));
+  const rows = items.filter((item) => item.craft_part_id && partIndex.has(item.craft_part_id) && item.craft_row !== null
+    && item.craft_row <= (sortedParts[partIndex.get(item.craft_part_id) as number].total_rows))
+    .sort((a, b) => (partIndex.get(a.craft_part_id as string) as number) - (partIndex.get(b.craft_part_id as string) as number) || (a.craft_row as number) - (b.craft_row as number));
+  const order = new Map(rows.map((item, i) => [item.id, i]));
+  const byKey = (a: { sort_order?: number | null; id: string }, b: { sort_order?: number | null; id: string }) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id.localeCompare(b.id);
+  const byTask = new Map<string, CraftItem[]>();
+  for (const item of rows) if (item.task_id) byTask.set(item.task_id, [...(byTask.get(item.task_id) ?? []), item]);
+  for (const list of byTask.values()) list.sort(byKey);
+  const bandTasks = new Set(segments.filter((segment) => segment.close_check && segment.task_id).map((segment) => segment.task_id as string));
+  const placed: (CraftCheck & { at: number })[] = [];
+  for (const check of plain) {
+    if (check.is_done || (bandTasks.has(check.task_id) && isCountItemText(check.text))) continue;
+    const onTask = byTask.get(check.task_id);
+    if (!onTask?.length) continue;
+    const before = onTask.filter((item) => byKey(item, check) < 0).at(-1);
+    const anchor = before ? rows[(order.get(before.id) as number) + 1] : onTask.find((item) => byKey(item, check) > 0);
+    if (!anchor) continue;
+    const own = (before ?? anchor).craft_part_id as string;
+    const part = sortedParts[partIndex.get(anchor.craft_part_id as string) as number];
+    placed.push({ id: check.id, task_id: check.task_id, text: check.text, part_id: part.id, part_name: part.name,
+      row_word: part.row_word === "round" ? "round" : "row", row: anchor.craft_row as number, other_part: own !== part.id,
+      at: order.get(anchor.id) as number });
+  }
+  return placed.sort((a, b) => a.at - b.at || (a.other_part === b.other_part ? 0 : a.other_part ? -1 : 1) || a.id.localeCompare(b.id))
+    .map(({ at: _at, ...check }) => check);
+}
+
+/**
+ * Upcoming rows with the checks that come before them (FR3), so a check is seen a row ahead: each check just before its
+ * row; checks before the next part's first row last.
+ */
+export type UpcomingEntry = { kind: "row"; id: string; row: number; text: string } | { kind: "check"; check: CraftCheck };
+export function upcomingWithChecks(rows: { id: string; row: number; text: string }[], checks: CraftCheck[], partId: string): UpcomingEntry[] {
+  const out: UpcomingEntry[] = [];
+  for (const row of rows) {
+    for (const check of checks) if (check.part_id === partId && check.row === row.row) out.push({ kind: "check", check });
+    out.push({ kind: "row", ...row });
+  }
+  for (const check of checks) if (check.part_id !== partId) out.push({ kind: "check", check });
+  return out;
+}
+
+/** "Before Round 25:", "Before Round 1 (Thumb gusset):" (FR3). */
+export const checkBeforeText = (check: Pick<CraftCheck, "row_word" | "row" | "other_part" | "part_name">) =>
+  `Before ${check.row_word === "round" ? "Round" : "Row"} ${check.row}${check.other_part ? ` (${check.part_name})` : ""}:`;
+
 export function buildCraftView(input: CraftInput) {
   const today = etDateOf(input.server_now);
   const parts = sortedProgress(input.parts, input.items);
@@ -141,11 +211,23 @@ export function buildCraftView(input: CraftInput) {
   const sittingStartMs = timerRow && timerRow.project_id === input.project.id ? Date.parse(timerRow.sitting_started_at) : null;
   const sinceTimer = (item: CraftItem) => sittingStartMs !== null && item.is_done && Boolean(item.completed_at) && Date.parse(item.completed_at as string) >= sittingStartMs;
   // S2: the active part's rows (numbers that exist, gaps left out) for the Undo, Fix count, Log sitting and total previews.
-  const row_states: RowState[] = active_part ? input.items.filter((item) => item.craft_part_id === active_part.id && item.craft_row !== null)
+  const rowStatesOf = (partId: string): RowState[] => input.items.filter((item) => item.craft_part_id === partId && item.craft_row !== null)
     .map((item) => ({ row: item.craft_row as number, done: item.is_done, linked: linkedItems.has(item.id), in_progress: inProgressItems.has(item.id),
       today: Boolean(item.is_done && item.completed_at && etDateOf(item.completed_at) === today),
-      since_timer: sinceTimer(item), done_at: item.is_done ? item.completed_at : null, units: item.unit_count ?? null, type: item.work_type ?? null }))
-    .sort((a, b) => a.row - b.row) : [];
+      since_timer: sinceTimer(item), done_at: item.is_done ? item.completed_at : null, units: item.unit_count ?? null, type: item.work_type ?? null, text: item.text }))
+    .sort((a, b) => a.row - b.row);
+  const row_states: RowState[] = active_part ? rowStatesOf(active_part.id) : [];
+  // S3 FR3: every part's rows, for Change total… on any part (the Parts list), finished ones too.
+  const part_rows: Record<string, RowState[]> = Object.fromEntries(parts.map((part) => [part.id, part.id === active_part?.id ? row_states : rowStatesOf(part.id)]));
+  const checks = placeChecks(parts, input.items, input.plain_items ?? [], input.segments);
+  // A check shows as a card once its row is reached on the screen's part: before the current row, or passed by Fix count.
+  const due_checks = active_part && !active_part.finished ? checks.filter((check) => check.part_id === active_part.id && check.row <= active_part.current_row) : [];
+  // Checks coming up: on rows after the current one, and before the next part's first row once this part's last few rows are left.
+  const nextPart = active_part ? parts.slice(parts.findIndex((part) => part.id === active_part.id) + 1).find((part) => part.row_count > 0) : undefined;
+  const rowsLeft = active_part ? row_states.filter((state) => !state.done && state.row <= active_part.total_rows).length : 0;
+  const upcoming_checks = active_part && !active_part.finished ? checks.filter((check) => (check.part_id === active_part.id && check.row > active_part.current_row)
+    || (nextPart !== undefined && rowsLeft <= 3 && check.part_id === nextPart.id && check.row === Math.min(...(part_rows[nextPart.id] ?? []).map((state) => state.row)))) : [];
+  const work_types = [...new Set(input.items.filter((item) => item.craft_part_id && partIds.has(item.craft_part_id) && item.work_type).map((item) => item.work_type as string))].sort();
   const nowMs = Date.parse(input.server_now);
   const elapsed = timerRow ? timerElapsedAt(timerRow, nowMs) : 0;
   const timerFacts = timerRow ? {
@@ -246,6 +328,8 @@ export function buildCraftView(input: CraftInput) {
     },
     recent_sittings, server_now: input.server_now,
     timer, other_timer, row_states, pending_checks, timer_rows, timer_last_done_at, rip_sittings, frogs,
+    // S3 FR3: checks in pattern order, the ones due on the screen's part, every part's rows, the work types in use.
+    checks, due_checks, upcoming_checks, part_rows, work_types,
     notes: [...(input.notes ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at) || a.id.localeCompare(b.id)).slice(0, 50),
     // Remove is offered only when the server said nothing would be lost (072 refuses otherwise too).
     can_remove: Array.isArray(input.remove_blockers) && input.remove_blockers.length === 0,

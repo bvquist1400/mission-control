@@ -4,19 +4,21 @@
  * fixes, the timer conflict and the new-day question. Each shows what it will change before saving, saves through
  * the screen's `send` (one 073 call; the reply carries the fresh view), and Enter saves (a form submit).
  */
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
+import { Input, Select } from "@/components/ui/Field";
 import type { CraftView } from "@/lib/craft";
-import { RIP_CHOICES } from "@/lib/craft";
+import { RIP_CHOICES, checkBeforeText } from "@/lib/craft";
 import {
-  CRAFT_MAX_ROWS, SITTING_MAX_MINUTES, addedRowsText, clockText, fixCountPlan, frogBody, frogPlan, keepsText, logSittingBody, logSittingDefaults, minutesText,
+  CRAFT_MAX_ROWS, SITTING_MAX_MINUTES, clockText, fixCountPlan, frogBody, frogPlan, keepsText, logSittingBody, logSittingDefaults, minutesText,
   newIdempotencyKey, partwayDefault, partwayRow, quarterText, retakeLogForm, rowFromRidgesDone, rowsText, setTotalPlan, setTotalRefusalText, sheetChangeText,
   sheetFactsOf, sittingCountText, sittingPlan, sittingSummary, timerMinutes, undoChoices, wordTitle, type LogForm, type RowWord, type SheetFacts,
+  estRange, renumberText, rowDescription, rowLabelOf, runsText, totalForLastEst,
 } from "@/lib/craft/actions";
 
-export type Send = (kind: "row" | "timer" | "sittings" | "total" | "notes" | "frog", body: Record<string, unknown>, method?: "POST" | "DELETE") => Promise<SendReply>;
+export type Send = (kind: "row" | "timer" | "sittings" | "total" | "notes" | "frog" | "check" | "part", body: Record<string, unknown>, method?: "POST" | "DELETE") => Promise<SendReply>;
 export interface SendReply { ok: boolean; status: number | null; body: Record<string, unknown> | null; error: string | null }
 type Part = NonNullable<CraftView["active_part"]>;
 
@@ -391,32 +393,144 @@ export function BandCloseSheet({ check, onClose, part, send }: { check: BandChec
 }
 
 // ── Change total ───────────────────────────────────────────────────────────
-export function ChangeTotalSheet({ open, onClose, view: live, part: livePart, send }: { open: boolean; onClose: () => void; view: CraftView; part: Part; send: Send }) {
-  const { snap, changed, notice, retake } = useSheetSnapshot(live, livePart, { total: true });
+/**
+ * Change total rows/rounds for any part, finished ones too (FR3: from the Parts list as well as the menu). Lowering
+ * drops only unticked "(est.)" (or blank) rows and renumbers the rows after them; with "(est.)" rows the sheet asks
+ * "Last (est.) round needed" and the total follows. Raising adds rows with the text and work type given.
+ */
+export function ChangeTotalSheet({ open, onClose, view: live, part: livePart, send }: { open: boolean; onClose: () => void; view: CraftView; part: CraftView["parts"][number]; send: Send }) {
+  const [snap, setSnap] = useState(() => ({ view: live, part: livePart }));
   const { view, part } = snap;
   const word = part.row_word as RowWord;
+  const nowPart = live.parts.find((entry) => entry.id === part.id) ?? null;
+  const changed = !nowPart ? "This part changed on another screen. Close this and check the count."
+    : nowPart.total_rows !== part.total_rows ? `Your total changed on another screen (now ${nowPart.total_rows} ${word}s). Check and save again.` : null;
+  const rows = useMemo(() => view.part_rows?.[part.id] ?? [], [view, part.id]);
+  const label = rowLabelOf(rows, word);
+  const last = rows.length ? rows[rows.length - 1] : null;
+  const est = estRange(rows, part.total_rows);
+  const [mode, setMode] = useState<"est" | "total">(est ? "est" : "total");
   const [value, setValue] = useState<number | null>(part.total_rows);
+  const [lastEst, setLastEst] = useState<number | null>(est ? Math.min(est.max, Math.max(est.min, part.current_row - 1)) : null);
+  const [text, setText] = useState(rowDescription(last?.text));
+  const [type, setType] = useState(last?.type ?? "");
   const [state, setState] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
-  const plan = value === null ? null : setTotalPlan(view.row_states, part.total_rows, value);
-  const adds = plan?.kind === "add" ? addedRowsText(word, view.row_states, part.stitch_count) : null;
+  const target = mode === "est" && est ? (lastEst === null ? null : totalForLastEst(rows, part.total_rows, lastEst)) : value;
+  const plan = target === null ? null : setTotalPlan(rows, part.total_rows, target);
+  const types = [...new Set([...(view.work_types ?? []), ...(last?.type ? [last.type] : [])])].sort();
+  const onScreen = view.active_part?.id === part.id;
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (retake()) { setValue(livePart.total_rows); setState({ busy: false, error: null }); return; }
+    if (changed) {
+      if (!nowPart) { onClose(); return; }
+      setSnap({ view: live, part: nowPart }); setValue(nowPart.total_rows); setState({ busy: false, error: null }); return;
+    }
     if (!plan || (plan.kind !== "add" && plan.kind !== "remove")) return;
     setState({ busy: true, error: null });
-    const reply = await send("total", { part_id: part.id, total: value, expected_total: part.total_rows });
+    const reply = await send("total", { part_id: part.id, total: target, expected_total: part.total_rows,
+      ...(plan.kind === "add" ? { text: text.trim() || null, work_type: type || null } : {}) });
     if (!reply.ok) { setState({ busy: false, error: reply.error }); return; }
     onClose();
   }
+  // 074: added rows get the part's stitch count, else the last row's units.
+  const units = part.stitch_count ?? last?.units ?? null;
+  const addLine = plan?.kind === "add"
+    ? `Adds ${label} ${runsText(plan.add)}${text.trim() ? ` · ${text.trim()}` : ""} at the end${type ? ` (${type})` : ""}, ${units !== null ? `${units.toLocaleString("en-US")} stitches each` : "no stitch count"}.${onScreen ? "" : " The screen moves to this part."}`
+    : null;
   return (
     <Sheet open={open} onClose={onClose} title={`Change total ${word}s`}>
       <form onSubmit={submit}>
-        <p className="craft-sheet-sub">{part.name}: {part.total_rows} {word}s now.</p>
-        <Stepper id="craft-total" label={`Total ${word}s`} min={1} max={CRAFT_MAX_ROWS} value={value} onChange={setValue} />
-        <Foot changed={notice} error={state.error} summaryWarn={plan?.kind === "refused"}
-          summary={!plan ? "Type a total." : plan.kind === "same" ? "Same as now." : plan.kind === "add" ? `Adds ${rowsText(word, plan.add)} at the end.${adds ? ` ${adds}` : ""}`
-            : plan.kind === "remove" ? `Removes ${rowsText(word, plan.remove)} (not ticked, in no sitting).` : setTotalRefusalText(word, plan)}
+        <p className="craft-sheet-sub">{part.name}: {part.total_rows} {word}s now{part.finished ? ", all ticked" : `, on ${word} ${part.current_row}`}. Only unticked (est.) {word}s can be dropped; the {word}s after them move up to close the gap.</p>
+        {est && (
+          <div className="craft-toggle craft-total-mode" role="group" aria-label="Set by">
+            <Button type="button" variant="toggle" size="sm" active={mode === "est"} onClick={() => setMode("est")}>Last (est.) {word} needed</Button>
+            <Button type="button" variant="toggle" size="sm" active={mode === "total"} onClick={() => setMode("total")}>Total {word}s</Button>
+          </div>
+        )}
+        {mode === "est" && est
+          ? <Stepper id="craft-total-est" label={`Last (est.) ${word} needed`} hint={target !== null ? `total ${target}` : undefined} min={est.min} max={est.max} value={lastEst} onChange={setLastEst} />
+          : <Stepper id="craft-total" label={`Total ${word}s`} min={1} max={CRAFT_MAX_ROWS} value={value} onChange={setValue} />}
+        {plan?.kind === "add" && (
+          <>
+            <div className="craft-field">
+              <label htmlFor="craft-total-text">Pattern text for the new {word}s<span>{label} {plan.add[0]} · …</span></label>
+              <Input id="craft-total-text" value={text} maxLength={200} placeholder="e.g. knit (US 7)" onChange={(e) => setText(e.target.value)} />
+            </div>
+            <div className="craft-field">
+              <label htmlFor="craft-total-type">Work type</label>
+              <Select id="craft-total-type" value={type} onChange={(e) => setType(e.target.value)}>
+                {!types.includes(type) && <option value={type}>{type || "none"}</option>}
+                {types.map((entry) => <option key={entry} value={entry}>{entry}</option>)}
+              </Select>
+            </div>
+          </>
+        )}
+        <Foot changed={changed} error={state.error} summaryWarn={plan?.kind === "refused"}
+          summary={!plan ? "Type a number." : plan.kind === "same" ? "Same as now." : plan.kind === "add" ? addLine
+            : plan.kind === "remove" ? renumberText(word, rows, plan) : setTotalRefusalText(word, plan)}
           busy={state.busy} onCancel={onClose} saveLabel={changed ? CHANGED_LABEL : "Save total"} disabled={!changed && (!plan || (plan.kind !== "add" && plan.kind !== "remove"))} />
+      </form>
+    </Sheet>
+  );
+}
+
+// ── Parts (FR3): work on another part, change any part's total ──────────────
+export function PartsSheet({ open, onClose, view, send, onChangeTotal }: { open: boolean; onClose: () => void; view: CraftView; send: Send; onChangeTotal: (partId: string) => void }) {
+  const [state, setState] = useState<{ busy: string | null; error: string | null }>({ busy: null, error: null });
+  async function pick(partId: string) {
+    setState({ busy: partId, error: null });
+    const reply = await send("part", { part_id: partId, expected_part_id: view.active_part?.id ?? null });
+    if (!reply.ok) { setState({ busy: null, error: reply.error }); return; }
+    setState({ busy: null, error: null });
+    onClose();
+  }
+  return (
+    <Sheet open={open} onClose={onClose} title="Parts">
+      <PartsList view={view} busy={state.busy} onPick={pick} onChangeTotal={onChangeTotal} />
+      <ErrorLine text={state.error} />
+      <div className="craft-sheet-actions craft-sheet-actions-one"><Button type="button" variant="secondary" size="lg" onClick={onClose}>Close</Button></div>
+    </Sheet>
+  );
+}
+/** The parts with "Work on this part" and "Change total…" (the Parts sheet and the inside screen's Parts list). */
+export function PartsList({ view, busy, onPick, onChangeTotal }: { view: CraftView; busy: string | null; onPick: (partId: string) => void; onChangeTotal: (partId: string) => void }) {
+  return (
+    <ul className="craft-parts craft-parts-act">{view.parts.map((entry) => {
+      const here = entry.id === view.active_part?.id;
+      return (
+        <li key={entry.id} aria-current={here ? "true" : undefined}><strong>{entry.name}</strong><span>{entry.row_label}{here ? " · on the screen" : ""}</span>
+          <div className="craft-part-buttons">
+            {!here && !entry.finished && <Button type="button" variant="secondary" size="sm" disabled={busy !== null} aria-busy={busy === entry.id || undefined}
+              aria-label={`Work on this part: ${entry.name}`} onClick={() => onPick(entry.id)}>{busy === entry.id ? "Saving…" : "Work on this part"}</Button>}
+            <Button type="button" variant="ghost" size="sm" disabled={busy !== null} aria-label={`Change total: ${entry.name}`} onClick={() => onChangeTotal(entry.id)}>Change total…</Button>
+          </div>
+        </li>
+      );
+    })}</ul>
+  );
+}
+
+// ── Row done with a check showing (FR3) ─────────────────────────────────────
+export function CheckFirstSheet({ checks, onClose, onYes }: { checks: CraftView["due_checks"]; onClose: () => void; onYes: () => Promise<string | null> }) {
+  const [state, setState] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
+  if (!checks.length) return null;
+  async function yes(event: FormEvent) {
+    event.preventDefault();
+    setState({ busy: true, error: null });
+    const error = await onYes();
+    setState({ busy: false, error });
+  }
+  return (
+    <Sheet open title="Not done yet" onClose={onClose}>
+      <form onSubmit={yes}>
+        <ul className="craft-check-list">{checks.map((check) => <li key={check.id}><small>{checkBeforeText(check)}</small><p>{check.text}</p></li>)}</ul>
+        <p className="craft-check-q">Done {checks.length === 1 ? "it" : "them"}?</p>
+        <p className="craft-sheet-sub">Yes ticks {checks.length === 1 ? "the check" : "the checks"}, then the {checks[0].row_word}. Not yet leaves both as they are.</p>
+        <ErrorLine text={state.error} />
+        <div className="craft-sheet-actions">
+          <Button type="button" variant="secondary" size="lg" onClick={onClose} disabled={state.busy}>Not yet</Button>
+          <Button type="submit" variant="primary" size="lg" disabled={state.busy} aria-busy={state.busy || undefined}>{state.busy ? "Saving…" : `Yes, done`}</Button>
+        </div>
       </form>
     </Sheet>
   );

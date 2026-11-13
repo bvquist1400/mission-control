@@ -1,12 +1,12 @@
 "use client";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { CraftProjectOption, CraftView } from "@/lib/craft";
+import { checkBeforeText, upcomingWithChecks, type CraftProjectOption, type CraftView, type UpcomingEntry } from "@/lib/craft";
 import { Button, buttonClasses } from "@/components/ui/Button";
 import { CraftProjectSwitcher } from "@/components/craft/CraftProjectSwitcher";
 import { CraftScreenMenu } from "@/components/craft/CraftScreenMenu";
 import {
-  BandCloseSheet, ChangeTotalSheet, FixCountSheet, LogSittingSheet, NewDaySheet, NoteSheet, TimerConflictSheet, TimerFixSheet, UndoRowsSheet,
+  BandCloseSheet, ChangeTotalSheet, CheckFirstSheet, FixCountSheet, LogSittingSheet, NewDaySheet, NoteSheet, PartsList, PartsSheet, TimerConflictSheet, TimerFixSheet, UndoRowsSheet,
   type BandCheck, type OtherTimer, type Send, type SendReply,
 } from "@/components/craft/CraftSheets";
 import { useWakeLock } from "@/components/craft/useWakeLock";
@@ -17,7 +17,7 @@ import {
 import "./craft.css";
 
 type Screen = CraftView & { projects?: CraftProjectOption[] };
-type SheetName = "log" | "log-then-start" | "undo" | "fix" | "total" | "note" | "timer" | "new-day";
+type SheetName = "log" | "log-then-start" | "undo" | "fix" | "total" | "note" | "timer" | "new-day" | "parts" | "check-first";
 interface Failure { text: string; retry: (() => void) | null }
 type Act = (label: string, kind: Parameters<Send>[0], body: Record<string, unknown>, onOk?: (reply: SendReply) => void, onNotOk?: (reply: SendReply) => boolean, method?: "POST" | "DELETE") => Promise<SendReply>;
 
@@ -45,6 +45,8 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
   const [check, setCheck] = useState<BandCheck | null>(null);
   const [conflict, setConflict] = useState<OtherTimer | null>(null);
   const [leftOnOk, setLeftOnOk] = useState<string | null>(null);
+  // S3 FR3: Change total… works on any part (the Parts list); null = the screen's part.
+  const [totalPartId, setTotalPartId] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const projectId = view.project.id;
 
@@ -115,7 +117,11 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
   const word = part?.row_word ?? "row";
   const Word = word === "round" ? "Round" : "Row";
   const nowRow = part && view.next_rows[0]?.row === part.current_row ? view.next_rows[0] : null;
-  const upcoming = part ? view.next_rows.filter((row) => row.row > part.current_row).slice(0, 3) : [];
+  const upcoming: UpcomingEntry[] = part ? upcomingWithChecks(view.next_rows.filter((row) => row.row > part.current_row).slice(0, 3), view.upcoming_checks ?? [], part.id) : [];
+  // The inside screen's "Next rows": the current row's due checks first, then each check before its row.
+  const nextEntries: UpcomingEntry[] = part ? upcomingWithChecks(view.next_rows, [...(view.due_checks ?? []).filter((check) => check.row === part.current_row), ...(view.upcoming_checks ?? [])], part.id) : [];
+  const dueChecks = view.due_checks ?? [];
+  const totalPart = view.parts.find((entry) => entry.id === (totalPartId ?? part?.id)) ?? null;
   const nextRow = part && !part.finished ? nextExistingRow(view.row_states, part.current_row, part.total_rows) : null;
   const timer = view.timer;
   const nowMs = tick === null ? Date.parse(view.server_now) : tick + offset;
@@ -142,6 +148,20 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
   const openUndo = (mode: "undo" | "rip", to?: number) => { setUndoTo(to); setUndoMode(mode); setSheet("undo"); };
 
   function rowDone() {
+    if (!part || part.finished) return;
+    // S3 FR3: a check still showing is asked about first ("Not done yet: …. Done it?").
+    if (dueChecks.length) { setSheet("check-first"); return; }
+    rowDoneNow();
+  }
+  async function checksThenRow(): Promise<string | null> {
+    const reply = await send("check", { item_ids: dueChecks.map((check) => check.id) });
+    if (!reply.ok) return reply.error;
+    setSheet(null);
+    rowDoneNow();
+    return null;
+  }
+  const openTotal = (partId: string | null) => { setTotalPartId(partId); setSheet("total"); };
+  function rowDoneNow() {
     if (!part || part.finished) return;
     const row = part.current_row, partId = part.id, before = view.row_states, total = part.total_rows;
     void act("row", "row", { part_id: partId, mode: "done", expected_row: row }, (reply) => {
@@ -190,13 +210,23 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
           actions={part ? [
             { label: `Undo ${word}s…`, onSelect: () => openUndo("undo") }, { label: "Fix count…", onSelect: () => setSheet("fix") },
             { label: "Ripped back…", onSelect: () => openUndo("rip") },
-            { label: `Change total ${word}s…`, onSelect: () => setSheet("total") }, { label: "Add a note…", onSelect: () => setSheet("note") },
-          ] : undefined} />
+            { label: `Change total ${word}s…`, onSelect: () => openTotal(null) }, { label: "Parts…", onSelect: () => setSheet("parts") }, { label: "Add a note…", onSelect: () => setSheet("note") },
+          ] : view.parts.length ? [{ label: "Parts…", onSelect: () => setSheet("parts") }] : undefined} />
       </header>
       <div className="craft-columns">
         <section className="craft-front" aria-label="Current progress">
           <div className="craft-project"><p className="craft-eyebrow">{view.craft === "knit" ? "Knitting" : view.craft === "crochet" ? "Crochet" : "Craft"}</p>{(view.projects?.length ?? 0) > 1 ? <CraftProjectSwitcher currentId={view.project.id} currentName={view.project.name} projects={view.projects ?? []} /> : <h2>{view.project.name}</h2>}{view.gear && <p>{view.gear}</p>}</div>
-          <div className="craft-part"><span className="craft-eyebrow">{allFinished ? "Project progress" : "Active part"}</span><h3>{part?.name ?? (allFinished ? "All parts finished" : "No parts yet")}</h3>{part?.stitch_count !== null && part?.stitch_count !== undefined && <p>{part.stitch_count} stitches</p>}</div>
+          <div className="craft-part"><span className="craft-eyebrow">{allFinished ? "Project progress" : "Active part"}</span><h3>{part?.name ?? (allFinished ? "All parts finished" : "No parts yet")}</h3>{part?.stitch_count !== null && part?.stitch_count !== undefined && <p>{part.stitch_count} stitches</p>}
+            {view.parts.length > 0 && <button type="button" className="craft-parts-open" onClick={() => setSheet("parts")} aria-label={`Parts (${view.parts.length}): work on another part or change a total`}>Parts</button>}</div>
+          {part && !part.finished && dueChecks.length > 0 && (
+            <ul className="craft-due-checks" aria-label="Checks before this row">{dueChecks.map((check) => (
+              <li key={check.id} className="craft-due-check">
+                <div><small>{checkBeforeText(check)}</small><p>{check.text}</p></div>
+                <Button variant="primary" size="md" disabled={busy !== null} aria-busy={busy === `check-${check.id}` || undefined} aria-label={`Done: ${check.text}`}
+                  onClick={() => { void act(`check-${check.id}`, "check", { item_ids: [check.id] }); }}>Done</Button>
+              </li>
+            ))}</ul>
+          )}
           {part ? (
             <section className="craft-pf" aria-label="Current row instructions" data-quarter={part.quarter > 0 ? part.quarter : undefined}>
               {part.finished ? (
@@ -212,7 +242,9 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
                   {part.quarter > 0 && <p className="craft-quarter">{["", "¼", "½", "¾"][part.quarter]} of this {part.row_word} done</p>}
                   <p className="craft-pf-now">{nowRow?.text ?? part.row_label}</p>
                   {rowNotes.length > 0 && <ul className="craft-pf-notes" aria-label={`Notes on ${word} ${part.current_row}`}>{rowNotes.map((note) => <li key={note.id}>{note.text}</li>)}</ul>}
-                  {upcoming.length > 0 && <ol className="craft-pf-then" aria-label={`Upcoming ${part.row_word}s`}>{upcoming.map((row) => <li key={row.id}><span>{part.row_word} {row.row}</span><p>{row.text}</p></li>)}</ol>}
+                  {upcoming.length > 0 && <ol className="craft-pf-then" aria-label={`Upcoming ${part.row_word}s`}>{upcoming.map((entry) => entry.kind === "row"
+                    ? <li key={entry.id}><span>{part.row_word} {entry.row}</span><p>{entry.text}</p></li>
+                    : <li key={`check-${entry.check.id}`} className="craft-then-check"><span>check</span><p>{checkBeforeText(entry.check)} {entry.check.text}</p></li>)}</ol>}
                 </>
               )}
             </section>
@@ -285,7 +317,8 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
           <section className="craft-today" aria-label="Today"><h3>Today</h3><p><strong>{view.today.rows}</strong> rows ticked <span>·</span> <strong>{view.today.minutes}</strong> min</p></section>
         </section>
         <aside className="craft-inside" aria-label="Project details">
-          <section><h2>Parts</h2><ul className="craft-parts">{view.parts.map((entry) => <li key={entry.id} aria-current={entry.id === part?.id ? "true" : undefined}><strong>{entry.name}</strong><span>{entry.row_label}</span></li>)}</ul>
+          <section><h2>Parts</h2><PartsList view={view} busy={busy?.startsWith("part-") ? busy.slice(5) : null}
+            onPick={(partId) => { void act(`part-${partId}`, "part", { part_id: partId, expected_part_id: part?.id ?? null }); }} onChangeTotal={(partId) => openTotal(partId)} />
             {view.frogs.length > 0 && (
               <div className="craft-frogs">
                 <h3>Ripped back</h3>
@@ -303,7 +336,8 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
           <section><h2>Bands</h2>{view.segments.length ? <><div className="craft-strip" aria-label="Band progress">{view.segments.map((segment) => <span key={segment.id} data-state={segment.state} title={`${segment.name}: ${segment.from_row}–${segment.to_row}, ${segment.state}`} style={{ flexGrow: segment.to_row - segment.from_row + 1 }} />)}</div><ol className="craft-bands">{view.segments.map((segment) => <li key={segment.id} data-state={segment.state} aria-current={segment.state === "current" ? "step" : undefined}><span>{segment.state === "done" ? "✓ " : ""}{segment.name}</span><span>{part?.row_word}s {segment.from_row}–{segment.to_row}<small>{segment.state}</small></span></li>)}</ol></> : <p>No bands yet.</p>}
             {view.next_segment && <div className="craft-peek"><p className="craft-eyebrow">Coming up</p><h3>{view.next_segment.name}</h3><p>{part?.row_word}s {view.next_segment.from_row}–{view.next_segment.to_row}</p></div>}
           </section>
-          <section><h2>Next rows</h2>{view.next_rows.length ? <ol className="craft-next">{view.next_rows.map((row) => <li key={row.id}>{row.text}</li>)}</ol> : <p>No unticked rows.</p>}</section>
+          <section><h2>Next rows</h2>{nextEntries.length ? <ol className="craft-next">{nextEntries.map((entry) => entry.kind === "row" ? <li key={entry.id}>{entry.text}</li>
+            : <li key={`check-${entry.check.id}`} className="craft-next-check">{checkBeforeText(entry.check)} {entry.check.text}</li>)}</ol> : <p>No unticked rows.</p>}</section>
           <section><h2>Recent sittings</h2>{view.recent_sittings.length ? <ol className="craft-sittings">{view.recent_sittings.map((sitting) => <li key={sitting.id}><div><time dateTime={sitting.date}>{sitting.date}</time><strong>{sitting.minutes} min</strong></div><p>{sittingRowsText(sitting)}</p>{sitting.note && <p>{sitting.note}</p>}{sitting.excluded_from_stats && <p className="craft-meta">{sitting.exclude_reason ? `Left out of speed: ${sitting.exclude_reason}` : "Excluded from pace stats"}</p>}</li>)}</ol> : <p>No sittings logged yet.</p>}</section>
           {view.notes.length > 0 && <section><h2>Notes</h2><ul className="craft-notes">{view.notes.map((note) => <li key={note.id}><small>{note.row ? `${view.parts.find((p) => p.id === note.part_id)?.row_word === "round" ? "Round" : "Row"} ${note.row}` : "Project"} · {note.created_at.slice(0, 10)}</small><p>{note.text}</p>
             <button type="button" aria-label={`Delete note: ${note.text.slice(0, 40)}`} onClick={() => { void act("note", "notes", { id: note.id }, undefined, undefined, "DELETE"); }}>Delete</button></li>)}</ul></section>}
@@ -314,7 +348,9 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
         onSaved={(reply) => { setSheet(null); onSittingSaved(reply); void act("timer", "timer", { action: "start", part_id: part.id }, undefined, onTimerRefusal); }} />}
       {part && sheet === "undo" && <UndoRowsSheet open onClose={() => setSheet(null)} view={view} part={part} send={send} initialTo={undoTo} initialMode={undoMode} onRipped={onRipped} />}
       {part && sheet === "fix" && <FixCountSheet open onClose={() => setSheet(null)} view={view} part={part} send={send} />}
-      {part && sheet === "total" && <ChangeTotalSheet open onClose={() => setSheet(null)} view={view} part={part} send={send} />}
+      {totalPart && sheet === "total" && <ChangeTotalSheet key={totalPart.id} open onClose={() => setSheet(null)} view={view} part={totalPart} send={send} />}
+      {sheet === "parts" && <PartsSheet open onClose={() => setSheet(null)} view={view} send={send} onChangeTotal={(partId) => openTotal(partId)} />}
+      {sheet === "check-first" && <CheckFirstSheet checks={dueChecks} onClose={() => setSheet(null)} onYes={checksThenRow} />}
       {sheet === "note" && <NoteSheet open onClose={() => setSheet(null)} part={part} send={send} />}
       {sheet === "timer" && <TimerFixSheet open onClose={() => setSheet(null)} view={view} send={send} />}
       {sheet === "new-day" && <NewDaySheet open onClose={() => setSheet(null)} view={view} onSaveFirst={() => setSheet("log-then-start")}

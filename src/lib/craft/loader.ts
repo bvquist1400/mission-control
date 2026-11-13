@@ -100,6 +100,13 @@ async function loadOneCraftView(client: SupabaseClient<Database>, userId: string
     count_items.push(...checkItems.filter((item) => item.craft_part_id === null && /^\s*count/i.test(item.text))
       .map(({ id: itemId, task_id, text, is_done, sort_order }) => ({ id: itemId, task_id, text, is_done, sort_order })));
   }
+  // S3 FR3: the checks: plain items (no craft row) on the tasks that hold the project's rows.
+  const plain_items: NonNullable<CraftInput["plain_items"]> = [];
+  for (const ids of chunks([...new Set(items.map((item) => item.task_id).filter((id): id is string => Boolean(id)))])) {
+    const plain = await pagedSelect<NonNullable<CraftInput["plain_items"]>[number]>((from, to) => client.from("task_checklist_items")
+      .select("id, task_id, text, is_done, sort_order").eq("user_id", userId).in("task_id", ids).is("craft_part_id", null).order("id").range(from, to));
+    plain_items.push(...plain);
+  }
   for (const ids of chunks(sessions.map((session) => session.id))) {
     const [links, details] = await Promise.all([
       pagedSelect<Tables["work_session_items"]["Row"]>((from, to) => client.from("work_session_items").select("*").eq("user_id", userId).in("session_id", ids).order("session_id").order("checklist_item_id").range(from, to)),
@@ -109,7 +116,7 @@ async function loadOneCraftView(client: SupabaseClient<Database>, userId: string
   }
   return buildCraftView({ project: projectResult.data, craft_project: craftResult.data, parts, segments, items,
     sessions, session_items, sitting_details, timer: timerResult.data, server_now: now.toISOString(), remove_blockers,
-    timer_project, band_tasks, count_items, notes, frogs });
+    timer_project, band_tasks, count_items, notes, frogs, plain_items });
 }
 
 /** 072's rule for Remove, asked once per view. Before 072 is applied (no such function) the screen loads without Remove. */

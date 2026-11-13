@@ -33,6 +33,8 @@ export interface RowState {
   in_progress?: boolean;
   /** S3: when it was ticked (null while unticked). */
   done_at?: string | null;
+  /** S3 FR3: the row item's text ("Rnd 29 · knit (US 7)"); absent = a bare "Row N" label. */
+  text?: string;
 }
 
 export type RowWord = "row" | "round";
@@ -103,36 +105,122 @@ export function countFromCheckText(text: string): number | null {
 export const isCountItemText = (text: string) => /^\s*count/i.test(text);
 
 /** The text 073 gives an added row item: the word of the part's last row item ("Rnd"), else the part's word. */
-export function newRowItemText(lastText: string | null, word: RowWord, n: number): string {
+export function newRowItemText(lastText: string | null, word: RowWord, n: number, text?: string | null): string {
   const label = lastText?.match(/^(Row|Rnd|Round)[ \t]+[0-9]/)?.[1] ?? wordTitle(word);
-  return `${label} ${n}`;
+  // FR3: the text typed for new rows goes after the label with the last row's separator (else " · "), as 074 writes it.
+  const clean = (text ?? "").replace(/^[ \t]*(Row|Rnd|Round)[ \t]+[0-9]+[ \t]*([·:–-][ \t]*)?/, "").trim();
+  if (!clean) return `${label} ${n}`;
+  const sep = lastText?.match(/^(?:Row|Rnd|Round)[ \t]+[0-9]+(?:[ \t]+\(est\.\))?([ \t]*[·:–-][ \t]*)[^ \t]/)?.[1] ?? " · ";
+  return `${label} ${n}${sep}${clean}`;
 }
 
 export type SetTotalPlan =
   | { kind: "same"; total: number }
   | { kind: "add"; total: number; add: number[] }
-  | { kind: "remove"; total: number; remove: number[] }
-  | { kind: "refused"; total: number; reason: "ticked" | "in_sitting" | "range"; rows: number[] };
+  | { kind: "remove"; total: number; remove: number[]; moves: { from: number; to: number }[] }
+  | { kind: "refused"; total: number; reason: "ticked" | "in_sitting" | "range"; rows: number[] }
+  | { kind: "refused"; total: number; reason: "not_est"; rows: number[]; need: number };
 
-/** Change total rows/rounds, as 073's craft_set_total decides it (adds at the end; removes only unticked rows in no sitting). */
+/** S3 FR3: a row whose text says "(est.)": a guessed row, the only kind lowering a total may drop (with bare rows). */
+export const isEstRowText = (text: string | undefined) => text !== undefined && text.toLowerCase().includes("(est.)");
+/** A row that is only its label ("Row 456", the scarf's tape-measure ending; no text = the same). */
+export const isBareRowText = (text: string | undefined) => text === undefined || /^(Row|Rnd|Round)[ \t]+[0-9]+[ \t]*$/.test(text);
+/** The rows lowering a total may drop (074's craft_set_total): "(est.)" or bare rows. */
+export const isDroppableRow = (state: Pick<RowState, "text">) => isEstRowText(state.text) || isBareRowText(state.text);
+const LABEL = /^(Row|Rnd|Round)[ \t]+[0-9]+(?:[ \t]+\(est\.\))?[ \t]*(?:[·:–-][ \t]*)?/;
+/** A row's pattern text after its label ("Rnd 24 (est.) · k1, p1 rib" → "k1, p1 rib"; "Row 519" → ""). */
+export const rowDescription = (text: string | undefined) => (text ?? "").replace(LABEL, "").trim();
+/** The label word a part's rows are written with ("Rnd"), else the part's word. */
+export function rowLabelOf(rows: Pick<RowState, "text">[], word: RowWord): string {
+  for (const state of rows) { const m = state.text?.match(/^(Row|Rnd|Round)[ \t]+[0-9]/); if (m) return m[1]; }
+  return wordTitle(word);
+}
+
+/**
+ * Change total rows/rounds, as 074's craft_set_total decides it (FR3). More adds at the end. Fewer by k drops the k
+ * highest droppable rows ("(est.)" or bare), never a pattern row: fewer such rows → not_est; a ticked one → ticked; one
+ * in a sitting (finished or in progress) → in_sitting. Every row after a dropped one moves down (`moves`).
+ */
 export function setTotalPlan(rows: RowState[], total: number, next: number): SetTotalPlan {
   if (!Number.isInteger(next) || next < 1 || next > CRAFT_MAX_ROWS) return { kind: "refused", total: next, reason: "range", rows: [] };
   if (next === total) return { kind: "same", total };
   if (next > total) return { kind: "add", total: next, add: Array.from({ length: next - total }, (_, i) => total + 1 + i) };
-  const cut = rows.filter((s) => s.row > next).sort((a, b) => a.row - b.row);
-  const ticked = cut.filter((s) => s.done).map((s) => s.row);
+  const need = total - next;
+  const drop = rows.filter((s) => s.row <= total && isDroppableRow(s)).sort((a, b) => b.row - a.row).slice(0, need).sort((a, b) => a.row - b.row);
+  if (drop.length < need) return { kind: "refused", total: next, reason: "not_est", rows: drop.map((s) => s.row), need };
+  const ticked = drop.filter((s) => s.done).map((s) => s.row);
   if (ticked.length) return { kind: "refused", total: next, reason: "ticked", rows: ticked };
   // A row in progress in a sitting is in that sitting too (073/074 refuse it as in_sitting).
-  const linked = cut.filter((s) => s.linked || s.in_progress).map((s) => s.row);
+  const linked = drop.filter((s) => s.linked || s.in_progress).map((s) => s.row);
   if (linked.length) return { kind: "refused", total: next, reason: "in_sitting", rows: linked };
-  return { kind: "remove", total: next, remove: cut.map((s) => s.row) };
+  const dropped = drop.map((s) => s.row);
+  const moves = rows.filter((s) => s.row > dropped[0] && !dropped.includes(s.row)).sort((a, b) => a.row - b.row)
+    .map((s) => ({ from: s.row, to: s.row - dropped.filter((d) => d < s.row).length }));
+  return { kind: "remove", total: next, remove: dropped, moves };
 }
 
-export function setTotalRefusalText(word: RowWord, plan: { reason: string; rows: number[] }): string {
+/** "25–28", "3, 5–7" (numbers only). */
+export function runsText(numbers: number[]): string {
+  const sorted = [...new Set(numbers)].sort((a, b) => a - b), runs: string[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    let j = i;
+    while (j + 1 < sorted.length && sorted[j + 1] === sorted[j] + 1) j++;
+    runs.push(i === j ? `${sorted[i]}` : `${sorted[i]}–${sorted[j]}`);
+    i = j;
+  }
+  return runs.join(", ");
+}
+
+/**
+ * What lowering does, in the sheet's words (FR3): "Drops Rnd 25–28 (est.). Rnd 29–31 · knit (US 7) become Rnd 25–27.
+ * New total 27." Moved rows are grouped by run and pattern text.
+ */
+export function renumberText(word: RowWord, rows: RowState[], plan: Extract<SetTotalPlan, { kind: "remove" }>): string {
+  const label = rowLabelOf(rows, word);
+  const byRow = new Map(rows.map((s) => [s.row, s]));
+  const allEst = plan.remove.every((r) => isEstRowText(byRow.get(r)?.text));
+  const parts = [`Drops ${label} ${runsText(plan.remove)}${allEst ? " (est.)" : ""}.`];
+  const groups: { from: number[]; to: number[]; desc: string }[] = [];
+  for (const move of plan.moves) {
+    const desc = rowDescription(byRow.get(move.from)?.text);
+    const last = groups.at(-1);
+    if (last && last.desc === desc && last.from.at(-1) === move.from - 1 && last.to.at(-1) === move.to - 1) { last.from.push(move.from); last.to.push(move.to); }
+    else groups.push({ from: [move.from], to: [move.to], desc });
+  }
+  if (groups.length > 3) {
+    const shift = plan.moves[0].from - plan.moves[0].to;
+    parts.push(`${label} ${plan.moves[0].from}–${plan.moves.at(-1)?.from} move down (text kept), starting at ${label} ${plan.moves[0].from - shift}.`);
+  } else {
+    for (const g of groups) parts.push(`${label} ${runsText(g.from)}${g.desc ? ` · ${g.desc}` : ""} ${g.from.length === 1 ? "becomes" : "become"} ${label} ${runsText(g.to)}.`);
+  }
+  parts.push(`New total ${plan.total}.`);
+  return parts.join(" ");
+}
+
+/**
+ * "Last (est.) round needed" (FR3): the part's unticked "(est.)" rows, the range the stepper offers (the row before the
+ * lowest one up to the highest one) and the total a value gives (every droppable row after it goes). Null without any.
+ */
+export function estRange(rows: RowState[], total: number) {
+  const est = rows.filter((s) => s.row <= total && !s.done && isEstRowText(s.text)).map((s) => s.row).sort((a, b) => a - b);
+  if (!est.length) return null;
+  return { min: Math.max(0, est[0] - 1), max: est.at(-1) as number };
+}
+export function totalForLastEst(rows: RowState[], total: number, lastNeeded: number): number {
+  return total - rows.filter((s) => s.row <= total && s.row > lastNeeded && isDroppableRow(s)).length;
+}
+
+export function setTotalRefusalText(word: RowWord, plan: { reason: string; rows: number[]; need?: number }): string {
   if (plan.reason === "range") return `The total has to be a whole number from 1 to ${CRAFT_MAX_ROWS.toLocaleString("en-US")}.`;
   const what = rowsText(word, plan.rows);
   if (plan.reason === "ticked") return `Can't remove ${what}: ${plan.rows.length === 1 ? "it is" : "they are"} ticked. Undo ${plan.rows.length === 1 ? "it" : "them"} first if that was a mistake.`;
   if (plan.reason === "in_sitting") return `Can't remove ${what}: ${plan.rows.length === 1 ? "it is" : "they are"} part of a saved sitting.`;
+  if (plan.reason === "not_est") {
+    const need = plan.need ?? plan.rows.length + 1;
+    return plan.rows.length
+      ? `Can't drop ${need} ${plural(word, need)}: only ${what} ${plan.rows.length === 1 ? "is an (est.) or blank" : "are (est.) or blank"} ${plural(word, plan.rows.length)}. ${wordTitle(word)}s with pattern steps are never dropped.`
+      : `Can't drop ${need} ${plural(word, need)}: this part has no (est.) or blank ${word}s left. ${wordTitle(word)}s with pattern steps are never dropped.`;
+  }
   if (plan.reason === "no_rows") return `This part has no ${word}s to add after.`;
   return "That total can't be saved.";
 }

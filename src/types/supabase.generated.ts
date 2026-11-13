@@ -3897,6 +3897,10 @@ export type Database = {
         Args: { p_segment_id: string; p_user_id: string }
         Returns: Json
       }
+      craft_check: {
+        Args: { p_item_ids: string[]; p_project_id: string; p_user_id: string }
+        Returns: Json
+      }
       craft_current_row: {
         Args: { p_part_id: string; p_total: number; p_user_id: string }
         Returns: number
@@ -3958,6 +3962,10 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      craft_pick_part: {
+        Args: { p_expected_part_id: string; p_part_id: string; p_user_id: string }
+        Returns: Json
+      }
       craft_remove_blockers: {
         Args: { p_project_id: string; p_user_id: string }
         Returns: string[]
@@ -3997,12 +4005,18 @@ export type Database = {
         }
         Returns: Json
       }
+      craft_screen_part: {
+        Args: { p_project_id: string; p_user_id: string }
+        Returns: string
+      }
       craft_set_total: {
         Args: {
           p_expected_total: number
           p_part_id: string
+          p_text?: string
           p_total: number
           p_user_id: string
+          p_work_type?: string
         }
         Returns: Json
       }

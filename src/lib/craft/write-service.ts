@@ -232,20 +232,64 @@ export async function writeFrog(client: Client, userId: string, projectId: strin
 // ── Change total rows/rounds ─────────────────────────────────────────────────
 export async function writeTotal(client: Client, userId: string, projectId: string, raw: unknown) {
   const body = record(raw);
-  onlyKeys(body, ["part_id", "total", "expected_total"]);
+  onlyKeys(body, ["part_id", "total", "expected_total", "text", "work_type"]);
   const partId = uuid(body.part_id, "part_id");
   const total = int(body.total, "total", 1, 2000);
   const expected = int(body.expected_total, "expected_total", 1, 100_000);
+  // S3 FR3: the pattern text and work type of rows Change total adds ("knit (US 7)", stockinette); none = the last row's type, a bare label.
+  if (body.text !== undefined && body.text !== null && typeof body.text !== "string") bad("text must be text");
+  const text = typeof body.text === "string" ? body.text.trim() : "";
+  if ([...text].length > 200) bad("text must be 200 characters or fewer");
+  if (body.work_type !== undefined && body.work_type !== null && (typeof body.work_type !== "string" || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(body.work_type))) bad("work_type must be a lowercase work type (letters, numbers, dashes)");
+  const workType = typeof body.work_type === "string" ? body.work_type : null;
   const part = await partIn(client, userId, projectId, partId);
-  const { data, error } = await client.rpc("craft_set_total", { p_user_id: userId, p_part_id: partId, p_total: total, p_expected_total: expected });
+  const { data, error } = await client.rpc("craft_set_total", { p_user_id: userId, p_part_id: partId, p_total: total, p_expected_total: expected,
+    ...(text ? { p_text: text } : {}), ...(workType ? { p_work_type: workType } : {}) });
   if (error) rpcFailure(error);
   const result = data as RpcResult;
   const fresh = await view(client, userId, projectId);
   if (result.status === "ok") return { result, view: fresh };
   if (result.status === "stale") throw new CraftWriteError(409, "Not saved: the total changed on another screen. The screen now shows it.", "stale", { result, view: fresh });
   const word: RowWord = part.row_word === "round" ? "round" : "row";
-  throw new CraftWriteError(409, setTotalRefusalText(word, { reason: String(result.reason), rows: (result.rows as number[] | undefined) ?? [] }),
+  throw new CraftWriteError(409, setTotalRefusalText(word, { reason: String(result.reason), rows: (result.rows as number[] | undefined) ?? [], need: result.need as number | undefined }),
     String(result.reason ?? "refused"), { result, view: fresh });
+}
+
+// ── Checks (S3 FR3) ──────────────────────────────────────────────────────────
+/** Done on a check card (or Yes on Row done's "Not done yet"): ticks those plain checklist items, only if they're this project's checks. */
+export async function writeCheck(client: Client, userId: string, projectId: string, raw: unknown) {
+  const body = record(raw);
+  onlyKeys(body, ["item_ids"]);
+  const raws = body.item_ids;
+  if (!Array.isArray(raws) || raws.length < 1 || raws.length > 50) bad("item_ids must be a list of 1 to 50 check ids");
+  const ids = [...new Set((raws as unknown[]).map((v) => uuid(v, "item_ids[]")))];
+  const craft = await client.from("craft_projects").select("project_id").eq("user_id", userId).eq("project_id", projectId).single();
+  if (craft.error) throw craft.error;
+  const { data, error } = await client.rpc("craft_check", { p_user_id: userId, p_project_id: projectId, p_item_ids: ids });
+  if (error) rpcFailure(error);
+  const result = data as RpcResult;
+  const fresh = await view(client, userId, projectId);
+  if (result.status === "ok") return { result, view: fresh };
+  throw new CraftWriteError(409, "Not saved: that check changed on another screen. The screen now shows the latest.", String(result.status), { result, view: fresh });
+}
+
+// ── Work on this part (S3 FR3) ──────────────────────────────────────────────
+export async function writePart(client: Client, userId: string, projectId: string, raw: unknown) {
+  const body = record(raw);
+  onlyKeys(body, ["part_id", "expected_part_id"]);
+  const partId = uuid(body.part_id, "part_id");
+  const expected = optional(body.expected_part_id, (v) => uuid(v, "expected_part_id"));
+  await partIn(client, userId, projectId, partId);
+  const { data, error } = await client.rpc("craft_pick_part", { p_user_id: userId, p_part_id: partId, p_expected_part_id: expected as string });
+  if (error) rpcFailure(error);
+  const result = data as RpcResult;
+  const fresh = await view(client, userId, projectId);
+  if (result.status === "ok") return { result, view: fresh };
+  const words: Record<string, string> = {
+    stale: "Not saved: the screen's part changed on another screen. The screen now shows it.",
+    finished: "Every row of that part is ticked. Change total… adds rows to it.",
+  };
+  throw new CraftWriteError(409, words[result.status] ?? "Not saved.", result.status, { result, view: fresh });
 }
 
 // ── Notes ───────────────────────────────────────────────────────────────────
