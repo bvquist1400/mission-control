@@ -120,6 +120,8 @@ await test("FR4 1 raise sheet (Mitten 1's Cuff 24 → 27): the text starts EMPTY
   const filled = renderToStaticMarkup(createElement(ChangeTotalSheet, { open: true, onClose: () => {}, view, part: cuff, send, initial: { total: 27, text: "knit (US 7)", type: "stockinette", place: "after_steps" } }));
   assert.match(filled, /<p class="craft-sheet-preview">Adds Rnd 25–27 · knit \(US 7\) at the end \(stockinette\), 36 stitches each\. The step “Check: cuff 4 in from cast-on\? Then switch to US 7” stays before Rnd 25\. The screen moves to this part\.<\/p>/);
   assert.doesNotMatch(filled, /<button type="submit"[^>]*disabled=""/);
+  const before = renderToStaticMarkup(createElement(ChangeTotalSheet, { open: true, onClose: () => {}, view, part: cuff, send, initial: { total: 27, text: "knit (US 7)", type: "stockinette", place: "after_row" } }));
+  assert.match(before, /<p class="craft-sheet-preview">Adds Rnd 25–27 · knit \(US 7\) right after Rnd 24 \(stockinette\), 36 stitches each\. The step “Check: cuff 4 in from cast-on\? Then switch to US 7” moves after Rnd 27\. The screen moves to this part\.<\/p>/);
   // No step after the last row (Mitten 2 from 31): the plain line, the FR3 review's words.
   const v2 = C.buildCraftView(mitten({ castOnDone: true, cuffDone: 24, active: "gusset" }));
   const two = renderToStaticMarkup(createElement(ChangeTotalSheet, { open: true, onClose: () => {}, view: v2, part: v2.parts.find((p) => p.id === "cuff"), send, initial: { total: 34, text: "knit (US 7)", type: "stockinette" } }));
