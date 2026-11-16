@@ -53,10 +53,10 @@
  *   `reminders_households_said_yes`, `invite_prompted_households` /
  *   `invite_prompted_joined_7d`, `second_day_households` / `second_day_eligible`
  *   (households). `daily`: `reminders_shown`, `reminders_acted`.
- *   A malformed reminder number (negative, fractional, too large, a
- *   boolean, an array or object) is DROPPED, not stored, and never fails the
- *   sign-up sync; a STRING under any key is still refused (it could be
- *   per-account text, decision Q1).
+ *   A malformed reminder NUMBER (negative, fractional, too large) or a
+ *   boolean is DROPPED, not stored, and never fails the sign-up sync; a
+ *   string, array or object under any key is refused (`app_db_not_counts`:
+ *   it could be per-account data, decision Q1).
  */
 
 import { addDays, etDate, isIsoDate } from './dates';
@@ -79,8 +79,10 @@ export const APP_DB_ACTIVITY_DAILY = ['real_households_to_date', 'active_househo
 
 /**
  * Reminder and invite-nudge totals (Grocery 1.0.3; optional). Event counts
- * from the phones, except the households keys. Counted by the function only
- * for real households and from the 1.0.3 release time.
+ * from the phones, except the households keys. The function counts real
+ * households only and has no release-time cutoff of its own: the event counts
+ * exist only because only the 1.0.3 app writes them. `second_day_*` is NOT
+ * limited to 1.0.3: it covers every real household 7+ days old since launch.
  */
 export const APP_DB_REMINDER_TOTALS = [
   'reminders_ask_shown',
@@ -223,10 +225,13 @@ function assertNoForbiddenKeys(record: Record<string, unknown>): void {
 
 const REMINDER_KEYS: ReadonlySet<string> = new Set<string>([...APP_DB_REMINDER_TOTALS, ...APP_DB_REMINDER_DAILY]);
 
-/** A reminder count that is a whole number 0..APP_DB_MAX_COUNT, else null (the value is dropped). */
+/**
+ * A reminder count that is a whole number 0..APP_DB_MAX_COUNT, else null (the
+ * value is dropped). Anything that is not a plain number or boolean (text, an
+ * array, an object) could carry per-account data, so it refuses the reply.
+ */
 function readReminderCount(value: unknown): number | null {
-  if (typeof value === 'string') {
-    // Text is never kept and never ignored quietly: it could be per-account data.
+  if (typeof value === 'string' || (typeof value === 'object' && value !== null)) {
     throw new LaunchSourceError('app_db_not_counts');
   }
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > APP_DB_MAX_COUNT) {

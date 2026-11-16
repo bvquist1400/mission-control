@@ -117,9 +117,9 @@ await test("parse: today's reply (no reminder keys) still validates and stores n
   assert.equal(daily.some((row) => names.has(row.metric)), false);
 });
 
-await test("parse: a malformed reminder number is dropped, never stored, and the rest of the reply (sign-ups too) still stands", () => {
+await test("parse: a malformed reminder number (or boolean) is dropped, never stored, and the rest of the reply (sign-ups too) still stands", () => {
   const base = withReminders();
-  for (const bad of [-1, 1.5, 10_000_001, true, false, [1], { n: 1 }, [], {}]) {
+  for (const bad of [-1, 1.5, 10_000_001, true, false]) {
     const raw = {
       ...base,
       totals: { ...base.totals, reminders_ask_shown: bad, reminders_shop_shown: bad, second_day_households: bad },
@@ -139,7 +139,7 @@ await test("parse: a malformed reminder number is dropped, never stored, and the
   assert.equal("reminders_ask_shown" in summary.totals, false);
 });
 
-await test("parse: counts only. Text under a reminder key refuses the whole reply, and so do ids, emails and names anywhere", () => {
+await test("parse: counts only. Text, an array or an object under a reminder key refuses the whole reply, and so do ids, emails and names anywhere", () => {
   const base = withReminders();
   const refused = (raw, label) =>
     assert.throws(() => appDb.validateAppDbSummary(raw, NOW), (error) => error.name === "LaunchSourceError" && ["app_db_not_counts", "app_db_shape"].includes(error.code), label);
@@ -147,6 +147,12 @@ await test("parse: counts only. Text under a reminder key refuses the whole repl
     refused({ ...base, totals: { ...base.totals, reminders_ask_yes: bad } }, `total ${bad}`);
     refused({ ...base, totals: { ...base.totals, second_day_eligible: bad } }, `total ${bad}`);
     refused({ ...base, daily: [{ ...base.daily[3], reminders_shown: bad }] }, `daily ${bad}`);
+  }
+  // An array or object under a reminder key is refused like text (it could hold anything), even when it holds an email.
+  for (const bad of [[1], [], {}, { n: 1 }, ["a@b.example"], { email: "a@b.example" }, [{ name: "Sam" }]]) {
+    refused({ ...base, totals: { ...base.totals, reminders_ask_yes: bad } }, `total ${JSON.stringify(bad)}`);
+    refused({ ...base, totals: { ...base.totals, second_day_households: bad } }, `total ${JSON.stringify(bad)}`);
+    refused({ ...base, daily: [{ ...base.daily[3], reminders_shown: bad }] }, `daily ${JSON.stringify(bad)}`);
   }
   refused({ ...base, totals: { ...base.totals, email: 1 } }, "email key");
   refused({ ...base, totals: { ...base.totals, user_ids: [1] } }, "user_ids key");
@@ -221,7 +227,7 @@ await test("page: present. The four tiles, the by-type table, the invite line an
   assert.match(words, /Take it shopping 31 19 12 3 2 8/);
   assert.match(words, /Share your list 11 4 7 2 1 4/);
   assert.match(words, /10 shown → 4 tapped Send invite → 4 invite codes made → 2 of 13 households got a 2nd person within 7 days/);
-  assert.match(text(activity), /Came back on a second day 6 of 12 households 7\+ days old that used it on 2\+ different days in their first week/);
+  assert.match(text(activity), /Came back on a second day 6 of 12 since launch \(all sign-up weeks, not only since 1\.0\.3\): households 7\+ days old that used it on 2\+ different days in their first week/);
   assert.ok(!/Not available yet/.test(words), "nothing is missing in this reply");
   assert.ok(!/\d%/.test(words), "no percentage under 20 households or events");
   assert.ok(section.indexOf('id="reminders-title"') >= 0);
@@ -253,7 +259,8 @@ await test("page: zero. Real zeros show as 0, an empty denominator shows a dash 
   assert.match(words, /Reminders tapped – No reminder has been shown yet/);
   assert.match(words, /Turned off 0 0 with the in-app switch, 0 in iPhone Settings\./);
   assert.match(words, /Take it shopping 0 0 0 0 0 0/);
-  assert.match(words, /0 shown → 0 tapped Send invite → 0 invite codes made → 0 of 0 households got a 2nd person within 7 days/);
+  assert.match(words, /0 shown → 0 tapped Send invite → 0 invite codes made → Nothing yet: no household has seen the invite card or the share reminder/);
+  assert.ok(!/0 of 0/.test(words), "no '0 of 0'");
   assert.match(text(activity), /Came back on a second day No household is 7\+ days old yet/);
   assert.ok(!/NaN|Infinity|undefined|null|\d%/.test(section + activity));
 });

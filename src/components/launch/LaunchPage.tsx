@@ -183,7 +183,7 @@ function SecondDayLine({ reminders }: { reminders: RemindersTotalsView | null })
       ) : (
         <span className="text-muted-foreground">{none ? "No household is 7+ days old yet" : "Not available yet"}</span>
       )}
-      <span className="text-xs text-muted-foreground">households 7+ days old that used it on 2+ different days in their first week</span>
+      <span className="text-xs text-muted-foreground">since launch (all sign-up weeks, not only since 1.0.3): households 7+ days old that used it on 2+ different days in their first week</span>
     </p>
   );
 }
@@ -338,9 +338,13 @@ function RemindersSection({ reminders, badge }: { reminders: RemindersTotalsView
             <span aria-hidden="true" className="text-muted-foreground">→</span>
             {funnelStep(r.nudgeInviteMade, "invite codes made")}
             <span aria-hidden="true" className="text-muted-foreground">→</span>
-            <span>
-              <b className="font-semibold tabular-nums text-foreground">{shareParts(r.invitePromptedJoined7d, r.invitePrompted).text}</b> households got a 2nd person within 7 days
-            </span>
+            {r.invitePrompted === 0 ? (
+              <span className="text-muted-foreground">Nothing yet: no household has seen the invite card or the share reminder</span>
+            ) : (
+              <span>
+                <b className="font-semibold tabular-nums text-foreground">{shareParts(r.invitePromptedJoined7d, r.invitePrompted).text}</b> households got a 2nd person within 7 days
+              </span>
+            )}
           </p>
           <p className="mt-2 text-xs text-muted-foreground">
             &quot;Households that got a 2nd person&quot; counts households that saw the invite card or the &quot;Share your list&quot; reminder. Each share shows as &quot;N of M&quot;; a percentage only once M is 20 or more. A dash means that number isn&apos;t available yet.

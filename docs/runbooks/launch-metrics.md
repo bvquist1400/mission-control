@@ -72,7 +72,8 @@ are live. Nothing to set up in Baseline (no migration, no new env value).
 Right under "Still using it" the page has a **Reminders** section. It shows
 whether the app's optional reminders (a local nudge on the phone, never a
 server push) and the new invite card bring people back. Counts only, real
-households only, New York days, from the day 1.0.3 is live.
+households only, New York days. The reminder and invite numbers start when 1.0.3
+is live (only that app sends them).
 
 - **Said yes to reminders**: "Remind me" taps out of the times the in-app card
   was shown, with Apple's dialog answers (allowed / didn't) and "Not now".
@@ -90,14 +91,18 @@ households only, New York days, from the day 1.0.3 is live.
   within 7 days.
 - Under "Still using it": **Came back on a second day**, households 7+ days
   old that used the app on 2 or more different days in their first week.
+  This one is NOT a 1.0.3-only number: it covers every real household 7+ days
+  old since launch (all sign-up weeks), so for the first weeks it mostly
+  reflects households from before 1.0.3 and can't tell before from after.
+  Judging 1.0.3 on new households would need the same count by sign-up week.
 
 The numbers are the Grocery summary's new optional keys (`reminders_*`,
 `invite_nudge_*`, `invite_prompted_*`, `second_day_*`, daily `reminders_shown`
 and `reminders_acted`; lists in `src/lib/launch-metrics/app-db.ts`). Same rules
-as the rest: counts only (text under any key, or an id/email/name key, refuses
-the whole reply). A reminder number that is malformed (negative, fractional,
-huge, an array) is dropped rather than failing the sign-up sync, and shows as a
-dash. "N of M"; a percentage only once M is 20 or more. **Ship order doesn't
+as the rest: counts only (text, an array or an object under any key, or an
+id/email/name key, refuses the whole reply). A reminder number that is
+malformed (negative, fractional, huge, a boolean) is dropped rather than
+failing the sign-up sync, and shows as a dash. "N of M"; a percentage only once M is 20 or more. **Ship order doesn't
 matter:** until the Grocery migration and function are live (and until the app
 update is out, which shows "Nothing yet") the section says "Not available yet".
 Nothing to set up in Baseline (no migration, no new env value).
