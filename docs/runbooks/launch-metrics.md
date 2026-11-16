@@ -80,7 +80,9 @@ is live (only that app sends them).
 - **Reminders tapped**: of the reminders shown, how many were tapped.
 - **Came back and used it**: of the reminders shown, how many were tapped or
   followed by opening the app within 24 hours and then checking an item off
-  (shopping reminder) or making an invite code (share reminder).
+  (shopping reminder) or making an invite code within a day (share reminder).
+  "Acted on" for the share reminder means a code was made, not that an invite
+  was sent: the app can't see whether the message actually went out.
 - **Turned off**: the in-app switch plus iPhone notifications turned off after
   being allowed.
 - **By reminder** ("Take it shopping", "Share your list"): planned, not

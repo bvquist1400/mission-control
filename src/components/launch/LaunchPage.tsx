@@ -283,7 +283,7 @@ function RemindersSection({ reminders, badge }: { reminders: RemindersTotalsView
     <Section
       id="reminders"
       title="Reminders"
-      note={'Since the reminders update (1.0.3) went live. Real households only, counted on the phone and sent as totals. "Acted on" = tapped or opened within 24 hours, and then checked an item off (shopping) or made an invite code (invite). "Ignored" = no tap and no visit within 24 hours. New York days.'}
+      note={'Since the reminders update (1.0.3) went live. Real households only, counted on the phone and sent as totals. "Acted on" = tapped or opened within 24 hours, and then checked an item off (shopping) or made an invite code within a day (share). The app can\'t see whether the invite message was actually sent. "Ignored" = no tap and no visit within 24 hours. New York days.'}
       badge={badge}
     >
       {known && r && head ? (
@@ -310,7 +310,7 @@ function RemindersSection({ reminders, badge }: { reminders: RemindersTotalsView
               label="Came back and used it"
               count={head.acted}
               of={head.shown}
-              meaning="shown reminders were followed by checking items off or making an invite code within 24 hours"
+              meaning="shown reminders were followed by checking items off or making an invite code within a day (not whether it was sent)"
               noneYet="No reminder has been shown yet"
             />
             <Tile

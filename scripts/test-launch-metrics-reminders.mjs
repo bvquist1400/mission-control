@@ -221,7 +221,8 @@ await test("page: present. The four tiles, the by-type table, the invite line an
   assert.match(words, /Reminders/);
   assert.match(words, /Said yes to reminders 9 of 14 Apple's dialog: 8 allowed, 1 didn't\. 3 said "Not now"\. 7 households said yes\./);
   assert.match(words, /Reminders tapped 5 of 19 shown reminders were tapped/);
-  assert.match(words, /Came back and used it 3 of 19 /);
+  assert.match(words, /Came back and used it 3 of 19 shown reminders were followed by checking items off or making an invite code within a day \(not whether it was sent\)/);
+  assert.match(words, /made an invite code within a day \(share\)\. The app can't see whether the invite message was actually sent\./);
   assert.match(words, /Turned off 2 1 with the in-app switch, 1 in iPhone Settings\./);
   assert.match(words, /Reminder Planned Not needed \(opened first\) Shown Tapped Acted on Ignored/);
   assert.match(words, /Take it shopping 31 19 12 3 2 8/);
