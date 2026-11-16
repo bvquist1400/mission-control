@@ -67,6 +67,41 @@ extra counts (schema_version stays 1). An older Baseline ignores them; this
 Baseline shows "Not available yet" until the Grocery migration and function
 are live. Nothing to set up in Baseline (no migration, no new env value).
 
+## Reminders (Menu & Market 1.0.3)
+
+Right under "Still using it" the page has a **Reminders** section. It shows
+whether the app's optional reminders (a local nudge on the phone, never a
+server push) and the new invite card bring people back. Counts only, real
+households only, New York days, from the day 1.0.3 is live.
+
+- **Said yes to reminders**: "Remind me" taps out of the times the in-app card
+  was shown, with Apple's dialog answers (allowed / didn't) and "Not now".
+- **Reminders tapped**: of the reminders shown, how many were tapped.
+- **Came back and used it**: of the reminders shown, how many were tapped or
+  followed by opening the app within 24 hours and then checking an item off
+  (shopping reminder) or making an invite code (share reminder).
+- **Turned off**: the in-app switch plus iPhone notifications turned off after
+  being allowed.
+- **By reminder** ("Take it shopping", "Share your list"): planned, not
+  needed (the person opened the app first), shown, tapped, acted on, ignored
+  (shown, then 24 hours with no tap and no visit).
+- **Invite card**: shown, "Send invite" tapped, codes made, and how many of the
+  households that saw the card or the share reminder got a second person
+  within 7 days.
+- Under "Still using it": **Came back on a second day**, households 7+ days
+  old that used the app on 2 or more different days in their first week.
+
+The numbers are the Grocery summary's new optional keys (`reminders_*`,
+`invite_nudge_*`, `invite_prompted_*`, `second_day_*`, daily `reminders_shown`
+and `reminders_acted`; lists in `src/lib/launch-metrics/app-db.ts`). Same rules
+as the rest: counts only (text under any key, or an id/email/name key, refuses
+the whole reply). A reminder number that is malformed (negative, fractional,
+huge, an array) is dropped rather than failing the sign-up sync, and shows as a
+dash. "N of M"; a percentage only once M is 20 or more. **Ship order doesn't
+matter:** until the Grocery migration and function are live (and until the app
+update is out, which shows "Nothing yet") the section says "Not available yet".
+Nothing to set up in Baseline (no migration, no new env value).
+
 ## Codes you may see
 
 | Code | Meaning | What to do |

@@ -145,8 +145,11 @@ await test("app db: the REAL Grocery reply (schema_version 1) validates and ever
 await test("app db: the contract key lists match the Grocery contract exactly", () => {
   // The newest Grocery reply (with the household activity keys of migration 20261102120000).
   const raw = fixture("app-db-summary-activity.json");
-  assert.deepEqual([...appDb.APP_DB_TOTAL_REQUIRED, ...appDb.APP_DB_TOTAL_OPTIONAL].sort(), Object.keys(raw.totals).sort());
-  assert.deepEqual([...appDb.APP_DB_DAILY_REQUIRED, ...appDb.APP_DB_DAILY_OPTIONAL].sort(), Object.keys(raw.daily[0]).filter((k) => k !== "date").sort());
+  // The 1.0.3 reminder keys come on top (their own fixture, below), so they are left out of this comparison.
+  const reminderTotals = new Set(appDb.APP_DB_REMINDER_TOTALS);
+  const reminderDaily = new Set(appDb.APP_DB_REMINDER_DAILY);
+  assert.deepEqual([...appDb.APP_DB_TOTAL_REQUIRED, ...appDb.APP_DB_TOTAL_OPTIONAL].filter((k) => !reminderTotals.has(k)).sort(), Object.keys(raw.totals).sort());
+  assert.deepEqual([...appDb.APP_DB_DAILY_REQUIRED, ...appDb.APP_DB_DAILY_OPTIONAL].filter((k) => !reminderDaily.has(k)).sort(), Object.keys(raw.daily[0]).filter((k) => k !== "date").sort());
   // The older reply's keys are all still accepted (the function before that migration).
   const older = fixture("app-db-summary.json");
   for (const key of Object.keys(older.totals)) assert.ok([...appDb.APP_DB_TOTAL_REQUIRED, ...appDb.APP_DB_TOTAL_OPTIONAL].includes(key), key);
@@ -1590,7 +1593,8 @@ await test("tiles: short sentence-case labels that wrap; the status pill sits be
   assert.match(tile, /\[overflow-wrap:anywhere\]">\{label\}/);
   // The badge is rendered in the number's row.
   assert.match(tile, /\{value\}<\/p>\s*\{badge\}/);
-  const labels = [...page.matchAll(/<Tile\s+label="([^"]+)"/g)].map((m) => m[1]);
+  // The headline tiles of the page body (the Reminders section's own "Turned off" tile is checked with its section).
+  const labels = [...page.slice(page.indexOf("export function LaunchPageBody")).matchAll(/<Tile\s+label="([^"]+)"/g)].map((m) => m[1]);
   assert.deepEqual(labels, ["Real users", "Not confirmed", "Paying Plus", "App downloads", "Website visitors", "Google search clicks"]);
   for (const label of labels) {
     assert.ok(label.length <= 20, label);

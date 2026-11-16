@@ -9,10 +9,12 @@
  * Household activity ("still using it", Grocery migration 20261102120000) is
  * read only from the same as-of day as the sign-up totals: a number the
  * function stopped sending (an older function) is `null` ("not available
- * yet"), never a stale value from an earlier day.
+ * yet"), never a stale value from an earlier day. Reminders and the invite
+ * nudge (Grocery 1.0.3) follow the same rule (`reminders`, see ./reminders).
  */
 
 import type { DailyValue } from './page-data';
+import type { RemindersTotalsView } from './reminders';
 
 export interface AppDbTotalsView {
   asOfDate: string;
@@ -32,6 +34,8 @@ export interface AppDbTotalsView {
   plusTrial: number;
   plusComp: number;
   activity: ActivityTotalsView;
+  /** Reminders, the invite nudge and the second-day count (Grocery 1.0.3). Each number null until stored for the as-of day. */
+  reminders: RemindersTotalsView;
 }
 
 /** Households. Each pair is shown as "N of M"; null = not available yet. */
@@ -101,6 +105,41 @@ export function latestTotals(daily: DailyValue[]): AppDbTotalsView | null {
       sharedHouseholds: onAsOf('shared_households_30d'),
       multiMemberHouseholds: onAsOf('multi_member_households'),
       shoppingHouseholds: onAsOf('shopping_households_7d'),
+    },
+    reminders: {
+      askShown: onAsOf('reminders_ask_shown'),
+      askYes: onAsOf('reminders_ask_yes'),
+      askNotNow: onAsOf('reminders_ask_not_now'),
+      iosAllowed: onAsOf('reminders_ios_allowed'),
+      iosDenied: onAsOf('reminders_ios_denied'),
+      householdsSaidYes: onAsOf('reminders_households_said_yes'),
+      shop: {
+        planned: onAsOf('reminders_shop_scheduled'),
+        notNeeded: onAsOf('reminders_shop_cancelled_opened'),
+        shown: onAsOf('reminders_shop_shown'),
+        tapped: onAsOf('reminders_shop_tapped'),
+        acted: onAsOf('reminders_shop_acted'),
+        ignored: onAsOf('reminders_shop_ignored'),
+      },
+      share: {
+        planned: onAsOf('reminders_share_scheduled'),
+        notNeeded: onAsOf('reminders_share_cancelled_opened'),
+        shown: onAsOf('reminders_share_shown'),
+        tapped: onAsOf('reminders_share_tapped'),
+        acted: onAsOf('reminders_share_acted'),
+        ignored: onAsOf('reminders_share_ignored'),
+      },
+      offInApp: onAsOf('reminders_off_in_app'),
+      offIos: onAsOf('reminders_off_ios'),
+      onInApp: onAsOf('reminders_on_in_app'),
+      nudgeShown: onAsOf('invite_nudge_shown'),
+      nudgeSendTapped: onAsOf('invite_nudge_send_tapped'),
+      nudgeDismissed: onAsOf('invite_nudge_dismissed'),
+      nudgeInviteMade: onAsOf('invite_nudge_invite_made'),
+      invitePrompted: onAsOf('invite_prompted_households'),
+      invitePromptedJoined7d: onAsOf('invite_prompted_joined_7d'),
+      secondDay: onAsOf('second_day_households'),
+      secondDayEligible: onAsOf('second_day_eligible'),
     },
   };
 }

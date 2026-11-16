@@ -23,6 +23,12 @@ Shapes, not recordings: no live call was made to build these (phase 1 rule).
   pgTAP fixture households of `launch_metrics_retention.test.sql` loaded (synthetic
   `@example.test` accounts only). Pretty-printed; values and key order as sent.
   Counts and dates only.
+- `app-db-summary-reminders.json`: NOT a recording. The activity reply above plus the
+  1.0.3 reminder and invite-nudge keys exactly as the plan names them
+  (mm-103-reminders-plan.md section 3), with the made-up example numbers of the plan's
+  Launch mockup (panel 5). Built by hand because the Grocery function that sends them
+  was not live when this was written; replace it with the function's real reply once
+  it is. Counts only.
 - `gsc-*.json`: Google's documented `token` and `searchAnalytics.query` replies.
 - `apple/*.tsv`: App Store report files built by hand from Apple's documented
   report fields (developer.apple.com Analytics Reports, "App Store Discovery and

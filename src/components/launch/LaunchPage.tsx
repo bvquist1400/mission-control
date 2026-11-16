@@ -9,6 +9,7 @@ import type { LaunchPageInput, LaunchView } from "@/lib/launch-metrics/page-data
 import { isoToEtLocal } from "@/lib/launch-metrics/dates";
 import { hasActivity, shareParts, type ActivityWeek } from "@/lib/launch-metrics/activity";
 import type { ActivityTotalsView } from "@/lib/launch-metrics/page-totals";
+import { hasReminders, hasSecondDay, reminderHeadline, remindersNotStarted, type RemindersTotalsView, type ReminderTypeView } from "@/lib/launch-metrics/reminders";
 
 function Section({ id, title, note, badge, children }: { id: string; title: string; note?: string; badge?: ReactNode; children: ReactNode }) {
   return (
@@ -166,7 +167,28 @@ function weekLabel(week: ActivityWeek): string {
   return week.current ? "Last 7 days" : `${day(week.since)} – ${day(week.until)}`;
 }
 
-function ActivitySection({ activity, weeks, badge }: { activity: ActivityTotalsView | null; weeks: ActivityWeek[]; badge: ReactNode }) {
+/** "Came back on a second day: N of M", under the "Still using it" tiles (Grocery 1.0.3 key; "Not available yet" until it is live). */
+function SecondDayLine({ reminders }: { reminders: RemindersTotalsView | null }) {
+  const known = hasSecondDay(reminders);
+  const { text, percent } = shareParts(known ? reminders!.secondDay : null, known ? reminders!.secondDayEligible : null);
+  const none = known && reminders!.secondDayEligible === 0;
+  return (
+    <p className="mt-3 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm" data-testid="second-day-line">
+      <span className="font-semibold text-[color:var(--chart-text-2)]">Came back on a second day</span>
+      {known && !none ? (
+        <span className="font-semibold tabular-nums text-foreground">
+          {text}
+          {percent ? ` (${percent})` : ""}
+        </span>
+      ) : (
+        <span className="text-muted-foreground">{none ? "No household is 7+ days old yet" : "Not available yet"}</span>
+      )}
+      <span className="text-xs text-muted-foreground">households 7+ days old that used it on 2+ different days in their first week</span>
+    </p>
+  );
+}
+
+function ActivitySection({ activity, reminders, weeks, badge }: { activity: ActivityTotalsView | null; reminders: RemindersTotalsView | null; weeks: ActivityWeek[]; badge: ReactNode }) {
   const known =
     activity !== null &&
     hasActivity([activity.activeHouseholds, activity.stillUsing, activity.stillUsingEligible, activity.sharedHouseholds, activity.multiMemberHouseholds, activity.shoppingHouseholds]);
@@ -209,6 +231,7 @@ function ActivitySection({ activity, weeks, badge }: { activity: ActivityTotalsV
               noneYet="No real households yet"
             />
           </div>
+          <SecondDayLine reminders={reminders} />
           <h3 className="mb-2 mt-6 text-sm font-semibold text-foreground">By week</h3>
           <Table
             caption="Still using it, by week"
@@ -222,6 +245,105 @@ function ActivitySection({ activity, weeks, badge }: { activity: ActivityTotalsV
           />
           <p className="mt-2 text-xs text-muted-foreground">
             Weeks run Monday to Sunday. In a week, &quot;still using it&quot; counts the households that signed up before that week began and used it during the week. The top row is the last 7 days, the same as the tiles. Past weeks are counted again on every update, so a household or list items deleted later can lower them a little.
+          </p>
+        </>
+      ) : (
+        <p className="text-sm text-muted-foreground">Not available yet. These numbers start once the app&apos;s database update for them is live.</p>
+      )}
+    </Section>
+  );
+}
+
+function typeRow(label: string, type: ReminderTypeView): ReactNode[] {
+  return [label, ...[type.planned, type.notNeeded, type.shown, type.tapped, type.acted, type.ignored].map((value) => formatCountOrDash(value))];
+}
+
+/** "9 of 14 asked"-style tile: "N of M" big, the meaning underneath (a percentage first from 20 households/events up). */
+function RemindersSection({ reminders, badge }: { reminders: RemindersTotalsView | null; badge: ReactNode }) {
+  const known = hasReminders(reminders);
+  const r = reminders;
+  const head = r ? reminderHeadline(r) : null;
+  const askParts: string[] = [];
+  if (r && r.iosAllowed !== null && r.iosDenied !== null) {
+    askParts.push(`Apple's dialog: ${formatCount(r.iosAllowed)} allowed, ${formatCount(r.iosDenied)} didn't.`);
+  }
+  if (r && r.askNotNow !== null) {
+    askParts.push(`${formatCount(r.askNotNow)} said "Not now".`);
+  }
+  if (r && r.householdsSaidYes !== null) {
+    askParts.push(`${plural(r.householdsSaidYes, "household", "households")} said yes.`);
+  }
+  const askMeaning = askParts.length ? askParts.join(" ") : "times the card was answered with Remind me";
+  const funnelStep = (value: number | null, text: string) => (
+    <span>
+      <b className="font-semibold tabular-nums text-foreground">{formatCountOrDash(value)}</b> {text}
+    </span>
+  );
+  return (
+    <Section
+      id="reminders"
+      title="Reminders"
+      note={'Since the reminders update (1.0.3) went live. Real households only, counted on the phone and sent as totals. "Acted on" = tapped or opened within 24 hours, and then checked an item off (shopping) or made an invite code (invite). "Ignored" = no tap and no visit within 24 hours. New York days.'}
+      badge={badge}
+    >
+      {known && r && head ? (
+        <>
+          {remindersNotStarted(r) ? (
+            <p className="mb-3 text-sm text-muted-foreground">Nothing yet. These start counting once the update is out and people say yes to reminders.</p>
+          ) : null}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <ShareTile
+              label="Said yes to reminders"
+              count={r.askYes}
+              of={r.askShown}
+              meaning={askMeaning}
+              noneYet="No one has been asked yet"
+            />
+            <ShareTile
+              label="Reminders tapped"
+              count={head.tapped}
+              of={head.shown}
+              meaning="shown reminders were tapped"
+              noneYet="No reminder has been shown yet"
+            />
+            <ShareTile
+              label="Came back and used it"
+              count={head.acted}
+              of={head.shown}
+              meaning="shown reminders were followed by checking items off or making an invite code within 24 hours"
+              noneYet="No reminder has been shown yet"
+            />
+            <Tile
+              label="Turned off"
+              value={formatCountOrDash(head.turnedOff)}
+              sub={
+                head.turnedOff === null
+                  ? "Not available yet"
+                  : `${formatCount(r.offInApp ?? 0)} with the in-app switch, ${formatCount(r.offIos ?? 0)} in iPhone Settings.${r.onInApp ? ` ${formatCount(r.onInApp)} turned it back on.` : ""}`
+              }
+            />
+          </div>
+          <h3 className="mb-2 mt-6 text-sm font-semibold text-foreground">By reminder</h3>
+          <Table
+            caption="Reminders by type"
+            head={["Reminder", "Planned", "Not needed (opened first)", "Shown", "Tapped", "Acted on", "Ignored"]}
+            rows={[typeRow("Take it shopping", r.shop), typeRow("Share your list", r.share)]}
+            empty="No reminders yet."
+          />
+          <h3 className="mb-2 mt-6 text-sm font-semibold text-foreground">Invite card</h3>
+          <p className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm text-foreground" data-testid="invite-funnel">
+            {funnelStep(r.nudgeShown, "shown")}
+            <span aria-hidden="true" className="text-muted-foreground">→</span>
+            {funnelStep(r.nudgeSendTapped, "tapped Send invite")}
+            <span aria-hidden="true" className="text-muted-foreground">→</span>
+            {funnelStep(r.nudgeInviteMade, "invite codes made")}
+            <span aria-hidden="true" className="text-muted-foreground">→</span>
+            <span>
+              <b className="font-semibold tabular-nums text-foreground">{shareParts(r.invitePromptedJoined7d, r.invitePrompted).text}</b> households got a 2nd person within 7 days
+            </span>
+          </p>
+          <p className="mt-2 text-xs text-muted-foreground">
+            &quot;Households that got a 2nd person&quot; counts households that saw the invite card or the &quot;Share your list&quot; reminder. Each share shows as &quot;N of M&quot;; a percentage only once M is 20 or more. A dash means that number isn&apos;t available yet.
           </p>
         </>
       ) : (
@@ -357,7 +479,9 @@ export function LaunchPageBody({ view, input, now }: { view: LaunchView; input: 
         </p>
       ) : null}
 
-      <ActivitySection activity={totals?.activity ?? null} weeks={view.activity.weeks} badge={sourceBadge(view, "app_db")} />
+      <ActivitySection activity={totals?.activity ?? null} reminders={totals?.reminders ?? null} weeks={view.activity.weeks} badge={sourceBadge(view, "app_db")} />
+
+      <RemindersSection reminders={totals?.reminders ?? null} badge={sourceBadge(view, "app_db")} />
 
       <Section id="signups" title="Sign-ups since launch" note="New York days. Unconfirmed email sign-ups are shown separately. Accounts deleted later still count on the day they signed up." badge={sourceBadge(view, "app_db")}>
         {view.signups.hasData ? (

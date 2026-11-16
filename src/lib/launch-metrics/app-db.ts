@@ -43,6 +43,20 @@
  *   that ET day, for the weekly trend): real_households_to_date,
  *   active_households_7d, still_using_eligible, still_using_households.
  *   Older Baseline builds drop these keys (unknown numeric keys are dropped).
+ * - Reminders and the invite nudge (Grocery 1.0.3, plan docs
+ *   mm-103-reminders-plan.md §3). Optional and additive like the activity
+ *   keys: today's function doesn't send them and the page says "not
+ *   available yet". All counts, none per account. `totals` (APP_DB_REMINDER_TOTALS):
+ *   `reminders_ask_*` / `reminders_ios_*` (the in-app card and Apple's
+ *   dialog), `reminders_{shop,share}_{scheduled,shown,tapped,acted,ignored,cancelled_opened}`,
+ *   `reminders_off_in_app` / `_off_ios` / `_on_in_app`, `invite_nudge_*`,
+ *   `reminders_households_said_yes`, `invite_prompted_households` /
+ *   `invite_prompted_joined_7d`, `second_day_households` / `second_day_eligible`
+ *   (households). `daily`: `reminders_shown`, `reminders_acted`.
+ *   A malformed reminder number (negative, fractional, too large, a
+ *   boolean, an array or object) is DROPPED, not stored, and never fails the
+ *   sign-up sync; a STRING under any key is still refused (it could be
+ *   per-account text, decision Q1).
  */
 
 import { addDays, etDate, isIsoDate } from './dates';
@@ -63,6 +77,47 @@ export const APP_DB_ACTIVITY_TOTALS = [
 /** Per ET day, the rolling household activity counts as of that day (optional). */
 export const APP_DB_ACTIVITY_DAILY = ['real_households_to_date', 'active_households_7d', 'still_using_eligible', 'still_using_households'] as const;
 
+/**
+ * Reminder and invite-nudge totals (Grocery 1.0.3; optional). Event counts
+ * from the phones, except the households keys. Counted by the function only
+ * for real households and from the 1.0.3 release time.
+ */
+export const APP_DB_REMINDER_TOTALS = [
+  'reminders_ask_shown',
+  'reminders_ask_yes',
+  'reminders_ask_not_now',
+  'reminders_ios_allowed',
+  'reminders_ios_denied',
+  'reminders_shop_scheduled',
+  'reminders_shop_shown',
+  'reminders_shop_tapped',
+  'reminders_shop_acted',
+  'reminders_shop_ignored',
+  'reminders_shop_cancelled_opened',
+  'reminders_share_scheduled',
+  'reminders_share_shown',
+  'reminders_share_tapped',
+  'reminders_share_acted',
+  'reminders_share_ignored',
+  'reminders_share_cancelled_opened',
+  'reminders_off_in_app',
+  'reminders_off_ios',
+  'reminders_on_in_app',
+  'invite_nudge_shown',
+  'invite_nudge_send_tapped',
+  'invite_nudge_dismissed',
+  'invite_nudge_invite_made',
+  /** Households (not events). */
+  'invite_prompted_households',
+  'invite_prompted_joined_7d',
+  'reminders_households_said_yes',
+  /** Households signed up 7+ days ago, and how many of them used it on 2+ different days in their first 7. */
+  'second_day_households',
+  'second_day_eligible',
+] as const;
+/** Per ET day, reminders shown and acted on (both types added together; optional). */
+export const APP_DB_REMINDER_DAILY = ['reminders_shown', 'reminders_acted'] as const;
+
 export const APP_DB_TOTAL_REQUIRED = [
   'real_users',
   'real_apple',
@@ -82,6 +137,8 @@ export const APP_DB_TOTAL_OPTIONAL = [
   'real_households',
   // Household activity (Grocery migration 20261102120000).
   ...APP_DB_ACTIVITY_TOTALS,
+  // Reminders and the invite nudge (Grocery 1.0.3).
+  ...APP_DB_REMINDER_TOTALS,
 ] as const;
 export const APP_DB_DAILY_REQUIRED = ['signups_real', 'signups_apple', 'signups_email'] as const;
 export const APP_DB_DAILY_OPTIONAL = [
@@ -91,6 +148,8 @@ export const APP_DB_DAILY_OPTIONAL = [
   'signups_internal',
   // Household activity (Grocery migration 20261102120000).
   ...APP_DB_ACTIVITY_DAILY,
+  // Reminders (Grocery 1.0.3).
+  ...APP_DB_REMINDER_DAILY,
 ] as const;
 
 type TotalKey = (typeof APP_DB_TOTAL_REQUIRED)[number] | (typeof APP_DB_TOTAL_OPTIONAL)[number];
@@ -162,6 +221,20 @@ function assertNoForbiddenKeys(record: Record<string, unknown>): void {
   }
 }
 
+const REMINDER_KEYS: ReadonlySet<string> = new Set<string>([...APP_DB_REMINDER_TOTALS, ...APP_DB_REMINDER_DAILY]);
+
+/** A reminder count that is a whole number 0..APP_DB_MAX_COUNT, else null (the value is dropped). */
+function readReminderCount(value: unknown): number | null {
+  if (typeof value === 'string') {
+    // Text is never kept and never ignored quietly: it could be per-account data.
+    throw new LaunchSourceError('app_db_not_counts');
+  }
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > APP_DB_MAX_COUNT) {
+    return null;
+  }
+  return value;
+}
+
 function pickCounts<K extends string>(
   record: Record<string, unknown>,
   required: readonly K[],
@@ -178,7 +251,15 @@ function pickCounts<K extends string>(
   }
   for (const key of optional) {
     if (key in record && record[key] !== null) {
-      out[key] = readCount(record[key]);
+      if (REMINDER_KEYS.has(key)) {
+        // Additive and not needed for the sign-up numbers: a malformed number is dropped, the rest of the reply stands.
+        const count = readReminderCount(record[key]);
+        if (count !== null) {
+          out[key] = count;
+        }
+      } else {
+        out[key] = readCount(record[key]);
+      }
     }
   }
   // Any other key is dropped. A non-count value under an unknown key is still

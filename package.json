@@ -45,6 +45,7 @@
     "test:task-fields": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-task-fields.mjs",
     "test:launch-metrics-apple-setup": "node --test scripts/test-launch-metrics-apple-setup.mjs",
     "test:launch-metrics": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-launch-metrics.mjs",
+    "test:launch-metrics-reminders": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-launch-metrics-reminders.mjs",
     "test:launch-metrics-apple": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-launch-metrics-apple.mjs",
     "test:launch-metrics-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-launch-metrics-db.mjs",
     "launch-metrics:seed": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/launch-metrics/seed-import.mjs",
