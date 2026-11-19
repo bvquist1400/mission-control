@@ -223,6 +223,12 @@ export interface SaveBriefInput {
   mode?: "refresh";
   /** mode "refresh" only: one short line on why ("AM digest added"). */
   refresh_reason?: string | null;
+  /**
+   * mode "refresh" only: a rebuild on command ("rebuild am"), whether or not
+   * brief_status found anything new. Same refresh rules; the brief must exist
+   * (a forced rebuild never creates a brief, so it can never send the notice).
+   */
+  force?: true;
   /** Text the parse cut to fit (field, original length); the save result passes them back. */
   warnings?: SaveWarning[];
 }

@@ -2222,7 +2222,7 @@
           "type": "string"
         },
         "mode": {
-          "description": "Leave out for a normal save. \"refresh\" rebuilds an existing brief in place: every content field is replaced by what you send (the old content is kept in Baseline's history), every existing item keeps its number and state untouched, new items are appended, and no second notice is sent. A refresh when the brief does not exist yet is a normal first save (with the notice).",
+          "description": "Leave out for a normal save. \"refresh\" rebuilds an existing brief in place: every content field is replaced by what you send (the old content is kept in Baseline's history), every existing item keeps its number and state untouched, new items are appended, and no second notice is sent. A refresh when the brief does not exist yet is a normal first save (with the notice), unless force is true (then it is refused).",
           "type": "string",
           "enum": [
             "refresh"
@@ -2231,6 +2231,10 @@
         "refresh_reason": {
           "description": "mode \"refresh\" only: one short line on why, shown on the page as \"Refreshed 8:45 AM: <reason>\", e.g. \"AM work digest added\" or \"late meeting notes added\". At most 200 characters.",
           "type": "string"
+        },
+        "force": {
+          "description": "mode \"refresh\" only: true = a rebuild on command (\"rebuild am\" / \"rebuild eod\"), even when brief_status found nothing new. Same refresh rules (every item keeps its number and state, the old content is kept in Baseline's history, no notice is sent). The brief must already exist: a forced rebuild of a brief that does not exist is refused (409) and nothing is saved; build it with a normal save instead. Without refresh_reason the page says \"Rebuilt on request\".",
+          "type": "boolean"
         },
         "content": {
           "type": "object",
@@ -2439,7 +2443,7 @@
           "type": "string"
         },
         "mode": {
-          "description": "Leave out for a normal save. \"refresh\" rebuilds an existing brief in place: every content field is replaced by what you send (the old content is kept in Baseline's history), every existing item keeps its number and state untouched, new items are appended, and no second notice is sent. A refresh when the brief does not exist yet is a normal first save (with the notice).",
+          "description": "Leave out for a normal save. \"refresh\" rebuilds an existing brief in place: every content field is replaced by what you send (the old content is kept in Baseline's history), every existing item keeps its number and state untouched, new items are appended, and no second notice is sent. A refresh when the brief does not exist yet is a normal first save (with the notice), unless force is true (then it is refused).",
           "type": "string",
           "enum": [
             "refresh"
@@ -2448,6 +2452,10 @@
         "refresh_reason": {
           "description": "mode \"refresh\" only: one short line on why, shown on the page as \"Refreshed 8:45 AM: <reason>\", e.g. \"AM work digest added\" or \"late meeting notes added\". At most 200 characters.",
           "type": "string"
+        },
+        "force": {
+          "description": "mode \"refresh\" only: true = a rebuild on command (\"rebuild am\" / \"rebuild eod\"), even when brief_status found nothing new. Same refresh rules (every item keeps its number and state, the old content is kept in Baseline's history, no notice is sent). The brief must already exist: a forced rebuild of a brief that does not exist is refused (409) and nothing is saved; build it with a normal save instead. Without refresh_reason the page says \"Rebuilt on request\".",
+          "type": "boolean"
         },
         "content": {
           "type": "object",

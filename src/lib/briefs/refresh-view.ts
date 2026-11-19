@@ -64,13 +64,41 @@ export interface LateDigestNote {
   edition: "am" | "pm";
   /** When the note was filed in Baseline (ISO), or null. */
   filed_at: string | null;
+  /** When the note was last written (ISO): shown for a re-filed note. */
+  updated_at?: string | null;
+  /** true when the brief read this note but it was re-filed after (brief_status reason *_digest_updated). */
+  updated?: boolean;
+}
+
+function digestNames(notes: LateDigestNote[]): string {
+  return notes.length === 1 ? `The ${notes[0].edition.toUpperCase()} work digest` : `The ${notes.map((note) => note.edition.toUpperCase()).join(" and ")} work digests`;
+}
+
+/** "The AM work digest came in after this brief was built (filed 8:06 AM)." for notes the brief never read. */
+function lateHead(notes: LateDigestNote[], builtAtIso: string | null): string {
+  const which = digestNames(notes);
+  const times = notes.map((note) => etClockTime(note.filed_at)).filter(Boolean);
+  const filed = times.length ? ` (filed ${times.join(" and ")})` : "";
+  const builtAt = builtAtIso ? Date.parse(builtAtIso) : Number.NaN;
+  const allAfter =
+    Number.isFinite(builtAt) && notes.every((note) => note.filed_at !== null && Date.parse(note.filed_at) > builtAt);
+  const verb = notes.length === 1 ? "is" : "are";
+  return allAfter ? `${which} came in after this brief was built${filed}.` : `${which}${filed} ${verb} not in this brief yet.`;
+}
+
+/** "The AM work digest was re-filed after this brief was last built (updated 9:30 AM)." for notes it read in an older version. */
+function refiledHead(notes: LateDigestNote[]): string {
+  const times = notes.map((note) => etClockTime(note.updated_at)).filter(Boolean);
+  const updated = times.length ? ` (updated ${times.join(" and ")})` : "";
+  return `${digestNames(notes)} ${notes.length === 1 ? "was" : "were"} re-filed after this brief was last built${updated}.`;
 }
 
 /**
  * The banner on a brief whose day has a work digest note it should cover but
- * doesn't record (brief_status's `needs_refresh` notes). Says when it was filed
- * and what happens next: before that day's catch-up run, "a refresh is queued";
- * after it, that it hasn't been added. Null when nothing is late.
+ * doesn't have (brief_status's `needs_refresh` notes): one it never read, or
+ * one re-filed after it was last built (`updated`). Says when it was filed (or
+ * updated) and what happens next: before that day's catch-up run, "a refresh
+ * is queued"; after it, that it hasn't been added. Null when nothing is late.
  */
 export function lateDigestBannerText(input: {
   edition: BriefEdition;
@@ -81,14 +109,9 @@ export function lateDigestBannerText(input: {
 }): string | null {
   const notes = [...input.notes].sort((a, b) => a.edition.localeCompare(b.edition));
   if (!notes.length) return null;
-  const which = notes.length === 1 ? `The ${notes[0].edition.toUpperCase()} work digest` : `The ${notes.map((note) => note.edition.toUpperCase()).join(" and ")} work digests`;
-  const times = notes.map((note) => etClockTime(note.filed_at)).filter(Boolean);
-  const filed = times.length ? ` (filed ${times.join(" and ")})` : "";
-  const builtAt = input.builtAt ? Date.parse(input.builtAt) : Number.NaN;
-  const allAfter =
-    Number.isFinite(builtAt) && notes.every((note) => note.filed_at !== null && Date.parse(note.filed_at) > builtAt);
-  const verb = notes.length === 1 ? "is" : "are";
-  const head = allAfter ? `${which} came in after this brief was built${filed}.` : `${which}${filed} ${verb} not in this brief yet.`;
+  const late = notes.filter((note) => !note.updated);
+  const refiled = notes.filter((note) => note.updated);
+  const head = [late.length ? lateHead(late, input.builtAt) : null, refiled.length ? refiledHead(refiled) : null].filter(Boolean).join(" ");
 
   const { date, minutes } = etNow(input.now);
   const catchup = BRIEF_CATCHUP_TIME_ET[input.edition];

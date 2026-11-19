@@ -229,7 +229,18 @@ await test("brief_status (am): no brief means build, never refresh; a filed AM n
   const late = buildBriefStatus({ edition: "am", date: DAY, brief: briefRow(), notes: [amRow()] });
   assert.deepEqual(late.refresh_needed, { digest: true, reasons: ["am_digest_not_in_brief"] });
   assert.deepEqual(late.digest_notes, [
-    { edition: "am", title: `Work digest ${DAY} AM`, status: "ok", note_id: NOTE_AM, filed_at: "2026-10-29T12:06:00Z", in_brief: false, needs_refresh: true },
+    {
+      edition: "am",
+      title: `Work digest ${DAY} AM`,
+      status: "ok",
+      note_id: NOTE_AM,
+      filed_at: "2026-10-29T12:06:00Z",
+      updated_at: null,
+      in_brief: false,
+      updated_since_brief: false,
+      needs_refresh: true,
+      reason: "am_digest_not_in_brief",
+    },
   ]);
   assert.equal(late.brief.code, "AM-1029");
   assert.equal(late.brief.built_at, "2026-10-29T11:57:00Z");

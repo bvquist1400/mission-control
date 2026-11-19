@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { isDateOnlyString } from "@/lib/briefs/due";
+import { briefLastBuiltAt, noteUpdatedAfter } from "@/lib/briefs/note-version";
 
 /**
  * The work digest (Baseline task edb01f58). Brent's Copilot writes a
@@ -97,11 +98,15 @@ export type WorkDigestNoteRead =
 
 export type WorkDigestAmRead = WorkDigestNoteRead & {
   /**
-   * EOD only: whether this morning's AM brief recorded this note in
-   * `content.work_digest_note_ids` (it read it), and that brief's code. The
-   * EOD uses the AM note's items only when the morning didn't.
+   * EOD only: whether this morning's AM brief has this note's current text:
+   * it recorded the note in `content.work_digest_note_ids` (it read it) and
+   * the note wasn't re-filed after that brief was last built or refreshed; and
+   * that brief's code. The EOD uses the AM note's items only when the morning
+   * brief doesn't have them.
    */
   in_morning_brief?: boolean;
+  /** EOD only, present (true) when the morning brief read this note but it was re-filed after (so in_morning_brief is false). */
+  updated_after_morning_brief?: true;
   morning_brief_code?: string | null;
 };
 
@@ -470,6 +475,14 @@ export function workDigestEditionsForMode(mode: string): WorkDigestEdition[] {
   return mode === "eod" ? ["am", "pm"] : ["am"];
 }
 
+/** When a brief was last built or refreshed, from its created_at and `content.refreshes` (null when unknown). */
+function lastBuiltAt(brief: { created_at?: string | null; content: unknown } | null | undefined): string | null {
+  if (!brief) return null;
+  const refreshes = brief.content && typeof brief.content === "object" ? (brief.content as { refreshes?: unknown }).refreshes : undefined;
+  const entries = Array.isArray(refreshes) ? refreshes.filter((entry): entry is { at: string } => Boolean(entry) && typeof (entry as { at?: unknown }).at === "string") : [];
+  return briefLastBuiltAt(brief.created_at ?? null, entries);
+}
+
 /** The note ids a brief's content says it read (`content.work_digest_note_ids`). */
 function recordedNoteIds(content: unknown): string[] {
   if (!content || typeof content !== "object") return [];
@@ -485,7 +498,7 @@ export function buildWorkDigestSection(input: {
   date: string;
   mode: string;
   rows: WorkDigestNoteRow[];
-  morningBrief?: { code: string; content: unknown } | null;
+  morningBrief?: { code: string; content: unknown; created_at?: string | null } | null;
 }): WorkDigestSection {
   const section: WorkDigestSection = { date: input.date };
   for (const edition of workDigestEditionsForMode(input.mode)) {
@@ -493,9 +506,13 @@ export function buildWorkDigestSection(input: {
     if (edition === "am") {
       if (input.mode === "eod") {
         const recorded = recordedNoteIds(input.morningBrief?.content);
+        const readByMorning = read.status !== "missing" && "note_id" in read && recorded.includes(read.note_id);
+        const row = readByMorning && "note_id" in read ? input.rows.find((entry) => entry.id === read.note_id) : undefined;
+        const refiled = readByMorning && noteUpdatedAfter(row?.updated_at, lastBuiltAt(input.morningBrief));
         section.am = {
           ...read,
-          in_morning_brief: read.status !== "missing" && "note_id" in read && recorded.includes(read.note_id),
+          in_morning_brief: readByMorning && !refiled,
+          ...(refiled ? { updated_after_morning_brief: true as const } : {}),
           morning_brief_code: input.morningBrief?.code ?? null,
         };
       } else {
@@ -538,18 +555,18 @@ export async function fetchWorkDigestSection(
       .in("title", titles);
     if (error) throw error;
 
-    let morningBrief: { code: string; content: unknown } | null = null;
+    let morningBrief: { code: string; content: unknown; created_at?: string | null } | null = null;
     if (mode === "eod") {
       try {
         const { data: brief, error: briefError } = await supabase
           .from("briefs")
-          .select("code, content")
+          .select("code, content, created_at")
           .eq("user_id", userId)
           .eq("edition", "am")
           .eq("brief_date", date)
           .maybeSingle();
         if (briefError) throw briefError;
-        morningBrief = (brief as { code: string; content: unknown } | null) ?? null;
+        morningBrief = (brief as { code: string; content: unknown; created_at?: string | null } | null) ?? null;
       } catch (err) {
         console.error("[digest] morning brief lookup for the work digest failed:", err);
       }
