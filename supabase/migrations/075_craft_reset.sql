@@ -1,7 +1,7 @@
 -- Craft S4 (Baseline 690e174c, Brent 11/19 "approve it as written"): Reset craft screen, self-healing
 -- parts, one part per section, stitch counts at set-up, and the guards the MCP row editing needs.
 --
--- Additive: no table or column changes. Twelve new functions and one trigger; three 072/073
+-- Additive: one new nullable column (craft_parts.row_numbering, FR2). Twelve new functions and one trigger; three 072/073
 -- functions replaced (075's rollback puts their bodies back).
 --  * craft_setup_fingerprint (072, replaced): v2 also hashes the task's unit_count and work_type
 --    and the item's work_type (the stitch-count step reads them). Same text as
@@ -46,6 +46,27 @@
 -- the other way round.
 BEGIN;
 SET LOCAL lock_timeout = '10s';
+
+-- ── FR2: how each part is numbered, recorded when the part is built ─────────
+-- 'label' = every row's leading label number was its row number when Set up / Reset built the part (an S1C
+-- part, or an S4 part whose numbers ran on); 'straight' = counted through (labels restart). Reset's task + row
+-- fallback trusts labels on 'label' parts only. NULL (a part not made by Set up or Reset) counts as straight.
+-- Change total keeps it true: on a 'label' part it renumbers a row's craft_row and its label together and adds
+-- rows labelled with their number; it never turns a 'straight' part into a labelled one (the flag stays).
+ALTER TABLE craft_parts ADD COLUMN row_numbering TEXT CHECK (row_numbering IN ('label', 'straight'));
+-- Backfill: parts made before 075 were built by 072/073's run-on rule, so their labels were their row numbers.
+-- Mark one 'label' only while that is still true of every row it holds now; a changed label, or no rows left
+-- to show it, is 'straight' (no guessing). The two row triggers are held off so nothing else on a part changes
+-- (updated_at, the ownership re-check).
+ALTER TABLE craft_parts DISABLE TRIGGER trg_craft_parts_updated;
+ALTER TABLE craft_parts DISABLE TRIGGER trg_craft_parts_ownership;
+UPDATE craft_parts p SET row_numbering = CASE
+  WHEN EXISTS (SELECT 1 FROM task_checklist_items i WHERE i.craft_part_id = p.id)
+   AND NOT EXISTS (SELECT 1 FROM task_checklist_items i WHERE i.craft_part_id = p.id
+     AND substring(i.text FROM '^(?:Row|Rnd|Round)[ \t]+([0-9]+)(?![0-9A-Za-z_])')::numeric IS DISTINCT FROM i.craft_row)
+  THEN 'label' ELSE 'straight' END;
+ALTER TABLE craft_parts ENABLE TRIGGER trg_craft_parts_updated;
+ALTER TABLE craft_parts ENABLE TRIGGER trg_craft_parts_ownership;
 
 -- ── v2 fingerprint ─────────────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION craft_setup_fingerprint(p_user_id UUID, p_project_id UUID)
@@ -330,6 +351,7 @@ DECLARE
   v_rows INTEGER := 0;
   v_segments INTEGER := 0;
   v_active INTEGER;
+  v_numbering TEXT;
 BEGIN
   IF jsonb_array_length(v_plan->'stops') > 0 THEN
     RAISE EXCEPTION 'CRAFT_SETUP_STOP: %', v_plan->>'stops' USING ERRCODE = '22023';
@@ -354,8 +376,12 @@ BEGIN
 
   FOR v_part IN SELECT value FROM jsonb_array_elements(v_plan->'parts') LOOP
     v_index := v_index + 1;
-    INSERT INTO craft_parts (user_id, project_id, name, sort_order, total_rows, row_word, stitch_count)
-    VALUES (p_user_id, p_project_id, v_names[v_index], v_index - 1, (v_part->>'total_rows')::int, v_part->>'row_word', (v_part->>'stitch_count')::int)
+    -- FR2: 'label' when every planned row's label is its row number (= planCraftSetup's numbering "labels").
+    SELECT CASE WHEN bool_and(substring(i.text FROM '^(?:Row|Rnd|Round)[ \t]+([0-9]+)(?![0-9A-Za-z_])')::numeric = (r.value->>'row')::numeric)
+      THEN 'label' ELSE 'straight' END INTO v_numbering
+    FROM jsonb_array_elements(v_part->'rows') r JOIN task_checklist_items i ON i.id = (r.value->>'item_id')::uuid AND i.user_id = p_user_id;
+    INSERT INTO craft_parts (user_id, project_id, name, sort_order, total_rows, row_word, stitch_count, row_numbering)
+    VALUES (p_user_id, p_project_id, v_names[v_index], v_index - 1, (v_part->>'total_rows')::int, v_part->>'row_word', (v_part->>'stitch_count')::int, v_numbering)
     RETURNING id INTO v_part_id;
     v_part_ids := v_part_ids || v_part_id;
     INSERT INTO craft_segments (user_id, part_id, task_id, name, from_row, to_row, sort_order)
@@ -477,9 +503,10 @@ AS $$
     SELECT w.part_id, w.r, min(np.part_index) AS np_, min(np.row) AS nr
     FROM refs w
     JOIN craft_segments s ON s.part_id = w.part_id AND w.r BETWEEN s.from_row AND s.to_row AND s.task_id IS NOT NULL
-      -- FR1 P2: a label is that part's row number only while the task's rows still on the part are all numbered by
-      -- their labels (an S1C part, or a part whose numbers ran on). On a part counted straight through "Row 6" is not
-      -- row 6, so nothing there is matched by label and the preview lists it.
+      -- FR2: only on a part recorded as built by its labels; a straight (or unknown) part has no fallback at all, so
+      -- a new row that happens to carry the old number never stands in for the deleted one (the preview lists it).
+      AND EXISTS (SELECT 1 FROM craft_parts q WHERE q.id = w.part_id AND q.row_numbering = 'label')
+      -- FR1 P2, kept as a second guard: the task's rows still on the part must all read their labels as their rows.
       AND EXISTS (SELECT 1 FROM task_checklist_items k WHERE k.task_id = s.task_id AND k.craft_part_id = w.part_id AND k.user_id = p_user_id)
       AND NOT EXISTS (SELECT 1 FROM task_checklist_items k WHERE k.task_id = s.task_id AND k.craft_part_id = w.part_id AND k.user_id = p_user_id
         AND substring(k.text FROM '^(?:Row|Rnd|Round)[ \t]+([0-9]+)(?![0-9A-Za-z_])')::numeric IS DISTINCT FROM k.craft_row)

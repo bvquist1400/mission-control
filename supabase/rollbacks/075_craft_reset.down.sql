@@ -4,7 +4,7 @@
 -- their grants). Roll the app back first: the S4 app hashes the v2 fingerprint, sends 'units' in
 -- the plan and calls craft_reset_preview / craft_reset_project, delete_task_checked and
 -- checklist_insert_items. Data stays as 075 left it: stitch counts written at set-up stay on the
--- rows, parts made by a Reset stay, parts the heal removed stay removed.
+-- rows, parts made by a Reset stay, parts the heal removed stay removed; craft_parts.row_numbering goes.
 BEGIN;
 SET LOCAL lock_timeout = '10s';
 DROP TRIGGER trg_checklist_craft_heal ON task_checklist_items;
@@ -266,6 +266,8 @@ DROP FUNCTION craft_setup_write(UUID, UUID, JSONB, JSONB);
 DROP FUNCTION craft_setup_check_payload(JSONB, TEXT, UUID, BOOLEAN);
 DROP FUNCTION craft_apply_units(UUID, UUID, JSONB);
 DROP FUNCTION craft_plan_core(UUID, UUID, BOOLEAN);
+-- FR2's numbering flag (Reset was its only reader).
+ALTER TABLE craft_parts DROP COLUMN row_numbering;
 
 COMMIT;
 NOTIFY pgrst, 'reload schema';

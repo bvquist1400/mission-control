@@ -667,6 +667,7 @@ export type Database = {
           quarter_row: number | null
           quarters: boolean
           ridges: boolean
+          row_numbering: string | null
           row_word: string
           sort_order: number
           stitch_count: number | null
@@ -683,6 +684,7 @@ export type Database = {
           quarter_row?: number | null
           quarters?: boolean
           ridges?: boolean
+          row_numbering?: string | null
           row_word?: string
           sort_order?: number
           stitch_count?: number | null
@@ -699,6 +701,7 @@ export type Database = {
           quarter_row?: number | null
           quarters?: boolean
           ridges?: boolean
+          row_numbering?: string | null
           row_word?: string
           sort_order?: number
           stitch_count?: number | null
@@ -3982,6 +3985,7 @@ export type Database = {
           quarter_row: number | null
           quarters: boolean
           ridges: boolean
+          row_numbering: string | null
           row_word: string
           sort_order: number
           stitch_count: number | null

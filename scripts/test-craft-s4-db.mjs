@@ -110,7 +110,7 @@ const itemLike = (taskId, prefix) => psql(`SELECT id FROM task_checklist_items W
 /** Everything a set-up craft project is: craft rows, row links, ticks, units, sittings and their links. */
 const projectState = (projectId) => psql(`SELECT md5(concat_ws('|',
   (SELECT coalesce(string_agg(to_jsonb(x)::text, ',' ORDER BY x.project_id), '') FROM craft_projects x WHERE project_id='${projectId}'),
-  (SELECT coalesce(string_agg(to_jsonb(x)::text, ',' ORDER BY x.id), '') FROM craft_parts x WHERE project_id='${projectId}'),
+  (SELECT coalesce(string_agg((to_jsonb(x) - 'row_numbering')::text, ',' ORDER BY x.id), '') FROM craft_parts x WHERE project_id='${projectId}'),
   (SELECT coalesce(string_agg(to_jsonb(s)::text, ',' ORDER BY s.id), '') FROM craft_segments s JOIN craft_parts p ON p.id = s.part_id WHERE p.project_id='${projectId}'),
   (SELECT coalesce(string_agg(to_jsonb(d)::text, ',' ORDER BY d.session_id), '') FROM craft_sitting_details d JOIN work_sessions w ON w.id = d.session_id WHERE w.project_id='${projectId}'),
   (SELECT coalesce(string_agg(to_jsonb(x)::text, ',' ORDER BY x.id), '') FROM craft_notes x WHERE project_id='${projectId}'),
@@ -190,7 +190,9 @@ INSERT INTO craft_yarns (user_id, project_id, part_id, name) VALUES ('${a.id}','
     psql(`UPDATE craft_parts SET ridges = true WHERE project_id='${gs.projectId}'; UPDATE task_checklist_items SET is_done = true WHERE craft_part_id IN (SELECT id FROM craft_parts WHERE project_id='${gs.projectId}') AND craft_row <= 12;`);
     const before = [m, bl, gs].map((p) => projectState(p.projectId));
     psql(up075); await waitForRpc(true);
-    assert.deepEqual([m, bl, gs].map((p) => projectState(p.projectId)), before, "every craft row, link, tick, unit and sitting is as 074 left it");
+    assert.deepEqual([m, bl, gs].map((p) => projectState(p.projectId)), before, "every craft row, link, tick, unit and sitting is as 074 left it (075's one new column aside)");
+    // FR2: 075 records how each old part is numbered, from its rows: every S1C-made part reads its labels as row numbers.
+    assert.equal(psql(`SELECT string_agg(DISTINCT row_numbering, ',') FROM craft_parts WHERE project_id IN ('${m.projectId}','${bl.projectId}','${gs.projectId}');`), "label");
     // And they keep working under 075: Row done on the cuff, the screens read them.
     const view = await getView(a, m.projectId);
     assert.deepEqual([view.parts.map((p) => p.name), view.active_part.name, view.active_part.current_row, view.hidden_parts], [["Mitten 1 · Cuff", "Mitten 1 · Hand", "Mitten 1 · Top decreases", "Mitten 1 · Thumb"], "Mitten 1 · Cuff", 21, 0]);
@@ -221,7 +223,7 @@ INSERT INTO craft_yarns (user_id, project_id, part_id, name) VALUES ('${a.id}','
     const res = await create(a, scarf.projectId);
     assert.equal(res.status, 201, JSON.stringify(res.body));
     assert.deepEqual([res.body.parts, res.body.rows_linked, res.body.units_filled], [1, 385, 386]);
-    assert.equal(psql(`SELECT name || '|' || total_rows || '|' || stitch_count FROM craft_parts WHERE project_id='${scarf.projectId}';`), "Scarf|385|30");
+    assert.equal(psql(`SELECT name || '|' || total_rows || '|' || stitch_count || '|' || row_numbering FROM craft_parts WHERE project_id='${scarf.projectId}';`), "Scarf|385|30|label");
     assert.equal(psql(`SELECT unit_count || '|' || work_type FROM task_checklist_items WHERE task_id='${scarf.taskIds.r1}' AND text='Cast on 30';`), "30|cast-on");
     assert.equal(psql(`SELECT count(*) FROM task_checklist_items i JOIN tasks t ON t.id=i.task_id WHERE t.project_id='${scarf.projectId}' AND i.text LIKE 'Check:%' AND i.unit_count IS NOT NULL;`), "0");
     assert.equal(psql(`SELECT count(*) FROM tasks t WHERE t.project_id='${scarf.projectId}' AND t.unit_count IS NOT NULL AND t.unit_count <> (SELECT sum(unit_count) FROM task_checklist_items WHERE task_id=t.id);`), "0");
@@ -233,7 +235,7 @@ INSERT INTO craft_yarns (user_id, project_id, part_id, name) VALUES ('${a.id}','
     const s2 = seed(a, desc);
     const res = await create(a, s2.projectId);
     assert.equal(res.status, 201, JSON.stringify(res.body));
-    assert.equal(psql(`SELECT string_agg(name || ':' || total_rows, ',' ORDER BY sort_order) FROM craft_parts WHERE project_id='${s2.projectId}';`), "Scarf 1 (increases):318,Hood:135,Scarf 2 (decreases):317");
+    assert.equal(psql(`SELECT string_agg(name || ':' || total_rows || ':' || row_numbering, ',' ORDER BY sort_order) FROM craft_parts WHERE project_id='${s2.projectId}';`), "Scarf 1 (increases):318:straight,Hood:135:straight,Scarf 2 (decreases):317:straight");
     assert.equal(psql(`SELECT craft_row FROM task_checklist_items WHERE task_id='${s2.taskIds.inc}' AND starts_with(text, 'Row 1 (rep 2)');`), "15", "6 tip rows, rep 1's 8, then rep 2's Row 1");
     assert.equal(psql(`SELECT string_agg(coalesce(unit_count::text, '-'), ',' ORDER BY sort_order) FROM task_checklist_items WHERE task_id='${s2.taskIds.inc}' AND sort_order < 10;`), "6,7,7,7,7,7,7,7,7,8");
     assert.equal(psql(`SELECT count(*) FROM task_checklist_items WHERE task_id='${s2.taskIds.left}' AND unit_count IS NOT NULL;`), "0", "the mismatched task is left alone");
@@ -446,6 +448,69 @@ INSERT INTO craft_timers (user_id, project_id, part_id, sitting_started_at, star
     assert.equal(psql(`SELECT coalesce(part_id::text, 'none') || ':' || coalesce(row::text, 'none') FROM craft_notes WHERE text='note on screen row 6';`), "none:none");
     assert.equal(psql(`SELECT count(*) FROM craft_frogs WHERE note='ripped row 6';`), "0");
     assert.equal(psql(`SELECT coalesce(part_id::text, 'none') || ':' || start_row FROM craft_timers WHERE user_id='${c.id}';`), "none:6");
+  });
+  await test("FR2 P2 (Codex): on a straight part, survivors whose labels happen to equal their rows don't let a new, unrelated row stand in for the deleted one: everything on it is listed, not moved", async () => {
+    const c = await user();
+    const p = seed(c, { project: { name: "Fake Coincidence", tags: ["knitting"] }, sections: [{ key: "s", name: "1. Scarf" }], tasks: [
+      { key: "a", section: "s", title: "A", unit_count: null, work_type: null, created: 0, items: ["Row 1", "Row 2", "Row 1 (repeat 2)", "Row 4"] },
+      { key: "b", section: "s", title: "B", unit_count: null, work_type: null, created: 1, items: ["Row 1"] }] });
+    assert.equal((await create(c, p.projectId)).status, 201);
+    const part = psql(`SELECT id || '|' || total_rows FROM craft_parts WHERE project_id='${p.projectId}';`).split("|");
+    assert.equal(part[1], "5");
+    const numbering = psql(`SELECT to_jsonb(p) ->> 'row_numbering' FROM craft_parts p WHERE id='${part[0]}';`);
+    assert.equal(psql(`SELECT text FROM task_checklist_items WHERE craft_part_id='${part[0]}' AND craft_row = 3;`), "Row 1 (repeat 2)");
+    psql(`UPDATE task_checklist_items SET is_done = true WHERE craft_part_id='${part[0]}' AND craft_row <= 3;`);
+    const s = psql(`SELECT (work_session_create('${c.id}', jsonb_build_object('project_id','${p.projectId}','session_date','2026-11-13','minutes',10), ARRAY(SELECT id FROM task_checklist_items WHERE craft_part_id='${part[0]}' AND craft_row = 3), false))->>'session_id';`);
+    psql(`INSERT INTO craft_sitting_details (session_id, user_id, part_id, from_row, to_row) VALUES ('${s}','${c.id}','${part[0]}',2,3);
+INSERT INTO craft_notes (user_id, project_id, part_id, row, text) VALUES ('${c.id}','${p.projectId}','${part[0]}',3,'note on screen row 3');
+INSERT INTO craft_frogs (user_id, part_id, from_row, to_row, note) VALUES ('${c.id}','${part[0]}',3,3,'ripped screen row 3');
+INSERT INTO craft_timers (user_id, project_id, part_id, sitting_started_at, start_row) VALUES ('${c.id}','${p.projectId}','${part[0]}', now(), 3);
+DELETE FROM task_checklist_items WHERE craft_part_id='${part[0]}' AND craft_row = 3;
+INSERT INTO task_checklist_items (user_id, task_id, text, sort_order) VALUES ('${c.id}','${p.taskIds.a}','Row 3 (new step)',4);`);
+    const { preview, status, body } = await doReset(c, p.projectId);
+    assert.equal(status, 200, JSON.stringify(body));
+    assert.deepEqual(preview.carry.lost.map((l) => l.kind).sort(), ["frog", "note", "sitting", "timer"], JSON.stringify(preview.carry.lost));
+    assert.deepEqual(body.lost, { sitting: 1, note: 1, frog: 1, timer: 1 });
+    assert.equal(psql(`SELECT coalesce(part_id::text, 'none') || ':' || from_row || '-' || to_row FROM craft_sitting_details WHERE session_id='${s}';`), "none:2-3");
+    assert.equal(psql(`SELECT coalesce(part_id::text, 'none') FROM craft_notes WHERE text='note on screen row 3';`), "none");
+    assert.equal(psql(`SELECT count(*) FROM craft_frogs WHERE note='ripped screen row 3';`), "0");
+    assert.equal(psql(`SELECT coalesce(part_id::text, 'none') || ':' || start_row FROM craft_timers WHERE user_id='${c.id}';`), "none:3");
+    assert.equal(numbering, "straight", "Create recorded the part as counted straight through");
+  });
+  await test("FR2: a part built by its labels (the S4 scarf) still re-points by task + row number when a row is deleted and made again", async () => {
+    const c = await user();
+    const p = seed(c, oneRowScarf());
+    assert.equal((await create(c, p.projectId)).status, 201);
+    const part = psql(`SELECT id || '|' || row_numbering FROM craft_parts WHERE project_id='${p.projectId}';`).split("|");
+    assert.equal(part[1], "label");
+    psql(`INSERT INTO craft_notes (user_id, project_id, part_id, row, text) VALUES ('${c.id}','${p.projectId}','${part[0]}',150,'note on row 150');
+INSERT INTO craft_timers (user_id, project_id, part_id, sitting_started_at, start_row) VALUES ('${c.id}','${p.projectId}','${part[0]}', now(), 150);`);
+    const sort = psql(`SELECT sort_order FROM task_checklist_items WHERE craft_part_id='${part[0]}' AND craft_row = 150;`);
+    psql(`DELETE FROM task_checklist_items WHERE craft_part_id='${part[0]}' AND craft_row = 150;
+INSERT INTO task_checklist_items (user_id, task_id, text, sort_order, unit_count) VALUES ('${c.id}','${p.taskIds.r101}','Row 150 · (k2, k1tbl, p1) ×7, k2 → 30 (made again)',${sort},30);`);
+    const { preview, status, body } = await doReset(c, p.projectId);
+    assert.equal(status, 200, JSON.stringify(body));
+    assert.deepEqual(preview.carry.lost, []);
+    assert.equal(psql(`SELECT n.row || ':' || (n.part_id = i.craft_part_id) FROM craft_notes n, task_checklist_items i WHERE n.text='note on row 150' AND starts_with(i.text, 'Row 150 ·') AND i.task_id='${p.taskIds.r101}';`), "150:true");
+    assert.equal(psql(`SELECT start_row FROM craft_timers WHERE user_id='${c.id}';`), "150");
+    assert.equal(psql(`SELECT row_numbering FROM craft_parts WHERE project_id='${p.projectId}';`), "label", "Reset records the new part's numbering too");
+  });
+  await test("FR2 backfill: 075 marks an old part 'label' only when every row it holds still reads its label as its row; a changed label or no rows at all is 'straight' (no task + row guessing)", async () => {
+    const c = await user();
+    const desc = () => ({ project: { name: "Fake Old Hat", tags: ["knitting"] }, sections: [{ key: "a", name: "1. Brim" }, { key: "b", name: "2. Crown" }], tasks: [
+      { key: "brim", section: "a", title: "Brim · Rows: r", unit_count: null, work_type: null, created: 0, items: ["Row 1", "Row 2", "Row 3"] },
+      { key: "crown", section: "b", title: "Crown · Rnds: r", unit_count: null, work_type: null, created: 1, items: ["Rnd 1", "Rnd 2"] },
+      { key: "top", section: "b", title: "Top · Rnds: r", unit_count: null, work_type: null, created: 2, items: ["Rnd 3"] }] });
+    const p = seed(c, desc());
+    psql(down075); await waitForRpc(false);
+    setUpOldWay(c.id, p.projectId, ["Brim", "Crown"]);
+    const parts = Object.fromEntries(psql(`SELECT name || '=' || id FROM craft_parts WHERE project_id='${p.projectId}';`).split("\n").map((l) => l.split("=")));
+    psql(`UPDATE task_checklist_items SET text = 'Row 7 · (renamed)' WHERE task_id='${p.taskIds.brim}' AND text = 'Row 2';`);
+    const empty = randomUUID();
+    psql(`INSERT INTO craft_parts (id, user_id, project_id, name, sort_order, total_rows) VALUES ('${empty}','${c.id}','${p.projectId}','Empty',2,4);`);
+    psql(up075); await waitForRpc(true);
+    assert.deepEqual(psql(`SELECT name || ':' || row_numbering FROM craft_parts WHERE project_id='${p.projectId}' ORDER BY sort_order;`).split("\n"), ["Brim:straight", "Crown:label", "Empty:straight"]);
+    assert.ok(parts.Brim && parts.Crown);
   });
   await test("Reset refuses what it can't make again (quarters, band checks, ridges: MC75K), a change since the preview (409), another user, and leaves everything as it was when its compare fails (one transaction)", async () => {
     const { bl, gs } = old;
