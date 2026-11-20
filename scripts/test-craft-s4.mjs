@@ -179,7 +179,13 @@ await test("C: a part never crosses a section or a change of word; D: names are 
   ], [{ key: "a", name: "1. Hat" }, { key: "b", name: "2) Ear flaps" }]));
   assert.deepEqual(p.parts.map((x) => [x.name, x.row_word, x.total_rows]), [["Hat", "row", 2], ["Hat 2", "round", 4], ["Ear flaps", "row", 1], ["Body", "row", 1]]);
   assert.equal(setup.partNameFromSection("12. Sleeves"), "Sleeves");
-  assert.equal(setup.partNameFromSection("3."), "Body");
+  // FR1 N3: only a leading list number "N. " / "N) " goes; years, decimals and anything else stay.
+  assert.equal(setup.partNameFromSection("2026 plan"), "2026 plan");
+  assert.equal(setup.partNameFromSection("1.5 Body"), "1.5 Body");
+  assert.equal(setup.partNameFromSection("3.Sleeves"), "3.Sleeves");
+  assert.equal(setup.partNameFromSection("10) Collar"), "Collar");
+  assert.equal(setup.partNameFromSection("3."), "3.");
+  assert.equal(setup.partNameFromSection("  "), "Body");
   assert.equal(setup.partNameFromSection(null), "Body");
 });
 await test("Reset mode plans as if the project weren't on the screen: no “already on the craft screen” or “already linked” STOP", () => {

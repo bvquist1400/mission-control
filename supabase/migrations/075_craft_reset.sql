@@ -477,6 +477,12 @@ AS $$
     SELECT w.part_id, w.r, min(np.part_index) AS np_, min(np.row) AS nr
     FROM refs w
     JOIN craft_segments s ON s.part_id = w.part_id AND w.r BETWEEN s.from_row AND s.to_row AND s.task_id IS NOT NULL
+      -- FR1 P2: a label is that part's row number only while the task's rows still on the part are all numbered by
+      -- their labels (an S1C part, or a part whose numbers ran on). On a part counted straight through "Row 6" is not
+      -- row 6, so nothing there is matched by label and the preview lists it.
+      AND EXISTS (SELECT 1 FROM task_checklist_items k WHERE k.task_id = s.task_id AND k.craft_part_id = w.part_id AND k.user_id = p_user_id)
+      AND NOT EXISTS (SELECT 1 FROM task_checklist_items k WHERE k.task_id = s.task_id AND k.craft_part_id = w.part_id AND k.user_id = p_user_id
+        AND substring(k.text FROM '^(?:Row|Rnd|Round)[ \t]+([0-9]+)(?![0-9A-Za-z_])')::numeric IS DISTINCT FROM k.craft_row)
     JOIN task_checklist_items i ON i.task_id = s.task_id AND i.user_id = p_user_id
       AND substring(i.text FROM '^(?:Row|Rnd|Round)[ \t]+([0-9]+)(?![0-9A-Za-z_])')::numeric = w.r
     JOIN np ON np.item_id = i.id

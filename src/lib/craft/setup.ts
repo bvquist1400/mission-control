@@ -193,7 +193,8 @@ export function defaultCraftKind(tags: string[] | null): CraftKind {
 
 /** S4 (D): "1. Scarf" → "Scarf", "2) Hood" → "Hood"; no section (or nothing left) → "Body". Never a task title. */
 export function partNameFromSection(name: string | null | undefined): string {
-  const stripped = (name ?? "").replace(LEADING_BLANKS, "").replace(/^[0-9]+[.)]?[ \t]*/, "").trim();
+  // FR1 N3: only a list number "N. " / "N) " (digits, a dot or paren, then a space); "2026 plan" and "1.5 Body" stay whole.
+  const stripped = (name ?? "").replace(LEADING_BLANKS, "").replace(/^[0-9]+[.)][ \t]+/, "").trim();
   return stripped ? clipName(stripped) : "Body";
 }
 

@@ -420,6 +420,33 @@ INSERT INTO task_checklist_items (user_id, task_id, text, sort_order) VALUES ('$
     assert.equal(psql(`SELECT name || '|' || total_rows FROM craft_parts WHERE project_id='${p.projectId}';`), "Scarf|385");
     assert.equal(psql(`SELECT coalesce(part_id::text, 'none') FROM craft_sitting_details WHERE session_id='${s}'; SELECT minutes FROM work_sessions WHERE id='${s}';`), "none\n30", "the sitting stays, without a part");
   });
+  await test("FR1 P2: on a part counted straight through, a deleted row is never matched by task + label (labels aren't its row numbers): the sitting, note, timer and rip-back on it are listed, not re-pointed", async () => {
+    const c = await user();
+    const p = seed(c, { project: { name: "Fake Straight Scarf", tags: ["knitting"] }, sections: [{ key: "s", name: "1. Scarf" }], tasks: [
+      { key: "tip", section: "s", title: "Tip", unit_count: null, work_type: null, created: 0, items: ["Row 1", "Row 2", "Row 3", "Row 4"] },
+      { key: "reps", section: "s", title: "Reps", unit_count: null, work_type: null, created: 1, items: ["Row 1", "Row 2", "Row 3", "Row 4", "Row 5", "Row 6"] }] });
+    const made = await create(c, p.projectId);
+    assert.equal(made.status, 201, JSON.stringify(made.body));
+    const part = psql(`SELECT id || '|' || total_rows FROM craft_parts WHERE project_id='${p.projectId}';`).split("|");
+    assert.equal(part[1], "10", "one part, 10 rows straight through");
+    psql(`UPDATE task_checklist_items SET is_done = true WHERE craft_part_id='${part[0]}' AND craft_row <= 6;`);
+    const s = psql(`SELECT (work_session_create('${c.id}', jsonb_build_object('project_id','${p.projectId}','session_date','2026-11-12','minutes',20), ARRAY(SELECT id FROM task_checklist_items WHERE craft_part_id='${part[0]}' AND craft_row BETWEEN 4 AND 6), false))->>'session_id';`);
+    psql(`INSERT INTO craft_sitting_details (session_id, user_id, part_id, from_row, to_row) VALUES ('${s}','${c.id}','${part[0]}',3,6);
+INSERT INTO craft_notes (user_id, project_id, part_id, row, text) VALUES ('${c.id}','${p.projectId}','${part[0]}',6,'note on screen row 6');
+INSERT INTO craft_frogs (user_id, part_id, from_row, to_row, note) VALUES ('${c.id}','${part[0]}',6,6,'ripped row 6');
+INSERT INTO craft_timers (user_id, project_id, part_id, sitting_started_at, start_row) VALUES ('${c.id}','${p.projectId}','${part[0]}', now(), 6);`);
+    // Screen row 6 is the Reps task's "Row 2"; the Reps task still has a "Row 6" (screen row 10).
+    assert.equal(psql(`SELECT text FROM task_checklist_items WHERE craft_part_id='${part[0]}' AND craft_row = 6 AND task_id='${p.taskIds.reps}';`), "Row 2");
+    psql(`DELETE FROM task_checklist_items WHERE craft_part_id='${part[0]}' AND craft_row = 6;`);
+    const { preview, status, body } = await doReset(c, p.projectId);
+    assert.equal(status, 200, JSON.stringify(body));
+    assert.deepEqual(preview.carry.lost.map((l) => l.kind).sort(), ["frog", "note", "sitting", "timer"], JSON.stringify(preview.carry.lost));
+    assert.deepEqual(body.lost, { sitting: 1, note: 1, frog: 1, timer: 1 });
+    assert.equal(psql(`SELECT coalesce(part_id::text, 'none') FROM craft_sitting_details WHERE session_id='${s}';`), "none");
+    assert.equal(psql(`SELECT coalesce(part_id::text, 'none') || ':' || coalesce(row::text, 'none') FROM craft_notes WHERE text='note on screen row 6';`), "none:none");
+    assert.equal(psql(`SELECT count(*) FROM craft_frogs WHERE note='ripped row 6';`), "0");
+    assert.equal(psql(`SELECT coalesce(part_id::text, 'none') || ':' || start_row FROM craft_timers WHERE user_id='${c.id}';`), "none:6");
+  });
   await test("Reset refuses what it can't make again (quarters, band checks, ridges: MC75K), a change since the preview (409), another user, and leaves everything as it was when its compare fails (one transaction)", async () => {
     const { bl, gs } = old;
     for (const p of [bl, gs]) {
