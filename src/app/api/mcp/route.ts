@@ -1129,6 +1129,10 @@ function createMcpServer(): McpServer {
     async ({ task_id, items, add, after_item_id, at_start, delete_item_ids }) => {
       const base = `https://mission-control-orpin-chi.vercel.app/api/tasks/${task_id}/checklist`;
       const headers = { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY!, 'Content-Type': 'application/json' };
+      // S4 FR4: a busy craft part is the route's 409 { error, reason: "busy" }; a body that isn't JSON still answers in plain words.
+      const readReply = (res: Response) => res.json().catch(() => (res.status === 409
+        ? { error: 'This project is busy, try again in a moment.', reason: 'busy' }
+        : { error: `The checklist could not be changed (HTTP ${res.status}). Try again.` }));
       const reply: Record<string, unknown> = {};
       let failed = false;
       if (!items?.length && !add?.length && !delete_item_ids?.length) {
@@ -1136,7 +1140,7 @@ function createMcpServer(): McpServer {
       }
       if (items?.length) {
         const res = await fetch(base, { method: 'PATCH', headers, body: JSON.stringify({ items }) });
-        const data = await res.json();
+        const data = await readReply(res);
         if (!res.ok || res.status === 207) failed = true;
         // Unchanged reply shape when only edits are sent.
         if (!add?.length && !delete_item_ids?.length) return { ...toMcpResponse(data), ...(failed ? { isError: true } : {}) };
@@ -1148,7 +1152,7 @@ function createMcpServer(): McpServer {
           method: 'POST', headers,
           body: JSON.stringify({ items: add, ...(after_item_id ? { after_item_id } : {}), ...(at_start ? { at_start: true } : {}) }),
         });
-        const data = await res.json();
+        const data = await readReply(res);
         reply.added = data;
         if (!res.ok) return { ...toMcpResponse(reply), isError: true };
       }

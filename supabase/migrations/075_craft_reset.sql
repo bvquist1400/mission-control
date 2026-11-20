@@ -745,7 +745,7 @@ CREATE TRIGGER trg_checklist_craft_heal AFTER DELETE ON task_checklist_items
 -- "Round", spaces or tabs, digits, not a range) stops being its craft_row, or it has no label, its part becomes
 -- 'straight'; only Set up or Reset make a part 'label'. A constraint trigger deferred to commit, so it reads each
 -- row as committed: Change total's two-step renumber (+1000000, then the new number with its label) never trips
--- it. The row is already locked by the write; the part is taken NOWAIT and only when it has to change (072's order
+-- it. The row is already locked by the write; the part is taken FOR NO KEY UPDATE NOWAIT and only when it has to change (072's order
 -- is items, then parts), so it never waits on Row done, Change total or the heal. Deletes can't make a surviving
 -- row disagree, so they don't fire it.
 CREATE FUNCTION craft_checklist_numbering_check()
@@ -768,7 +768,9 @@ BEGIN
   v_m := regexp_match(v_item.text, c_label);
   v_label := CASE WHEN v_m IS NULL OR substr(v_item.text, char_length(v_m[1]) + 1) ~* v_range THEN NULL ELSE v_m[3]::numeric END;
   IF v_label IS DISTINCT FROM v_item.craft_row THEN
-    PERFORM 1 FROM craft_parts WHERE id = v_item.craft_part_id AND row_numbering = 'label' FOR UPDATE NOWAIT;
+    -- FR4: FOR NO KEY UPDATE (the UPDATE below changes no key column), so a row being inserted under the part
+    -- (its foreign key's FOR KEY SHARE: checklist rows, sittings, notes) doesn't make it busy.
+    PERFORM 1 FROM craft_parts WHERE id = v_item.craft_part_id AND row_numbering = 'label' FOR NO KEY UPDATE NOWAIT;
     UPDATE craft_parts SET row_numbering = 'straight' WHERE id = v_item.craft_part_id AND row_numbering = 'label';
   END IF;
   RETURN NULL;

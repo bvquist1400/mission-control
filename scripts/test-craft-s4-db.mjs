@@ -540,20 +540,19 @@ INSERT INTO task_checklist_items (user_id, task_id, text, sort_order) VALUES ('$
     await editedLabelReset(c, p, part);
     assert.deepEqual([flagAfterEdit, flagAfterBack], ["straight", "straight"], "one-way: putting the label back doesn't make it 'label' again");
   });
-  await test("FR3 P2 (Codex, MCP update_task_checklist): the same edit through MCP turns the part 'straight' too", async () => {
-    const c = await user();
-    const p = seed(c, labelRepro());
-    assert.equal((await create(c, p.projectId)).status, 201);
-    const part = psql(`SELECT id FROM craft_parts WHERE project_id='${p.projectId}';`);
-    const r3 = psql(`SELECT id FROM task_checklist_items WHERE craft_part_id='${part}' AND craft_row = 3;`);
-    // MCP calls the REST API through fetch: send its checklist calls to the real route as this user.
+  // MCP calls the REST API through fetch: send its checklist calls to the real route as the test's user. The MCP
+  // route keeps the fetch it saw when it was first imported, so that one shim reads the caller at call time.
+  let mcpCaller = null;
+  async function withMcpAs(c, fn) {
     const realFetch = globalThis.fetch;
+    mcpCaller = c;
     globalThis.fetch = async (input, init = {}) => {
       const u = new URL(typeof input === "string" ? input : input.url);
       const m = u.pathname.match(/^\/api\/tasks\/([^/]+)\/checklist$/);
-      if (!m) return realFetch(input, init);
+      if (!m || !mcpCaller) return realFetch(input, init);
+      const who = mcpCaller;
       const r = new NextRequest(`http://localhost${u.pathname}${u.search}`, { method: init.method ?? "GET", ...(init.body ? { body: init.body, headers: { "content-type": "application/json" } } : {}) });
-      writeInternalAuthContext(r, { supabase: c.client, userId: c.id, user: { id: c.id }, authSource: "session" });
+      writeInternalAuthContext(r, { supabase: who.client, userId: who.id, user: { id: who.id }, authSource: "session" });
       return checklistRoute[(init.method ?? "GET").toUpperCase()](r, { params: Promise.resolve({ id: m[1] }) });
     };
     try {
@@ -566,11 +565,95 @@ INSERT INTO task_checklist_items (user_id, task_id, text, sort_order) VALUES ('$
         return JSON.parse(text.startsWith("event:") || text.startsWith("data:") ? text.split("\n").find((l) => l.startsWith("data:")).slice(5) : text);
       };
       await rpc({ jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "s4-db", version: "1" } } });
-      const out = await rpc({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "update_task_checklist", arguments: { task_id: p.taskIds.a, items: [{ id: r3, text: "Row 1 (repeat 2)" }] } } });
-      assert.notEqual(out.result?.isError, true, JSON.stringify(out));
-    } finally { globalThis.fetch = realFetch; }
+      return await fn(rpc);
+    } finally { globalThis.fetch = realFetch; mcpCaller = null; }
+  }
+  await test("FR3 P2 (Codex, MCP update_task_checklist): the same edit through MCP turns the part 'straight' too", async () => {
+    const c = await user();
+    const p = seed(c, labelRepro());
+    assert.equal((await create(c, p.projectId)).status, 201);
+    const part = psql(`SELECT id FROM craft_parts WHERE project_id='${p.projectId}';`);
+    const r3 = psql(`SELECT id FROM task_checklist_items WHERE craft_part_id='${part}' AND craft_row = 3;`);
+    const out = await withMcpAs(c, (rpc) => rpc({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "update_task_checklist", arguments: { task_id: p.taskIds.a, items: [{ id: r3, text: "Row 1 (repeat 2)" }] } } }));
+    assert.notEqual(out.result?.isError, true, JSON.stringify(out));
     assert.equal(psql(`SELECT text || '|' || craft_row FROM task_checklist_items WHERE id='${r3}';`), "Row 1 (repeat 2)|3", "the edit landed and the row keeps its link");
     assert.equal(psql(`SELECT to_jsonb(p) ->> 'row_numbering' FROM craft_parts p WHERE id='${part}';`), "straight");
+  });
+
+  // ── FR4: the numbering flip under concurrent locks ───────────────────────
+  // FU-A: a part held FOR UPDATE elsewhere makes the flip's NOWAIT fail (55P03): the checklist PATCH and MCP say
+  // "busy" in plain words, never database text, and nothing is saved. FU-B: the flip takes FOR NO KEY UPDATE, so an
+  // uncommitted insert of a row hung on the part (its foreign key's FOR KEY SHARE) no longer makes it fail.
+  const RAW_DB_TEXT = /could not obtain|lock_not_available|55P03|NOWAIT|craft_parts|relation|row_numbering/i;
+  async function labelPart() {
+    const c = await user();
+    const p = seed(c, labelRepro());
+    assert.equal((await create(c, p.projectId)).status, 201);
+    const part = psql(`SELECT id FROM craft_parts WHERE project_id='${p.projectId}';`);
+    const row = (n) => psql(`SELECT id FROM task_checklist_items WHERE craft_part_id='${part}' AND craft_row = ${n};`);
+    assert.equal(psql(`SELECT row_numbering FROM craft_parts WHERE id='${part}';`), "label");
+    return { c, p, part, r1: row(1), r3: row(3) };
+  }
+  const facts = (part, id) => psql(`SELECT (SELECT text FROM task_checklist_items WHERE id='${id}') || '|' || row_numbering FROM craft_parts WHERE id='${part}';`);
+  await test("FR4 FU-A (PATCH): a mismatching edit while another session holds the part FOR UPDATE is 409 busy in plain words, nothing saved, still 'label'; with two rows the busy one is listed busy (207)", async () => {
+    const { c, p, part, r1, r3 } = await labelPart();
+    const holder = connection("holder");
+    try {
+      holder.send(`BEGIN; SELECT 1 FROM craft_parts WHERE id='${part}' FOR UPDATE; SELECT 'part-held';`);
+      await holder.wait("part-held");
+      const one = await call(checklistRoute.PATCH, c, "PATCH", `/api/tasks/${p.taskIds.a}/checklist`, { id: p.taskIds.a }, { items: [{ id: r3, text: "Row 1 (repeat 2)" }] });
+      assert.deepEqual([one.status, one.body.reason], [409, "busy"], JSON.stringify(one.body));
+      assert.match(one.body.error, /busy, try again in a moment/i);
+      assert.doesNotMatch(JSON.stringify(one.body), RAW_DB_TEXT);
+      assert.equal(facts(part, r3), "Row 3|label", "nothing saved");
+      // Two rows: a wording edit that keeps its label saves; the mismatching one is the busy one.
+      const two = await call(checklistRoute.PATCH, c, "PATCH", `/api/tasks/${p.taskIds.a}/checklist`, { id: p.taskIds.a }, { items: [{ id: r1, text: "Row 1 · cast on" }, { id: r3, text: "Row 1 (repeat 2)" }] });
+      assert.equal(two.status, 207, JSON.stringify(two.body));
+      assert.deepEqual(two.body.updated.map((r) => r.id), [r1]);
+      assert.deepEqual(two.body.failed.map((f) => [f.id, f.reason]), [[r3, "busy"]]);
+      assert.match(two.body.failed[0].error, /busy, try again in a moment/i);
+      assert.doesNotMatch(JSON.stringify(two.body), RAW_DB_TEXT);
+      assert.equal(facts(part, r3), "Row 3|label");
+      assert.equal(psql(`SELECT text FROM task_checklist_items WHERE id='${r1}';`), "Row 1 · cast on");
+      holder.send("ROLLBACK; SELECT 'released';");
+      await holder.wait("released");
+      const after = await call(checklistRoute.PATCH, c, "PATCH", `/api/tasks/${p.taskIds.a}/checklist`, { id: p.taskIds.a }, { items: [{ id: r3, text: "Row 1 (repeat 2)" }] });
+      assert.equal(after.status, 200, JSON.stringify(after.body));
+      assert.equal(facts(part, r3), "Row 1 (repeat 2)|straight", "once the lock is gone the same edit goes through");
+    } finally { await holder.end(); }
+  });
+  await test("FR4 FU-A (MCP update_task_checklist): the same busy edit through MCP is an error reply saying busy, try again (no crash, no database text), nothing saved", async () => {
+    const { c, p, part, r3 } = await labelPart();
+    const holder = connection("holder-mcp");
+    try {
+      holder.send(`BEGIN; SELECT 1 FROM craft_parts WHERE id='${part}' FOR UPDATE; SELECT 'part-held';`);
+      await holder.wait("part-held");
+      const out = await withMcpAs(c, (rpc) => rpc({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "update_task_checklist", arguments: { task_id: p.taskIds.a, items: [{ id: r3, text: "Row 1 (repeat 2)" }] } } }));
+      assert.equal(out.error, undefined, JSON.stringify(out));
+      assert.equal(out.result?.isError, true, JSON.stringify(out));
+      const text = out.result.content.map((x) => x.text).join("\n");
+      assert.match(text, /busy, try again in a moment/i);
+      assert.match(text, /"reason":\s*"busy"/);
+      assert.doesNotMatch(text, RAW_DB_TEXT);
+      assert.equal(facts(part, r3), "Row 3|label", "nothing saved");
+    } finally { await holder.end(); }
+  });
+  await test("FR4 FU-B: while another session has an uncommitted note on the part (its foreign key holds FOR KEY SHARE), the flip goes through: 200, 'straight'; the note then commits", async () => {
+    const { c, p, part, r3 } = await labelPart();
+    const holder = connection("holder-keyshare");
+    try {
+      holder.send(`BEGIN; INSERT INTO craft_notes (user_id, project_id, part_id, row, text) VALUES ('${c.id}','${p.projectId}','${part}',2,'note in flight'); SELECT 'note-held';`);
+      await holder.wait("note-held");
+      // The held insert's row lock is FOR KEY SHARE: a FOR UPDATE NOWAIT on the part fails, FOR NO KEY UPDATE NOWAIT doesn't.
+      assert.match(psql(`BEGIN; SELECT 1 FROM craft_parts WHERE id='${part}' FOR NO KEY UPDATE NOWAIT; ROLLBACK;`), /^1$/);
+      const r = await call(checklistRoute.PATCH, c, "PATCH", `/api/tasks/${p.taskIds.a}/checklist`, { id: p.taskIds.a }, { items: [{ id: r3, text: "Row 1 (repeat 2)" }] });
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      assert.equal(facts(part, r3), "Row 1 (repeat 2)|straight");
+      holder.send("COMMIT; SELECT 'note-done';");
+      await holder.wait("note-done");
+      assert.doesNotMatch(holder.output(), /ERROR/);
+      assert.equal(psql(`SELECT count(*) FROM craft_notes WHERE part_id='${part}' AND text='note in flight';`), "1");
+    } finally { await holder.end(); }
   });
   await test("FR3: Change total on a 'label' part (dropping an (est.) row renumbers the rest, labels with them; a raise adds labelled rows) keeps 'label'", async () => {
     const c = await user();

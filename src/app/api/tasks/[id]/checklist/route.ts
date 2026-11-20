@@ -7,6 +7,11 @@ import { parseChecklistAdd, parseRowObject } from '@/lib/checklist-input';
 
 const CHECKLIST_ITEM_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// A row lock that couldn't be had (075's craft triggers take the part NOWAIT: 55P03) or a deadlock (40P01):
+// the reply says "busy" in plain words; the database text stays in the server log.
+const isBusy = (error: { code?: string } | null | undefined) => error?.code === '55P03' || error?.code === '40P01';
+const PATCH_BUSY = 'This project is busy, try again in a moment.';
+
 // GET /api/tasks/[id]/checklist - Get checklist items for a task
 export async function GET(
   request: NextRequest,
@@ -71,7 +76,7 @@ export async function POST(
           return NextResponse.json({ error: /item/.test(insertError.message ?? '') ? 'after_item_id is not on this task' : 'Task not found' }, { status: 404 });
         }
         if (insertError.code === '22023') return NextResponse.json({ error: 'Some rows are not valid; nothing was added' }, { status: 400 });
-        if (insertError.code === '55P03' || insertError.code === '40P01') return NextResponse.json({ error: 'The task was busy and nothing was added. Try again.', reason: 'busy' }, { status: 409 });
+        if (isBusy(insertError)) return NextResponse.json({ error: 'The task was busy and nothing was added. Try again.', reason: 'busy' }, { status: 409 });
         throw insertError;
       }
       return NextResponse.json(inserted ?? [], { status: 201 });
@@ -218,7 +223,7 @@ export async function PATCH(
     }
 
     const results: Array<Record<string, unknown>> = [];
-    const failed: Array<{ id: string; error: string }> = [];
+    const failed: Array<{ id: string; error: string; reason?: 'busy' }> = [];
 
     for (const { id: itemId, updates } of planned) {
       const { data, error } = await supabase
@@ -232,7 +237,8 @@ export async function PATCH(
 
       if (error) {
         console.error('Checklist item update failed:', itemId, error);
-        failed.push({ id: itemId, error: error.message || 'update failed' });
+        // S4 FR4: never pass database text through (075's numbering flip on a busy part is 55P03).
+        failed.push(isBusy(error) ? { id: itemId, error: PATCH_BUSY, reason: 'busy' } : { id: itemId, error: 'update failed' });
       } else if (!data) {
         failed.push({ id: itemId, error: 'not found on this task' });
       } else {
@@ -244,6 +250,9 @@ export async function PATCH(
       return NextResponse.json(results);
     }
 
+    if (results.length === 0 && failed.some((entry) => entry.reason === 'busy')) {
+      return NextResponse.json({ error: PATCH_BUSY, reason: 'busy', updated: results, failed }, { status: 409 });
+    }
     const status = results.length > 0 ? 207 : failed.every((entry) => entry.error === 'not found on this task') ? 404 : 500;
     return NextResponse.json({ updated: results, failed }, { status });
   } catch (error) {
@@ -282,7 +291,7 @@ export async function DELETE(
 
     if (error) {
       // S4 (A): deleting a craft row heals its part (075's trigger), which never waits on a busy craft screen.
-      if (error.code === '55P03' || error.code === '40P01') {
+      if (isBusy(error)) {
         return NextResponse.json({ error: 'The craft screen was busy and nothing was deleted. Try again in a moment.', reason: 'busy' }, { status: 409 });
       }
       throw error;

@@ -494,6 +494,9 @@ await test("075: one migration with its rollback; the lock order is written down
   assert.match(up, /^-- Craft S4/);
   assert.match(up, /BEGIN;[\s\S]*COMMIT;/);
   assert.match(up, /FOR NO KEY UPDATE NOWAIT;[\s\S]*FOR UPDATE NOWAIT;/, "the heal takes the craft project, then the parts, never waiting");
+  // FR4 (FU-B): the numbering flip changes only row_numbering (no key column), so it takes FOR NO KEY UPDATE NOWAIT.
+  const flip = up.slice(up.indexOf("CREATE FUNCTION craft_checklist_numbering_check()"), up.indexOf("CREATE CONSTRAINT TRIGGER trg_checklist_craft_numbering"));
+  assert.deepEqual(flip.match(/FOR (?:NO KEY )?UPDATE(?: NOWAIT)?;/g), ["FOR NO KEY UPDATE NOWAIT;"]);
   assert.match(up, /AFTER DELETE ON task_checklist_items\s+REFERENCING OLD TABLE AS old_rows FOR EACH STATEMENT/);
   assert.match(up, /'craft-setup-v2\|'/);
   for (const fn of ["craft_plan_core", "craft_apply_units", "craft_reset_preview", "craft_reset_project", "delete_task_checked", "checklist_insert_items"]) {
