@@ -9,6 +9,8 @@ BEGIN;
 SET LOCAL lock_timeout = '10s';
 DROP TRIGGER trg_checklist_craft_heal ON task_checklist_items;
 DROP FUNCTION craft_checklist_heal();
+DROP TRIGGER trg_checklist_craft_numbering ON task_checklist_items;
+DROP FUNCTION craft_checklist_numbering_check();
 DROP FUNCTION craft_part_keeps(UUID);
 DROP FUNCTION craft_reset_project(UUID, UUID, JSONB, TEXT);
 DROP FUNCTION craft_reset_preview(UUID, UUID);

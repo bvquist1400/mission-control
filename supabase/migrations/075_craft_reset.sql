@@ -1,7 +1,7 @@
 -- Craft S4 (Baseline 690e174c, Brent 11/19 "approve it as written"): Reset craft screen, self-healing
 -- parts, one part per section, stitch counts at set-up, and the guards the MCP row editing needs.
 --
--- Additive: one new nullable column (craft_parts.row_numbering, FR2). Twelve new functions and one trigger; three 072/073
+-- Additive: one new nullable column (craft_parts.row_numbering, FR2). Thirteen new functions and two triggers (FR3); three 072/073
 -- functions replaced (075's rollback puts their bodies back).
 --  * craft_setup_fingerprint (072, replaced): v2 also hashes the task's unit_count and work_type
 --    and the item's work_type (the stitch-count step reads them). Same text as
@@ -740,6 +740,43 @@ $$;
 CREATE TRIGGER trg_checklist_craft_heal AFTER DELETE ON task_checklist_items
   REFERENCING OLD TABLE AS old_rows FOR EACH STATEMENT EXECUTE FUNCTION craft_checklist_heal();
 
+-- ── FR3: keep row_numbering true to the rows ────────────────────────────────
+-- 'label' → 'straight' is one-way and sticky: when a linked row's label (craft_plan_core's parser: "Row"/"Rnd"/
+-- "Round", spaces or tabs, digits, not a range) stops being its craft_row, or it has no label, its part becomes
+-- 'straight'; only Set up or Reset make a part 'label'. A constraint trigger deferred to commit, so it reads each
+-- row as committed: Change total's two-step renumber (+1000000, then the new number with its label) never trips
+-- it. The row is already locked by the write; the part is taken NOWAIT and only when it has to change (072's order
+-- is items, then parts), so it never waits on Row done, Change total or the heal. Deletes can't make a surviving
+-- row disagree, so they don't fire it.
+CREATE FUNCTION craft_checklist_numbering_check()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+DECLARE
+  c_ws CONSTANT TEXT := '[\t\n\v\f\r    -     　﻿]';
+  c_label CONSTANT TEXT := '^((Row|Rnd|Round)[ \t]+([0-9]+))(?![0-9A-Za-z_])';
+  v_range TEXT;
+  v_item RECORD;
+  v_m TEXT[];
+  v_label NUMERIC;
+BEGIN
+  SELECT i.craft_part_id, i.craft_row, i.text INTO v_item FROM task_checklist_items i WHERE i.id = NEW.id;
+  IF NOT FOUND OR v_item.craft_part_id IS NULL THEN RETURN NULL; END IF;
+  IF NOT EXISTS (SELECT 1 FROM craft_parts WHERE id = v_item.craft_part_id AND row_numbering = 'label') THEN RETURN NULL; END IF;
+  v_range := '^(?:' || c_ws || '*(?:[-‐‑‒–—―−~/&,+]|(?:to|through|thru|and)(?![0-9A-Za-z_]))' || c_ws || '*[0-9]|\.[0-9])';
+  v_m := regexp_match(v_item.text, c_label);
+  v_label := CASE WHEN v_m IS NULL OR substr(v_item.text, char_length(v_m[1]) + 1) ~* v_range THEN NULL ELSE v_m[3]::numeric END;
+  IF v_label IS DISTINCT FROM v_item.craft_row THEN
+    PERFORM 1 FROM craft_parts WHERE id = v_item.craft_part_id AND row_numbering = 'label' FOR UPDATE NOWAIT;
+    UPDATE craft_parts SET row_numbering = 'straight' WHERE id = v_item.craft_part_id AND row_numbering = 'label';
+  END IF;
+  RETURN NULL;
+END;
+$$;
+CREATE CONSTRAINT TRIGGER trg_checklist_craft_numbering AFTER INSERT OR UPDATE OF text, craft_row, craft_part_id ON task_checklist_items
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.craft_part_id IS NOT NULL) EXECUTE FUNCTION craft_checklist_numbering_check();
+
 -- ── Delete guard (S4 A) ────────────────────────────────────────────────────
 CREATE FUNCTION delete_task_checked(p_user_id UUID, p_task_id UUID, p_force BOOLEAN DEFAULT false)
 RETURNS JSONB
@@ -827,6 +864,7 @@ REVOKE ALL ON FUNCTION craft_reset_preview(UUID, UUID) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION craft_reset_project(UUID, UUID, JSONB, TEXT) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION craft_part_keeps(UUID) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION craft_checklist_heal() FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION craft_checklist_numbering_check() FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION delete_task_checked(UUID, UUID, BOOLEAN) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION checklist_insert_items(UUID, UUID, JSONB, UUID, BOOLEAN) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION craft_plan_core(UUID, UUID, BOOLEAN) TO authenticated, service_role;
@@ -840,6 +878,7 @@ GRANT EXECUTE ON FUNCTION craft_reset_preview(UUID, UUID) TO authenticated, serv
 GRANT EXECUTE ON FUNCTION craft_reset_project(UUID, UUID, JSONB, TEXT) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION craft_part_keeps(UUID) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION craft_checklist_heal() TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION craft_checklist_numbering_check() TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION delete_task_checked(UUID, UUID, BOOLEAN) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION checklist_insert_items(UUID, UUID, JSONB, UUID, BOOLEAN) TO authenticated, service_role;
 

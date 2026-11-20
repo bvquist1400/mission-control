@@ -483,6 +483,11 @@ INSERT INTO task_checklist_items (user_id, task_id, text, sort_order) VALUES ('$
     assert.equal((await create(c, p.projectId)).status, 201);
     const part = psql(`SELECT id || '|' || row_numbering FROM craft_parts WHERE project_id='${p.projectId}';`).split("|");
     assert.equal(part[1], "label");
+    // FR3: a wording edit that keeps the label (through the checklist PATCH) keeps the part 'label'.
+    const row6 = itemLike(p.taskIds.r1, "Row 6 ·");
+    const edit = await call(checklistRoute.PATCH, c, "PATCH", `/api/tasks/${p.taskIds.r1}/checklist`, { id: p.taskIds.r1 }, { items: [{ id: row6, text: "Row 6 · (k2, k1tbl, p1) ×7, knit 2 → 30" }] });
+    assert.equal(edit.status, 200, JSON.stringify(edit.body));
+    assert.equal(psql(`SELECT row_numbering FROM craft_parts WHERE id='${part[0]}';`), "label");
     psql(`INSERT INTO craft_notes (user_id, project_id, part_id, row, text) VALUES ('${c.id}','${p.projectId}','${part[0]}',150,'note on row 150');
 INSERT INTO craft_timers (user_id, project_id, part_id, sitting_started_at, start_row) VALUES ('${c.id}','${p.projectId}','${part[0]}', now(), 150);`);
     const sort = psql(`SELECT sort_order FROM task_checklist_items WHERE craft_part_id='${part[0]}' AND craft_row = 150;`);
@@ -493,7 +498,93 @@ INSERT INTO task_checklist_items (user_id, task_id, text, sort_order, unit_count
     assert.deepEqual(preview.carry.lost, []);
     assert.equal(psql(`SELECT n.row || ':' || (n.part_id = i.craft_part_id) FROM craft_notes n, task_checklist_items i WHERE n.text='note on row 150' AND starts_with(i.text, 'Row 150 ·') AND i.task_id='${p.taskIds.r101}';`), "150:true");
     assert.equal(psql(`SELECT start_row FROM craft_timers WHERE user_id='${c.id}';`), "150");
+    assert.equal(psql(`SELECT t.part_id = p.id FROM craft_timers t, craft_parts p WHERE t.user_id='${c.id}' AND p.project_id='${p.projectId}';`), "t", "the timer follows to the new part");
     assert.equal(psql(`SELECT row_numbering FROM craft_parts WHERE project_id='${p.projectId}';`), "label", "Reset records the new part's numbering too");
+  });
+  const labelRepro = () => ({ project: { name: "Fake Edited Labels", tags: ["knitting"] }, sections: [{ key: "s", name: "1. Scarf" }], tasks: [
+    { key: "a", section: "s", title: "A", unit_count: null, work_type: null, created: 0, items: ["Row 1", "Row 2", "Row 3", "Row 4"] },
+    { key: "b", section: "s", title: "B", unit_count: null, work_type: null, created: 1, items: ["Row 5"] }] });
+  async function editedLabelReset(c, p, part) {
+    psql(`UPDATE task_checklist_items SET is_done = true WHERE craft_part_id='${part}' AND craft_row <= 3;`);
+    const s = psql(`SELECT (work_session_create('${c.id}', jsonb_build_object('project_id','${p.projectId}','session_date','2026-11-14','minutes',10), ARRAY(SELECT id FROM task_checklist_items WHERE craft_part_id='${part}' AND craft_row = 3), false))->>'session_id';`);
+    psql(`INSERT INTO craft_sitting_details (session_id, user_id, part_id, from_row, to_row) VALUES ('${s}','${c.id}','${part}',2,3);
+INSERT INTO craft_notes (user_id, project_id, part_id, row, text) VALUES ('${c.id}','${p.projectId}','${part}',3,'note on edited row 3');
+INSERT INTO craft_frogs (user_id, part_id, from_row, to_row, note) VALUES ('${c.id}','${part}',3,3,'ripped edited row 3');
+INSERT INTO craft_timers (user_id, project_id, part_id, sitting_started_at, start_row) VALUES ('${c.id}','${p.projectId}','${part}', now(), 3);
+DELETE FROM task_checklist_items WHERE craft_part_id='${part}' AND craft_row = 3;
+INSERT INTO task_checklist_items (user_id, task_id, text, sort_order) VALUES ('${c.id}','${p.taskIds.a}','Row 3 (new step)',4);`);
+    const { preview, status, body } = await doReset(c, p.projectId);
+    assert.equal(status, 200, JSON.stringify(body));
+    assert.deepEqual(preview.carry.lost.map((l) => l.kind).sort(), ["frog", "note", "sitting", "timer"], JSON.stringify(preview.carry.lost));
+    assert.deepEqual(body.lost, { sitting: 1, note: 1, frog: 1, timer: 1 });
+    assert.equal(psql(`SELECT coalesce(part_id::text, 'none') || ':' || coalesce(row::text, 'none') FROM craft_notes WHERE text='note on edited row 3';`), "none:none");
+    assert.equal(psql(`SELECT coalesce(part_id::text, 'none') || ':' || from_row || '-' || to_row FROM craft_sitting_details WHERE session_id='${s}';`), "none:2-3");
+  }
+  await test("FR3 P2 (Codex, PATCH): text edits that make labels stop matching rows turn a 'label' part 'straight' for good; delete + append + Reset then lists the history, never moves it", async () => {
+    const c = await user();
+    const p = seed(c, labelRepro());
+    assert.equal((await create(c, p.projectId)).status, 201);
+    const part = psql(`SELECT id FROM craft_parts WHERE project_id='${p.projectId}';`);
+    const label = () => psql(`SELECT to_jsonb(p) ->> 'row_numbering' FROM craft_parts p WHERE id='${part}';`);
+    assert.equal(label(), "label");
+    const r3 = psql(`SELECT id FROM task_checklist_items WHERE craft_part_id='${part}' AND craft_row = 3;`), r5 = psql(`SELECT id FROM task_checklist_items WHERE craft_part_id='${part}' AND craft_row = 5;`);
+    for (const [task, id, text] of [[p.taskIds.a, r3, "Row 1 (repeat 2)"], [p.taskIds.b, r5, "Row 1"]]) {
+      const r = await call(checklistRoute.PATCH, c, "PATCH", `/api/tasks/${task}/checklist`, { id: task }, { items: [{ id, text }] });
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+    }
+    const flagAfterEdit = label();
+    const r3back = await call(checklistRoute.PATCH, c, "PATCH", `/api/tasks/${p.taskIds.a}/checklist`, { id: p.taskIds.a }, { items: [{ id: r3, text: "Row 3" }] });
+    assert.equal(r3back.status, 200);
+    const flagAfterBack = label();
+    await call(checklistRoute.PATCH, c, "PATCH", `/api/tasks/${p.taskIds.a}/checklist`, { id: p.taskIds.a }, { items: [{ id: r3, text: "Row 1 (repeat 2)" }] });
+    await editedLabelReset(c, p, part);
+    assert.deepEqual([flagAfterEdit, flagAfterBack], ["straight", "straight"], "one-way: putting the label back doesn't make it 'label' again");
+  });
+  await test("FR3 P2 (Codex, MCP update_task_checklist): the same edit through MCP turns the part 'straight' too", async () => {
+    const c = await user();
+    const p = seed(c, labelRepro());
+    assert.equal((await create(c, p.projectId)).status, 201);
+    const part = psql(`SELECT id FROM craft_parts WHERE project_id='${p.projectId}';`);
+    const r3 = psql(`SELECT id FROM task_checklist_items WHERE craft_part_id='${part}' AND craft_row = 3;`);
+    // MCP calls the REST API through fetch: send its checklist calls to the real route as this user.
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (input, init = {}) => {
+      const u = new URL(typeof input === "string" ? input : input.url);
+      const m = u.pathname.match(/^\/api\/tasks\/([^/]+)\/checklist$/);
+      if (!m) return realFetch(input, init);
+      const r = new NextRequest(`http://localhost${u.pathname}${u.search}`, { method: init.method ?? "GET", ...(init.body ? { body: init.body, headers: { "content-type": "application/json" } } : {}) });
+      writeInternalAuthContext(r, { supabase: c.client, userId: c.id, user: { id: c.id }, authSource: "session" });
+      return checklistRoute[(init.method ?? "GET").toUpperCase()](r, { params: Promise.resolve({ id: m[1] }) });
+    };
+    try {
+      process.env.MISSION_CONTROL_USER_ID = c.id; process.env.DEPLOYMENT_ROLE = "main";
+      const mcpRoute = await import("../src/app/api/mcp/route.ts");
+      const rpc = async (body) => {
+        const res = await mcpRoute.POST(new Request("http://localhost/api/mcp", { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream",
+          "x-mission-control-key": process.env.MISSION_CONTROL_API_KEY, "mcp-session-id": "stateless", "mcp-protocol-version": "2025-06-18" }, body: JSON.stringify(body) }));
+        const text = await res.text();
+        return JSON.parse(text.startsWith("event:") || text.startsWith("data:") ? text.split("\n").find((l) => l.startsWith("data:")).slice(5) : text);
+      };
+      await rpc({ jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "s4-db", version: "1" } } });
+      const out = await rpc({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "update_task_checklist", arguments: { task_id: p.taskIds.a, items: [{ id: r3, text: "Row 1 (repeat 2)" }] } } });
+      assert.notEqual(out.result?.isError, true, JSON.stringify(out));
+    } finally { globalThis.fetch = realFetch; }
+    assert.equal(psql(`SELECT text || '|' || craft_row FROM task_checklist_items WHERE id='${r3}';`), "Row 1 (repeat 2)|3", "the edit landed and the row keeps its link");
+    assert.equal(psql(`SELECT to_jsonb(p) ->> 'row_numbering' FROM craft_parts p WHERE id='${part}';`), "straight");
+  });
+  await test("FR3: Change total on a 'label' part (dropping an (est.) row renumbers the rest, labels with them; a raise adds labelled rows) keeps 'label'", async () => {
+    const c = await user();
+    const p = seed(c, { project: { name: "Fake Total", tags: ["knitting"] }, sections: [{ key: "s", name: "1. Body" }], tasks: [
+      { key: "t", section: "s", title: "Rows 1–5", unit_count: null, work_type: null, created: 0, items: ["Row 1 · k", "Row 2 (est.) · k", "Row 3 · k", "Row 4 · k", "Row 5 · k"] }] });
+    assert.equal((await create(c, p.projectId)).status, 201);
+    const part = psql(`SELECT id FROM craft_parts WHERE project_id='${p.projectId}';`);
+    const lower = JSON.parse(psql(`SELECT craft_set_total('${c.id}','${part}',4,5);`));
+    assert.equal(lower.status, "ok", JSON.stringify(lower));
+    assert.equal(psql(`SELECT string_agg(craft_row || '=' || text, ',' ORDER BY craft_row) FROM task_checklist_items WHERE craft_part_id='${part}';`), "1=Row 1 · k,2=Row 2 · k,3=Row 3 · k,4=Row 4 · k");
+    assert.equal(psql(`SELECT row_numbering FROM craft_parts WHERE id='${part}';`), "label", "the +1000000 step never trips it: the check runs on the rows as committed");
+    const raise = JSON.parse(psql(`SELECT craft_set_total('${c.id}','${part}',6,4,'k',NULL,NULL);`));
+    assert.equal(raise.status, "ok", JSON.stringify(raise));
+    assert.equal(psql(`SELECT count(*) || ':' || (SELECT row_numbering FROM craft_parts WHERE id='${part}') FROM task_checklist_items WHERE craft_part_id='${part}';`), "6:label");
   });
   await test("FR2 backfill: 075 marks an old part 'label' only when every row it holds still reads its label as its row; a changed label or no rows at all is 'straight' (no task + row guessing)", async () => {
     const c = await user();
@@ -578,10 +669,11 @@ INSERT INTO task_checklist_items (user_id, task_id, text, sort_order, unit_count
     const kept = data();
     psql(down075);
     const at074 = sigs.map(fn);
-    for (const gone of ["craft_reset_project(uuid,uuid,jsonb,text)", "craft_plan_core(uuid,uuid,boolean)", "delete_task_checked(uuid,uuid,boolean)", "checklist_insert_items(uuid,uuid,jsonb,uuid,boolean)", "craft_checklist_heal()"]) {
+    for (const gone of ["craft_reset_project(uuid,uuid,jsonb,text)", "craft_plan_core(uuid,uuid,boolean)", "delete_task_checked(uuid,uuid,boolean)", "checklist_insert_items(uuid,uuid,jsonb,uuid,boolean)", "craft_checklist_heal()", "craft_checklist_numbering_check()"]) {
       assert.equal(psql(`SELECT to_regprocedure('${gone}') IS NULL;`), "t", gone);
     }
-    assert.equal(psql("SELECT count(*) FROM pg_trigger WHERE tgname='trg_checklist_craft_heal';"), "0");
+    assert.equal(psql("SELECT count(*) FROM pg_trigger WHERE tgname IN ('trg_checklist_craft_heal','trg_checklist_craft_numbering');"), "0");
+    assert.equal(psql("SELECT count(*) FROM information_schema.columns WHERE table_name='craft_parts' AND column_name='row_numbering';"), "0");
     assert.equal(data(), kept);
     // 074 down + up from the migration files gives the same three bodies: 075 down restored them exactly.
     psql(readFileSync(new URL("../supabase/rollbacks/074_craft_progress.down.sql", import.meta.url), "utf8"));
