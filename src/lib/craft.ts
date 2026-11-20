@@ -95,6 +95,9 @@ function partProgress<P extends CraftPart>(part: P, items: ProgressItem[]) {
 function sortedProgress<P extends CraftPart>(parts: P[], items: ProgressItem[]) {
   return [...parts].sort((a, b) => a.sort_order - b.sort_order || a.id.localeCompare(b.id)).map((part) => partProgress(part, items));
 }
+/** S4 (A, pick 3): a part whose rows were all deleted but that keeps sittings, rip-backs or notes stays in the
+ * database, hidden as empty; only Reset clears it. */
+const withRows = <P extends { row_count: number }>(parts: P[]) => parts.filter((part) => part.row_count > 0);
 
 /**
  * The stored active part while it is unfinished; once it is finished, the first unfinished part by sort
@@ -238,7 +241,9 @@ export function timestampMicros(text: string): number {
 
 export function buildCraftView(input: CraftInput) {
   const today = etDateOf(input.server_now);
-  const parts = sortedProgress(input.parts, input.items);
+  const allParts = sortedProgress(input.parts, input.items);
+  const parts = withRows(allParts);
+  const hidden_parts = allParts.length - parts.length;
   const active_part = pickActivePart(parts, input.craft_project.active_part_id);
   const segments = active_part ? input.segments.filter((segment) => segment.part_id === active_part.id)
     .sort((a, b) => a.sort_order - b.sort_order || a.from_row - b.from_row || a.id.localeCompare(b.id))
@@ -400,6 +405,7 @@ export function buildCraftView(input: CraftInput) {
     // Remove is offered only when the server said nothing would be lost (072 refuses otherwise too).
     can_remove: Array.isArray(input.remove_blockers) && input.remove_blockers.length === 0,
     remove_blockers: input.remove_blockers ?? null,
+    hidden_parts,
   };
 }
 export type CraftView = ReturnType<typeof buildCraftView>;

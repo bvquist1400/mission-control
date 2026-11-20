@@ -22,6 +22,10 @@ const down073 = readFileSync(new URL("../supabase/rollbacks/073_craft_rpcs.down.
 const up074 = readFileSync(new URL("../supabase/migrations/074_craft_progress.sql", import.meta.url), "utf8");
 const down074 = readFileSync(new URL("../supabase/rollbacks/074_craft_progress.down.sql", import.meta.url), "utf8");
 const psql = (sql) => execFileSync("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"], { input: sql, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+const up075 = readFileSync(new URL("../supabase/migrations/075_craft_reset.sql", import.meta.url), "utf8");
+const down075 = readFileSync(new URL("../supabase/rollbacks/075_craft_reset.down.sql", import.meta.url), "utf8");
+// Craft S4: 075 sits on 074, so it comes off before any 074 rollback and goes back right after 074 is re-applied.
+const has075 = () => psql("SELECT to_regprocedure('craft_reset_project(uuid,uuid,jsonb,text)') IS NOT NULL;") === "t";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function connection(label) {
   const child = spawn("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"]);
@@ -911,7 +915,8 @@ INSERT INTO task_checklist_items (user_id, task_id, text, sort_order) SELECT '${
     }
     const snap = await loadSetupSnapshot(a.client, owner, projectId), plan = planCraftSetup(snap);
     assert.ok(plan.ok, JSON.stringify(plan.stops));
-    assert.deepEqual(plan.parts.map((p) => p.name), ["Mitten 1 · Cuff", "Mitten 2 · Cuff"]);
+    // S4 (D): parts are named after their sections; the order is what this pins.
+    assert.deepEqual(plan.parts.map((p) => p.name), ["Mitten 1", "Mitten 2"]);
     const sql = (await rpc(a, "craft_setup_plan", { p_user_id: owner, p_project_id: projectId })).data;
     assert.deepEqual(sql.parts.map((p) => p.segments[0].task_id), plan.parts.map((p) => p.segments[0].task_id));
   });
@@ -920,6 +925,7 @@ INSERT INTO task_checklist_items (user_id, task_id, text, sort_order) SELECT '${
   await test("073 down returns the schema to 072 exactly (every craft function's body and grants, craft_timers' columns) on a fresh 072 capture; craft rows and sittings stay; 073 re-applies", () => {
     const keep = () => psql("SELECT md5(coalesce(string_agg(to_jsonb(s)::text, ',' ORDER BY s.id), '')) FROM work_sessions s; SELECT md5(coalesce(string_agg(to_jsonb(d)::text, ',' ORDER BY d.session_id), '')) FROM craft_sitting_details d; SELECT md5(coalesce(string_agg((to_jsonb(i) - 'is_done' - 'completed_at')::text, ',' ORDER BY i.id), '')) FROM task_checklist_items i;");
     const rows = keep();
+    if (has075()) psql(down075);
     psql(down074);
     psql(down073);
     psql(down072);
@@ -934,6 +940,7 @@ INSERT INTO task_checklist_items (user_id, task_id, text, sort_order) SELECT '${
     psql(up073);
     assert.equal(keep(), rows);
     psql(up074);
+    psql(up075);
     for (const fn of FUNCTIONS_073_UNDER_074) assert.equal(psql(`SELECT has_function_privilege('authenticated', '${fn}', 'EXECUTE');`), "t", fn);
   });
 } finally {

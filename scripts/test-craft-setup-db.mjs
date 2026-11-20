@@ -27,6 +27,10 @@ const up074 = readFileSync(new URL("../supabase/migrations/074_craft_progress.sq
 const down074 = readFileSync(new URL("../supabase/rollbacks/074_craft_progress.down.sql", import.meta.url), "utf8");
 const has074 = () => psql("SELECT to_regclass('public.craft_frogs') IS NOT NULL;") === "t";
 const psql = (sql) => execFileSync("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"], { input: sql, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+const up075 = readFileSync(new URL("../supabase/migrations/075_craft_reset.sql", import.meta.url), "utf8");
+const down075 = readFileSync(new URL("../supabase/rollbacks/075_craft_reset.down.sql", import.meta.url), "utf8");
+// Craft S4: 075 sits on 074, so it comes off before any 074 rollback and goes back right after 074 is re-applied.
+const has075 = () => psql("SELECT to_regprocedure('craft_reset_project(uuid,uuid,jsonb,text)') IS NOT NULL;") === "t";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function connection(label) {
   const child = spawn("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"]);
@@ -157,6 +161,7 @@ let rights071, functions071;
 try {
   // FR1 (F5): the 071 state is captured from a FRESH 071 apply (071 down, 071 up), never from after 072's down.
   await test("072 applies on top of a fresh 071; the 071 rights are captured from that fresh apply", () => {
+    if (has075()) psql(down075);
     if (has074()) psql(down074);
     if (has073()) psql(down073);
     if (functionNames().includes("craft_setup_project")) psql(down072);
@@ -168,6 +173,7 @@ try {
     // The rest runs on what ships: 072 with 073 and 074 over it.
     psql(up073);
     psql(up074);
+    psql(up075);
   });
   await test("072 functions: SECURITY INVOKER, EXECUTE for authenticated and service_role only (not anon, not PUBLIC)", () => {
     for (const fn of FUNCTIONS) {
@@ -226,9 +232,8 @@ try {
   });
   await test("FR1 plan parity (F4): 072's craft_setup_plan matches the TypeScript planner on the mittens, gaps, blanket- and scarf-shaped projects, ties, long names and every STOP", async () => {
     await parity(a, m1.projectId, "mittens");
-    const gaps = await seedMittens(a.id, "Mittens gaps");
-    const cuff = gaps.id(fixture.tasks.find((t) => t.title.startsWith("Mitten 1 · Cuff")).id);
-    psql(`DELETE FROM task_checklist_items WHERE task_id='${cuff}' AND text ~ '^Rnd 2[2-8] ';`);
+    // S4: gaps exist only where the labels run on (a cuff on its own); the whole mitten is counted straight through.
+    const gaps = seedProject(a.id, "Cuff gaps", [{ title: "Mitten 1 · Cuff: r", rows: [...rowsOf("Rnd", 1, 21, 14, "36"), ...rowsOf("Rnd", 29, 31, 0, "36")] }]);
     assert.deepEqual((await parity(a, gaps.projectId, "gaps")).plan.parts[0].gaps, [[22, 28]]);
     const blanket = seedProject(a.id, "Blanket shape", [
       ...[["Foundation", 1, 1], ["Waffle 1", 2, 18], ["Tree 1", 19, 37], ["Waffle 2", 38, 52], ["Tree 2", 53, 71], ["Waffle 3", 72, 86], ["Tree 3", 87, 105], ["Waffle 4", 106, 120], ["Tree 4", 121, 139], ["Waffle 5", 140, 156], ["Final sc row", 157, 157]]
@@ -252,14 +257,15 @@ try {
       { title: `🧶 ${"Long name ".repeat(12)}· Stage: r`, section: 1, rows: rowsOf("Round", 1, 1) },
     ], { sections: ["A", "B"] });
     const order = await parity(a, mixed.projectId, "order");
-    assert.deepEqual(order.plan.parts.map((p) => [p.name, p.total_rows, p.segments.length]).slice(0, 3), [["A · Later id", 6, 2], ["A · Rows now", 8, 1], ["A · Skip", 11, 1]]);
+    // S4: one part per section and row word; A's numbers run on (by first number), B's restart (straight through); unsectioned last as "Body".
+    assert.deepEqual(order.plan.parts.map((p) => [p.name, p.total_rows, p.segments.length, p.numbering]), [["A", 6, 2, "labels"], ["A 2", 11, 2, "labels"], ["B", 3, 2, "straight"], ["Body", 3, 1, "labels"]]);
+    assert.deepEqual(order.plan.parts[0].segments.map((g) => g.task_id), [tieA, tieB], "by first row number, not by creation");
     const orderPv = await preview(a, mixed.projectId);
     assert.equal((await create(a, mixed.projectId, orderPv)).status, 201);
     const written = psql(`SELECT string_agg(s.name, '|' ORDER BY p.sort_order, s.sort_order) FROM craft_segments s JOIN craft_parts p ON p.id = s.part_id WHERE p.project_id='${mixed.projectId}';`);
     assert.equal(written, orderPv.plan.parts.flatMap((p) => p.segments.map((g) => g.name)).join("|"), "segment names (80-character cut included) match the preview");
     // Every STOP: SQL refuses the same projects.
     for (const [label, tasks] of [
-      ["repeat", [{ title: "P", rows: [["Rnd 1"], ["Rnd 2"], ["Rnd 2 · again"]] }]],
       ["mixed", [{ title: "P", rows: [["Rnd 1"], ["Row 2"]] }]],
       ["range", [{ title: "P", rows: [["Rnd 1"], ["Rnd 2 – 3"]] }]],
       ["range to", [{ title: "P", rows: [["Rnd 1"], ["Rnd 2 TO 3"]] }]],
@@ -273,6 +279,9 @@ try {
       const { sql } = await parity(a, seeded.projectId, label);
       assert.ok(sql.stops.length > 0, label);
     }
+    // S4: a repeated number is a restart, counted straight through: no STOP, and SQL agrees.
+    const repeat = seedProject(a.id, "Repeat", [{ title: "P", rows: [["Rnd 1"], ["Rnd 2"], ["Rnd 2 · again"]] }]);
+    assert.deepEqual((await parity(a, repeat.projectId, "repeat")).sql.parts.map((p) => p.total_rows), [3]);
     const fine = seedProject(a.id, "Exactly 2000", [{ title: "P", rows: [["Row 1"], ["Row 2000"]] }]);
     assert.equal((await parity(a, fine.projectId, "2000")).plan.ok, true);
   });
@@ -283,40 +292,42 @@ try {
     firstPreview = await preview(a, m1.projectId);
     const parts = firstPreview.plan.parts;
     assert.equal(firstPreview.plan.ok, true, firstPreview.plan.stops.join("; "));
-    assert.deepEqual(parts.map((p) => [p.name, p.total_rows, p.current_row, p.stitch_count, p.segments.length]), [1, 2].flatMap((m) => [[`Mitten ${m} · Cuff`, 31, m === 1 ? 15 : 1, 36, 1], [`Mitten ${m} · Hand`, 45, 1, null, 2], [`Mitten ${m} · Top decreases`, 8, 1, null, 1], [`Mitten ${m} · Thumb`, 15, 1, 14, 1]]));
+    // S4 (pick 1): one part per mitten section, counted straight through.
+    assert.deepEqual(parts.map((p) => [p.name, p.total_rows, p.current_row, p.stitch_count, p.segments.length]), [1, 2].map((m) => [`Mitten ${m}`, 99, m === 1 ? 15 : 1, null, 5]));
     assert.equal(craftRowCount(m1.projectId), "0");
     assert.equal(psql(itemsSql(m1.projectId)), before.all);
   });
 
-  await test("Create writes exactly the planned rows and links: 1 craft project, 8 parts, 10 segments, 198 rows; nothing else on the items changes", async () => {
+  await test("Create writes exactly the planned rows and links: 1 craft project, 2 parts, 10 segments, 198 rows; nothing else on the items changes", async () => {
     const res = await create(a, m1.projectId, firstPreview);
     assert.equal(res.status, 201, JSON.stringify(await res.clone().json()));
     const out = await res.json();
-    assert.deepEqual([out.parts, out.segments, out.rows_linked], [8, 10, 198]);
+    assert.deepEqual([out.parts, out.segments, out.rows_linked, out.units_filled], [2, 10, 198, 0]);
     const cp = await a.client.from("craft_projects").select("*").eq("project_id", m1.projectId).single();
     assert.equal(cp.data.craft, "knit");
     const parts = (await a.client.from("craft_parts").select("*").eq("project_id", m1.projectId).order("sort_order")).data;
     assert.deepEqual(parts.map((p) => [p.name, p.row_word, p.total_rows, p.stitch_count, p.sort_order, p.quarters, p.ridges]), firstPreview.plan.parts.map((p, i) => [p.name, "round", p.total_rows, p.stitch_count, i, false, false]));
-    assert.equal(cp.data.active_part_id, parts[0].id, "active part = Mitten 1 · Cuff");
+    assert.equal(cp.data.active_part_id, parts[0].id, "active part = Mitten 1");
     const segs = (await a.client.from("craft_segments").select("*").in("part_id", parts.map((p) => p.id))).data;
     assert.equal(segs.length, 10);
     for (const [k, p] of firstPreview.plan.parts.entries()) {
       const mine = segs.filter((s) => s.part_id === parts[k].id).sort((x, y) => x.sort_order - y.sort_order);
       assert.deepEqual(mine.map((s) => [s.task_id, s.name, s.from_row, s.to_row, s.close_check]), p.segments.map((s) => [s.task_id, s.name, s.from_row, s.to_row, false]));
     }
-    // Every linked row's number is the number in its text; the plain items are untouched.
-    assert.equal(psql(`SELECT count(*) FROM task_checklist_items i JOIN tasks t ON t.id=i.task_id WHERE t.project_id='${m1.projectId}' AND i.craft_part_id IS NOT NULL AND i.craft_row = substring(i.text from '^(?:Row|Rnd|Round)\\s+(\\d+)')::int;`), "198");
+    // S4: rows are counted straight through each mitten, so only the cuffs' numbers equal the numbers in their text; the plain items are untouched.
+    assert.equal(psql(`SELECT count(*) FROM task_checklist_items i JOIN tasks t ON t.id=i.task_id WHERE t.project_id='${m1.projectId}' AND i.craft_part_id IS NOT NULL AND i.craft_row = substring(i.text from '^(?:Row|Rnd|Round)\\s+(\\d+)')::int;`), "62");
+    assert.equal(psql(`SELECT count(DISTINCT (i.craft_part_id, i.craft_row)) FROM task_checklist_items i JOIN tasks t ON t.id=i.task_id WHERE t.project_id='${m1.projectId}' AND i.craft_part_id IS NOT NULL AND i.craft_row BETWEEN 1 AND 99;`), "198");
     assert.equal(linkedCount(m1.projectId), "198");
     assert.equal(psql(itemsSql(m1.projectId, "-'craft_part_id'-'craft_row'")), before.items, "is_done, completed_at, units, work type, text, sort order unchanged");
   });
-  await test("The craft screen reads it back: Mitten 1 · Cuff, round 15 next with its own text; 8 parts", async () => {
+  await test("The craft screen reads it back: Mitten 1, round 15 next with its own text; 2 parts", async () => {
     const res = await detailRoute.GET(routeReq(a, "GET", `/api/craft/${m1.projectId}`), ctx(m1.projectId));
     assert.equal(res.status, 200);
     const view = await res.json();
-    assert.equal(view.active_part.name, "Mitten 1 · Cuff");
-    assert.deepEqual([view.active_part.current_row, view.active_part.total_rows, view.active_part.done_rows, view.active_part.row_count, view.active_part.row_word], [15, 31, 14, 31, "round"]);
+    assert.equal(view.active_part.name, "Mitten 1");
+    assert.deepEqual([view.active_part.current_row, view.active_part.total_rows, view.active_part.done_rows, view.active_part.row_count, view.active_part.row_word], [15, 99, 14, 99, "round"]);
     assert.equal(view.next_rows[0].text, fixtureItem("Mitten 1 · Cuff", "Rnd 15 ·").text);
-    assert.equal(view.parts.length, 8);
+    assert.equal(view.parts.length, 2);
     assert.ok(view.projects.some((p) => p.id === m1.projectId && p.progress === "round 15"), "the title switcher picks it up");
   });
   await test("Create again: the route STOPs (already on the craft screen) and the function refuses (23505); nothing more written", async () => {
@@ -325,7 +336,7 @@ try {
     assert.match((await res.json()).error, /already on the craft screen/);
     const direct = await a.client.rpc("craft_setup_project", { p_user_id: a.id, p_project_id: m1.projectId, p_plan: craftSetupPayload(firstPreview.plan, "knit", firstPreview.plan.parts.map((p) => p.name)), p_fingerprint: firstPreview.fingerprint });
     assert.equal(direct.error?.code, "23505");
-    assert.equal(psql(`SELECT count(*) FROM craft_parts WHERE project_id='${m1.projectId}';`), "8");
+    assert.equal(psql(`SELECT count(*) FROM craft_parts WHERE project_id='${m1.projectId}';`), "2");
   });
 
   // ── The fingerprint guard ───────────────────────────────────────────
@@ -382,7 +393,7 @@ try {
     const pv = await preview(a, m2.projectId);
     const results = await Promise.all([create(a, m2.projectId, pv), create(a, m2.projectId, pv)]);
     assert.deepEqual(results.map((r) => r.status).sort(), [201, 409]);
-    assert.equal(psql(`SELECT count(*) FROM craft_parts WHERE project_id='${m2.projectId}';`), "8");
+    assert.equal(psql(`SELECT count(*) FROM craft_parts WHERE project_id='${m2.projectId}';`), "2");
     assert.equal(linkedCount(m2.projectId), "198");
     assert.equal((await remove(a, m2.projectId)).status, 200);
   });
@@ -483,7 +494,7 @@ try {
     assert.equal((await b.client.rpc("craft_remove_project", { p_user_id: a.id, p_project_id: m1.projectId })).error?.code, "42501");
     assert.equal((await b.client.rpc("craft_remove_project", { p_user_id: b.id, p_project_id: m1.projectId })).error?.code, "P0002");
     assert.equal(craftRowCount(m3.projectId), "0");
-    assert.equal(psql(`SELECT count(*) FROM craft_parts WHERE project_id='${m1.projectId}';`), "8");
+    assert.equal(psql(`SELECT count(*) FROM craft_parts WHERE project_id='${m1.projectId}';`), "2");
   });
   await test("anon: no EXECUTE on any 072 function", async () => {
     for (const [name, args] of [["craft_setup_project", { p_user_id: a.id, p_project_id: m3.projectId, p_plan: {}, p_fingerprint: "0".repeat(64) }], ["craft_remove_project", { p_user_id: a.id, p_project_id: m1.projectId }], ["craft_setup_fingerprint", { p_user_id: a.id, p_project_id: m1.projectId }]]) {
@@ -495,7 +506,7 @@ try {
     const pv = await preview(a, m3.projectId);
     const payload = craftSetupPayload(pv.plan, "knit", pv.plan.parts.map((p) => p.name));
     const bad = structuredClone(payload); bad.parts[0].rows[0].item_id = m3.id(fixtureItem("Mitten 1 · Cuff", "Cast on").id); bad.parts[0].rows[0].row = 1;
-    const wrongTask = structuredClone(payload); wrongTask.parts[0].rows[3].item_id = payload.parts[2].rows[3].item_id;
+    const wrongTask = structuredClone(payload); wrongTask.parts[0].rows[3].item_id = payload.parts[1].rows[3].item_id;
     for (const plan of [bad, wrongTask, { ...payload, extra: 1 }, { ...payload, craft: "weave" }, { ...payload, parts: [] }]) {
       const res = await a.client.rpc("craft_setup_project", { p_user_id: a.id, p_project_id: m3.projectId, p_plan: plan, p_fingerprint: pv.fingerprint });
       assert.ok(["22023", "23505"].includes(res.error?.code), res.error?.message);
@@ -522,7 +533,7 @@ try {
       "a row with another number": (c) => { c.parts[0].rows[30].row = 30; c.parts[0].rows[29].row = 31; },
       "a dropped part": (c) => { c.parts.pop(); },
       "a split part": handSplit,
-      "an extra part": (c) => { c.parts.push({ ...structuredClone(c.parts[3]), name: "Again" }); },
+      "an extra part": (c) => { c.parts.push({ ...structuredClone(c.parts[1]), name: "Again" }); },
       "parts reordered": (c) => { c.parts.reverse(); },
       "active part": (c) => { c.active_part_index = 1; },
       "no active part": (c) => { c.active_part_index = null; },
@@ -541,7 +552,7 @@ try {
     const ok = await a.client.rpc("craft_setup_project", { p_user_id: a.id, p_project_id: m3.projectId, p_plan: renamed, p_fingerprint: pv.fingerprint });
     assert.ifError(ok.error);
     assert.equal(psql(`SELECT name || '|' || sort_order FROM craft_parts WHERE project_id='${m3.projectId}' ORDER BY sort_order LIMIT 1;`), "Left cuff|0");
-    assert.equal(psql(`SELECT s.name || '|' || s.sort_order FROM craft_segments s JOIN craft_parts p ON p.id = s.part_id WHERE p.project_id='${m3.projectId}' AND p.sort_order = 0;`), `${pv.plan.parts[0].segments[0].name}|0`);
+    assert.equal(psql(`SELECT s.name || '|' || s.sort_order FROM craft_segments s JOIN craft_parts p ON p.id = s.part_id WHERE p.project_id='${m3.projectId}' AND p.sort_order = 0 ORDER BY s.sort_order;`), pv.plan.parts[0].segments.map((g, i) => `${g.name}|${i}`).join("\n"));
     assert.equal(psql(`SELECT craft FROM craft_projects WHERE project_id='${m3.projectId}';`), "crochet");
     assert.equal(linkedCount(m3.projectId), "198");
     assert.equal((await remove(a, m3.projectId)).status, 200);
@@ -577,7 +588,7 @@ try {
     psql(`DELETE FROM craft_sitting_details WHERE session_id='${s.data.session_id}';`);
     const res = await remove(a, m1.projectId);
     assert.equal(res.status, 200);
-    assert.deepEqual(await res.json(), { project_id: m1.projectId, items_unlinked: 198, parts_removed: 8, segments_removed: 10 });
+    assert.deepEqual(await res.json(), { project_id: m1.projectId, items_unlinked: 198, parts_removed: 2, segments_removed: 10 });
     assert.equal(linkedCount(m1.projectId), "0");
     assert.equal(craftRowCount(m1.projectId), "0");
     assert.equal(psql(`SELECT count(*) FROM craft_segments WHERE part_id IN ('${parts.map((p) => p.id).join("','")}');`), "0");
@@ -649,6 +660,8 @@ try {
     const m4 = await seedMittens(a.id, "Mittens copy 4");
     const cuff = m4.id(fixture.tasks.find((t) => t.title.startsWith("Mitten 1 · Cuff")).id);
     psql(`DELETE FROM task_checklist_items WHERE task_id='${cuff}' AND text ~ '^Rnd 2[2-8] ';`);
+    // S4: a cuff with gaps keeps its numbers when it is the only row task in its section.
+    psql(`DELETE FROM tasks WHERE project_id='${m4.projectId}' AND id <> '${cuff}';`);
     const pv = await preview(a, m4.projectId);
     assert.deepEqual(pv.plan.parts[0].gap_notes, ["Rounds 22–28 are not in the list; the screen goes from 21 to 29."]);
     assert.equal((await create(a, m4.projectId, pv)).status, 201);
@@ -662,6 +675,7 @@ try {
   await test("072 down returns the schema to 071 (functions and rights), keeps craft rows; 072 re-applies", () => {
     const data = () => psql(`SELECT count(*) FROM craft_parts; SELECT count(*) FROM task_checklist_items WHERE craft_part_id IS NOT NULL;`);
     const kept = data();
+    if (has075()) psql(down075);
     psql(down074);
     psql(down073);
     psql(down072);
@@ -671,6 +685,7 @@ try {
     psql(up072);
     psql(up073);
     psql(up074);
+    psql(up075);
     assert.ok(functionNames().includes("craft_setup_project"));
     assert.equal(psql("SELECT has_table_privilege('authenticated','craft_parts','TRUNCATE');"), "f");
   });
@@ -678,6 +693,7 @@ try {
     const narrow = "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE TRUNCATE, MAINTAIN ON TABLES FROM service_role;";
     const widen = "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT TRUNCATE, MAINTAIN ON TABLES TO service_role;";
     try {
+      if (has075()) psql(down075);
       if (has074()) psql(down074);
       if (has073()) psql(down073);
       psql(down072); psql(down071); psql(narrow); psql(up071);
@@ -689,6 +705,7 @@ try {
       assert.equal(rights(), fresh, "down restored exactly the fresh 071 rights");
     } finally {
       psql(widen);
+      if (has075()) psql(down075);
       if (has074()) psql(down074);
       if (has073()) psql(down073);
       if (functionNames().includes("craft_setup_project")) psql(down072);
@@ -697,6 +714,7 @@ try {
     assert.equal(functionNames(), FUNCTIONS_072);
     psql(up073);
     psql(up074);
+    psql(up075);
     assert.equal(psql("SELECT has_table_privilege('service_role','craft_parts','SELECT') AND NOT has_table_privilege('service_role','craft_parts','TRUNCATE');"), "t", "the stack is left with 072 applied over a fresh 071");
   });
 } finally {

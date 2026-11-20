@@ -228,6 +228,87 @@
     }
   },
   {
+    "name": "craft_reset",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "type": "string",
+          "description": "Project UUID"
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "preview",
+            "commit"
+          ],
+          "description": "preview first, then commit with its fingerprint"
+        },
+        "fingerprint": {
+          "description": "The preview's fingerprint (required for commit)",
+          "type": "string"
+        },
+        "names": {
+          "description": "One name per new part, in the preview's order (default: the preview's names)",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "project_id",
+        "action"
+      ]
+    }
+  },
+  {
+    "name": "craft_setup",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "type": "string",
+          "description": "Project UUID"
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "preview",
+            "commit"
+          ],
+          "description": "preview first, then commit with its fingerprint"
+        },
+        "fingerprint": {
+          "description": "The preview's fingerprint (required for commit)",
+          "type": "string"
+        },
+        "names": {
+          "description": "One name per part, in the preview's order (default: the preview's names)",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "craft": {
+          "description": "Craft kind (default: from the project's tags)",
+          "type": "string",
+          "enum": [
+            "knit",
+            "crochet",
+            "other"
+          ]
+        }
+      },
+      "required": [
+        "project_id",
+        "action"
+      ]
+    }
+  },
+  {
     "name": "create_application",
     "inputSchema": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -937,10 +1018,51 @@
           "type": "string"
         },
         "initial_checklist": {
-          "description": "Creates checklist items",
+          "description": "Creates checklist items, in order: plain text, or { text, unit_count?, work_type? } for pace rows",
+          "maxItems": 500,
           "type": "array",
           "items": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Row text"
+                  },
+                  "unit_count": {
+                    "description": "Units on this row (e.g. stitches)",
+                    "anyOf": [
+                      {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "work_type": {
+                    "description": "Pace tracking work type: a lowercase slug such as \"sc\", \"plain-dc\", \"waffle\", \"colorwork-dc\", \"chain\".",
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "text"
+                ]
+              }
+            ]
           }
         }
       },
@@ -1156,6 +1278,10 @@
         "task_id": {
           "type": "string",
           "description": "Task UUID"
+        },
+        "force": {
+          "description": "Delete even when the task has ticked craft rows or sittings (default false)",
+          "type": "boolean"
         }
       },
       "required": [
@@ -3988,6 +4114,7 @@
           "description": "Task UUID"
         },
         "items": {
+          "description": "Rows to edit",
           "type": "array",
           "items": {
             "type": "object",
@@ -3999,6 +4126,17 @@
               "is_done": {
                 "description": "Whether the item is done",
                 "type": "boolean"
+              },
+              "text": {
+                "description": "New text for the row (the craft link stays)",
+                "type": "string",
+                "minLength": 1
+              },
+              "sort_order": {
+                "description": "New sort position (rows are shown by sort_order)",
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
               },
               "unit_count": {
                 "description": "Units on this row (e.g. stitches); null clears",
@@ -4027,13 +4165,72 @@
             "required": [
               "id"
             ]
-          },
-          "description": "Items to update"
+          }
+        },
+        "add": {
+          "description": "Rows to add, in order",
+          "maxItems": 500,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Row text, e.g. \"Row 12 · k2, p2 → 30\""
+              },
+              "unit_count": {
+                "description": "Units on this row; omit or null for none",
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "work_type": {
+                "description": "Pace tracking work type: a lowercase slug such as \"sc\", \"plain-dc\", \"waffle\", \"colorwork-dc\", \"chain\".",
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "is_done": {
+                "description": "Add it already ticked (default false)",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "text"
+            ]
+          }
+        },
+        "after_item_id": {
+          "description": "Insert the added rows right after this row (an item of this task); the rows after it move down",
+          "type": "string"
+        },
+        "at_start": {
+          "description": "Insert the added rows before the first row (instead of at the end)",
+          "type": "boolean"
+        },
+        "delete_item_ids": {
+          "description": "Checklist item UUIDs to delete",
+          "maxItems": 500,
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "required": [
-        "task_id",
-        "items"
+        "task_id"
       ]
     }
   },

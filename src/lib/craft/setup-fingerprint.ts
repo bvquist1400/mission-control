@@ -5,10 +5,12 @@
  * proves JS and SQL agree on real rows).
  *
  * One line per row, sorted by id within each kind; texts are hashed so no separator can be forged:
- *   craft-setup-v1|<project_id>
+ *   craft-setup-v2|<project_id>
  *   s|<section id>|<sort_order>|<created_at in ms>
- *   t|<task id>|<section id or "">|<created_at in ms>|<is_sample 1/0>|<sha256(title)>
- *   i|<item id>|<task id>|<sort_order>|<is_done 1/0>|<unit_count or "">|<craft_part_id or "">|<sha256(text)>
+ *   t|<task id>|<section id or "">|<created_at in ms>|<is_sample 1/0>|<unit_count or "">|<work_type or "">|<sha256(title)>
+ *   i|<item id>|<task id>|<sort_order>|<is_done 1/0>|<unit_count or "">|<work_type or "">|<craft_part_id or "">|<sha256(text)>
+ * v2 (S4, migration 075) adds the task's unit_count and work_type and the item's work_type: the stitch-count
+ * step reads them, so a change to any of them between the preview and Create is refused too.
  * unit_count is the database's numeric text (the loader reads unit_count::text), trimmed like
  * trim_scale(): never a JavaScript number, so 1e-7 and 1e21 keep their digits (FR1, F3/F5).
  */
@@ -21,11 +23,18 @@ const byId = <T extends { id: string }>(rows: T[]) => [...rows].sort((a, b) => (
 
 export function craftSetupFingerprintText(snapshot: SetupSnapshot): string {
   return [
-    `craft-setup-v1|${snapshot.project.id}`,
+    `craft-setup-v2|${snapshot.project.id}`,
     byId(snapshot.sections).map((s) => `s|${s.id}|${s.sort_order}|${ms(s.created_at)}`).join("\n"),
-    byId(snapshot.tasks).map((t) => `t|${t.id}|${t.section_id ?? ""}|${ms(t.created_at)}|${t.is_sample ? 1 : 0}|${sha(t.title)}`).join("\n"),
-    byId(snapshot.items).map((i) => `i|${i.id}|${i.task_id}|${i.sort_order}|${i.is_done ? 1 : 0}|${canonicalUnitText(i.unit_count) ?? ""}|${i.craft_part_id ?? ""}|${sha(i.text)}`).join("\n"),
+    byId(snapshot.tasks).map((t) => `t|${t.id}|${t.section_id ?? ""}|${ms(t.created_at)}|${t.is_sample ? 1 : 0}|${canonicalUnitText(t.unit_count ?? null) ?? ""}|${t.work_type ?? ""}|${sha(t.title)}`).join("\n"),
+    byId(snapshot.items).map((i) => `i|${i.id}|${i.task_id}|${i.sort_order}|${i.is_done ? 1 : 0}|${canonicalUnitText(i.unit_count) ?? ""}|${i.work_type ?? ""}|${i.craft_part_id ?? ""}|${sha(i.text)}`).join("\n"),
   ].join("\n");
 }
 
 export const craftSetupFingerprint = (snapshot: SetupSnapshot) => sha(craftSetupFingerprintText(snapshot));
+
+/**
+ * S4 (B): Reset's fingerprint = sha256("<setup fingerprint>|<craft state fingerprint>"). The setup part is the one
+ * above (TS); the craft state part (parts, sittings, notes, rip-backs, instructions, timer, links, yarn) comes from
+ * 075's craft_reset_preview(), the same function Reset runs under its locks.
+ */
+export const craftResetFingerprint = (setupFingerprint: string, stateFingerprint: string) => sha(`${setupFingerprint}|${stateFingerprint}`);

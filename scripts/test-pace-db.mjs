@@ -56,6 +56,10 @@ const CRAFT_S2_ROLLBACK = readFileSync(new URL("../supabase/rollbacks/073_craft_
 // 074 (craft S3) replaces two 059 functions and adds work_session_items.in_progress: rolled back first, restored last.
 const CRAFT_S3_MIGRATION = readFileSync(new URL("../supabase/migrations/074_craft_progress.sql", import.meta.url), "utf8");
 const CRAFT_S3_ROLLBACK = readFileSync(new URL("../supabase/rollbacks/074_craft_progress.down.sql", import.meta.url), "utf8");
+// Craft S4 (075) sits on 074: removed first, restored last.
+const CRAFT_S4_MIGRATION = readFileSync(new URL("../supabase/migrations/075_craft_reset.sql", import.meta.url), "utf8");
+const CRAFT_S4_ROLLBACK = readFileSync(new URL("../supabase/rollbacks/075_craft_reset.down.sql", import.meta.url), "utf8");
+let craftS4WasRemoved = false;
 // S3 FR1 (Fable 4): PACE_TEST_ON_074=1 runs every test on 074's work_session_create / work_session_update
 // bodies and its work_session_items.in_progress column (the "074 layer"), laid over each 059 apply, since
 // the craft schema that 074 sits on is rolled back for this suite. Without it the suite runs on 059's bodies.
@@ -323,6 +327,10 @@ function psqlConnection(label) {
 try {
   craftWasPresent = psql("SELECT to_regclass('public.craft_projects') IS NOT NULL;") === "t";
   if (craftWasPresent) {
+    if (psql("SELECT to_regprocedure('craft_reset_project(uuid,uuid,jsonb,text)') IS NOT NULL;") === "t") {
+      psql(CRAFT_S4_ROLLBACK);
+      craftS4WasRemoved = true;
+    }
     if (psql("SELECT to_regclass('public.craft_frogs') IS NOT NULL;") === "t") {
       psql(CRAFT_S3_ROLLBACK);
       craftS3WasRemoved = true;
@@ -1189,7 +1197,7 @@ try {
   }
 } finally {
   // test() records a restore failure without preventing fetch/user cleanup.
-  await test("cleanup: restore 059 before the removed 071, 072, 073 and 074", async () => {
+  await test("cleanup: restore 059 before the removed 071, 072, 073, 074 and 075", async () => {
     await restorePace();
     // The 074 layer comes off first (074 adds the column itself), leaving 059 exactly as its migration wrote it.
     if (ON_074 && layer074Present()) psql(UNLAYER_074);
@@ -1208,6 +1216,10 @@ try {
     if (craftS3WasRemoved) {
       psql(CRAFT_S3_MIGRATION);
       craftS3WasRemoved = false;
+    }
+    if (craftS4WasRemoved) {
+      psql(CRAFT_S4_MIGRATION);
+      craftS4WasRemoved = false;
     }
   });
   globalThis.fetch = realFetch;

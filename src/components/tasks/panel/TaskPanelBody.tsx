@@ -96,6 +96,8 @@ export const TaskPanelBody = memo(function TaskPanelBody({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [commitments, setCommitments] = useState<CommitmentSummary[]>([]);
   const [actionError, setActionError] = useState<string | null>(null);
+  // Craft S4 (A): a delete refused for ticked craft rows or sittings can be sent again with force, from here only.
+  const [forceDelete, setForceDelete] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   // "All fields" starts open (the body is keyed by task, so every task opens with it open).
   const [fieldsOpen, setFieldsOpen] = useState(true);
@@ -229,15 +231,17 @@ export const TaskPanelBody = memo(function TaskPanelBody({
     if (saved) onClose();
   }
 
-  async function handleDelete() {
+  async function handleDelete(force = false) {
     if (!task || isDeleting) return;
-    if (!window.confirm(`Delete task "${task.title}"? This cannot be undone.`)) return;
+    if (!force && !window.confirm(`Delete task "${task.title}"? This cannot be undone.`)) return;
     setActionError(null);
+    setForceDelete(false);
     setIsDeleting(true);
     try {
-      const response = await fetch(`/api/tasks/${task.id}`, { method: "DELETE" });
+      const response = await fetch(`/api/tasks/${task.id}${force ? "?force=true" : ""}`, { method: "DELETE" });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({ error: "Failed to delete task" }));
+        if (response.status === 409 && payload.reason === "craft_history") setForceDelete(true);
         throw new Error(typeof payload.error === "string" ? payload.error : "Failed to delete task");
       }
       emitDeleted(task.id);
@@ -328,6 +332,9 @@ export const TaskPanelBody = memo(function TaskPanelBody({
       {errorText ? (
         <p role="alert" className="tp-alert">
           {errorText}
+          {forceDelete && !detail.error ? (
+            <> <Button variant="danger" size="xs" onClick={() => void handleDelete(true)} disabled={isDeleting}>Delete anyway</Button></>
+          ) : null}
         </p>
       ) : null}
 

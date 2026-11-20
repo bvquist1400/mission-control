@@ -745,7 +745,14 @@ function createMcpServer(): McpServer {
       is_sample: z.boolean().optional().describe('Pace tracking: true for a swatch / test piece / prototype; its speeds are labelled as sample speeds'),
       blocked_by_task_id: z.string().optional().describe('Task UUID this new task waits on. If the link can\'t be saved, the task is not created and an error is returned.'),
       initial_comment: z.string().optional().describe('Creates first comment on the task'),
-      initial_checklist: z.array(z.string()).optional().describe('Creates checklist items'),
+      initial_checklist: z.array(z.union([
+        z.string(),
+        z.object({
+          text: z.string().min(1).describe('Row text'),
+          unit_count: z.number().min(0).nullable().optional().describe('Units on this row (e.g. stitches)'),
+          work_type: z.string().nullable().optional().describe(WORK_TYPE_DESCRIPTION),
+        }),
+      ])).max(500).optional().describe('Creates checklist items, in order: plain text, or { text, unit_count?, work_type? } for pace rows'),
     },
     async (args) => {
       const res = await fetch('https://mission-control-orpin-chi.vercel.app/api/tasks', {
@@ -870,20 +877,21 @@ function createMcpServer(): McpServer {
   // ── DELETE TASK ───────────────────────────────────────────────────────
   mcp.tool(
     'delete_task',
-    'Delete a task by ID.',
+    'Delete a task by ID. A task with ticked craft rows or logged sittings is refused (nothing deleted; the reply says how many) unless force is true: deleting it takes those ticks and sittings off the craft screen and out of the pace numbers. To change a craft task\'s rows, edit them with update_task_checklist instead of deleting and recreating the task.',
     {
       task_id: z.string().describe('Task UUID'),
+      force: z.boolean().optional().describe('Delete even when the task has ticked craft rows or sittings (default false)'),
     },
-    async ({ task_id }) => {
+    async ({ task_id, force }) => {
       const res = await fetch(
-        `https://mission-control-orpin-chi.vercel.app/api/tasks/${task_id}`,
+        `https://mission-control-orpin-chi.vercel.app/api/tasks/${task_id}${force ? '?force=true' : ''}`,
         {
           method: 'DELETE',
           headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
         }
       );
       const data = await res.json();
-      return toMcpResponse(data);
+      return { ...toMcpResponse(data), ...(res.ok ? {} : { isError: true }) };
     }
   );
 
@@ -1097,31 +1105,143 @@ function createMcpServer(): McpServer {
 
   mcp.tool(
     'update_task_checklist',
-    'Update checklist items: mark done/undone, or set the units on a row for pace tracking (unit_count, e.g. 195 stitches, and work_type, e.g. "colorwork-dc"; null clears). Each item needs its id and at least one field. Every item is validated before any is written. If some rows fail, the reply lists them under failed and is marked as an error. To record time spent, use log_work_session instead (it can tick the rows too).',
+    'Edit a task\'s checklist in place: mark rows done/undone, change a row\'s text or sort position, set its units for pace tracking (unit_count, e.g. 195 stitches, and work_type, e.g. "colorwork-dc"; null clears), add rows (at the end, at the start, or after a given row, moving the rows after them down) and delete rows. A row linked to the craft screen keeps its link when its text or position changes, so ticks and sittings stay; prefer this to deleting and recreating tasks. Added rows join the craft screen at its next Reset (craft_reset). Deleting a craft row also tidies its part (a part left with no rows goes, unless it has sittings, rip-backs or notes). Order: items (edits), then add, then delete; every edit is validated before any is written. If some rows fail, the reply lists them and is marked as an error. To record time spent, use log_work_session instead (it can tick the rows too).',
     {
       task_id: z.string().describe('Task UUID'),
       items: z.array(z.object({
         id: z.string().describe('Checklist item UUID'),
         is_done: z.boolean().optional().describe('Whether the item is done'),
+        text: z.string().min(1).optional().describe('New text for the row (the craft link stays)'),
+        sort_order: z.number().int().optional().describe('New sort position (rows are shown by sort_order)'),
         unit_count: z.number().min(0).nullable().optional().describe('Units on this row (e.g. stitches); null clears'),
         work_type: z.string().nullable().optional().describe(WORK_TYPE_DESCRIPTION),
-      })).describe('Items to update'),
+      })).optional().describe('Rows to edit'),
+      add: z.array(z.object({
+        text: z.string().min(1).describe('Row text, e.g. "Row 12 · k2, p2 → 30"'),
+        unit_count: z.number().min(0).nullable().optional().describe('Units on this row; omit or null for none'),
+        work_type: z.string().nullable().optional().describe(WORK_TYPE_DESCRIPTION),
+        is_done: z.boolean().optional().describe('Add it already ticked (default false)'),
+      })).max(500).optional().describe('Rows to add, in order'),
+      after_item_id: z.string().optional().describe('Insert the added rows right after this row (an item of this task); the rows after it move down'),
+      at_start: z.boolean().optional().describe('Insert the added rows before the first row (instead of at the end)'),
+      delete_item_ids: z.array(z.string()).max(500).optional().describe('Checklist item UUIDs to delete'),
     },
-    async ({ task_id, items }) => {
-      const res = await fetch(
-        `https://mission-control-orpin-chi.vercel.app/api/tasks/${task_id}/checklist`,
-        {
-          method: 'PATCH',
-          headers: {
-            'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY!,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ items }),
+    async ({ task_id, items, add, after_item_id, at_start, delete_item_ids }) => {
+      const base = `https://mission-control-orpin-chi.vercel.app/api/tasks/${task_id}/checklist`;
+      const headers = { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY!, 'Content-Type': 'application/json' };
+      const reply: Record<string, unknown> = {};
+      let failed = false;
+      if (!items?.length && !add?.length && !delete_item_ids?.length) {
+        return { ...toMcpResponse({ error: 'Give items to edit, rows to add or rows to delete' }), isError: true };
+      }
+      if (items?.length) {
+        const res = await fetch(base, { method: 'PATCH', headers, body: JSON.stringify({ items }) });
+        const data = await res.json();
+        if (!res.ok || res.status === 207) failed = true;
+        // Unchanged reply shape when only edits are sent.
+        if (!add?.length && !delete_item_ids?.length) return { ...toMcpResponse(data), ...(failed ? { isError: true } : {}) };
+        reply.updated = data;
+        if (!res.ok && res.status !== 207) return { ...toMcpResponse(reply), isError: true };
+      }
+      if (add?.length) {
+        const res = await fetch(base, {
+          method: 'POST', headers,
+          body: JSON.stringify({ items: add, ...(after_item_id ? { after_item_id } : {}), ...(at_start ? { at_start: true } : {}) }),
+        });
+        const data = await res.json();
+        reply.added = data;
+        if (!res.ok) return { ...toMcpResponse(reply), isError: true };
+      }
+      if (delete_item_ids?.length) {
+        const deleted: string[] = [];
+        const notDeleted: { id: string; error: string }[] = [];
+        for (const itemId of delete_item_ids) {
+          const res = await fetch(`${base}?itemId=${encodeURIComponent(itemId)}`, { method: 'DELETE', headers });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok) deleted.push(itemId); else notDeleted.push({ id: itemId, error: (data as { error?: string }).error ?? `HTTP ${res.status}` });
         }
-      );
-      const data = await res.json();
-      const failed = !res.ok || res.status === 207;
-      return { ...toMcpResponse(data), ...(failed ? { isError: true } : {}) };
+        reply.deleted = deleted;
+        if (notDeleted.length) { reply.not_deleted = notDeleted; failed = true; }
+      }
+      return { ...toMcpResponse(reply), ...(failed ? { isError: true } : {}) };
+    }
+  );
+
+  // ── CRAFT SCREEN (S4, migration 075): set up and reset, each a preview then a commit ─────────
+  const craftPlanSummary = (plan: Record<string, unknown> | undefined) => {
+    if (!plan) return plan;
+    const parts = Array.isArray(plan.parts) ? (plan.parts as Record<string, unknown>[]) : [];
+    return {
+      ok: plan.ok, stops: plan.stops, active_part_index: plan.active_part_index, default_craft: plan.default_craft,
+      parts: parts.map((part) => ({
+        name: part.name, row_word: part.row_word, total_rows: part.total_rows, row_count: part.row_count, done_count: part.done_count,
+        current_row: part.current_row, stitch_count: part.stitch_count, numbering: part.numbering, gap_notes: part.gap_notes,
+        stitches: part.stitches,
+        segments: Array.isArray(part.segments) ? (part.segments as Record<string, unknown>[]).map(({ task_id, name, from_row, to_row }) => ({ task_id, name, from_row, to_row })) : [],
+      })),
+      plain_steps: Array.isArray(plan.plain_items) ? plan.plain_items.length : 0,
+      near_misses: plan.near_misses,
+      stitch_fills: Array.isArray(plan.stitch_fills) ? plan.stitch_fills.length : 0,
+    };
+  };
+  const craftCommit = async (path: string, body: Record<string, unknown>) => {
+    const res = await fetch(`https://mission-control-orpin-chi.vercel.app/api/craft/${path}`, {
+      method: 'POST',
+      headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY!, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    return { ...toMcpResponse(data), ...(res.ok ? {} : { isError: true }) };
+  };
+  const craftPreview = async (path: string) => {
+    const res = await fetch(`https://mission-control-orpin-chi.vercel.app/api/craft/${path}`, {
+      headers: { 'X-Mission-Control-Key': process.env.MISSION_CONTROL_API_KEY! },
+    });
+    return { res, data: await res.json() as Record<string, unknown> };
+  };
+
+  mcp.tool(
+    'craft_setup',
+    'Put a knitting/crochet project on the craft screen, the same two steps as the app: action "preview" shows what Create would make (one part per section, rows counted as the pattern numbers them or straight through when labels restart, cast-on and checks as plain steps, the stitch counts it would fill on rows that have none, and any STOP that blocks it) with a fingerprint; action "commit" creates it with that fingerprint, refused if anything changed since the preview. Names (one per part, in order) and craft (knit/crochet/other) default to the preview\'s. Nothing is written by preview.',
+    {
+      project_id: z.string().describe('Project UUID'),
+      action: z.enum(['preview', 'commit']).describe('preview first, then commit with its fingerprint'),
+      fingerprint: z.string().optional().describe('The preview\'s fingerprint (required for commit)'),
+      names: z.array(z.string()).optional().describe('One name per part, in the preview\'s order (default: the preview\'s names)'),
+      craft: z.enum(['knit', 'crochet', 'other']).optional().describe('Craft kind (default: from the project\'s tags)'),
+    },
+    async ({ project_id, action, fingerprint, names, craft }) => {
+      const path = `setup/${encodeURIComponent(project_id)}`;
+      const { res, data } = await craftPreview(path);
+      if (!res.ok) return { ...toMcpResponse(data), isError: true };
+      const plan = data.plan as Record<string, unknown>;
+      if (action === 'preview') return toMcpResponse({ fingerprint: data.fingerprint, plan: craftPlanSummary(plan) });
+      if (!fingerprint) return { ...toMcpResponse({ error: 'fingerprint is required for commit; run preview first' }), isError: true };
+      const parts = (plan.parts as { name: string }[]) ?? [];
+      return craftCommit(path, { fingerprint, craft: craft ?? plan.default_craft, names: names ?? parts.map((part) => part.name) });
+    }
+  );
+
+  mcp.tool(
+    'craft_reset',
+    'Reset a project\'s craft screen: unlink its parts and set it up again from the checklists with today\'s rules, in one transaction, the same two steps as the app\'s "Reset craft screen". Ticks stay on the rows; sittings, notes, rip-backs, instructions and the timer move to the same rows (by row first, then by task + row number). action "preview" shows the new parts, the stitch counts it would fill, what moves and everything that can\'t be matched to a row (and what happens to it), with a fingerprint; action "commit" resets with that fingerprint, refused if anything changed. Refused for projects with quarter rows, ridge counts or band checks. Names default to the preview\'s.',
+    {
+      project_id: z.string().describe('Project UUID'),
+      action: z.enum(['preview', 'commit']).describe('preview first, then commit with its fingerprint'),
+      fingerprint: z.string().optional().describe('The preview\'s fingerprint (required for commit)'),
+      names: z.array(z.string()).optional().describe('One name per new part, in the preview\'s order (default: the preview\'s names)'),
+    },
+    async ({ project_id, action, fingerprint, names }) => {
+      const path = `${encodeURIComponent(project_id)}/reset`;
+      const { res, data } = await craftPreview(path);
+      if (!res.ok) return { ...toMcpResponse(data), isError: true };
+      const plan = data.plan as Record<string, unknown>;
+      if (action === 'preview') {
+        return toMcpResponse({ fingerprint: data.fingerprint, plan: craftPlanSummary(plan), old_parts: data.old_parts, carry: data.carry_lines, cannot_carry: (data.carry as { lost?: unknown })?.lost });
+      }
+      if (!fingerprint) return { ...toMcpResponse({ error: 'fingerprint is required for commit; run preview first' }), isError: true };
+      const parts = (plan.parts as { name: string }[]) ?? [];
+      return craftCommit(path, { fingerprint, names: names ?? parts.map((part) => part.name) });
     }
   );
 

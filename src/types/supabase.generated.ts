@@ -3889,9 +3889,42 @@ export type Database = {
         }
         Returns: Json
       }
+      checklist_insert_items: {
+        Args: {
+          p_after_item_id?: string
+          p_at_start?: boolean
+          p_items: Json
+          p_task_id: string
+          p_user_id: string
+        }
+        Returns: {
+          completed_at: string | null
+          craft_part_id: string | null
+          craft_row: number | null
+          created_at: string
+          id: string
+          is_done: boolean
+          sort_order: number
+          task_id: string
+          text: string
+          unit_count: number | null
+          user_id: string
+          work_type: string | null
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "task_checklist_items"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
       clear_task_unblock: {
         Args: { p_reason?: string; p_task_id: string; p_user_id: string }
         Returns: Json
+      }
+      craft_apply_units: {
+        Args: { p_project_id: string; p_units: Json; p_user_id: string }
+        Returns: number
       }
       craft_band_check: {
         Args: { p_segment_id: string; p_user_id: string }
@@ -3937,6 +3970,7 @@ export type Database = {
         }
         Returns: Json
       }
+      craft_part_keeps: { Args: { p_part_id: string }; Returns: boolean }
       craft_part_lock: {
         Args: { p_part_id: string; p_user_id: string }
         Returns: {
@@ -3970,6 +4004,10 @@ export type Database = {
         }
         Returns: Json
       }
+      craft_plan_core: {
+        Args: { p_project_id: string; p_reset: boolean; p_user_id: string }
+        Returns: Json
+      }
       craft_remove_blockers: {
         Args: { p_project_id: string; p_user_id: string }
         Returns: string[]
@@ -3977,6 +4015,39 @@ export type Database = {
       craft_remove_project: {
         Args: { p_project_id: string; p_user_id: string }
         Returns: Json
+      }
+      craft_reset_blockers: {
+        Args: { p_project_id: string; p_user_id: string }
+        Returns: string[]
+      }
+      craft_reset_decisions: {
+        Args: { p_plan: Json; p_project_id: string; p_user_id: string }
+        Returns: {
+          at_row: number
+          from_row: number
+          kind: string
+          new_part: number
+          old_part_id: string
+          ref: string
+          to_row: number
+        }[]
+      }
+      craft_reset_preview: {
+        Args: { p_project_id: string; p_user_id: string }
+        Returns: Json
+      }
+      craft_reset_project: {
+        Args: {
+          p_fingerprint: string
+          p_plan: Json
+          p_project_id: string
+          p_user_id: string
+        }
+        Returns: Json
+      }
+      craft_reset_state_text: {
+        Args: { p_project_id: string; p_user_id: string }
+        Returns: string
       }
       craft_rows: {
         Args: {
@@ -4025,6 +4096,15 @@ export type Database = {
         }
         Returns: Json
       }
+      craft_setup_check_payload: {
+        Args: {
+          p_fingerprint: string
+          p_need_craft: boolean
+          p_plan: Json
+          p_project_id: string
+        }
+        Returns: undefined
+      }
       craft_setup_fingerprint: {
         Args: { p_project_id: string; p_user_id: string }
         Returns: string
@@ -4043,6 +4123,15 @@ export type Database = {
           p_plan: Json
           p_project_id: string
           p_user_id: string
+        }
+        Returns: Json
+      }
+      craft_setup_write: {
+        Args: {
+          p_plan: Json
+          p_project_id: string
+          p_user_id: string
+          v_plan: Json
         }
         Returns: Json
       }
@@ -4073,6 +4162,10 @@ export type Database = {
       }
       craft_timer_state: {
         Args: { p_now: string; p_user_id: string }
+        Returns: Json
+      }
+      delete_task_checked: {
+        Args: { p_force?: boolean; p_task_id: string; p_user_id: string }
         Returns: Json
       }
       famcal_add_personal_task_comment: {

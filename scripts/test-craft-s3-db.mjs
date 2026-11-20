@@ -18,6 +18,10 @@ const admin = createClient(url, key, { auth: { persistSession: false, autoRefres
 const up074 = readFileSync(new URL("../supabase/migrations/074_craft_progress.sql", import.meta.url), "utf8");
 const down074 = readFileSync(new URL("../supabase/rollbacks/074_craft_progress.down.sql", import.meta.url), "utf8");
 const psql = (sql) => execFileSync("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"], { input: sql, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+const up075 = readFileSync(new URL("../supabase/migrations/075_craft_reset.sql", import.meta.url), "utf8");
+const down075 = readFileSync(new URL("../supabase/rollbacks/075_craft_reset.down.sql", import.meta.url), "utf8");
+// Craft S4: 075 sits on 074, so it comes off before any 074 rollback and goes back right after 074 is re-applied.
+const has075 = () => psql("SELECT to_regprocedure('craft_reset_project(uuid,uuid,jsonb,text)') IS NOT NULL;") === "t";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function connection(label) {
   const child = spawn("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"]);
@@ -823,12 +827,15 @@ try {
     const kept = sessions();
     const finished = psql("SELECT count(*) FROM work_session_items WHERE NOT in_progress;");
     assert.notEqual(psql("SELECT count(*) FROM work_session_items WHERE in_progress;"), "0", "there are in-progress links to drop");
+    if (has075()) psql(down075);
     psql(down074);
     psql(down073);
     psql(up073);
     const fresh073 = schemaState();
     psql(up074);
+    psql(up075);
     assert.notEqual(schemaState(), fresh073);
+    if (has075()) psql(down075);
     psql(down074);
     assert.equal(schemaState(), fresh073);
     assert.equal(psql("SELECT to_regclass('public.craft_frogs') IS NULL;"), "t");
@@ -839,6 +846,7 @@ try {
     assert.equal(sessions(), kept, "sittings (and the exclusions a rip-back made) stay");
     assert.equal(psql("SELECT count(*) FROM work_session_items;"), finished, "only the in-progress links went");
     psql(up074);
+    psql(up075);
     for (const fn of [...NEW_FUNCTIONS, ...REPLACED]) assert.equal(psql(`SELECT has_function_privilege('authenticated', '${fn}', 'EXECUTE');`), "t", fn);
   });
 } finally {

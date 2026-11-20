@@ -9,6 +9,10 @@ export const REMOVE_KEEPS = "Your ticks, stitch counts and sittings stay.";
 export const removeGoes = (parts: number) =>
   `Removes the craft screen setup for this project: ${parts} ${parts === 1 ? "part and its" : "parts and their"} row links.`;
 
+/** S4 (A): parts whose rows were all deleted but that keep history are hidden; Reset sets the project up again. */
+export const hiddenPartsText = (n: number) =>
+  `${n === 1 ? "One part has" : `${n} parts have`} no rows left (they were deleted from the checklist), so ${n === 1 ? "it is" : "they are"} hidden. Use Reset craft screen in the ⋯ menu to set the screen up again from the checklists.`;
+
 export type RemoveResult = { ok: true } | { ok: false; message: string };
 export async function sendRemove(projectId: string, fetcher: typeof fetch = fetch): Promise<RemoveResult> {
   try {
@@ -59,6 +63,8 @@ export function CraftScreenMenu({ projectId, projectName, canRemove, partCount, 
       <Button ref={trigger} variant="ghost" size="icon" aria-label="Craft screen menu" aria-expanded={open} aria-controls={menuId} onClick={() => setOpen((v) => !v)}>⋯</Button>
       <div id={menuId} className="craft-menu-panel" hidden={!open}>
         {actions?.map((action) => <button key={action.label} type="button" className="craft-menu-item" onClick={() => { setOpen(false); action.onSelect(); }}>{action.label}</button>)}
+        {/* S4 (B): Reset opens its preview, which confirms before anything changes. */}
+        <a className="craft-menu-item" href={`/craft/setup/${projectId}?reset=1`}>Reset craft screen…</a>
         {canRemove
           ? <button type="button" className="craft-menu-item" onClick={() => { setOpen(false); setConfirming(true); }}>Remove from craft screen</button>
           : <p className="craft-menu-note">{blockers?.length

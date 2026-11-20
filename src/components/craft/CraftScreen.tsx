@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { checkBeforeText, upcomingWithChecks, type CraftProjectOption, type CraftView, type UpcomingEntry } from "@/lib/craft";
 import { Button, buttonClasses } from "@/components/ui/Button";
 import { CraftProjectSwitcher } from "@/components/craft/CraftProjectSwitcher";
-import { CraftScreenMenu } from "@/components/craft/CraftScreenMenu";
+import { CraftScreenMenu, hiddenPartsText } from "@/components/craft/CraftScreenMenu";
 import {
   BandCloseSheet, ChangeTotalSheet, CheckFirstSheet, EarlierSteps, FixCountSheet, LogSittingSheet, NewDaySheet, NoteSheet, PartsList, PartsSheet, TimerConflictSheet, TimerFixSheet, UndoRowsSheet,
   type BandCheck, type OtherTimer, type Send, type SendReply,
@@ -225,6 +225,7 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
           <div className="craft-project"><p className="craft-eyebrow">{view.craft === "knit" ? "Knitting" : view.craft === "crochet" ? "Crochet" : "Craft"}</p>{(view.projects?.length ?? 0) > 1 ? <CraftProjectSwitcher currentId={view.project.id} currentName={view.project.name} projects={view.projects ?? []} /> : <h2>{view.project.name}</h2>}{view.gear && <p>{view.gear}</p>}</div>
           <div className="craft-part"><span className="craft-eyebrow">{allFinished ? "Project progress" : "Active part"}</span><h3>{part?.name ?? (allFinished ? "All parts finished" : "No parts yet")}</h3>{part?.stitch_count !== null && part?.stitch_count !== undefined && <p>{part.stitch_count} stitches</p>}
             {view.parts.length > 0 && <button type="button" className="craft-parts-open" onClick={() => setSheet("parts")} aria-label={`Parts (${view.parts.length}): work on another part or change a total`}>Parts</button>}</div>
+          {view.hidden_parts > 0 && <p className="craft-menu-note" role="note">{hiddenPartsText(view.hidden_parts)}</p>}
           {afterLast.length > 0 && (
             <ul className="craft-due-checks" aria-label="After the last row">{afterLast.map((check) => (
               <li key={check.id} className="craft-due-check">

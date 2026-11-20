@@ -3,7 +3,7 @@ import { requireAuthenticatedRoute } from "@/lib/supabase/route-auth";
 import { isPostgrestNotFound } from "@/lib/supabase/errors";
 import { withCorsHeaders } from "@/lib/cors";
 import { CraftNotFoundError, loadCraftView } from "@/lib/craft/loader";
-import { CraftSetupRefusal, createCraftSetup, loadCraftSetupPreview, removeCraftProject } from "@/lib/craft/setup-service";
+import { CraftSetupRefusal, createCraftSetup, loadCraftResetPreview, loadCraftSetupPreview, removeCraftProject, resetCraftProject } from "@/lib/craft/setup-service";
 import { CraftWriteError, deleteNote, writeCheck, writeFrog, writeNote, writePart, writeRows, writeSitting, writeTimer, writeTotal } from "@/lib/craft/write-service";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -27,10 +27,10 @@ export async function craftGet(request: NextRequest, projectId?: string) {
   }
 }
 
-type SetupAction = "preview" | "create" | "remove";
-const NOT_FOUND = { preview: "Project not found", create: "Project not found", remove: "Craft project not found" } as const;
+type SetupAction = "preview" | "create" | "remove" | "reset_preview" | "reset";
+const NOT_FOUND = { preview: "Project not found", create: "Project not found", remove: "Craft project not found", reset_preview: "Project not found", reset: "Project not found" } as const;
 
-/** GET /api/craft/setup/[id] (preview), POST same (Create), DELETE /api/craft/[id] (Remove). */
+/** GET /api/craft/setup/[id] (preview), POST same (Create), DELETE /api/craft/[id] (Remove), GET/POST /api/craft/[id]/reset (S4 Reset). */
 export async function craftSetupRoute(request: NextRequest, action: SetupAction, projectId: string) {
   const json = jsonFor(request);
   try {
@@ -40,8 +40,10 @@ export async function craftSetupRoute(request: NextRequest, action: SetupAction,
     const { supabase, userId } = auth.context;
     if (action === "preview") return json(await loadCraftSetupPreview(supabase, userId, projectId), 200);
     if (action === "remove") return json(await removeCraftProject(supabase, userId, projectId), 200);
+    if (action === "reset_preview") return json(await loadCraftResetPreview(supabase, userId, projectId), 200);
     let body: unknown;
     try { body = await request.json(); } catch { return json({ error: "Body must be JSON" }, 400); }
+    if (action === "reset") return json(await resetCraftProject(supabase, userId, projectId, body), 200);
     return json(await createCraftSetup(supabase, userId, projectId, body), 201);
   } catch (error) {
     if (error instanceof CraftSetupRefusal) return json({ error: error.message, reason: error.reason, ...(error.stops ? { stops: error.stops } : {}) }, error.status);

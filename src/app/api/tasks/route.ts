@@ -42,6 +42,7 @@ import {
 import type { TaskStatus, TaskType, EstimateSource, BlockedReason } from '@/types/database';
 import { normalizeTaskOwner, parseTaskOwnerFields, TASK_OWNERS } from '@/lib/task-owner';
 import { normalizeUnitCount, normalizeWorkType } from '@/lib/pace';
+import { parseInitialChecklist } from '@/lib/checklist-input';
 
 const VALID_STATUSES: TaskStatus[] = ['Backlog', 'Planned', 'In Progress', 'Blocked/Waiting', 'Parked', 'Missed', 'Done'];
 const VALID_TASK_TYPES: TaskType[] = ['Task', 'Ticket', 'MeetingPrep', 'FollowUp', 'Admin', 'Build'];
@@ -400,6 +401,11 @@ export async function POST(request: NextRequest) {
     }
 
     // Pace tracking (migration 059): task-level units, work type, sample flag.
+    // Craft S4 (G): rows as text or { text, unit_count?, work_type? }, all checked before the task is made.
+    const initialChecklistInput = parseInitialChecklist(body.initial_checklist);
+    if (!initialChecklistInput.ok) {
+      return NextResponse.json({ error: initialChecklistInput.error }, { status: 400 });
+    }
     const unitCount = normalizeUnitCount(body.unit_count);
     if (!unitCount.ok) {
       return NextResponse.json({ error: unitCount.error }, { status: 400 });
@@ -723,23 +729,20 @@ export async function POST(request: NextRequest) {
     }
 
     // Create initial checklist items if provided (from Quick Capture LLM extraction)
-    const initialChecklist = Array.isArray(body.initial_checklist)
-      ? (body.initial_checklist as unknown[])
-          .filter((item): item is string => typeof item === 'string')
-          .map((s) => s.trim())
-          .filter(Boolean)
-      : [];
+    const initialChecklist = initialChecklistInput.rows;
 
     if (initialChecklist.length > 0 && data) {
       const { error: checklistError } = await supabase
         .from('task_checklist_items')
         .insert(
-          initialChecklist.map((text, index) => ({
+          initialChecklist.map((row, index) => ({
             user_id: userId,
             task_id: data.id,
-            text,
+            text: row.text,
             is_done: false,
             sort_order: index,
+            unit_count: row.unit_count,
+            work_type: row.work_type,
           }))
         );
 

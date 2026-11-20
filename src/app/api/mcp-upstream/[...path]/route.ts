@@ -40,6 +40,8 @@ import * as projectForecastRoute from '@/app/api/projects/[id]/forecast/route';
 import * as paceRatesRoute from '@/app/api/pace-rates/route';
 import * as workSessionsRoute from '@/app/api/work-sessions/route';
 import * as workSessionRoute from '@/app/api/work-sessions/[id]/route';
+import * as craftSetupRoute from '@/app/api/craft/setup/[projectId]/route';
+import * as craftResetRoute from '@/app/api/craft/[projectId]/reset/route';
 import * as sectionRoute from '@/app/api/sections/[id]/route';
 import * as sprintsRoute from '@/app/api/sprints/route';
 import * as sprintRoute from '@/app/api/sprints/[id]/route';
@@ -356,6 +358,19 @@ async function handleRequest(
   if (segments[0] === 'work-sessions' && segments[1] && segments.length === 2) {
     if (request.method === 'PATCH') return invokeDynamic(workSessionRoute.PATCH, requestWithContext, { id: segments[1] });
     if (request.method === 'DELETE') return invokeDynamic(workSessionRoute.DELETE, requestWithContext, { id: segments[1] });
+    return methodNotAllowed();
+  }
+
+  // Craft S4 (075): MCP craft_setup and craft_reset (preview = GET, commit = POST), the screen's own routes.
+  if (segments[0] === 'craft' && segments[1] === 'setup' && segments[2] && segments.length === 3) {
+    if (request.method === 'GET') return invokeDynamic(craftSetupRoute.GET, requestWithContext, { projectId: segments[2] });
+    if (request.method === 'POST') return invokeDynamic(craftSetupRoute.POST, requestWithContext, { projectId: segments[2] });
+    return methodNotAllowed();
+  }
+
+  if (segments[0] === 'craft' && segments[1] && segments[2] === 'reset' && segments.length === 3) {
+    if (request.method === 'GET') return invokeDynamic(craftResetRoute.GET, requestWithContext, { projectId: segments[1] });
+    if (request.method === 'POST') return invokeDynamic(craftResetRoute.POST, requestWithContext, { projectId: segments[1] });
     return methodNotAllowed();
   }
 

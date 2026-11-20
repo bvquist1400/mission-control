@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isPostgrestNotFound } from '@/lib/supabase/errors';
+import type { Json } from '@/types/supabase.generated';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 import { normalizeUnitCount, normalizeWorkType } from '@/lib/pace';
+import { parseChecklistAdd, parseRowObject } from '@/lib/checklist-input';
 
 const CHECKLIST_ITEM_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -51,10 +53,36 @@ export async function POST(
     const { supabase, userId } = auth.context;
     const { id } = await params;
     const body = (await request.json()) as Record<string, unknown>;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return NextResponse.json({ error: 'Body must be a JSON object' }, { status: 400 });
+    }
+
+    // Craft S4 (E): several rows at one place, { items, after_item_id?, at_start? }, in one 075 call
+    // (checklist_insert_items: the rows after them move down; a craft row keeps its link).
+    if ('items' in body) {
+      const add = parseChecklistAdd(body);
+      if (!add.ok) return NextResponse.json({ error: add.error }, { status: 400 });
+      const { data: inserted, error: insertError } = await supabase.rpc('checklist_insert_items', {
+        p_user_id: userId, p_task_id: id, p_items: add.rows as unknown as Json,
+        ...(add.after_item_id ? { p_after_item_id: add.after_item_id } : {}), p_at_start: add.at_start,
+      });
+      if (insertError) {
+        if (insertError.code === 'P0002') {
+          return NextResponse.json({ error: /item/.test(insertError.message ?? '') ? 'after_item_id is not on this task' : 'Task not found' }, { status: 404 });
+        }
+        if (insertError.code === '22023') return NextResponse.json({ error: 'Some rows are not valid; nothing was added' }, { status: 400 });
+        if (insertError.code === '55P03' || insertError.code === '40P01') return NextResponse.json({ error: 'The task was busy and nothing was added. Try again.', reason: 'busy' }, { status: 409 });
+        throw insertError;
+      }
+      return NextResponse.json(inserted ?? [], { status: 201 });
+    }
 
     if (typeof body.text !== 'string' || body.text.trim().length === 0) {
       return NextResponse.json({ error: 'text is required' }, { status: 400 });
     }
+    // S4: one row may carry unit_count / work_type too (same rules as PATCH).
+    const extras = parseRowObject({ text: body.text, ...('unit_count' in body ? { unit_count: body.unit_count } : {}), ...('work_type' in body ? { work_type: body.work_type } : {}) }, false);
+    if (!extras.ok) return NextResponse.json({ error: extras.error }, { status: 400 });
 
     const { data: task, error: taskError } = await supabase
       .from('tasks')
@@ -93,6 +121,8 @@ export async function POST(
         text: body.text.trim(),
         is_done: typeof body.is_done === 'boolean' ? body.is_done : false,
         sort_order: typeof body.sort_order === 'number' ? body.sort_order : nextSortOrder,
+        ...('unit_count' in body ? { unit_count: extras.row.unit_count } : {}),
+        ...('work_type' in body ? { work_type: extras.row.work_type } : {}),
       })
       .select()
       .single();
@@ -251,6 +281,10 @@ export async function DELETE(
       .select('id');
 
     if (error) {
+      // S4 (A): deleting a craft row heals its part (075's trigger), which never waits on a busy craft screen.
+      if (error.code === '55P03' || error.code === '40P01') {
+        return NextResponse.json({ error: 'The craft screen was busy and nothing was deleted. Try again in a moment.', reason: 'busy' }, { status: 409 });
+      }
       throw error;
     }
 

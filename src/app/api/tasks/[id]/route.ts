@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { taskDeleteRefusalText } from '@/lib/checklist-input';
 import {
   ProjectSectionServiceError,
   resolveTaskProjectSectionState,
@@ -966,20 +967,35 @@ export async function DELETE(
 
     const { supabase, userId } = auth.context;
     const { id } = await params;
-
-    const { data, error } = await supabase
-      .from('tasks')
-      .delete()
-      .eq('id', id)
-      .eq('user_id', userId)
-      .select('id');
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+    }
+    // Craft S4 (A): one call to 075's delete_task_checked, which refuses a task with ticked craft rows or
+    // sittings unless ?force=true (the MCP delete_task passes force through).
+    const forceParam = new URL(request.url).searchParams.get('force');
+    if (forceParam !== null && forceParam !== 'true' && forceParam !== 'false') {
+      return NextResponse.json({ error: 'force must be true or false' }, { status: 400 });
+    }
+    const { data, error } = await supabase.rpc('delete_task_checked', {
+      p_user_id: userId, p_task_id: id.toLowerCase(), p_force: forceParam === 'true',
+    });
 
     if (error) {
+      if (error.code === '55P03' || error.code === '40P01') {
+        return NextResponse.json({ error: 'The task or its craft screen was busy and nothing was deleted. Try again in a moment.', reason: 'busy' }, { status: 409 });
+      }
       throw error;
     }
 
-    if (!data || data.length === 0) {
+    const reply = (data ?? {}) as { status?: string; ticked_craft_rows?: number; sittings?: number };
+    if (reply.status === 'not_found') {
       return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+    }
+    if (reply.status === 'refused') {
+      return NextResponse.json({
+        error: taskDeleteRefusalText(reply.ticked_craft_rows ?? 0, reply.sittings ?? 0),
+        reason: 'craft_history', ticked_craft_rows: reply.ticked_craft_rows ?? 0, sittings: reply.sittings ?? 0,
+      }, { status: 409 });
     }
 
     return NextResponse.json({ success: true });
