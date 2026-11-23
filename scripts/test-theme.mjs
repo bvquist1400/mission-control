@@ -143,7 +143,7 @@ await test("no flash: no other stylesheet or component sets color-scheme or read
     if (rel === path.join("src", "app", "globals.css")) continue;
     if (rel === path.join("src", "lib", "theme.ts")) continue; // theme-color media strings
     if (rel === path.join("src", "components", "layout", "AccountMenu.tsx")) continue; // matchMedia for the menu's live line only
-    if (rel === path.join("src", "lib", "briefing", "render.ts")) continue; // the n8n email HTML, not a page
+    if (rel === path.join("src", "lib", "briefing", "render.ts")) continue; // the brief email HTML, not a page
     const text = fs.readFileSync(file, "utf8");
     const code = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
     if (/color-scheme\s*:/.test(code) || /prefers-color-scheme/.test(code)) offenders.push(rel);

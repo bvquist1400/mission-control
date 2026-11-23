@@ -48,7 +48,7 @@ External task identities are stored as the nullable pair `external_source_system
 - Timestamp inputs: validate with `validateOptionalTimestamp()` from `@/lib/validate` before insert/update
 - Secret/API-key comparisons: use `secureCompare()` from `@/lib/secure-compare`, never `===`
 - Supabase queries: always filter by `user_id`
-- Email intake `POST /api/intake/email` (header `x-api-key` = `N8N_INTAKE_API_KEY`, acts as `DEFAULT_USER_ID`; a session also works): without `mode` it stores an `inbox_items` row, runs the AI extraction and creates a Backlog task (the n8n behaviour). `mode: "inbox_only"` stores the row with the excerpt (at most 2,000 characters, NUL and lone surrogates cleaned) in `llm_extraction_json` as `{ intake_mode: "inbox_only", body_snippet, body_snippet_truncated }` and stops: 201, no model call, no task, `triage_state` stays New. Any other `mode` is a 400, checked before the required fields so `{ mode: "<unknown>" }` alone is a side-effect-free version check (the support-mail Apps Script uses it); a repeat `message_id` is 200 in both modes. MCP `fetch` of `email:<id>` shows that excerpt as plain text. `npm run test:intake-email` (offline) pins both modes.
+- Email intake `POST /api/intake/email` (header `x-api-key` = `N8N_INTAKE_API_KEY`, acts as `DEFAULT_USER_ID`; a session also works): without `mode` it stores an `inbox_items` row, runs the AI extraction and creates a Backlog task (the original behaviour). `mode: "inbox_only"` stores the row with the excerpt (at most 2,000 characters, NUL and lone surrogates cleaned) in `llm_extraction_json` as `{ intake_mode: "inbox_only", body_snippet, body_snippet_truncated }` and stops: 201, no model call, no task, `triage_state` stays New. Any other `mode` is a 400, checked before the required fields so `{ mode: "<unknown>" }` alone is a side-effect-free version check (the support-mail Apps Script uses it); a repeat `message_id` is 200 in both modes. MCP `fetch` of `email:<id>` shows that excerpt as plain text. `npm run test:intake-email` (offline) pins both modes.
 
 ### Database
 
@@ -377,7 +377,6 @@ Controls with behaviour (Button, Input) are components; pure-styling primitives 
 | Project status update route | `src/app/api/project-status-updates/route.ts` |
 | Weekly review route | `src/app/api/briefing/weekly-review/route.ts` |
 | Monthly review route | `src/app/api/briefing/monthly-review/route.ts` |
-| Review automation workflow export | `n8n/mission-control-project-reviews.json` |
 | Notes schema migration | `supabase/migrations/032_add_notes.sql` |
 | Upstream API router | `src/app/api/mcp-upstream/[...path]/route.ts` |
 | Brief pages service (save / get / act) | `src/lib/briefs/service.ts` |
@@ -399,15 +398,14 @@ Controls with behaviour (Button, Input) are components; pure-styling primitives 
 
 - `briefing_narrative` is lib-controlled, not user-configured in the database.
 - To change the model used for daily brief email narration, edit `LIB_CONTROLLED_FEATURE_MODELS.briefing_narrative` in `src/lib/llm/catalog.ts`.
-- The current daily brief email flow expects Mission Control to generate the narrative server-side before n8n sends the email.
+- `GET /api/briefing/render` (and MCP `get_brief_render`) generates the narrative server-side and returns `subject`, `html` and `text`. Nothing in this repo schedules or sends brief email now; the n8n workflow that did was retired (Brent, 11/22).
 
 ## Review Automation Note
 
 - Daily project review history is stored in `project_status_updates`.
 - Weekly and monthly review snapshots are stored in `briefing_review_snapshots`.
-- The daily project review n8n branch calls Anthropic directly to generate strict JSON summaries per project.
-- Weekly and monthly review endpoints are deterministic server-side rollups; n8n only formats and sends the emails.
-- Never commit live machine keys or provider API keys into tracked n8n workflow exports.
+- Weekly and monthly review endpoints are deterministic server-side rollups. `POST /api/project-status-updates` and `POST /api/briefing/review-snapshots` stay available for any caller; nothing in this repo schedules them now (the n8n workflows that did were retired, Brent 11/22).
+- Never commit live machine keys or provider API keys into the repo.
 
 ## Calendar
 

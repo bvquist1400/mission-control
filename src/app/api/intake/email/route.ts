@@ -9,7 +9,7 @@ import {
 } from '@/lib/priority';
 import { requireAuthenticatedRoute } from '@/lib/supabase/route-auth';
 
-// API key authentication for n8n/external integrations
+// API key authentication for external integrations
 function validateApiKey(request: NextRequest): { valid: boolean; userId: string | null } {
   const apiKey = request.headers.get('x-api-key');
   const expectedKey = process.env.N8N_INTAKE_API_KEY;
@@ -112,7 +112,7 @@ async function logIngestionEvent(
 // POST /api/intake/email - Process incoming Action Intake email
 // Supports two auth methods:
 // 1. Supabase session (browser auth)
-// 2. X-API-Key header (n8n/external integrations)
+// 2. X-API-Key header (external integrations)
 export async function POST(request: NextRequest) {
   let supabase: SupabaseClient;
   let userId: string;
@@ -123,7 +123,7 @@ export async function POST(request: NextRequest) {
     supabase = auth.context.supabase;
     userId = auth.context.userId;
   } else {
-    // Fall back to API key auth for n8n
+    // Fall back to API key auth for external integrations
     const apiKeyAuth = validateApiKey(request);
     if (!apiKeyAuth.valid || !apiKeyAuth.userId) {
       return NextResponse.json(
