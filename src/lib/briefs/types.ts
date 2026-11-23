@@ -181,6 +181,16 @@ export interface BriefContent {
    */
   work_digest_note_ids?: string[];
   /**
+   * Which version of each digest note this brief was built from: note id ->
+   * that note's updated_at as the routine read it (get_brief_digest's
+   * work_digest.am/pm.updated_at), or as the server read it at save time when
+   * the routine didn't send it. The server writes the stored map on every save
+   * (a version later than the note's current one is replaced by the current
+   * one). A note updated after its version was re-filed: the brief has old
+   * text (Baseline task 483846c2; note-version.ts).
+   */
+  work_digest_note_versions?: Record<string, string>;
+  /**
    * Server side only (a save overwrites whatever the caller sends): how many
    * "Now unblocked" retries had given up when the brief was saved (067:
    * task_unblock_retries still open after 8 attempts). Absent when 0; the page

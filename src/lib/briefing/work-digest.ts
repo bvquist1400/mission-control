@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { isDateOnlyString } from "@/lib/briefs/due";
-import { briefLastBuiltAt, noteUpdatedAfter } from "@/lib/briefs/note-version";
+import { briefLastBuiltAt, noteRefiledSince, readNoteVersions } from "@/lib/briefs/note-version";
 
 /**
  * The work digest (Baseline task edb01f58). Brent's Copilot writes a
@@ -91,10 +91,15 @@ export interface ParsedWorkDigest {
 
 export type WorkDigestParse = { ok: true; value: ParsedWorkDigest } | { ok: false; reason: string };
 
+/**
+ * `updated_at` is the note's version as read (Baseline task 483846c2): the
+ * brief save sends it back in `content.work_digest_note_versions` so a re-file
+ * between this read and the save is caught.
+ */
 export type WorkDigestNoteRead =
-  | ({ status: "ok"; note_id: string; title: string } & ParsedWorkDigest)
+  | ({ status: "ok"; note_id: string; title: string; updated_at?: string } & ParsedWorkDigest)
   | { status: "missing"; title: string }
-  | { status: "unreadable"; note_id: string; title: string; reason: string };
+  | { status: "unreadable"; note_id: string; title: string; reason: string; updated_at?: string };
 
 export type WorkDigestAmRead = WorkDigestNoteRead & {
   /**
@@ -465,9 +470,11 @@ export function readWorkDigestNote(rows: WorkDigestNoteRow[], date: string, edit
     .filter((row) => row && row.title === title && (row.status ?? "active") === "active")
     .sort((a, b) => String(b.updated_at ?? "").localeCompare(String(a.updated_at ?? "")))[0];
   if (!note) return { status: "missing", title };
+  // The version the routine read: it sends it back in content.work_digest_note_versions.
+  const version = typeof note.updated_at === "string" && note.updated_at ? { updated_at: note.updated_at } : {};
   const parsed = checkWorkDigestBody(note.body_markdown, date, edition);
-  if (!parsed.ok) return { status: "unreadable", note_id: note.id, title, reason: parsed.reason };
-  return { status: "ok", note_id: note.id, title, ...parsed.value };
+  if (!parsed.ok) return { status: "unreadable", note_id: note.id, title, reason: parsed.reason, ...version };
+  return { status: "ok", note_id: note.id, title, ...version, ...parsed.value };
 }
 
 /** Which editions a digest mode reads: the morning brief (and midday) the AM note; the EOD both. */
@@ -508,7 +515,8 @@ export function buildWorkDigestSection(input: {
         const recorded = recordedNoteIds(input.morningBrief?.content);
         const readByMorning = read.status !== "missing" && "note_id" in read && recorded.includes(read.note_id);
         const row = readByMorning && "note_id" in read ? input.rows.find((entry) => entry.id === read.note_id) : undefined;
-        const refiled = readByMorning && noteUpdatedAfter(row?.updated_at, lastBuiltAt(input.morningBrief));
+        const recordedVersion = readByMorning && "note_id" in read ? readNoteVersions(input.morningBrief?.content)[read.note_id.toLowerCase()] : null;
+        const refiled = readByMorning && noteRefiledSince({ noteUpdatedAt: row?.updated_at, recordedVersion, briefBuiltAt: lastBuiltAt(input.morningBrief) });
         section.am = {
           ...read,
           in_morning_brief: readByMorning && !refiled,

@@ -2,6 +2,7 @@ import { normalizeDateOnly } from "@/lib/date-only";
 import { todayInBriefTimeZone } from "@/lib/briefs/keys";
 import { ACCEPT_DUE_HELP, isDateOnlyString, parseAcceptDue, type AcceptDueChoice } from "@/lib/briefs/due";
 import { safeBriefHref } from "@/lib/briefs/href";
+import { readNoteVersions } from "@/lib/briefs/note-version";
 import { capIdentifier, capText, collectSaveWarnings } from "@/lib/briefs/text-cut";
 
 export { safeBriefHref };
@@ -272,6 +273,8 @@ export function normalizeBriefContent(value: unknown): BriefContent {
     const noteIds = [...new Set(value.work_digest_note_ids.filter(isUuid).map((id) => id.toLowerCase()))].slice(0, MAX_DIGEST_NOTES);
     if (noteIds.length) content.work_digest_note_ids = noteIds;
   }
+  const versions = readNoteVersions(value);
+  if (Object.keys(versions).length) content.work_digest_note_versions = versions;
   if (Number.isSafeInteger(value.unblock_stuck) && (value.unblock_stuck as number) > 0) {
     content.unblock_stuck = value.unblock_stuck as number;
   }

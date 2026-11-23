@@ -6,7 +6,7 @@
 // are the routine's own check (its Granola list against covered_meeting_ids).
 
 import { readWorkDigestNote, workDigestEditionsForMode, type WorkDigestEdition, type WorkDigestNoteRow } from "@/lib/briefing/work-digest";
-import { briefLastBuiltAt, noteUpdatedAfter } from "@/lib/briefs/note-version";
+import { briefLastBuiltAt, noteRefiledSince, readNoteVersions } from "@/lib/briefs/note-version";
 import type { BriefEdition, BriefRefresh } from "@/lib/briefs/types";
 
 /**
@@ -32,7 +32,17 @@ export interface DigestNoteStatus {
   updated_at: string | null;
   /** Whether this brief's content.work_digest_note_ids records it (by id, whatever its version). */
   in_brief: boolean;
-  /** Recorded in this brief, but updated after the brief was last built or refreshed (the brief has old text). */
+  /**
+   * The version of this note the brief was built from (its updated_at as the
+   * routine read it, or as the server read it at save time), or null when the
+   * brief didn't record one (not read, or saved before versions).
+   */
+  brief_version: string | null;
+  /**
+   * Recorded in this brief, but updated after the version it was built from
+   * (or, with no version recorded, after the brief was last built or
+   * refreshed): the brief has old text.
+   */
   updated_since_brief: boolean;
   /** EOD's AM note only: whether this morning's AM brief recorded it (by id). */
   in_morning_brief?: boolean;
@@ -70,7 +80,7 @@ export interface BriefStatus {
 export interface BriefStatusRow {
   code: string;
   created_at: string;
-  content: { work_digest_note_ids?: string[]; refreshes?: BriefRefresh[] } | null;
+  content: { work_digest_note_ids?: string[]; work_digest_note_versions?: Record<string, string>; refreshes?: BriefRefresh[] } | null;
   covered_meeting_ids: string[] | null;
 }
 
@@ -84,8 +94,10 @@ export type BriefStatusNoteRow = WorkDigestNoteRow & { created_at?: string | nul
  * (the same rule the EOD routine follows with `work_digest.am.in_morning_brief`).
  *
  * A brief "has" a note when it recorded the note's id AND the note wasn't
- * updated after the brief was last built or refreshed (`briefLastBuiltAt`). A
- * missing or unreadable time on either side falls back to the id alone.
+ * updated after the version the brief recorded for it
+ * (`content.work_digest_note_versions`; with none, after the brief was last
+ * built or refreshed, `briefLastBuiltAt`). A missing or unreadable time on
+ * either side falls back to the id alone.
  */
 export function buildBriefStatus(input: {
   edition: BriefEdition;
@@ -95,11 +107,15 @@ export function buildBriefStatus(input: {
   morningNoteIds?: string[] | null;
   /** EOD only: when this morning's AM brief was last built or refreshed (ISO); unknown = the id-only rule. */
   morningBuiltAt?: string | null;
+  /** EOD only: the note versions this morning's AM brief recorded (its content.work_digest_note_versions). */
+  morningNoteVersions?: Record<string, string> | null;
   notes: BriefStatusNoteRow[];
 }): BriefStatus {
   const recorded = input.brief?.content?.work_digest_note_ids ?? [];
   const refreshes = input.brief?.content?.refreshes ?? [];
   const lastBuiltAt = input.brief ? briefLastBuiltAt(input.brief.created_at, refreshes) : null;
+  const versions = readNoteVersions(input.brief?.content);
+  const morningVersions = readNoteVersions({ work_digest_note_versions: input.morningNoteVersions ?? undefined });
   const isEod = input.edition === "eod";
   const digestNotes: DigestNoteStatus[] = [];
   const reasons: RefreshReason[] = [];
@@ -110,10 +126,14 @@ export function buildBriefStatus(input: {
     const row = noteId ? input.notes.find((note) => note.id === noteId) : undefined;
     const updatedAt = row?.updated_at ?? null;
     const inBrief = noteId !== null && recorded.includes(noteId);
-    const updatedSinceBrief = inBrief && noteUpdatedAfter(updatedAt, lastBuiltAt);
+    const briefVersion = inBrief && noteId ? (versions[noteId.toLowerCase()] ?? null) : null;
+    const updatedSinceBrief = inBrief && noteRefiledSince({ noteUpdatedAt: updatedAt, recordedVersion: briefVersion, briefBuiltAt: lastBuiltAt });
     const morningSide = isEod && edition === "am";
     const inMorningBrief = morningSide ? noteId !== null && (input.morningNoteIds ?? []).includes(noteId) : undefined;
-    const updatedSinceMorning = morningSide ? inMorningBrief === true && noteUpdatedAfter(updatedAt, input.morningBuiltAt) : undefined;
+    const updatedSinceMorning = morningSide
+      ? inMorningBrief === true &&
+        noteRefiledSince({ noteUpdatedAt: updatedAt, recordedVersion: noteId ? morningVersions[noteId.toLowerCase()] : null, briefBuiltAt: input.morningBuiltAt })
+      : undefined;
     const briefHasIt = inBrief && !updatedSinceBrief;
     const morningHasIt = inMorningBrief === true && updatedSinceMorning !== true;
     const needsRefresh = input.brief !== null && read.status === "ok" && !briefHasIt && !morningHasIt;
@@ -129,6 +149,7 @@ export function buildBriefStatus(input: {
       filed_at: row?.created_at ?? null,
       updated_at: updatedAt,
       in_brief: inBrief,
+      brief_version: briefVersion,
       updated_since_brief: updatedSinceBrief,
       ...(inMorningBrief === undefined ? {} : { in_morning_brief: inMorningBrief, updated_since_morning_brief: updatedSinceMorning === true }),
       needs_refresh: needsRefresh,

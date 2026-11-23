@@ -331,7 +331,8 @@ clearly about that meeting; otherwise leave the link out.
     { "key": "cold", "type": "list", "label": "Cold follow-ups", "value": 2, "summary": "…", "groups": [{ "rows": [{ "title": "…", "meta": "…" }] }] },
     { "key": "status", "type": "list", "label": "Status updates due", "value": 2, "summary": "…", "groups": [{ "rows": [{ "title": "…", "meta": "…" }] }] }
   ],
-  "work_digest_note_ids": ["<work_digest.pm.note_id>", "<work_digest.am.note_id, if you used it>"]
+  "work_digest_note_ids": ["<work_digest.pm.note_id>", "<work_digest.am.note_id, if you used it>"],
+  "work_digest_note_versions": { "<work_digest.pm.note_id>": "<work_digest.pm.updated_at>", "<work_digest.am.note_id, if you used it>": "<work_digest.am.updated_at>" }
 }
 ```
 
@@ -359,7 +360,11 @@ id of **every** finished meeting you read today, even ones with no items; never
 one still in progress or without notes), `items` in display order (meeting
 items first, grouped; then digest proposals; then the calls). Put the note id
 of every work digest note you used (status `ok`) in
-`content.work_digest_note_ids`, even if it produced no items.
+`content.work_digest_note_ids`, even if it produced no items, and each one's
+`updated_at` (exactly as `get_brief_digest` gave it) in
+`content.work_digest_note_versions` under its note id: it is the version you
+read, so a digest re-filed while you were writing still counts as new and the
+next catch-up takes it in.
 
 - If it returns an error, fix what it names and call it again (a retry is
   safe: it only appends what's missing). If it still fails, stop and say so.

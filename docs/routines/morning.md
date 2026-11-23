@@ -365,7 +365,8 @@ clearly about that meeting; otherwise leave the link out.
     { "key": "cold", "type": "list", "label": "Cold follow-ups", "value": 11, "summary": "…", "groups": [{ "rows": [{ "title": "…", "meta": "…", "task_id": "…" }] }] }
   ],
   "footnote": "Built by the morning run at 8:00 AM from Baseline, your calendar and this morning's work digest. Tonight's EOD picks up from here.",
-  "work_digest_note_ids": ["<work_digest.am.note_id, when its status is ok>"]
+  "work_digest_note_ids": ["<work_digest.am.note_id, when its status is ok>"],
+  "work_digest_note_versions": { "<work_digest.am.note_id>": "<work_digest.am.updated_at, copied exactly>" }
 }
 ```
 
@@ -406,7 +407,11 @@ calls), and `covered_meeting_ids`: the Granola id of **every** late meeting you
 read in step 5, even ones with no items. Leave it empty if there were none.
 Put `work_digest.am.note_id` in `content.work_digest_note_ids` whenever the
 note's status was `ok`, even if it produced no items (tonight's EOD uses it to
-tell that you read it); leave it out otherwise.
+tell that you read it); leave it out otherwise. Put the same note's
+`work_digest.am.updated_at` (exactly as `get_brief_digest` gave it) in
+`content.work_digest_note_versions` under its note id: it is the version you
+read, so a digest re-filed while you were writing still counts as new and the
+next catch-up takes it in.
 
 - If it returns an error, fix what it names and call it again (a retry is safe:
   a second save the same day never changes or duplicates existing items). If it

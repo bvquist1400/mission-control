@@ -29,7 +29,7 @@ import { normalizeBriefContent, normalizeStoredWorkDigestRef } from "@/lib/brief
 import type { SaveWarning } from "@/lib/briefs/text-cut";
 import { checkWorkDigestBody, parseWorkDigestTitle, workDigestEditionsForMode, workDigestTitle } from "@/lib/briefing/work-digest";
 import { buildBriefStatus, type BriefStatus, type BriefStatusNoteRow } from "@/lib/briefs/refresh-status";
-import { briefLastBuiltAt, noteUpdatedAfter } from "@/lib/briefs/note-version";
+import { briefLastBuiltAt, noteRefiledSince, versionToRecord, type NoteVersions } from "@/lib/briefs/note-version";
 import { countBriefItems } from "@/lib/briefs/counts";
 import {
   isUnblockedRow,
@@ -291,6 +291,12 @@ export interface SaveBriefResult {
   mode: "append" | "refresh";
   /** true when the save was a forced rebuild (`force: true`); absent otherwise. */
   forced?: true;
+  /**
+   * The note versions this save recorded (content.work_digest_note_versions):
+   * as_read = the version the caller sent (what it read); false = the note's
+   * updated_at at save time (the caller sent none, or one later than the note's).
+   */
+  work_digest_versions: Array<{ note_id: string; version: string; as_read: boolean }>;
   /** mode "refresh": the brief_revisions row holding the content this save replaced. */
   revision_id: string | null;
   /** Text cut to fit its cap at a sentence or word boundary (field and original length). Empty when nothing was cut. */
@@ -531,6 +537,52 @@ function withStuckCount(content: BriefContent, stuck: number | null): BriefConte
   return stuck ? { ...rest, unblock_stuck: stuck } : rest;
 }
 
+/** `content` with exactly these note versions (none = the field is left out). */
+function withNoteVersions(content: BriefContent, versions: NoteVersions): BriefContent {
+  const { work_digest_note_versions: _sent, ...rest } = content;
+  void _sent;
+  return Object.keys(versions).length ? { ...rest, work_digest_note_versions: versions } : rest;
+}
+
+/**
+ * The version this save records for each digest note it read (the notes in
+ * content.work_digest_note_ids and every cited note): the version the caller
+ * sent in content.work_digest_note_versions (the updated_at get_brief_digest
+ * gave it) when it isn't later than the note's current updated_at, else the
+ * current one. `current` is each note's updated_at now (database clock); a
+ * note that isn't Brent's, or can't be read, records nothing.
+ */
+async function readSaveNoteVersions(
+  supabase: AnySupabase,
+  userId: string,
+  input: Pick<SaveBriefInput, "content" | "items">,
+  known: Map<string, string | null>
+): Promise<{ current: Map<string, string | null>; recorded: NoteVersions; report: SaveBriefResult["work_digest_versions"] }> {
+  const ids = [
+    ...new Set([
+      ...(input.content.work_digest_note_ids ?? []),
+      ...input.items.map((item) => item.source.work_digest?.note_id).filter((id): id is string => Boolean(id)),
+    ].map((id) => id.toLowerCase())),
+  ];
+  const current = new Map<string, string | null>([...known].map(([id, at]) => [id.toLowerCase(), at]));
+  const unread = ids.filter((id) => !current.has(id));
+  if (unread.length) {
+    const { data, error } = await supabase.from("notes").select("id, updated_at").eq("user_id", userId).in("id", unread);
+    if (error) throw error;
+    for (const row of (data ?? []) as Array<{ id: string; updated_at?: string | null }>) current.set(row.id.toLowerCase(), row.updated_at ?? null);
+  }
+  const sent = input.content.work_digest_note_versions ?? {};
+  const recorded: NoteVersions = {};
+  const report: SaveBriefResult["work_digest_versions"] = [];
+  for (const id of ids) {
+    const version = versionToRecord(sent[id], current.get(id));
+    if (!version) continue;
+    recorded[id] = version.version;
+    report.push({ note_id: id, ...version });
+  }
+  return { current, recorded, report };
+}
+
 /** The refresh reason a forced rebuild records when the caller gives none. */
 export const FORCED_REBUILD_REASON = "Rebuilt on request";
 
@@ -548,6 +600,9 @@ export async function saveBrief(
   await assertTasksOwned(supabase, userId, referencedTaskIds);
   const citations = await resolveWorkDigestCitations(supabase, userId, input);
   input = { ...input, items: citations.items };
+  // The version of each digest note this save read (Baseline task 483846c2).
+  const noteVersions = await readSaveNoteVersions(supabase, userId, input, citations.noteUpdatedAt);
+  input = { ...input, content: withNoteVersions(input.content, noteVersions.recorded) };
 
   const unblocked = await readUnblockedForSave(supabase, userId);
   input = {
@@ -581,11 +636,17 @@ export async function saveBrief(
   const covered = new Set(created ? [] : brief.covered_meeting_ids);
   const coveredNotes = new Set(created ? [] : brief.content.work_digest_note_ids ?? []);
   // A refresh also takes in a recorded note that was re-filed (updated) after
-  // this brief was last built or refreshed: the brief has its old text. Keys
-  // still dedupe, so an item it already has is kept_on_refresh, not doubled.
+  // the version this brief recorded for it (no version: after the brief was
+  // last built or refreshed): the brief has its old text. Keys still dedupe,
+  // so an item it already has is kept_on_refresh, not doubled.
   const builtAt = briefLastBuiltAt(brief.created_at, brief.content.refreshes);
+  const briefVersions = created ? {} : (brief.content.work_digest_note_versions ?? {});
   const refiledNotes = new Set(
-    refresh ? [...coveredNotes].filter((noteId) => noteUpdatedAfter(citations.noteUpdatedAt.get(noteId), builtAt)) : []
+    refresh
+      ? [...coveredNotes].filter((noteId) =>
+          noteRefiledSince({ noteUpdatedAt: noteVersions.current.get(noteId), recordedVersion: briefVersions[noteId], briefBuiltAt: builtAt })
+        )
+      : []
   );
   const skipped: SaveBriefSkip[] = [];
   const candidates: Array<{ index: number; key: string; item: SaveBriefInput["items"][number] }> = [];
@@ -710,7 +771,8 @@ export async function saveBrief(
   const refreshReason = input.refresh_reason || (input.force ? FORCED_REBUILD_REASON : null);
   if (refresh) {
     const refreshed = await refreshBriefContent(supabase, userId, brief, {
-      content: refreshContent(input.content, brief.content, unblocked.stuck, nByIndex, candidates),
+      // Versions: the old ones for notes this refresh didn't read, this read's for the rest.
+      content: withNoteVersions(refreshContent(input.content, brief.content, unblocked.stuck, nByIndex, candidates), { ...briefVersions, ...noteVersions.recorded }),
       covered: [...input.covered_meeting_ids, ...candidates.flatMap((candidate) => candidate.item.source.meetings.map((meeting) => meeting.id))],
       refresh: { at: now.toISOString(), ...(refreshReason ? { reason: refreshReason } : {}) },
     });
@@ -738,6 +800,17 @@ export async function saveBrief(
     if (nextNotes.length !== knownNotes.length) {
       const base = (briefUpdates.content as BriefContent | undefined) ?? brief.content;
       briefUpdates.content = { ...base, work_digest_note_ids: nextNotes.slice(0, 4) };
+    }
+    // Versions on a plain rerun: a note new to the brief gets this read's
+    // version; a note it already had keeps its old one (a rerun never takes in
+    // a re-filed note's new items, so the brief still has that note's old text).
+    if (!created) {
+      const known = new Set(knownNotes);
+      const added = Object.entries(noteVersions.recorded).filter(([noteId]) => !known.has(noteId) && !(noteId in briefVersions));
+      if (added.length) {
+        const base = (briefUpdates.content as BriefContent | undefined) ?? brief.content;
+        briefUpdates.content = withNoteVersions(base, { ...briefVersions, ...Object.fromEntries(added) });
+      }
     }
     // A rerun refreshes the stuck count; an unknown count (a failed read) leaves it as it was.
     if (!created && unblocked.stuck !== null && (brief.content.unblock_stuck ?? 0) !== unblocked.stuck) {
@@ -778,6 +851,7 @@ export async function saveBrief(
     notify,
     mode: refresh ? "refresh" : "append",
     ...(input.force ? { forced: true as const } : {}),
+    work_digest_versions: noteVersions.report,
     revision_id: revisionId,
     warnings: input.warnings ?? [],
   };
@@ -1045,6 +1119,7 @@ export async function getBriefStatus(
     brief: own ? { code: own.code, created_at: own.created_at, content: normalizeBriefContent(own.content), covered_meeting_ids: own.covered_meeting_ids ?? [] } : null,
     morningNoteIds: morning ? (normalizeBriefContent(morning.content).work_digest_note_ids ?? []) : null,
     morningBuiltAt: morning ? briefLastBuiltAt(morning.created_at, normalizeBriefContent(morning.content).refreshes) : null,
+    morningNoteVersions: morning ? (normalizeBriefContent(morning.content).work_digest_note_versions ?? null) : null,
     notes: (notes.data ?? []) as BriefStatusNoteRow[],
   });
 }

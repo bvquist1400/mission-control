@@ -5,6 +5,9 @@
 //      (am_digest_updated / pm_digest_updated), the EOD's "AM note already in
 //      the morning brief" rule follows the note's version, get_brief_digest's
 //      in_morning_brief agrees, and the refresh appends items from the new text.
+//  (V) the brief records which version of each note it was built from
+//      (Baseline task 483846c2), so a re-file between the routine's read and
+//      its save is caught and no check compares two clocks.
 //  (A) save_brief / save_eod_brief take `force: true` (with mode "refresh"):
 //      a rebuild on command with nothing new, same refresh rules (items kept,
 //      old text saved, no notice), and never a first save.
@@ -464,6 +467,147 @@ await test("B15 fetchWorkDigestSection reads the morning brief's created_at (the
   assert.equal(section.am.status, "ok");
   assert.equal(section.am.in_morning_brief, false);
   assert.equal(section.am.updated_after_morning_brief, true);
+});
+
+// ---------------------------------------------------------------------------
+// (V) versions (Baseline task 483846c2): the brief records which version of
+//     each note it was built from, so a re-file between the routine's read and
+//     its save is caught, and nothing compares the app's clock with the DB's.
+// ---------------------------------------------------------------------------
+
+const nv = await load("lib/briefs/note-version.ts");
+// Postgres-style times (microseconds), as PostgREST returns them.
+const V1 = "2026-10-29T11:41:00.123456+00:00";
+const V2 = "2026-10-29T11:59:30.654321+00:00";
+const V3 = "2026-10-29T12:44:10.000001+00:00";
+
+await test("V1 versions compare to the microsecond, on one clock; malformed versions are dropped (that note keeps the save-time rule)", () => {
+  need(nv, "noteVersionMicros", "readNoteVersions", "noteRefiledSince", "versionToRecord");
+  assert.ok(nv.noteVersionMicros("2026-10-29T11:58:00.123457+00:00") > nv.noteVersionMicros("2026-10-29T11:58:00.123456+00:00"), "same millisecond, later microsecond");
+  assert.equal(nv.noteVersionMicros("2026-10-29T11:58:00.123+00:00"), nv.noteVersionMicros("2026-10-29T11:58:00.123Z"));
+  assert.equal(nv.noteVersionMicros("2026-10-29T07:58:00-04:00"), nv.noteVersionMicros("2026-10-29T11:58:00Z"));
+  assert.equal(nv.noteVersionMicros("garbage"), null);
+  assert.deepEqual(nv.readNoteVersions({ work_digest_note_versions: { [NOTE_AM.toUpperCase()]: V1, [NOTE_PM]: "nope", "not-a-uuid": V1 } }), { [NOTE_AM]: V1 });
+  assert.deepEqual(nv.readNoteVersions({ work_digest_note_versions: [V1] }), {});
+  // With a version: only a later updated_at is a re-file, whatever the brief's save time says.
+  assert.equal(nv.noteRefiledSince({ noteUpdatedAt: V2, recordedVersion: V1, briefBuiltAt: "2026-10-29T12:00:00Z" }), true, "re-filed 7:59:30, saved 8:00: caught");
+  assert.equal(nv.noteRefiledSince({ noteUpdatedAt: V1, recordedVersion: V1, briefBuiltAt: "2026-10-29T11:41:00.050Z" }), false, "same version: not re-filed, even with the save time 73 ms before updated_at (clock skew)");
+  // No version: the old rule.
+  assert.equal(nv.noteRefiledSince({ noteUpdatedAt: V2, recordedVersion: null, briefBuiltAt: "2026-10-29T12:00:00Z" }), false);
+  assert.equal(nv.noteRefiledSince({ noteUpdatedAt: V2, recordedVersion: undefined, briefBuiltAt: "2026-10-29T11:58:00Z" }), true);
+  // What a save records: the caller's read when not later than the note; else the note's current version.
+  assert.deepEqual(nv.versionToRecord(V1, V2), { version: V1, as_read: true });
+  assert.deepEqual(nv.versionToRecord(V3, V2), { version: V2, as_read: false }, "a version later than the note's is not believed");
+  assert.deepEqual(nv.versionToRecord(undefined, V2), { version: V2, as_read: false });
+  assert.equal(nv.versionToRecord(V1, null), null);
+});
+
+await test("V2 brief_status: a note re-filed after the read but before the save asks for a refresh (am_digest_updated); the same version never does, even with the save time before updated_at", () => {
+  // Read V1 at 7:58:40, re-filed V2 at 7:59:30, saved at 8:00 (after the re-file).
+  const brief = briefRow([NOTE_AM], { created_at: "2026-10-29T12:00:00Z", content: { work_digest_note_ids: [NOTE_AM], work_digest_note_versions: { [NOTE_AM]: V1 } } });
+  const raced = amStatus(brief, [amRow({ updated_at: V2 })]);
+  assert.deepEqual(raced.refresh_needed, { digest: true, reasons: ["am_digest_updated"] });
+  assert.equal(raced.digest_notes[0].brief_version, V1);
+  assert.equal(raced.digest_notes[0].updated_since_brief, true);
+  // Skew: the save time (app clock) is 70 ms BEFORE the note's updated_at (DB clock), same version.
+  const skewed = briefRow([NOTE_AM], { created_at: "2026-10-29T11:41:00.053Z", content: { work_digest_note_ids: [NOTE_AM], work_digest_note_versions: { [NOTE_AM]: V1 } } });
+  assert.deepEqual(amStatus(skewed, [amRow({ updated_at: V1 })]).refresh_needed, { digest: false, reasons: [] });
+  // EOD: the morning brief's version decides whether the EOD needs the AM note.
+  const pmBefore = pmRow({ created_at: "2026-10-29T20:05:00Z", updated_at: "2026-10-29T20:05:00Z" });
+  const eod = (morningVersions) =>
+    status.buildBriefStatus({
+      edition: "eod",
+      date: DAY,
+      brief: briefRow([NOTE_PM], { code: "EOD-1029", created_at: T.eodBuilt, content: { work_digest_note_ids: [NOTE_PM] } }),
+      morningNoteIds: [NOTE_AM],
+      morningBuiltAt: "2026-10-29T12:00:00Z",
+      morningNoteVersions: morningVersions,
+      notes: [amRow({ updated_at: V2 }), pmBefore],
+    });
+  assert.deepEqual(eod({ [NOTE_AM]: V1 }).refresh_needed.reasons, ["am_digest_updated"], "the morning brief was built from V1: the EOD needs V2");
+  assert.equal(eod({ [NOTE_AM]: V2 }).refresh_needed.digest, false);
+  assert.equal(eod(null).refresh_needed.digest, false, "no morning version: the old save-time rule (V2 is before 8:00)");
+});
+
+await test("V3 get_brief_digest gives each note's updated_at (the version to send back), and the EOD's in_morning_brief follows the morning brief's version", () => {
+  need(wd, "buildWorkDigestSection", "readWorkDigestNote");
+  assert.equal(wd.readWorkDigestNote([amRow({ updated_at: V1 })], DAY, "am").updated_at, V1);
+  assert.equal(wd.readWorkDigestNote([amRow({ updated_at: V1, body_markdown: "garbage" })], DAY, "am").updated_at, V1);
+  assert.equal("updated_at" in wd.readWorkDigestNote([amRow({ updated_at: null })], DAY, "am"), false);
+  const morningBrief = (versions) => ({ code: "AM-1029", created_at: "2026-10-29T12:00:00Z", content: { work_digest_note_ids: [NOTE_AM], ...(versions ? { work_digest_note_versions: versions } : {}) } });
+  const raced = wd.buildWorkDigestSection({ date: DAY, mode: "eod", rows: [amRow({ updated_at: V2 }), pmRow()], morningBrief: morningBrief({ [NOTE_AM]: V1 }) });
+  assert.equal(raced.am.in_morning_brief, false);
+  assert.equal(raced.am.updated_after_morning_brief, true);
+  assert.equal(raced.am.updated_at, V2);
+  const current = wd.buildWorkDigestSection({ date: DAY, mode: "eod", rows: [amRow({ updated_at: V2 }), pmRow()], morningBrief: morningBrief({ [NOTE_AM]: V2 }) });
+  assert.equal(current.am.in_morning_brief, true);
+});
+
+await test("V4 save end to end: read V1, re-filed V2 before the save → caught; the catch-up reads V2, re-filed V3 before its save → caught again; reading V3 → clear (no loop)", async () => {
+  need(service, "saveBrief", "getBriefStatus");
+  const world = makeWorld({ notes: [amRow({ updated_at: V1 })] });
+  const read = () => service.getBriefStatus(fakeSupabase(world), USER, "am", DAY);
+  // 7:58:40 the routine reads V1; 7:59:30 Brent re-files; 8:00 the routine saves what it read.
+  world.tables.notes[0].updated_at = V2;
+  const first = await save(world, { edition: "am", date: DAY, content: { narrative: "Built.", work_digest_note_ids: [NOTE_AM], work_digest_note_versions: { [NOTE_AM]: V1 } }, items: [W3_ITEM] }, new Date("2026-10-29T12:00:00Z"));
+  assert.equal(first.created, true);
+  assert.deepEqual(first.work_digest_versions, [{ note_id: NOTE_AM, version: V1, as_read: true }]);
+  assert.deepEqual(world.tables.briefs[0].content.work_digest_note_versions, { [NOTE_AM]: V1 });
+  assert.deepEqual((await read()).refresh_needed.reasons, ["am_digest_updated"], "caught, though the save came after the re-file");
+
+  // 8:45 catch-up reads V2; Brent re-files V3 at 8:44:10... before its save at 8:45:30.
+  world.tables.notes[0].updated_at = V3;
+  const refresh = await save(world, { edition: "am", date: DAY, mode: "refresh", refresh_reason: "AM work digest re-filed", content: { narrative: "Refreshed.", work_digest_note_ids: [NOTE_AM], work_digest_note_versions: { [NOTE_AM]: V2 } }, items: [W3_ITEM, W2_ITEM] }, new Date("2026-10-29T12:45:30Z"));
+  assert.equal(refresh.mode, "refresh");
+  assert.deepEqual(refresh.appended.map((entry) => entry.title), ["Suggest the location value for the import"], "the re-filed note's new item is appended");
+  assert.deepEqual(world.tables.briefs[0].content.work_digest_note_versions, { [NOTE_AM]: V2 });
+  assert.deepEqual((await read()).refresh_needed.reasons, ["am_digest_updated"], "V3 still news");
+
+  // The next catch-up reads V3: clear.
+  await save(world, { edition: "am", date: DAY, mode: "refresh", content: { narrative: "Refreshed again.", work_digest_note_ids: [NOTE_AM], work_digest_note_versions: { [NOTE_AM]: V3 } }, items: [W3_ITEM, W2_ITEM] }, new Date("2026-10-29T13:00:00Z"));
+  assert.deepEqual((await read()).refresh_needed, { digest: false, reasons: [] });
+  assert.equal(world.tables.briefs[0].content.work_digest_note_versions[NOTE_AM], V3);
+});
+
+await test("V5 a caller that sends no versions (the old prompt): the note's updated_at at save time is recorded, so a refresh right after a filing never asks again (no clock skew); a version later than the note's is not believed", async () => {
+  const world = makeWorld({ notes: [amRow({ updated_at: V1 })] });
+  // The app's save time is BEFORE the note's DB time (skew), as on colima.
+  const first = await save(world, { edition: "am", date: DAY, content: { work_digest_note_ids: [NOTE_AM] }, items: [] }, new Date("2026-10-29T11:41:00.050Z"));
+  assert.deepEqual(first.work_digest_versions, [{ note_id: NOTE_AM, version: V1, as_read: false }]);
+  assert.equal((await service.getBriefStatus(fakeSupabase(world), USER, "am", DAY)).refresh_needed.digest, false);
+  const future = makeWorld({ notes: [amRow({ updated_at: V1 })] });
+  const bogus = await save(future, { edition: "am", date: DAY, content: { work_digest_note_ids: [NOTE_AM], work_digest_note_versions: { [NOTE_AM]: V3 } }, items: [] }, new Date("2026-10-29T12:00:00Z"));
+  assert.deepEqual(bogus.work_digest_versions, [{ note_id: NOTE_AM, version: V1, as_read: false }]);
+  // A version for a note that isn't the caller's (or doesn't exist) records nothing.
+  const stranger = makeWorld({ notes: [] });
+  const none = await save(stranger, { edition: "am", date: DAY, content: { work_digest_note_ids: [NOTE_AM], work_digest_note_versions: { [NOTE_AM]: V1 } }, items: [] }, new Date("2026-10-29T12:00:00Z"));
+  assert.deepEqual(none.work_digest_versions, []);
+  assert.equal("work_digest_note_versions" in stranger.tables.briefs[0].content, false);
+});
+
+await test("V6 a plain rerun keeps a known note's old version (it never takes in a re-filed note's items) and records a new note's; a refresh keeps the versions of notes it didn't read", async () => {
+  const world = makeWorld({ notes: [amRow({ updated_at: V1 }), pmRow({ updated_at: "2026-10-29T20:31:00.5+00:00" })] });
+  await save(world, { edition: "eod", date: DAY, content: { work_digest_note_ids: [NOTE_AM] }, items: [] }, new Date(T.eodBuilt));
+  world.tables.notes[0].updated_at = V3;
+  await save(world, { edition: "eod", date: DAY, content: { work_digest_note_ids: [NOTE_AM, NOTE_PM], work_digest_note_versions: { [NOTE_AM]: V3, [NOTE_PM]: "2026-10-29T20:31:00.5+00:00" } }, items: [] }, new Date("2026-10-29T20:40:00Z"));
+  assert.deepEqual(world.tables.briefs[0].content.work_digest_note_versions, { [NOTE_AM]: V1, [NOTE_PM]: "2026-10-29T20:31:00.5+00:00" });
+  const stale = await service.getBriefStatus(fakeSupabase(world), USER, "eod", DAY);
+  assert.deepEqual(stale.refresh_needed.reasons, ["am_digest_updated"], "the rerun didn't take in V3, and brief_status still says so");
+  // A refresh that reads only the AM note keeps the PM note's version.
+  await save(world, { edition: "eod", date: DAY, mode: "refresh", content: { work_digest_note_ids: [NOTE_AM], work_digest_note_versions: { [NOTE_AM]: V3 } }, items: [] }, new Date("2026-10-29T21:00:00Z"));
+  assert.deepEqual(world.tables.briefs[0].content.work_digest_note_versions, { [NOTE_AM]: V3, [NOTE_PM]: "2026-10-29T20:31:00.5+00:00" });
+  assert.equal((await service.getBriefStatus(fakeSupabase(world), USER, "eod", DAY)).refresh_needed.digest, false);
+});
+
+await test("V7 the MCP tools ask for the versions: get_brief_digest names updated_at, the save tools take content.work_digest_note_versions, brief_status names brief_version", () => {
+  const mcp = readFileSync(path.join(ROOT, "src/app/api/mcp/route.ts"), "utf8");
+  assert.match(mcp, /`updated_at` \(the version you read/);
+  assert.match(mcp, /work_digest_note_versions\{<note id>/);
+  assert.match(mcp, /its updated_at from get_brief_digest in content\.work_digest_note_versions/);
+  assert.match(mcp, /brief_version \(the version of the note the brief was built from\)/);
+  for (const doc of ["docs/routines/morning.md", "docs/routines/eod.md"]) {
+    assert.match(readFileSync(path.join(ROOT, doc), "utf8"), /work_digest_note_versions/, `${doc} tells the routine to send the versions`);
+  }
 });
 
 // ---------------------------------------------------------------------------

@@ -11,7 +11,9 @@
 // parked, done), appends new ones as n+1, rewrites the content, writes a
 // brief_revisions row, never sends a second notice; a refresh before the brief
 // exists is a first save; brief_status; the boundary cut on a real save; RLS;
-// two refreshes at once; 068 rollback and re-apply.
+// two refreshes at once; 068 rollback and re-apply. Versions (Baseline task
+// 483846c2): a re-file between the routine's read and its save is caught; a
+// re-file then a refresh appends; app-vs-database clock skew asks for nothing.
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -46,6 +48,7 @@ delete process.env.BASELINE_TELEGRAM_CHAT_ID;
 const { saveBrief, getBrief, actOnBriefItems } = await import("../src/lib/briefs/service.ts");
 const service = await import("../src/lib/briefs/service.ts");
 const { parseSaveBriefInput, parseBriefActions } = await import("../src/lib/briefs/validate.ts");
+const wd = await import("../src/lib/briefing/work-digest.ts");
 
 const APP_URL = "http://localhost:3000";
 const admin = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
@@ -395,6 +398,104 @@ try {
     const theirs = await service.getBriefStatus(other.client, other.id, "am", date);
     assert.equal(theirs.brief.exists, false);
     assert.equal(theirs.digest_notes[0].status, "missing");
+  });
+
+  // Versions (Baseline task 483846c2). A re-file is an UPDATE of the same note
+  // (the notes trigger moves updated_at on the database clock).
+  const refile = async (noteId) => {
+    psql(`UPDATE notes SET body_markdown = body_markdown WHERE id = '${noteId}';`);
+    const { data, error } = await admin.from("notes").select("updated_at").eq("id", noteId).single();
+    if (error) throw error;
+    return data.updated_at;
+  };
+  const W2_LINE = "Nathan asked for a suggestion on which location value to use because the study record import failed without one.";
+  const digestItem = (noteId, block, line, title) => ({ kind: "proposed_task", title, source: { work_digest: { note_id: noteId, edition: "am", blocks: [block], lines: [line] } } });
+  // Each test has its own user: digest item keys are the cited lines, so the
+// same W line in another test's brief would be already_in_a_brief.
+  /** What get_brief_digest hands the routine for today's AM note (its version included). */
+  const readDigest = async (who, date) => (await wd.fetchWorkDigestSection(who.client, who.id, date, "morning")).am;
+
+  await test("versions: a re-file between the routine's read and its save is caught (the build and the catch-up), and clears once a refresh saves the version it read", async () => {
+    const me = await makeUser("versions");
+    const date = nextDate();
+    const note = await fileDigest(me.id, date);
+    const w3 = digestItem(note, "W3", W3_LINE, "Check the study record Nathan moved to test");
+    const w2 = digestItem(note, "W2", W2_LINE, "Suggest the location value for the import");
+
+    // The 7:59 run reads v1; Brent re-files before the run saves.
+    const read1 = await readDigest(me, date);
+    assert.equal(read1.status, "ok");
+    assert.ok(read1.updated_at, "get_brief_digest gives the note's version");
+    const v2 = await refile(note);
+    assert.notEqual(new Date(v2).getTime(), new Date(read1.updated_at).getTime());
+    const built = await save(me.client, me.id, { date, content: { work_digest_note_ids: [note], work_digest_note_versions: { [note]: read1.updated_at } }, items: [w3] });
+    assert.equal(built.created, true);
+    assert.deepEqual(built.work_digest_versions, [{ note_id: note, version: read1.updated_at, as_read: true }]);
+    assert.deepEqual((await briefRow(built.brief_id)).content.work_digest_note_versions, { [note]: read1.updated_at });
+    let status = await service.getBriefStatus(me.client, me.id, "am", date);
+    assert.deepEqual(status.refresh_needed, { digest: true, reasons: ["am_digest_updated"] }, "the save came after the re-file, and it is still caught");
+    assert.equal(status.digest_notes[0].brief_version, read1.updated_at);
+
+    // The 8:45 catch-up reads v2; Brent re-files again before it saves.
+    const read2 = await readDigest(me, date);
+    assert.equal(new Date(read2.updated_at).getTime(), new Date(v2).getTime());
+    await refile(note);
+    const caught = await save(me.client, me.id, { date, mode: "refresh", refresh_reason: "AM work digest re-filed", content: { work_digest_note_ids: [note], work_digest_note_versions: { [note]: read2.updated_at } }, items: [w3, w2] });
+    assert.equal(caught.mode, "refresh");
+    assert.deepEqual(caught.appended.map((entry) => [entry.n, entry.title]), [[2, "Suggest the location value for the import"]]);
+    status = await service.getBriefStatus(me.client, me.id, "am", date);
+    assert.deepEqual(status.refresh_needed.reasons, ["am_digest_updated"], "the second re-file is still news");
+
+    // The next catch-up reads v3 and saves it: clear, no loop.
+    const read3 = await readDigest(me, date);
+    await save(me.client, me.id, { date, mode: "refresh", content: { work_digest_note_ids: [note], work_digest_note_versions: { [note]: read3.updated_at } }, items: [w3, w2] });
+    status = await service.getBriefStatus(me.client, me.id, "am", date);
+    assert.deepEqual(status.refresh_needed, { digest: false, reasons: [] });
+    assert.equal(status.brief.refresh_count, 2);
+    assert.equal((await itemRows(built.brief_id)).length, 2, "nothing doubled");
+  });
+
+  await test("re-file, then a refresh appends: before the re-file a new W item from the note is work_digest_already_covered; after it, the refresh appends it as n+1, keeps the old item byte for byte, sends no notice, and brief_status clears", async () => {
+    const me = await makeUser("refile");
+    const date = nextDate();
+    const note = await fileDigest(me.id, date);
+    const w3 = digestItem(note, "W3", W3_LINE, "Check the study record Nathan moved to test");
+    const w2 = digestItem(note, "W2", W2_LINE, "Suggest the location value for the import");
+    const { sent, notifier } = counter();
+    // An old-prompt caller (no versions): the server records the version it reads at save time.
+    const built = await save(me.client, me.id, { date, content: { narrative: "Built.", work_digest_note_ids: [note] }, items: [w3] }, notifier);
+    assert.deepEqual(built.work_digest_versions.map((entry) => entry.as_read), [false]);
+    assert.equal(sent.length, 1);
+    const before = await itemRows(built.brief_id);
+
+    const unchanged = await save(me.client, me.id, { date, mode: "refresh", content: { narrative: "Not re-filed yet.", work_digest_note_ids: [note] }, items: [w3, w2] }, notifier);
+    assert.deepEqual(unchanged.skipped.map((skip) => skip.reason), ["kept_on_refresh", "work_digest_already_covered"]);
+    assert.deepEqual(unchanged.appended, []);
+
+    await refile(note);
+    assert.deepEqual((await service.getBriefStatus(me.client, me.id, "am", date)).refresh_needed.reasons, ["am_digest_updated"]);
+    const refreshed = await save(me.client, me.id, { date, mode: "refresh", refresh_reason: "AM work digest re-filed", content: { narrative: "Re-filed.", work_digest_note_ids: [note] }, items: [w3, w2] }, notifier);
+    assert.deepEqual(refreshed.skipped.map((skip) => [skip.reason, skip.n]), [["kept_on_refresh", 1]]);
+    assert.deepEqual(refreshed.appended.map((entry) => [entry.n, entry.title]), [[2, "Suggest the location value for the import"]]);
+    assert.equal(refreshed.notify.status, "skipped_refresh");
+    assert.equal(sent.length, 1, "no second notice");
+    const after = await itemRows(built.brief_id);
+    assert.deepEqual(after[0], before[0], "the old item is byte for byte the same, updated_at included");
+    assert.equal(after[1].source.work_digest.blocks[0], "W2");
+    assert.equal((await briefRow(built.brief_id)).content.narrative, "Re-filed.");
+    assert.deepEqual((await service.getBriefStatus(me.client, me.id, "am", date)).refresh_needed, { digest: false, reasons: [] });
+  });
+
+  await test("clock skew: a refresh whose app clock runs behind the database (its refresh.at before the note's updated_at) does not ask for another refresh", async () => {
+    const date = nextDate();
+    await save(client, user.id, { date });
+    const note = await fileDigest(user.id, date);
+    // The app's clock 5 s behind the database's (colima runs ~70 ms ahead; 5 s makes it certain).
+    const behind = new Date(Date.now() - 5000);
+    await saveBrief(client, user.id, input({ date, mode: "refresh", content: { work_digest_note_ids: [note] } }), { appUrl: APP_URL, notifier: { send: async () => {} }, now: behind });
+    const status = await service.getBriefStatus(client, user.id, "am", date);
+    assert.ok(new Date(status.brief.last_built_at) < new Date(status.digest_notes[0].updated_at), "the setup really is skewed");
+    assert.deepEqual(status.refresh_needed, { digest: false, reasons: [] });
   });
 
   await test("RLS: another user can't read a brief's revisions or refresh it; the machine key's service-role client can refresh", async () => {

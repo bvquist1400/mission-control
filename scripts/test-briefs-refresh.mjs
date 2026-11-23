@@ -237,6 +237,7 @@ await test("brief_status (am): no brief means build, never refresh; a filed AM n
       filed_at: "2026-10-29T12:06:00Z",
       updated_at: null,
       in_brief: false,
+      brief_version: null,
       updated_since_brief: false,
       needs_refresh: true,
       reason: "am_digest_not_in_brief",
