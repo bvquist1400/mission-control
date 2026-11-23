@@ -24,7 +24,8 @@ import {
 } from "@/lib/pace";
 import { etDateOf } from "@/lib/work-sessions/parse";
 
-export interface EstimatePart { id: string; name: string; sort_order: number; row_word: string; total_rows: number }
+/** `stitch_count`: the part's planned stitches (FR1: what a row with no stitch count counts as when no row of the part has one). */
+export interface EstimatePart { id: string; name: string; sort_order: number; row_word: string; total_rows: number; stitch_count?: number | null }
 /** A craft row: a checklist item linked to a part (`craft_part_id` + `craft_row`). Its units and type come from `pace.items`. */
 export interface EstimateRow { item_id: string; part_id: string; row: number; is_done: boolean; completed_at: string | null }
 export interface CraftEstimateInput {
@@ -115,6 +116,9 @@ export function buildCraftEstimate(input: CraftEstimateInput): CraftEstimate {
   const rows = input.rows.filter((row) => partById.has(row.part_id) && row.row <= (partById.get(row.part_id) as EstimatePart).total_rows);
   const itemById = new Map(pace.items.map((item) => [item.id, item]));
   const taskById = new Map(pace.tasks.map((task) => [task.id, task]));
+  // FR1 (P3a): a date in another year carries its year ("Jun 5, 2031").
+  const md = (date: string) => `${monthDay(date)}${date.slice(0, 4) === today.slice(0, 4) ? "" : `, ${date.slice(0, 4)}`}`;
+  const wd = (date: string) => `${weekdayDate(date)}${date.slice(0, 4) === today.slice(0, 4) ? "" : `, ${date.slice(0, 4)}`}`;
 
   // A row counts on the day of the sitting that finished it, else the day it was ticked.
   const finishedOn = new Map<string, string>();
@@ -129,10 +133,17 @@ export function buildCraftEstimate(input: CraftEstimateInput): CraftEstimate {
   const doneToday = rows.filter((row) => rowDay(row) === today);
   const doneTodayIds = new Set(doneToday.map((row) => row.item_id));
 
-  // This morning: today's rows back on the pile, speed from before today's sittings (today's on the first day).
+  // This morning (FR1 P2-1): the whole project as it was: today's rows back on the pile, and a task that was closed
+  // today (a band closed when its last row was ticked: one of its rows or steps was ticked today) open again.
+  // Speed from before today's sittings (today's on the first day).
+  const tickedToday = (item: { id: string; completed_at?: string | null }) => doneTodayIds.has(item.id)
+    || Boolean(item.completed_at && etDateOf(item.completed_at) === today);
+  const reopenedTasks = new Set(pace.items.filter((item) => item.is_done && tickedToday(item as { id: string; completed_at?: string | null }))
+    .map((item) => item.task_id).filter((taskId) => taskById.get(taskId)?.status === "Done"));
   const earlier = pace.sessions.filter((session) => session.session_date < today);
   const morning = computeForecast({
     ...pace,
+    tasks: pace.tasks.map((task) => (reopenedTasks.has(task.id) ? { ...task, status: "In Progress" } : task)),
     items: pace.items.map((item) => (doneTodayIds.has(item.id) ? { ...item, is_done: false } : item)),
     sessions: earlier.length > 0 ? earlier : pace.sessions,
   });
@@ -146,57 +157,81 @@ export function buildCraftEstimate(input: CraftEstimateInput): CraftEstimate {
     const units = itemById.get(row.item_id)?.unit_count;
     return typeof units === "number" && units > 0 ? units : 0;
   };
+  // FR1 (P2-3): a row with no stitch count is never free: it counts as the part's average counted row (else the part's
+  // planned stitches, else the project's average row), at its stitch type's speed (else the part's usual type).
+  const counted = rows.filter((row) => unitsOf(row) > 0);
+  const average = (list: EstimateRow[]) => (list.length ? list.reduce((sum, row) => sum + unitsOf(row), 0) / list.length : null);
+  const projectAverage = average(counted);
+  const partAverage = new Map(parts.map((part) => [part.id, average(counted.filter((row) => row.part_id === part.id))]));
+  const partType = new Map(parts.map((part) => {
+    const types = counted.filter((row) => row.part_id === part.id).map(typeOf);
+    return [part.id, types.sort((a, b) => types.filter((t) => t === b).length - types.filter((t) => t === a).length)[0] ?? null];
+  }));
+  const estimatedUnits = (row: EstimateRow) => partAverage.get(row.part_id)
+    ?? (Number(partById.get(row.part_id)?.stitch_count) > 0 ? Number(partById.get(row.part_id)?.stitch_count) : null) ?? projectAverage;
   const costWith = (f: PaceForecast) => (row: EstimateRow): number | null => {
-    const units = unitsOf(row);
-    const seconds = secondsFor(f, typeOf(row));
-    return units > 0 && seconds !== null && seconds > 0 ? (units * seconds) / 60 : null;
+    const own = unitsOf(row);
+    const units = own > 0 ? own : estimatedUnits(row);
+    const partFallback = partType.get(row.part_id);
+    const seconds = secondsFor(f, typeOf(row)) ?? (partFallback ? secondsFor(f, partFallback) : null);
+    return units !== null && units > 0 && seconds !== null && seconds > 0 ? (units * seconds) / 60 : null;
   };
 
-  // Pattern order: the screen's part first, then the other parts by sort order; rows by number.
+  // Pattern order: parts by sort order, rows by number. "Now" puts the screen's part first; this morning's walk
+  // never does (FR1 P2-1: the part on the screen changes during the day, the morning doesn't).
   const sortedParts = [...parts].sort((a, b) => a.sort_order - b.sort_order || a.id.localeCompare(b.id));
-  const ordered = (isDone: (row: EstimateRow) => boolean, cost: (row: EstimateRow) => number | null): OrderedRow[] => {
+  const ordered = (isDone: (row: EstimateRow) => boolean, cost: (row: EstimateRow) => number | null, anchorFirst: boolean): OrderedRow[] => {
     const undone = rows.filter((row) => !isDone(row));
     const hasUndone = (partId: string) => undone.some((row) => row.part_id === partId);
-    const anchor = (input.active_part_id && hasUndone(input.active_part_id) ? input.active_part_id : null)
-      ?? sortedParts.find((part) => hasUndone(part.id))?.id ?? null;
+    const anchor = anchorFirst ? (input.active_part_id && hasUndone(input.active_part_id) ? input.active_part_id : null) : null;
     const partOrder = [...sortedParts.filter((part) => part.id === anchor), ...sortedParts.filter((part) => part.id !== anchor)];
     return partOrder.flatMap((part) => undone.filter((row) => row.part_id === part.id).sort((a, b) => a.row - b.row)
       .map((row) => ({ row, part, cost: cost(row) })));
   };
-  const nowRows = ordered((row) => row.is_done, costWith(forecast));
-  const morningRows = ordered((row) => row.is_done && !doneTodayIds.has(row.item_id), costWith(morning));
+  const nowRows = ordered((row) => row.is_done, costWith(forecast), true);
+  const morningRows = ordered((row) => row.is_done && !doneTodayIds.has(row.item_id), costWith(morning), false);
   const rowsLeft = nowRows.length;
   const anchorPart = nowRows[0]?.part ?? morningRows[0]?.part ?? partById.get(input.active_part_id ?? "") ?? sortedParts[0];
   const rowWord: "row" | "round" = anchorPart?.row_word === "round" ? "round" : "row";
   const rowsWord = (n: number) => (n === 1 ? rowWord : `${rowWord}s`);
   const Rows = rowWord === "round" ? "Rounds" : "Rows";
 
-  // Minutes or rows only: rows with no stitch counts, or work with no speed, are counted in rows.
-  const priced = nowRows.length > 0 ? nowRows.some((entry) => entry.cost !== null) && forecast.work_left_minutes !== null
-    : forecast.work_left_minutes !== null;
+  // Minutes or rows only: no stitch counts at all, or work with no speed, are counted in rows.
+  const isPriced = (list: OrderedRow[], f: PaceForecast) => (list.length > 0 ? list.some((entry) => entry.cost !== null) : true) && f.work_left_minutes !== null;
+  const priced = isPriced(nowRows, forecast);
+  const morningPriced = isPriced(morningRows, morning);
   const costs = nowRows.map((entry) => entry.cost).filter((cost): cost is number => cost !== null);
-  const equal = !priced || costs.length === 0 || Math.max(...costs) <= Math.min(...costs) * (1 + EQUAL_ROWS_TOLERANCE);
-  const mode: CraftEstimate["mode"] = !priced ? "rows" : equal ? "equal" : "unequal";
+  const isEqual = (list: number[]) => list.length === 0 || Math.max(...list) <= Math.min(...list) * (1 + EQUAL_ROWS_TOLERANCE);
+  const mode: CraftEstimate["mode"] = !priced ? "rows" : isEqual(costs) ? "equal" : "unequal";
+  // Today's line keeps this morning's kind of target all day (a part finished today can leave only equal rows).
+  const morningMode: CraftEstimate["mode"] = !morningPriced ? "rows"
+    : isEqual(morningRows.map((entry) => entry.cost).filter((cost): cost is number => cost !== null)) ? "equal" : "unequal";
   const pricedCost = (entry: OrderedRow) => entry.cost ?? 0;
+  const estimatedRows = nowRows.filter((entry) => unitsOf(entry.row) === 0 && entry.cost !== null);
+  const estimatedNow = estimatedRows.reduce((sum, entry) => sum + pricedCost(entry), 0);
+  const estimatedMorning = morningRows.filter((entry) => unitsOf(entry.row) === 0).reduce((sum, entry) => sum + pricedCost(entry), 0);
 
   const daysLeft = forecast.available_days;
   const pastDue = target !== null && target < today;
   const dueToday = target === today;
-  const needed = forecast.needed_minutes_per_day;
+  // Work left and min a day: the shared forecast's, plus the rows with no stitch count it can't price (FR1 P2-3).
+  const workLeft = forecast.work_left_minutes === null ? null : forecast.work_left_minutes + estimatedNow;
+  const needed = estimatedNow > 0 && workLeft !== null && daysLeft ? Math.round((workLeft / daysLeft) * 10) / 10 : forecast.needed_minutes_per_day;
+  const morningNeeded = estimatedMorning > 0 && morning.work_left_minutes !== null && morning.available_days
+    ? (morning.work_left_minutes + estimatedMorning) / morning.available_days : morning.needed_minutes_per_day;
   const nowWalk = priced && needed !== null ? walk(nowRows, needed, pricedCost) : null;
   const rowsNeededPerDay = rowsLeft === 0 || pastDue || !target || !daysLeft ? null
     : priced ? (nowWalk ? nowWalk.count : null) : Math.ceil(rowsLeft / daysLeft);
 
-  // Today's target, from this morning (holds all day).
+  // Today's target, from this morning (holds all day, FR1 P2-1 / P3b: its own mode, minutes or rows).
   let todayTarget: CraftEstimate["today_target"] = null;
   let targetIds: string[] = [];
   if (target && !pastDue && daysLeft && morningRows.length > 0) {
-    const mNeeded = morning.needed_minutes_per_day;
-    if (priced && mNeeded !== null) {
-      const w = walk(morningRows, mNeeded, pricedCost);
+    if (morningPriced && morningNeeded !== null) {
+      const w = walk(morningRows, morningNeeded, pricedCost);
       todayTarget = { rows: w.count, part_id: w.last?.part.id ?? null, row: w.last?.row.row ?? null };
       targetIds = w.ids;
-    } else if (!priced) {
+    } else if (!morningPriced) {
       const n = Math.min(morningRows.length, Math.ceil(morningRows.length / daysLeft));
       const last = morningRows[n - 1];
       todayTarget = { rows: n, part_id: last?.part.id ?? null, row: last?.row.row ?? null };
@@ -204,13 +239,17 @@ export function buildCraftEstimate(input: CraftEstimateInput): CraftEstimate {
     }
   }
   const rowsDoneToday = doneToday.length;
-  const toGo = nowRows.filter((entry) => targetIds.includes(entry.row.item_id));
+  // Done means the target's own rows are ticked (FR1 P2-1), never just "as many rows" somewhere else.
+  const targetSet = new Set(targetIds);
+  const toGo = nowRows.filter((entry) => targetSet.has(entry.row.item_id));
   const rowsToGo = todayTarget ? toGo.length : 0;
+  const targetDone = todayTarget ? todayTarget.rows - rowsToGo : 0;
   const minutesToGo = todayTarget && priced ? toGo.reduce((sum, entry) => sum + pricedCost(entry), 0) : null;
   const undoneIds = new Set(nowRows.map((entry) => entry.row.item_id));
   const partialId = pace.sessions.filter((session) => session.session_date === today)
     .flatMap((session) => session.in_progress_item_ids ?? []).find((id) => undoneIds.has(id));
   const partialRow = partialId ? rows.find((row) => row.item_id === partialId)?.row ?? null : null;
+  const partialText = partialRow !== null ? `part of ${rowWord} ${partialRow}` : null;
 
   // What you're doing: rows a day over the forecast's days (or, with no sittings, the days rows were ticked).
   const rowDays = rows.map(rowDay).filter((day): day is string => day !== null);
@@ -229,34 +268,49 @@ export function buildCraftEstimate(input: CraftEstimateInput): CraftEstimate {
 
   // Finish and health. Rows only: no date; On track / Behind from rows a day once there is enough.
   const ready = forecast.finish_ready;
-  const finishDate = priced ? forecast.projected_finish : null;
+  const cadence = forecast.cadence_minutes_per_day;
+  // With rows that have no stitch count the finish is worked out here, from the same work left as the target.
+  const finishDate = !priced ? null : estimatedNow > 0
+    ? (ready && workLeft !== null && cadence > 0 ? addDays(today, Math.max(0, Math.ceil(workLeft / cadence - 1e-9))) : null)
+    : forecast.projected_finish;
+  const health = estimatedNow > 0 && ready && target ? (finishDate !== null && finishDate <= target ? "on_track" : "behind") : forecast.health;
+  const behindSoFar = estimatedNow > 0
+    ? !ready && forecast.sittings_with_rows > 0 && needed !== null && needed > forecast.longest_day_minutes + 1e-9 : forecast.behind_so_far;
   const farLate = Boolean(finishDate && target && daysBetween(target, finishDate) > FAR_LATE_DAYS);
+  // FR1 (P2-2): every row ticked is not "done" while finishing (or any other open work) is left.
+  const otherLeft = workLeft === null ? null : Math.max(0, workLeft - nowRows.reduce((sum, entry) => sum + pricedCost(entry), 0));
+  const allDone = rows.length > 0 && rowsLeft === 0 && workLeft !== null && workLeft <= 0;
   let chip: EstimateChip;
-  if (rowsLeft === 0 && rows.length > 0) chip = { kind: "done", label: "All done" };
+  if (allDone) chip = { kind: "done", label: "All done" };
   else if (!target) chip = { kind: "none", label: "No due date" };
   else if (pastDue) chip = { kind: "behind", label: "Behind" };
-  else if (!ready) chip = priced && forecast.behind_so_far ? { kind: "behind_so_far", label: "Behind so far" } : { kind: "early", label: "Too early to tell" };
-  else if (!priced) chip = rowsNeededPerDay !== null && rowsPerDay + 1e-9 >= rowsNeededPerDay ? { kind: "ok", label: "On track" } : { kind: "behind", label: "Behind" };
-  else if (forecast.health === "on_track") chip = { kind: "ok", label: "On track" };
-  else if (forecast.health === "behind") chip = { kind: "behind", label: "Behind" };
+  else if (!ready) chip = priced && behindSoFar ? { kind: "behind_so_far", label: "Behind so far" } : { kind: "early", label: "Too early to tell" };
+  // FR1 (P3d): rows a day against the unrounded rows a day needed.
+  else if (!priced) chip = daysLeft && rowsPerDay + 1e-9 >= rowsLeft / daysLeft ? { kind: "ok", label: "On track" } : { kind: "behind", label: "Behind" };
+  else if (health === "on_track") chip = { kind: "ok", label: "On track" };
+  else if (health === "behind") chip = { kind: "behind", label: "Behind" };
   else chip = { kind: "early", label: "Too early to tell" };
 
   // ── Front: the Today box ──
-  const reached = todayTarget !== null && todayTarget.rows > 0 && rowsDoneToday >= todayTarget.rows;
-  const head = todayTarget && !reached ? `${rowsDoneToday} of ${todayTarget.rows} ${rowsWord(todayTarget.rows)}` : `${rowsDoneToday} ${rowsWord(rowsDoneToday)}`;
-  const bar = todayTarget && todayTarget.rows > 0 ? Math.min(1, rowsDoneToday / todayTarget.rows) : null;
-  const finishWords = finishDate && !farLate ? `Finish about ${monthDay(finishDate)}` : farLate && target ? `Finish more than a month after ${monthDay(target)}` : null;
+  const reached = todayTarget !== null && todayTarget.rows > 0 && rowsToGo === 0;
+  const head = todayTarget && !reached ? `${targetDone} of ${todayTarget.rows} ${rowsWord(todayTarget.rows)}` : `${rowsDoneToday} ${rowsWord(rowsDoneToday)}`;
+  const bar = todayTarget && todayTarget.rows > 0 ? Math.min(1, targetDone / todayTarget.rows) : null;
+  const finishWords = finishDate && !farLate ? `Finish about ${md(finishDate)}` : farLate && target ? `Finish more than a month after ${md(target)}` : null;
   const measured = isMeasured(focusSource(forecast, nowRows, typeOf)?.source);
+  const finishingLeft = otherLeft !== null && otherLeft > 0 ? `about ${whole(otherLeft)} min of finishing left` : null;
   let line: string;
   if (rows.length === 0) line = "No rows on the craft screen yet.";
-  else if (rowsLeft === 0) line = `Every ${rowWord} is ticked.`;
+  else if (allDone) line = `Every ${rowWord} is ticked.`;
+  else if (rowsLeft === 0) line = `Every ${rowWord} is ticked; ${finishingLeft ?? "some work is left"}${pastDue ? `, ${plural(daysBetween(target as string, today), "day")} past` : dueToday ? ", due today" : ""}.`;
   else if (pastDue) line = `${plural(rowsLeft, rowWord)} left, ${plural(daysBetween(target as string, today), "day")} past`;
   else if (!target) line = finishWords ?? (span.days > 0 && rowsInSpan > 0 ? `${whole(rowsPerDay)} ${rowsWord(Math.round(rowsPerDay))} a day so far. No due date.` : "No due date, so no daily target.");
   else if (dueToday) line = `${plural(rowsLeft, rowWord)} left, due today`;
   else if (reached && todayTarget) line = `${todayTarget.rows} needed, done.${finishWords ? ` ${finishWords}` : ""}`;
-  else if (mode === "unequal" && todayTarget) line = `${plural(rowsToGo, rowWord)} to go, about ${whole(minutesToGo ?? 0)} min at ${measured ? "your" : "plan"} speed`;
-  else if (todayTarget) line = `${todayTarget.rows} ${rowsWord(todayTarget.rows)} a day to finish by ${weekdayDate(target)}`;
+  else if (morningMode === "unequal" && todayTarget) line = `${plural(rowsToGo, rowWord)} to go, about ${whole(minutesToGo ?? 0)} min at ${measured ? "your" : "plan"} speed`;
+  else if (todayTarget) line = `${todayTarget.rows} ${rowsWord(todayTarget.rows)} a day to finish by ${wd(target)}`;
   else line = "No daily target yet.";
+  // FR1 (P3c): a row partway today shows in every mode.
+  if (partialText && rowsLeft > 0) line = `${line}${line.endsWith(".") ? "" : " ·"} + ${partialText}`;
   const noRowsLine = sittingsWithoutRows.length > 0
     ? `${plural(sittingsWithoutRows.length, "sitting")} ${sittingsWithoutRows.length === 1 ? "has" : "have"} no ${rowWord}s.` : null;
 
@@ -267,44 +321,48 @@ export function buildCraftEstimate(input: CraftEstimateInput): CraftEstimate {
       ? `to ${partById.get(todayTarget.part_id)?.name ?? "the next part"} ${rowWord} ${todayTarget.row}`
       : `to ${rowWord} ${todayTarget.row} of ${anchorPart?.total_rows ?? todayTarget.row}`) : "";
   let neededTile: EstimateTile;
-  if (rowsLeft === 0) neededTile = { label: "Needed", value: "0", unit: `${rowWord}s left`, sub: "all ticked" };
+  if (allDone) neededTile = { label: "Needed", value: "0", unit: `${rowWord}s left`, sub: "all ticked" };
+  else if (rowsLeft === 0) neededTile = {
+    label: "Needed", value: needed === null || !target || pastDue ? "—" : whole(needed), unit: "min a day",
+    sub: target ? `finishing, ${pastDue ? "due" : "by"} ${wd(target)}` : "finishing, no due date",
+  };
   else if (!target) neededTile = { label: "Needed", value: "—", unit: "", sub: "no due date" };
-  else if (pastDue) neededTile = { label: "Needed", value: whole(rowsLeft), unit: `${rowsWord(rowsLeft)} left`, sub: `due ${weekdayDate(target)}` };
+  else if (pastDue) neededTile = { label: "Needed", value: whole(rowsLeft), unit: `${rowsWord(rowsLeft)} left`, sub: `due ${wd(target)}` };
   else if (mode === "unequal" && todayTarget) neededTile = { label: "Needed today", value: whole(todayTarget.rows), unit: rowsWord(todayTarget.rows), sub: targetRowText };
   else neededTile = {
     label: "Needed", value: rowsNeededPerDay === null ? "—" : whole(rowsNeededPerDay), unit: `${rowsWord(rowsNeededPerDay ?? 2)} a day`,
-    sub: ready && priced && needed !== null ? `${whole(needed)} min, by ${weekdayDate(target)}` : `to finish by ${weekdayDate(target)}`,
+    sub: ready && priced && needed !== null ? `${whole(needed)} min, by ${wd(target)}` : `to finish by ${wd(target)}`,
   };
   let youTile: EstimateTile;
   if (mode === "unequal") {
     youTile = {
-      label: "You", value: whole(rowsDoneToday), unit: `${rowsWord(rowsDoneToday)} today${partialRow !== null ? ` + part of ${rowWord} ${partialRow}` : ""}`,
+      label: "You", value: whole(rowsDoneToday), unit: `${rowsWord(rowsDoneToday)} today${partialText ? ` + ${partialText}` : ""}`,
       sub: todaySessions.length ? `${whole(minutesToday)} min in ${plural(todaySessions.length, "sitting")}` : "no sittings today",
     };
   } else if (rowsInSpan === 0) {
     youTile = {
       label: "You", value: "0", unit: `${rowWord}s ticked`,
-      sub: span.days > 0 ? `${whole(forecast.minutes_in_cadence_window)} min in ${plural(span.days, "day")}` : "no sittings in 14 days",
+      sub: `${span.days > 0 ? `${whole(forecast.minutes_in_cadence_window)} min in ${plural(span.days, "day")}` : "no sittings in 14 days"}${partialText ? ` · + ${partialText}` : ""}`,
     };
   } else {
     youTile = {
       label: "You", value: whole(rowsPerDay), unit: `${rowsWord(Math.round(rowsPerDay))} a day`,
-      sub: `${whole(forecast.cadence_minutes_per_day)} min, ${span.days === 1 ? "today" : `last ${span.days} days`}`,
+      sub: `${whole(forecast.cadence_minutes_per_day)} min, ${span.days === 1 ? "today" : `last ${span.days} days`}${partialText ? ` · + ${partialText}` : ""}`,
     };
   }
 
   const planNeed = forecast.plan_cadence_minutes_per_day;
   const planText = planNeed !== null && needed !== null && Math.round(planNeed) !== Math.round(needed) ? ` At plan speed it would need ${whole(planNeed)}.` : "";
   let warn: CraftEstimate["sheet"]["warn"] = null;
-  if (rowsLeft > 0 && pastDue) warn = { strong: `The due date, ${weekdayDate(target as string)}, has passed.`, rest: ` ${plural(rowsLeft, rowWord)} left.` };
-  else if (rowsLeft > 0 && chip.kind === "behind_so_far" && needed !== null) {
+  if (!allDone && pastDue) warn = { strong: `The due date, ${wd(target as string)}, has passed.`, rest: ` ${plural(rowsLeft, rowWord)} left.` };
+  else if (!allDone && chip.kind === "behind_so_far" && needed !== null) {
     warn = { strong: `Needs ${whole(needed)} min a day${measured ? " at your speed" : ""}. Your longest day is ${whole(forecast.longest_day_minutes)}.`, rest: planText };
-  } else if (rowsLeft > 0 && chip.kind === "behind" && priced && needed !== null) {
+  } else if (!allDone && chip.kind === "behind" && priced && needed !== null) {
     warn = { strong: `Needs ${whole(needed)} min a day. You're doing ${whole(forecast.cadence_minutes_per_day)}.`, rest: planText };
   }
   const fix = sittingsWithoutRows.length > 0
     ? `${plural(sittingsWithoutRows.length, "sitting")} ${sittingsWithoutRows.length === 1 ? "has" : "have"} time but no ${rowWord}s: ${sittingsWithoutRows.slice(0, 4)
-      .map((s) => `${weekdayDate(s.date).slice(0, 3)} ${Number(s.date.slice(5, 7))}/${Number(s.date.slice(8, 10))}, ${s.minutes} min`).join("; ")}${sittingsWithoutRows.length > 4 ? "; …" : ""}. Their time counts, but they can't give a speed until they have ${rowWord}s.`
+      .map((s) => `${wd(s.date).slice(0, 3)} ${Number(s.date.slice(5, 7))}/${Number(s.date.slice(8, 10))}, ${s.minutes} min`).join("; ")}${sittingsWithoutRows.length > 4 ? "; …" : ""}. Their time counts, but they can't give a speed until they have ${rowWord}s.`
     : null;
   const chart = span.days >= 3 && span.from && rowsInSpan > 0 ? {
     days: Array.from({ length: span.days }, (_, i) => {
@@ -328,8 +386,8 @@ export function buildCraftEstimate(input: CraftEstimateInput): CraftEstimate {
   }
   const sittingsWord = forecast.sittings_with_rows;
   let finishFact: EstimateFact;
-  if (rowsLeft === 0) finishFact = { key: "finish", label: "Finish", strong: "Done", small: `Every ${rowWord} is ticked.` };
-  else if (!priced) finishFact = { key: "finish", label: "Finish", strong: "No date", small: `These ${rowWord}s have no stitch counts or speed, so it goes by ${rowWord}s a day.` };
+  if (allDone) finishFact = { key: "finish", label: "Finish", strong: "Done", small: `Every ${rowWord} is ticked.` };
+  else if (!priced && rowsLeft > 0) finishFact = { key: "finish", label: "Finish", strong: "No date", small: `These ${rowWord}s have no stitch counts or speed, so it goes by ${rowWord}s a day.` };
   else if (!ready) {
     finishFact = {
       key: "finish", label: "Finish", strong: "No date yet",
@@ -338,11 +396,11 @@ export function buildCraftEstimate(input: CraftEstimateInput): CraftEstimate {
   } else if (!finishDate) {
     finishFact = { key: "finish", label: "Finish", strong: "No date yet", small: forecast.cadence_days === 0 ? "No sittings in the last 14 days." : "Some work has no speed yet." };
   } else if (farLate && target) {
-    finishFact = { key: "finish", label: "Finish", strong: "More than a month late", small: `More than a month after ${weekdayDate(target)} at ${whole(forecast.cadence_minutes_per_day)} min a day.` };
+    finishFact = { key: "finish", label: "Finish", strong: "More than a month late", small: `More than a month after ${wd(target)} at ${whole(forecast.cadence_minutes_per_day)} min a day.` };
   } else {
     const slack = target ? daysBetween(finishDate, target) : null;
     finishFact = {
-      key: "finish", label: "Finish", strong: `About ${weekdayDate(finishDate)}`,
+      key: "finish", label: "Finish", strong: `About ${wd(finishDate)}`,
       small: slack === null ? `At ${whole(forecast.cadence_minutes_per_day)} min a day.` : slack > 0 ? `${plural(slack, "day")} early.` : slack === 0 ? "On the due date." : `${plural(-slack, "day")} late.`,
     };
   }
@@ -376,8 +434,9 @@ export function buildCraftEstimate(input: CraftEstimateInput): CraftEstimate {
   const unitsLeft = nowRows.reduce((sum, entry) => sum + unitsOf(entry.row), 0);
   const leftSmall = [
     unitsLeft > 0 ? `${whole(unitsLeft)} ${unitsLeft === 1 ? unit : pace.project.unit_label?.trim() || "stitches"}.` : null,
+    estimatedRows.length > 0 ? `${plural(estimatedRows.length, rowWord)} ${estimatedRows.length === 1 ? "has" : "have"} no stitch count; ${estimatedRows.length === 1 ? "it counts" : "each counts"} as an average ${rowWord}.` : null,
     forecast.unitless_minutes_left > 0 ? `Plus about ${whole(forecast.unitless_minutes_left)} min of finishing.` : null,
-    target ? `Due ${weekdayDate(target)}.` : "No due date.",
+    target ? `Due ${wd(target)}.` : "No due date.",
   ].filter(Boolean).join(" ");
   facts.push({ key: "left", label: "Left", strong: `${whole(rowsLeft)} ${rowsWord(rowsLeft)}${partsLeft > 1 ? ` in ${partsLeft} parts` : ""}`, small: leftSmall });
 
@@ -398,8 +457,8 @@ export function buildCraftEstimate(input: CraftEstimateInput): CraftEstimate {
     const by = left > 0 && partsLeft >= 2 ? finishBy.get(part.id) ?? null : null;
     const word = part.row_word === "round" ? "round" : "row";
     const text = left === 0 ? `All ${word}s ticked`
-      : by && target ? `${plural(left, word)} left · finish by ${by >= target ? monthDay(target) : `about ${monthDay(by)}`}`
-        : `${plural(left, word)} left${target && partsLeft < 2 ? ` · due ${weekdayDate(target)}` : ""}`;
+      : by && target ? `${plural(left, word)} left · finish by ${by >= target ? md(target) : `about ${md(by)}`}`
+        : `${plural(left, word)} left${target && partsLeft < 2 ? ` · due ${wd(target)}` : ""}`;
     return { part_id: part.id, rows_left: left, finish_by: by, text };
   });
 
@@ -414,10 +473,10 @@ export function buildCraftEstimate(input: CraftEstimateInput): CraftEstimate {
     sheet: { tiles: [neededTile, youTile], warn, fix, chart, facts },
     parts: partLines,
     forecast: {
-      needed_minutes_per_day: forecast.needed_minutes_per_day, cadence_minutes_per_day: forecast.cadence_minutes_per_day,
+      needed_minutes_per_day: needed, cadence_minutes_per_day: forecast.cadence_minutes_per_day,
       cadence_days: forecast.cadence_days, finish_ready: forecast.finish_ready, sittings_with_rows: forecast.sittings_with_rows,
-      days_with_rows: forecast.days_with_rows, behind_so_far: forecast.behind_so_far, projected_finish: farLate ? null : forecast.projected_finish,
-      health: forecast.health, longest_day_minutes: forecast.longest_day_minutes, plan_cadence_minutes_per_day: forecast.plan_cadence_minutes_per_day,
+      days_with_rows: forecast.days_with_rows, behind_so_far: behindSoFar, projected_finish: farLate ? null : finishDate,
+      health, longest_day_minutes: forecast.longest_day_minutes, plan_cadence_minutes_per_day: forecast.plan_cadence_minutes_per_day,
     },
   };
 }

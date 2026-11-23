@@ -170,7 +170,9 @@ function TimelineChart({ timeline, appId }: { timeline: Timeline; appId: string 
           const right = timelinePosition(timeline, lane.end, 1);
           const range = dateRange(lane.start, lane.end);
           const name = lane.project ? `${lane.project} · ${lane.label}` : lane.label;
-          const projectedNote = lane.pace?.projectedEnd
+          const projectedNote = lane.pace?.farLate
+            ? `, projected to finish more than a month after ${formatTick(lane.end)} at your pace`
+            : lane.pace?.projectedEnd
             ? `, projected to finish ${formatTick(lane.pace.projectedEnd)} at your pace`
             : lane.pace
               ? ", no pace yet"
@@ -207,7 +209,8 @@ function TimelineChart({ timeline, appId }: { timeline: Timeline; appId: string 
                   <span
                     className={`pf-tail${lane.pace.tail.cut ? " cut" : ""}`}
                     style={{ left: `${lane.pace.tail.left}%`, width: `${lane.pace.tail.width}%` }}
-                    title={`Projected end ${lane.pace.projectedEnd ? formatTick(lane.pace.projectedEnd) : ""} at your pace${lane.pace.tail.cut ? " (past the right edge of the chart)" : ""}`}
+                    title={lane.pace.farLate ? `Projected end more than a month after ${formatTick(lane.end)} at your pace`
+                      : `Projected end ${lane.pace.projectedEnd ? formatTick(lane.pace.projectedEnd) : ""} at your pace${lane.pace.tail.cut ? " (past the right edge of the chart)" : ""}`}
                     aria-hidden="true"
                   />
                 ) : null}

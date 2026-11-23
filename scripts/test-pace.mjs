@@ -894,12 +894,15 @@ test("sections: a running clock walks planned_start order, leaves gaps between s
   assert.deepEqual([d.units_left, d.projected_end, d.health, d.health_basis], [0, null, null, "rows"], "no unit work left → row count, and it doesn't move the clock");
 });
 
-test("sections: cadence 0 → behind with no projected end; fewer than 3 counted sittings → row-count basis; unpriced units → unknown", () => {
+test("sections: a break still going on → no time call (FR1); fewer than 3 counted sittings → row-count basis; unpriced units → unknown", () => {
   const old = [1, 2, 3].map((n) => session({ id: `old${n}`, session_date: `2026-08-0${n}`, minutes: 30, item_ids: [`lane-row${n}`] }));
   const idle = computeForecast(lanes({ sessions: old }));
   assert.equal(idle.cadence_minutes_per_day, 0);
   const idleA = laneOf(idle, "sec-a");
-  assert.deepEqual([idleA.projected_end, idleA.health, idleA.health_basis], [null, "behind", "time"], "cadence 0 is behind");
+  // Craft estimates FR1 (Brent 11/23, "wait after a break"): no sitting in 14 days is a break still going on, so the
+  // forecast restarts and makes no time call (it used to say Behind on cadence 0).
+  assert.deepEqual([idleA.projected_end, idleA.health, idleA.health_basis], [null, null, "rows"], "after a break: no time call");
+  assert.deepEqual([idle.sittings_with_rows, idle.finish_ready, idle.health], [0, false, "insufficient_data"]);
   assert.equal(laneOf(idle, "sec-c").projected_end, null);
   assert.equal(laneOf(idle, "sec-d").health, null);
 

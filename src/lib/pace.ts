@@ -833,7 +833,10 @@ export interface PaceForecast {
   cadence_days: number;
   /** E1: the most minutes on one day within the cadence days (all sittings: learning is time too). */
   longest_day_minutes: number;
-  /** E1: counted sittings with rows (finished rows or extra units), and on how many different days. */
+  /**
+   * E1: counted sittings with rows (finished rows or extra units), and on how many different days. FR1: only since
+   * the restart after the last break of 14 days or more (none while such a break is still going on).
+   */
   sittings_with_rows: number;
   days_with_rows: number;
   /** E1: enough to give a finish date and On track / Behind (3 counted sittings with rows on 3 days). */
@@ -871,17 +874,18 @@ export function round(value: number, places = 1): number {
  * activity in the last 14 days there are none (from null, 0 days). Dates after today are ignored.
  * The blanket, worked on for weeks, keeps all 14; a scarf started yesterday has 2.
  */
-export function activeDays(dates: string[], today: string): { from: string | null; days: number } {
+export function activeDays(dates: string[], today: string): { from: string | null; days: number; run_start: string | null } {
   const sorted = [...new Set(dates.filter((date) => date <= today))].sort();
-  if (sorted.length === 0) return { from: null, days: 0 };
+  if (sorted.length === 0) return { from: null, days: 0, run_start: null };
   let start = sorted[0];
   for (let i = 1; i < sorted.length; i += 1) {
     if (daysBetween(sorted[i - 1], sorted[i]) - 1 >= CADENCE_WINDOW_DAYS) start = sorted[i];
   }
   const windowStart = addDays(today, -(CADENCE_WINDOW_DAYS - 1));
-  if (sorted[sorted.length - 1] < windowStart) return { from: null, days: 0 };
+  // A break of 14 days or more that is still going on: nothing counts until you start again.
+  if (sorted[sorted.length - 1] < windowStart) return { from: null, days: 0, run_start: null };
   const from = start > windowStart ? start : windowStart;
-  return { from, days: daysBetween(from, today) + 1 };
+  return { from, days: daysBetween(from, today) + 1, run_start: start };
 }
 
 /** Whole days of work at a cadence; the epsilon keeps an exact multiple (60 min ÷ 6 a day) from rounding up on float dust. */
@@ -1026,9 +1030,11 @@ export function computeForecast(input: PaceInput): PaceForecast {
 
   const countedSessions = sessions.filter((session) => !session.exclude_from_stats).length;
   // E1: sittings with rows (finished rows or extra units) are what a finish date rests on; a sitting with
-  // minutes but no rows is time, never speed, and doesn't count toward the 3.
-  const withRows = sessions.filter((session) => !session.exclude_from_stats && session.session_date <= today
-    && (session.item_ids.length > 0 || positive(session.extra_units) > 0));
+  // minutes but no rows is time, never speed, and doesn't count toward the 3. FR1 (Brent 11/23, "wait after a
+  // break"): after a break of 14 days or more the forecast restarts, so only sittings since you started again count.
+  const restart = cadenceDays.run_start;
+  const withRows = restart === null ? [] : sessions.filter((session) => !session.exclude_from_stats && session.session_date <= today
+    && session.session_date >= restart && (session.item_ids.length > 0 || positive(session.extra_units) > 0));
   const daysWithRows = new Set(withRows.map((session) => session.session_date)).size;
   const finishReady = withRows.length >= MIN_SITTINGS_WITH_ROWS_FOR_FINISH && daysWithRows >= MIN_DAYS_WITH_ROWS_FOR_FINISH;
 

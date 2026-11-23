@@ -25,7 +25,7 @@ export async function getCraftPace(client: SupabaseClient<Database>, userId: str
     try {
       const [{ project, input }, parts] = await Promise.all([
         loadProjectPaceInput(client as unknown as SupabaseClient, userId, craft.project_id, today),
-        pagedSelect<EstimatePart>((from, to) => client.from("craft_parts").select("id, name, sort_order, row_word, total_rows")
+        pagedSelect<EstimatePart>((from, to) => client.from("craft_parts").select("id, name, sort_order, row_word, total_rows, stitch_count")
           .eq("user_id", userId).eq("project_id", craft.project_id).order("id").range(from, to)),
       ]);
       const rows: EstimateRow[] = [];

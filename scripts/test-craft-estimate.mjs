@@ -9,6 +9,7 @@
 // PACE_MODULE=<path> runs part 1 against another copy of pace.ts (the fail-before run used the base commit's).
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 const pace = await import(process.env.PACE_MODULE ?? "../src/lib/pace.ts");
 const { computeForecast } = pace;
@@ -464,7 +465,6 @@ etest("product words: no assistant names, rows never inches", () => {
 // ── 3. E2: the Today box, Pace (inside + sheet), parts, the route ───────────
 
 if (!onlyPace) {
-  const { readFileSync } = await import("node:fs");
   const { registerHooks } = await import("node:module");
   const { fileURLToPath } = await import("node:url");
   const ts = (await import("typescript")).default;
@@ -547,7 +547,7 @@ if (!onlyPace) {
     const screen = readFileSync(new URL("../src/components/craft/CraftScreen.tsx", import.meta.url), "utf8");
     const pace = readFileSync(new URL("../src/components/craft/CraftPace.tsx", import.meta.url), "utf8");
     assert.match(screen, /const estimate = useCraftPace\(projectId, paceKey\);/);
-    assert.match(screen, /paceKey = \[view\.today\.date, part\?\.id \?\? "", \.\.\.view\.parts\.map\(\(entry\) => `\$\{entry\.id\}:\$\{entry\.done_rows\}`\)/);
+    assert.match(screen, /paceKey = \[view\.today\.date, part\?\.id \?\? "", `w\$\{writes\}`, \.\.\.view\.parts\.map\(\(entry\) => `\$\{entry\.id\}:\$\{entry\.done_rows\}:\$\{entry\.row_count\}:\$\{entry\.total_rows\}`\)/);
     assert.match(screen, /\{estimate && <CraftTodayBox estimate=\{estimate\} onOpen=\{\(\) => setSheet\("pace"\)\} \/>\}/);
     assert.match(screen, /\{!estimate && <section className="craft-today"/);
     assert.match(screen, /<aside className="craft-inside" aria-label="Project details">\s*<CraftPaceSection estimate=\{estimate\} \/>/);
@@ -651,6 +651,138 @@ if (!onlyPace) {
   })();
 
 }
+
+// ── 4. Fix round 1 (Fable f1167bb8 + Codex): each case failed on b25d6bf ─────
+
+test("FR1 P2-4: after a 14+ day break the forecast restarts: no finish date or On track until 3 new sittings with rows on 3 days", () => {
+  const sessions = [
+    session({ session_date: "2026-10-01", minutes: 50, item_ids: rowIds("p1", 1, 10) }), session({ session_date: "2026-10-02", minutes: 50, item_ids: rowIds("p1", 11, 20) }),
+    session({ session_date: "2026-10-03", minutes: 50, item_ids: rowIds("p1", 21, 30) }), session({ session_date: "2026-11-22", minutes: 150, item_ids: rowIds("p1", 31, 60) }),
+  ];
+  const done = { ...ticks("p1", 1, 10, "2026-10-01"), ...ticks("p1", 11, 20, "2026-10-02"), ...ticks("p1", 21, 30, "2026-10-03"), ...ticks("p1", 31, 60, "2026-11-22") };
+  const f = computeForecast(craft({ done, sessions }).pace);
+  assert.deepEqual([f.sittings_with_rows, f.days_with_rows, f.finish_ready, f.health, f.projected_finish], [1, 1, false, "insufficient_data", null], "only the sitting since the break counts");
+  // Behind so far still warns early after a break: one 20-minute day back against ~70 a day needed.
+  const short = computeForecast(craft({ done: { ...done, ...ticks("p1", 31, 34, "2026-11-22") }, sessions: [...sessions.slice(0, 3), session({ session_date: "2026-11-22", minutes: 20, item_ids: rowIds("p1", 31, 34) })] }).pace);
+  assert.equal(short.behind_so_far, true);
+  // Three new days after the break: ready again.
+  const back = [...sessions.slice(0, 3), ...["2026-11-20", "2026-11-21", "2026-11-22"].map((date, i) => session({ session_date: date, minutes: 80, item_ids: rowIds("p1", 31 + i * 10, 40 + i * 10) }))];
+  const again = computeForecast(craft({ done: { ...done }, sessions: back }).pace);
+  assert.deepEqual([again.sittings_with_rows, again.days_with_rows, again.finish_ready], [3, 3, true]);
+  // A break still going on (nothing in 14 days): nothing counts.
+  const idle = computeForecast(craft({ today: "2026-11-01", done: ticks("p1", 1, 30, "2026-10-01"), sessions: sessions.slice(0, 3) }).pace);
+  assert.deepEqual([idle.sittings_with_rows, idle.finish_ready, idle.health], [0, false, "insufficient_data"]);
+});
+
+etest("FR1 P2-1: a part finished today, then a row on the next part (the screen moves): the target holds and is done only when its own rows are", () => {
+  const parts = [{ id: "a", name: "Scarf 1", rows: 10, stitches: () => 6, planSec: 10 }, { id: "b", name: "Hood", rows: 10, stitches: () => 60, planSec: 10 }];
+  const base = { parts, target: "2026-11-26", finishingMinutes: 0 };
+  const morning = est(craft({ ...base, activePart: "a" }));
+  const after = est(craft({ ...base, activePart: "b", done: { ...ticks("a", 1, 10, "2026-11-22"), ...ticks("b", 1, 1, "2026-11-22") } }));
+  assert.deepEqual(after.today_target, morning.today_target, "the morning walk ignores which part is on the screen now");
+  assert.equal(after.rows_to_go_today, morning.today_target.rows - 11);
+  assert.equal(after.front.head, `11 of ${morning.today_target.rows} rows`);
+  assert.doesNotMatch(after.front.line, /needed, done/);
+  assert.match(after.front.line, /^\d+ rows? to go, about \d+ min/, "this morning's kind of target (unequal rows) all day");
+  // Unequal rows on another part (Fable R5): head and line agree.
+  const r5parts = [{ id: "a", name: "Cuff", rows: 60, stitches: () => 20, planSec: 6 }, { id: "b", name: "Hand", rows: 60, stitches: () => 60, planSec: 6 }];
+  const onB = est(craft({ parts: r5parts, target: "2026-11-27", finishingMinutes: 0, activePart: "b", sessions: [session({ session_date: "2026-11-21", minutes: 20, item_ids: rowIds("a", 1, 10) })],
+    done: { ...ticks("a", 1, 10, "2026-11-21"), ...ticks("a", 11, 20, "2026-11-22") } }));
+  assert.equal(onB.today_target.rows - Number(onB.front.head.split(" ")[0]), onB.rows_to_go_today);
+});
+
+etest("FR1 P2-1: a task closed today (a band closed on its last row) doesn't shrink today's target", () => {
+  const parts = [{ id: "a", name: "Cuff", rows: 30, stitches: () => 40, planSec: 6 }, { id: "b", name: "Hand", rows: 60, stitches: () => 40, planSec: 6 }];
+  const make = () => craft({ parts, target: "2026-11-24", finishingMinutes: 60, sessions: [session({ session_date: "2026-11-21", minutes: 40, item_ids: rowIds("a", 1, 10) })],
+    done: { ...ticks("a", 1, 10, "2026-11-21"), ...ticks("a", 11, 30, "2026-11-22") } });
+  const open = make(), closed = make();
+  closed.pace.tasks.find((t) => t.id === "t-a").status = "Done";
+  assert.deepEqual(est(closed).today_target, est(open).today_target);
+});
+
+etest("FR1 P2-2 (Codex P1): every row ticked with finishing left is not 'All done'; the forecast's health, needed minutes and date stay", () => {
+  const sessions = ["2026-11-20", "2026-11-21", "2026-11-22"].map((date, i) => session({ session_date: date, item_ids: [`p1:${i + 1}`] }));
+  const done = { ...ticks("p1", 1, 1, "2026-11-20"), ...ticks("p1", 2, 2, "2026-11-21"), ...ticks("p1", 3, 3, "2026-11-22") };
+  const e = est(craft({ parts: [{ id: "p1", name: "Scarf", rows: 3, stitches: () => 30, planSec: 10 }], target: "2026-11-23", finishingMinutes: 120, sessions, done }));
+  assert.notEqual(e.chip.kind, "done");
+  assert.deepEqual(e.chip, { kind: "behind", label: "Behind" }, "as the project page says");
+  assert.equal(e.front.line, "Every row is ticked; about 120 min of finishing left.");
+  assert.deepEqual(e.sheet.tiles[0], { label: "Needed", value: "60", unit: "min a day", sub: "finishing, by Mon, Nov 23" });
+  assert.notEqual(e.sheet.facts.find((f) => f.key === "finish").strong, "Done");
+  assert.equal(e.finish.date, "2026-12-04");
+  // With nothing left at all it is All done.
+  const all = est(craft({ parts: [{ id: "p1", name: "Scarf", rows: 3, stitches: () => 30, planSec: 10 }], target: "2026-11-23", finishingMinutes: 0, sessions, done }));
+  assert.deepEqual([all.chip.kind, all.sheet.facts.find((f) => f.key === "finish").strong], ["done", "Done"]);
+});
+
+etest("FR1 P2-3: a row with no stitch count is never free: it counts as the part's average row, and the sheet says so", () => {
+  const front = est(craft({ parts: [{ id: "p1", name: "Hood", rows: 100, stitches: (r) => (r <= 40 ? null : 30), planSec: 10 }] }));
+  assert.ok(front.rows_needed_per_day <= 10, `uncounted rows first: ${front.rows_needed_per_day} rows a day`);
+  const end = est(craft({ parts: [{ id: "p1", name: "Hood", rows: 100, stitches: (r) => (r > 60 ? null : 30), planSec: 10 }] }));
+  assert.ok(end.rows_needed_per_day * 27 >= end.rows_left, `uncounted rows last: ${end.rows_needed_per_day} × 27 < ${end.rows_left}`);
+  assert.equal(end.mode, "equal", "an average row is the same as the counted ones");
+  assert.match(end.sheet.facts.find((f) => f.key === "left").small, /40 rows have no stitch count; each counts as an average row\./);
+  assert.ok(end.forecast.needed_minutes_per_day > computeForecast(craft({ parts: [{ id: "p1", name: "Hood", rows: 100, stitches: (r) => (r > 60 ? null : 30), planSec: 10 }] }).pace).needed_minutes_per_day, "their minutes are in the minutes a day");
+  // A part with no counted rows takes its planned stitches; the rest of the project counts as usual.
+  const input = craft({ parts: [{ id: "a", name: "Body", rows: 20, stitches: () => 30, planSec: 10 }, { id: "b", name: "Trim", rows: 10, stitches: () => null }], finishingMinutes: 0 });
+  input.parts[1].stitch_count = 60;
+  const trim = est(input);
+  assert.equal(trim.mode, "unequal", "trim rows count as 60 stitches, body rows 30");
+  // Every row uncounted and no planned stitches: rows only, as before.
+  assert.equal(est(craft({ parts: [{ id: "p1", name: "Mitten", rows: 30, stitches: () => null }], finishingMinutes: 0 })).mode, "rows");
+});
+
+etest("FR1 P3a: a finish in another year carries its year", () => {
+  const done = { ...ticks("p1", 1, 1, "2026-11-10"), ...ticks("p1", 2, 2, "2026-11-15"), ...ticks("p1", 3, 3, "2026-11-22") };
+  const sessions = [session({ session_date: "2026-11-10", minutes: 5, item_ids: ["p1:1"] }), session({ session_date: "2026-11-15", minutes: 5, item_ids: ["p1:2"] }), session({ session_date: "2026-11-22", minutes: 5, item_ids: ["p1:3"] })];
+  const e = est(craft({ target: null, done, sessions }));
+  const year = e.finish.date.slice(0, 4);
+  assert.notEqual(year, "2026");
+  assert.match(e.front.line, new RegExp(`^Finish about \\w+ \\d+, ${year}$`));
+  assert.match(e.sheet.facts.find((f) => f.key === "finish").strong, new RegExp(`^About \\w+, \\w+ \\d+, ${year}$`));
+  assert.doesNotMatch(est(craft({})).front.line, /2026/, "this year's dates stay short");
+});
+
+etest("FR1 P3b: today's target holds when today's first sitting with rows gives the first speed", () => {
+  const parts = [{ id: "p1", name: "Scarf", rows: 100, stitches: () => 30, planSec: 0 }];
+  const s1 = session({ session_date: "2026-11-21", minutes: 50 });
+  const before = est(craft({ parts, sessions: [s1] }));
+  const after = est(craft({ parts, sessions: [s1, session({ session_date: "2026-11-22", minutes: 30, item_ids: rowIds("p1", 1, 3) })], done: ticks("p1", 1, 3, "2026-11-22") }));
+  assert.equal(after.today_target.rows, before.today_target.rows);
+  assert.equal(after.front.head, `3 of ${before.today_target.rows} rows`);
+});
+
+etest("FR1 P3c: a row partway shows for equal rows and rows only too", () => {
+  const e = est(craft({ parts: [{ id: "p1", name: "Scarf", rows: 100, stitches: () => 30, planSec: 10 }], done: ticks("p1", 1, 3, "2026-11-22"),
+    sessions: [session({ minutes: 30, item_ids: rowIds("p1", 1, 3), in_progress_item_ids: ["p1:4"] })] }));
+  assert.equal(e.mode, "equal");
+  assert.match(e.front.line, / · \+ part of row 4$/);
+  assert.match(e.sheet.tiles[1].sub, / · \+ part of row 4$/);
+  const reachedLine = est(craft({ parts: [{ id: "p1", name: "Scarf", rows: 100, stitches: () => 30, planSec: 10 }], done: ticks("p1", 1, 5, "2026-11-22"),
+    sessions: [session({ minutes: 30, item_ids: rowIds("p1", 1, 5), in_progress_item_ids: ["p1:6"] })] })).front.line;
+  assert.match(reachedLine, /needed, done\. \+ part of row 6$/);
+  const rowsOnly = est(craft({ parts: [{ id: "p1", name: "Mitten", rows: 30, stitches: () => null, word: "round" }], finishingMinutes: 0, sessions: [session({ minutes: 20, in_progress_item_ids: ["p1:1"] })] }));
+  assert.match(JSON.stringify([rowsOnly.front, rowsOnly.sheet.tiles]), /part of round 1/);
+});
+
+etest("FR1 P3d: rows-only On track compares rows a day with the unrounded need (2.33 a day against 2.2 is On track)", () => {
+  const parts = [{ id: "p1", name: "Mitten", rows: 18, stitches: () => null }];
+  const sessions = [session({ session_date: "2026-11-20", item_ids: rowIds("p1", 1, 2) }), session({ session_date: "2026-11-21", item_ids: rowIds("p1", 3, 4) }), session({ session_date: "2026-11-22", item_ids: rowIds("p1", 5, 7) })];
+  const e = est(craft({ parts, finishingMinutes: 0, target: "2026-11-26", sessions, done: { ...ticks("p1", 1, 2, "2026-11-20"), ...ticks("p1", 3, 4, "2026-11-21"), ...ticks("p1", 5, 7, "2026-11-22") } }));
+  assert.equal(e.mode, "rows");
+  assert.equal(e.rows_left, 11);
+  assert.deepEqual(e.chip, { kind: "ok", label: "On track" });
+});
+
+etest("FR1 P2-5: the screen re-reads the estimate after any saved write that can change it, and when a total changes", () => {
+  const screen = readFileSync(new URL("../src/components/craft/CraftScreen.tsx", import.meta.url), "utf8");
+  assert.match(screen, /if \(res\.ok && kind !== "timer" && kind !== "notes"\) setWrites\(\(count\) => count \+ 1\);/);
+  // The key itself, evaluated: a raised total changes it even with the same rows done.
+  const keyOf = (view, writes) => [view.today.date, view.part.id, `w${writes}`, ...view.parts.map((entry) => `${entry.id}:${entry.done_rows}:${entry.row_count}:${entry.total_rows}`)].join("|");
+  const v = { today: { date: "2026-11-22" }, part: { id: "a" }, parts: [{ id: "a", done_rows: 10, row_count: 20, total_rows: 20 }] };
+  assert.notEqual(keyOf(v, 0), keyOf({ ...v, parts: [{ id: "a", done_rows: 10, row_count: 40, total_rows: 40 }] }, 0));
+  assert.notEqual(keyOf(v, 0), keyOf(v, 1));
+});
 
 function nextDays(day, n) {
   let out = day;

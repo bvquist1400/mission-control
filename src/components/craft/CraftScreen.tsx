@@ -48,6 +48,9 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
   const [leftOnOk, setLeftOnOk] = useState<string | null>(null);
   // S3 FR3: Change total… works on any part (the Parts list); null = the screen's part.
   const [totalPartId, setTotalPartId] = useState<string | null>(null);
+  // Craft estimates FR1 (P2-5): every saved write that can change the estimate (rows, a sitting, a total, a check,
+  // a rip-back, another part) re-reads it at once; the timer and notes can't change it.
+  const [writes, setWrites] = useState(0);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const projectId = view.project.id;
 
@@ -91,6 +94,7 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
       const res = await fetch(`/api/craft/${projectId}/${kind}`, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
       const json = await res.json().catch(() => null) as Record<string, unknown> | null;
       if (json && typeof json === "object" && "view" in json) accept(json.view as Screen);
+      if (res.ok && kind !== "timer" && kind !== "notes") setWrites((count) => count + 1);
       reply = { ok: res.ok, status: res.status, body: json, error: res.ok ? null : writeFailureText(res.status, json as { error?: string } | null) };
     } catch {
       reply = { ok: false, status: null, body: null, error: writeFailureText(null, null) };
@@ -138,7 +142,7 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
   const rowNotes = part ? view.notes.filter((note) => note.part_id === part.id && note.row === part.current_row) : [];
   // Craft estimates E2: the estimate is read after the screen and again after a saved row or sitting (or a new day,
   // or another part on the screen), never on the 30-second refresh alone.
-  const paceKey = [view.today.date, part?.id ?? "", ...view.parts.map((entry) => `${entry.id}:${entry.done_rows}`),
+  const paceKey = [view.today.date, part?.id ?? "", `w${writes}`, ...view.parts.map((entry) => `${entry.id}:${entry.done_rows}:${entry.row_count}:${entry.total_rows}`),
     ...view.recent_sittings.map((sitting) => `${sitting.id}:${sitting.minutes}:${sitting.rows.length}:${sitting.in_progress_rows.length}:${sitting.excluded_from_stats}`)].join("|");
   const estimate = useCraftPace(projectId, paceKey);
   function confirm(text: string) {

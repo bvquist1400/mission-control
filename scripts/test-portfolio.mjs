@@ -6,6 +6,7 @@
 //   npm run test:portfolio
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 const {
   percentDone,
@@ -1391,15 +1392,27 @@ test("lane chips: sections with a time basis show On track / Behind from the for
   assert.equal(body.health.kind, "behind");
 });
 
+test("craft estimates FR1 (Codex 7): a lane projected more than a month past its planned end is words, never the far date", () => {
+  const far = chipOf(paceLane(paceInput()), "3. Blanket body");
+  assert.equal(far.pace.farLate, true, "projected Oct 2027 vs planned Nov 29");
+  const near = chipOf(paceLane(paceInput({}, { body: { health: "behind", projected_end: "2026-12-10" } })), "3. Blanket body");
+  assert.equal(near.pace.farLate, undefined, "11 days late: the date is fine");
+  const page = readFileSync(new URL("../src/components/portfolio/PortfolioPage.tsx", import.meta.url), "utf8");
+  assert.match(page, /lane\.pace\?\.farLate\s*\? `, projected to finish more than a month after \$\{formatTick\(lane\.end\)\} at your pace`/);
+  assert.match(page, /title=\{lane\.pace\.farLate \? `Projected end more than a month after \$\{formatTick\(lane\.end\)\} at your pace`/);
+});
+
 test("project health on the Portfolio follows the forecast once it says on_track or behind; otherwise today's rule", () => {
   const rowChip = buildPortfolio(paceInput({ health: "insufficient_data", counted_sessions: 1 }, { body: { health: null, health_basis: "rows" }, finish: { health: null, health_basis: "rows" } }), { scope: "personal", now: PACE_NOW });
-  // Today's rule: lanes that have started — Swatch is "Ahead" (green) → "On track".
-  assert.deepEqual(blanketLane(rowChip).timeline.summary.health, { kind: "ok", label: "On track" });
+  // Craft estimates FR1 (Codex 5, pick 2 "never On track early"): the row-count rule's "On track" (Swatch "Ahead")
+  // gives way to "Too early to tell" until the forecast has 3 sittings with rows on 3 days; its lanes too.
+  assert.deepEqual(blanketLane(rowChip).timeline.summary.health, { kind: "plan", label: "Too early to tell" });
+  assert.ok(blanketLane(rowChip).timeline.lanes.every((lane) => lane.health.kind !== "ok" && lane.health.kind !== "ahead"), "no lane says On track / Ahead early");
   const behind = paceLane(paceInput({ health: "behind" })).timeline.summary.health;
   assert.deepEqual(behind, { kind: "behind", label: "Behind" });
   const onTrack = paceLane(paceInput({ health: "on_track" }, { body: { health: "behind" } })).timeline.summary.health;
   assert.deepEqual(onTrack, { kind: "ok", label: "On track" }, "the project's forecast wins over a lane's");
-  for (const health of ["insufficient_data", "unknown", "no_target"]) {
+  for (const health of ["unknown", "no_target"]) {
     const kept = paceLane(paceInput({ health }, { body: { health: null, health_basis: "rows" }, finish: { health: null, health_basis: "rows" } })).timeline.summary.health;
     assert.deepEqual(kept, { kind: "ok", label: "On track" }, `${health} keeps the row-count rule`);
   }
