@@ -31,6 +31,10 @@ export const MIN_SITTINGS_WITH_ROWS_FOR_FINISH = 3;
 export const MIN_DAYS_WITH_ROWS_FOR_FINISH = 3;
 /** E1: a finish more than this many days after the due date is never shown as a date ("more than a month after Dec 18"). */
 export const FAR_LATE_DAYS = 30;
+/** FR2 (Brent 11/23): with no sittings yet, "Behind so far" when the plan needs more than a 2-hour day. */
+export const NO_HISTORY_DAY_MINUTES = 120;
+/** FR2: the unpriced "work type" for craft rows with no stitch count in a task with no estimate and no units. */
+export const UNCOUNTED_ROWS_TYPE = "rows-with-no-stitch-count";
 export const SIZE_FIT_FIXED_CADENCES = [60, 90, 120] as const;
 export const SAMPLE_SPEED_LABEL =
   "from the swatch/sample — rows are narrower, so per-row overhead makes this slower than the main work";
@@ -272,6 +276,13 @@ export interface PaceItemInput {
   is_done: boolean;
   unit_count: number | null;
   work_type: string | null;
+  /**
+   * Craft rows (071): the part and row number when the item is a row on the craft screen. FR2: a craft row with no
+   * stitch count in a task whose other rows have counts is priced as an average counted row (see buildUnitEntries).
+   * Absent = a plain checklist item.
+   */
+  craft_part_id?: string | null;
+  craft_row?: number | null;
 }
 
 export interface PaceSessionInput {
@@ -328,6 +339,8 @@ export interface UnitEntry {
   done: boolean;
   /** Its task is Missed or Parked: not done, but not work left either. */
   inactive: boolean;
+  /** FR2: a craft row with no stitch count, counted as an average counted row (its units are that average). */
+  estimated?: boolean;
 }
 
 function isInactive(task: PaceTaskInput): boolean {
@@ -376,6 +389,18 @@ export function buildUnitEntries(tasks: PaceTaskInput[], items: PaceItemInput[])
       stepByItem.set(task.source_checklist_item_id, task);
     }
   }
+  // FR2 (craft estimates): a craft row with no stitch count, in a task whose other rows have counts, is one average
+  // counted row of its part (else of its task, else of the project's craft rows), priced once here so every screen
+  // agrees. A task with no counted rows keeps its own pricing (task units, or its estimate as unit-less work).
+  const isRow = (item: PaceItemInput) => item.craft_row !== null && item.craft_row !== undefined;
+  const brokenOut = new Set(tasks.map((task) => task.source_checklist_item_id).filter((id): id is string => Boolean(id)));
+  const mean = (list: PaceItemInput[]) => (list.length ? list.reduce((sum, item) => sum + positive(item.unit_count), 0) / list.length : null);
+  const countedRows = items.filter((item) => isRow(item) && positive(item.unit_count) > 0);
+  const projectAverage = mean(countedRows);
+  const partAverage = new Map<string, number | null>();
+  for (const partId of new Set(countedRows.map((item) => item.craft_part_id).filter((id): id is string => Boolean(id)))) {
+    partAverage.set(partId, mean(countedRows.filter((item) => item.craft_part_id === partId)));
+  }
   const entries: UnitEntry[] = [];
   for (const task of tasks) {
     if (task.source_checklist_item_id && stepByItem.get(task.source_checklist_item_id) === task) continue;
@@ -384,6 +409,18 @@ export function buildUnitEntries(tasks: PaceTaskInput[], items: PaceItemInput[])
     const inactive = isInactive(task);
     const unitItems = (itemsByTask.get(task.id) ?? []).filter((item) => positive(item.unit_count) > 0);
     if (unitItems.length > 0) {
+      const taskAverage = mean(unitItems);
+      const usualType = unitItems.map((item) => item.work_type).find((type): type is string => Boolean(type)) ?? null;
+      for (const item of itemsByTask.get(task.id) ?? []) {
+        if (!isRow(item) || positive(item.unit_count) > 0 || brokenOut.has(item.id)) continue;
+        const units = (item.craft_part_id ? partAverage.get(item.craft_part_id) : null) ?? taskAverage ?? projectAverage;
+        if (!units) continue;
+        entries.push({
+          key: item.id, item_id: item.id, task_id: task.id, section_id: task.section_id,
+          work_type: item.work_type ?? task.work_type ?? usualType ?? UNTYPED_WORK_TYPE,
+          units, scope, done: finished || item.is_done, inactive, estimated: true,
+        });
+      }
       for (const item of unitItems) {
         const step = stepByItem.get(item.id);
         const stepDone = step?.status === "Done";
@@ -831,7 +868,7 @@ export interface PaceForecast {
   cadence_from: string | null;
   /** E1: the days the cadence divides by (0 with no sitting in the last 14 days; at most 14). */
   cadence_days: number;
-  /** E1: the most minutes on one day within the cadence days (all sittings: learning is time too). */
+  /** E1/FR2: the most minutes on one day on this project, any time (all sittings: learning is time too). */
   longest_day_minutes: number;
   /**
    * E1: counted sittings with rows (finished rows or extra units), and on how many different days. FR1: only since
@@ -842,8 +879,9 @@ export interface PaceForecast {
   /** E1: enough to give a finish date and On track / Behind (3 counted sittings with rows on 3 days). */
   finish_ready: boolean;
   /**
-   * E1 early warning ("Behind so far"): before `finish_ready`, at least 1 counted sitting with rows and the
-   * minutes a day needed are more than your longest day. Never says On track early.
+   * E1/FR2 early warning ("Behind so far"): before `finish_ready`, the minutes a day needed are more than your longest
+   * day on this project (any time, a break included); with no sittings yet, the plan needs more than a 2-hour day.
+   * Never says On track early.
    */
   behind_so_far: boolean;
   /** E1: the projected finish is more than FAR_LATE_DAYS after the target (shown as words, never a far date). */
@@ -955,9 +993,14 @@ export function computeForecast(input: PaceInput): PaceForecast {
   }
   let unitlessMinutes = 0;
   const unitlessBySection = new Map<string, number>();
+  // FR2: craft rows with no stitch count in a task with no units and no estimate can't be priced: never free.
+  let unpricedRows = 0;
   for (const task of tasks) {
     if (isClosed(task) || taskHasUnits.has(task.id)) continue;
     const checklist = itemsByTask.get(task.id) ?? [];
+    if (positive(task.estimated_minutes) === 0) {
+      unpricedRows += checklist.filter((item) => !item.is_done && item.craft_row !== null && item.craft_row !== undefined).length;
+    }
     const tickedShare = checklist.length > 0 ? checklist.filter((item) => item.is_done).length / checklist.length : 0;
     const minutes = positive(task.estimated_minutes) * (1 - tickedShare);
     unitlessMinutes += minutes;
@@ -971,6 +1014,7 @@ export function computeForecast(input: PaceInput): PaceForecast {
   const unpricedUnits = workLeft
     .filter((row) => row.seconds_per_unit === null)
     .map((row) => ({ work_type: row.work_type, units_left: row.units_left }));
+  if (unpricedRows > 0) unpricedUnits.push({ work_type: UNCOUNTED_ROWS_TYPE, units_left: unpricedRows });
   const workLeftMinutes: number | null = unpricedUnits.length > 0 ? null : pricedWorkLeftMinutes;
 
   // Every work type with units, finished ones too, for the speed table.
@@ -1007,8 +1051,11 @@ export function computeForecast(input: PaceInput): PaceForecast {
   const windowMinutes = windowSessions.reduce((sum, session) => sum + session.minutes, 0);
   const cadenceDays = activeDays(sessions.map((session) => session.session_date), today);
   const cadence = cadenceDays.days > 0 ? windowMinutes / cadenceDays.days : 0;
+  // FR2 (Brent 11/23): your best day is the most minutes on one day on this project, any time (a break doesn't erase it).
   const minutesByDay = new Map<string, number>();
-  for (const session of windowSessions) minutesByDay.set(session.session_date, (minutesByDay.get(session.session_date) ?? 0) + session.minutes);
+  for (const session of sessions) {
+    if (session.session_date <= today) minutesByDay.set(session.session_date, (minutesByDay.get(session.session_date) ?? 0) + session.minutes);
+  }
   const longestDay = Math.max(0, ...minutesByDay.values());
 
   // Available days: from max(today, earliest planned start of a section that
@@ -1052,7 +1099,12 @@ export function computeForecast(input: PaceInput): PaceForecast {
   else if (!target) health = "no_target";
   else if (workLeftMinutes === null) health = "unknown";
   else health = projectedFinish !== null && projectedFinish <= target ? "on_track" : "behind";
-  const behindSoFar = !finishReady && withRows.length > 0 && needed !== null && needed > longestDay + 1e-9;
+  // FR2 (Brent 11/23, "warn if due soon"): before a finish date, "Behind so far" when the minutes a day needed are more
+  // than your longest day on this project (any time, a break included); with no sittings at all, when the plan needs
+  // more than a 2-hour day.
+  const behindSoFar = !finishReady && target !== null && (sessions.some((session) => session.session_date <= today)
+    ? needed !== null && needed > longestDay + 1e-9
+    : planCadence !== null && planCadence > NO_HISTORY_DAY_MINUTES + 1e-9);
 
   // Lane (section) projections: a running clock from today walks the sections in
   // planned_start order. A section with unit work left starts at max(clock, its
@@ -1296,7 +1348,8 @@ export function formatForecastLine(forecast: PaceForecast, focusType?: string | 
   }
   if (forecast.unpriced_units.length > 0) {
     const label = forecast.unit_label?.trim() || "units";
-    const list = forecast.unpriced_units.map((entry) => `${entry.units_left} ${entry.work_type} ${label}`);
+    const list = forecast.unpriced_units.map((entry) => (entry.work_type === UNCOUNTED_ROWS_TYPE
+      ? `${entry.units_left} rows with no stitch count or estimate` : `${entry.units_left} ${entry.work_type} ${label}`));
     const joined = list.length > 1 ? `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}` : list[0];
     parts.push(`${joined} ${list.length === 1 && forecast.unpriced_units[0].units_left === 1 ? "has" : "have"} no speed yet; log a session or set an estimate`);
   } else if (forecast.work_left_minutes === null || forecast.work_left_minutes <= 0) {

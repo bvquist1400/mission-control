@@ -7,6 +7,7 @@
 import {
   MIN_SITTINGS_WITH_ROWS_FOR_FINISH,
   SAMPLE_SPEED_LABEL,
+  UNCOUNTED_ROWS_TYPE,
   singularUnit,
   type PaceForecast,
   type PlanRatio,
@@ -90,7 +91,8 @@ export interface PaceLine {
 function unpricedText(forecast: PaceForecast): string | null {
   if (forecast.unpriced_units.length === 0) return null;
   const label = forecast.unit_label?.trim() || "units";
-  const list = forecast.unpriced_units.map((entry) => `${entry.units_left} ${entry.work_type} ${label}`);
+  const list = forecast.unpriced_units.map((entry) => (entry.work_type === UNCOUNTED_ROWS_TYPE
+    ? `${entry.units_left} rows with no stitch count or estimate` : `${entry.units_left} ${entry.work_type} ${label}`));
   const joined = list.length > 1 ? `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}` : list[0];
   return `${joined} ${list.length === 1 && forecast.unpriced_units[0].units_left === 1 ? "has" : "have"} no speed yet`;
 }

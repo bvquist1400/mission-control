@@ -1392,6 +1392,26 @@ test("lane chips: sections with a time basis show On track / Behind from the for
   assert.equal(body.health.kind, "behind");
 });
 
+await testAsync("craft estimates FR2 (c): Portfolio, the project page and the craft screen agree for rows with no stitch count", async () => {
+  const { computeForecast } = await import("../src/lib/pace.ts");
+  const { buildCraftEstimate } = await import("../src/lib/craft/estimate.ts");
+  const { paceChip } = await import("../src/lib/pace-view.ts");
+  // 100 rows, 61–100 with no stitch count, one task estimated at 300 min; rows 1–3 in 10-minute sittings Oct 2–4.
+  const items = Array.from({ length: 100 }, (_, i) => ({ id: `r${i + 1}`, task_id: "t", is_done: i < 3, unit_count: i < 60 ? 30 : null, work_type: "knit", craft_part_id: "p", craft_row: i + 1 }));
+  const sessions = ["2026-10-02", "2026-10-03", "2026-10-04"].map((date, i) => ({ id: `s${i}`, task_id: "t", session_date: date, minutes: 25, exclude_from_stats: false, item_ids: [`r${i + 1}`], in_progress_item_ids: [], extra_units: null, extra_work_type: null }));
+  for (const target of ["2026-12-05", "2027-03-31"]) {
+    const pace = { project: { unit_label: "stitches", target_date: target, pace_settings: null }, sections: [], items, sessions, today: "2026-10-04", otherProjectRates: [],
+      tasks: [{ id: "t", status: "In Progress", estimated_minutes: 300, unit_count: null, work_type: "knit", is_sample: false, section_id: null }] };
+    const forecast = computeForecast(pace);
+    const craft = buildCraftEstimate({ pace, parts: [{ id: "p", name: "Scarf", sort_order: 0, row_word: "row", total_rows: 100 }],
+      rows: items.map((item) => ({ item_id: item.id, part_id: "p", row: item.craft_row, is_done: item.is_done, completed_at: null })), active_part_id: "p" });
+    const lane = paceLane(paceInput(forecast));
+    assert.equal(lane.timeline.summary.health.label, craft.chip.label, `Portfolio vs craft screen, due ${target}`);
+    assert.equal(paceChip(forecast).label, craft.chip.label, `project page vs craft screen, due ${target}`);
+    if (!forecast.finish_far_late) assert.equal(craft.finish.date, forecast.projected_finish);
+  }
+});
+
 test("craft estimates FR1 (Codex 7): a lane projected more than a month past its planned end is words, never the far date", () => {
   const far = chipOf(paceLane(paceInput()), "3. Blanket body");
   assert.equal(far.pace.farLate, true, "projected Oct 2027 vs planned Nov 29");

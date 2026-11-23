@@ -15,6 +15,7 @@ const pace = await import(process.env.PACE_MODULE ?? "../src/lib/pace.ts");
 const { computeForecast } = pace;
 const onlyPace = Boolean(process.env.PACE_MODULE);
 const estimateModule = onlyPace ? null : await import("../src/lib/craft/estimate.ts");
+const paceView = onlyPace ? null : await import("../src/lib/pace-view.ts");
 
 let passed = 0;
 const failures = [];
@@ -56,7 +57,7 @@ function craft({
       const stitches = part.stitches(row);
       const key = `${part.id}:${row}`;
       const completed = done[key] ?? null;
-      items.push({ id: key, task_id: `t-${part.id}`, is_done: Boolean(completed), unit_count: stitches, work_type: part.type ?? "knit" });
+      items.push({ id: key, task_id: `t-${part.id}`, is_done: Boolean(completed), unit_count: stitches, work_type: part.type ?? "knit", craft_part_id: part.id, craft_row: row });
       rows.push({ item_id: key, part_id: part.id, row, is_done: Boolean(completed), completed_at: completed === true ? null : completed });
       units += stitches ?? 0;
     }
@@ -173,9 +174,9 @@ test("E1 Behind so far: 1 counted sitting with rows and needed > your longest da
   assert.equal(longer.longest_day_minutes, 90);
   assert.equal(longer.behind_so_far, false);
   assert.equal(longer.health, "insufficient_data");
-  // No sitting with rows yet: no early warning (minutes alone say nothing about speed).
+  // FR2 (Brent 11/23): the best day is any sitting's minutes, rows or not: a 5-minute best day against ~74 needed warns.
   const noRows = computeForecast(craft({ sessions: [session({ minutes: 5 })] }).pace);
-  assert.equal(noRows.behind_so_far, false);
+  assert.equal(noRows.behind_so_far, true);
   // A day of the needed minutes (whole minutes, rounded up) is not behind.
   const needed = Math.ceil(one.needed_minutes_per_day);
   // (A learning sitting tops the day up so the speed, and so the minutes needed, stay the same.)
@@ -422,7 +423,9 @@ etest("sittings with minutes but no rows: time counts, speed stays the plan's, a
   assert.notEqual(e.chip.kind, "behind");
   assert.equal(e.sittings_without_rows.length, 4);
   assert.equal(e.front.no_rows_line, "4 sittings have no rows.");
-  assert.ok(e.sheet.facts.find((f) => f.key === "time"), "plan speed: the Time row, not a measured Speed row");
+  // FR2: 40 min is the best day and ~74 a day are needed, so it warns early (the warning replaces the Time row).
+  assert.equal(e.chip.kind, "behind_so_far");
+  assert.match(e.sheet.warn.strong, /Your longest day is 40\./);
 });
 
 etest("3 sittings with rows on 3 days before a finish date (the scarf after rows are added)", () => {
@@ -722,12 +725,13 @@ etest("FR1 P2-3: a row with no stitch count is never free: it counts as the part
   assert.ok(end.rows_needed_per_day * 27 >= end.rows_left, `uncounted rows last: ${end.rows_needed_per_day} × 27 < ${end.rows_left}`);
   assert.equal(end.mode, "equal", "an average row is the same as the counted ones");
   assert.match(end.sheet.facts.find((f) => f.key === "left").small, /40 rows have no stitch count; each counts as an average row\./);
-  assert.ok(end.forecast.needed_minutes_per_day > computeForecast(craft({ parts: [{ id: "p1", name: "Hood", rows: 100, stitches: (r) => (r > 60 ? null : 30), planSec: 10 }] }).pace).needed_minutes_per_day, "their minutes are in the minutes a day");
-  // A part with no counted rows takes its planned stitches; the rest of the project counts as usual.
+  // FR2: priced once, in the shared forecast: the craft screen's minutes a day are the project page's.
+  assert.equal(end.forecast.needed_minutes_per_day, computeForecast(craft({ parts: [{ id: "p1", name: "Hood", rows: 100, stitches: (r) => (r > 60 ? null : 30), planSec: 10 }] }).pace).needed_minutes_per_day);
+  // FR2: a part with no counted rows is priced by its own task (its estimate shared by its rows), never free.
   const input = craft({ parts: [{ id: "a", name: "Body", rows: 20, stitches: () => 30, planSec: 10 }, { id: "b", name: "Trim", rows: 10, stitches: () => null }], finishingMinutes: 0 });
-  input.parts[1].stitch_count = 60;
+  input.pace.tasks.find((t) => t.id === "t-b").estimated_minutes = 60;
   const trim = est(input);
-  assert.equal(trim.mode, "unequal", "trim rows count as 60 stitches, body rows 30");
+  assert.equal(trim.mode, "unequal", "trim rows 6 min each (60 ÷ 10), body rows 5");
   // Every row uncounted and no planned stitches: rows only, as before.
   assert.equal(est(craft({ parts: [{ id: "p1", name: "Mitten", rows: 30, stitches: () => null }], finishingMinutes: 0 })).mode, "rows");
 });
@@ -782,6 +786,99 @@ etest("FR1 P2-5: the screen re-reads the estimate after any saved write that can
   const v = { today: { date: "2026-11-22" }, part: { id: "a" }, parts: [{ id: "a", done_rows: 10, row_count: 20, total_rows: 20 }] };
   assert.notEqual(keyOf(v, 0), keyOf({ ...v, parts: [{ id: "a", done_rows: 10, row_count: 40, total_rows: 40 }] }, 0));
   assert.notEqual(keyOf(v, 0), keyOf(v, 1));
+});
+
+// ── 5. Fix round 2 (Opus e4cfa9ad + Codex Sol): rows with no stitch count priced once, the best-day warning ──
+
+/** Body 50 × 30 stitches (plan 10 s) and a Trim of 40 rows with no stitch counts in its own task (estimate `trimMinutes`). */
+function bodyAndTrim({ trimMinutes = 120, trimUnits = null, sessions = [], done = {}, today = "2026-11-22", target = "2026-12-18" } = {}) {
+  const input = craft({ today, target, finishingMinutes: 0, sessions, done,
+    parts: [{ id: "b", name: "Body", rows: 50, stitches: () => 30, planSec: 10 }, { id: "t", name: "Trim", rows: 40, stitches: () => null }] });
+  const trim = input.pace.tasks.find((t) => t.id === "t-t");
+  trim.estimated_minutes = trimMinutes;
+  trim.unit_count = trimUnits;
+  return input;
+}
+
+test("FR2 (a): a task of rows with no stitch count is priced once, by its own estimate or units (D1–D3)", () => {
+  assert.equal(computeForecast(bodyAndTrim().pace).work_left_minutes, 250 + 120, "D1: Body 250 + Trim's estimate 120");
+  assert.equal(computeForecast(bodyAndTrim({ trimMinutes: 30 }).pace).work_left_minutes, 250 + 30, "D3: the database default 30");
+  const d2 = computeForecast(bodyAndTrim({ trimMinutes: 0, trimUnits: 1200 }).pace);
+  assert.equal(d2.work_left_minutes, 250 + 200, "D2: Trim's 1,200 stitches at the knit speed (10 s)");
+  assert.equal(computeForecast(bodyAndTrim({ trimUnits: 1200 }).pace).work_left_minutes, 370, "with its 120-min estimate too: one plan speed for 2,700 stitches, 370 in all");
+  // In a task whose other rows have counts, a row with none is an average counted row: the task's estimate covers all its rows.
+  const hood = craft({ finishingMinutes: 0, parts: [{ id: "p1", name: "Hood", rows: 100, stitches: (r) => (r > 60 ? null : 30), planSec: 10 }] });
+  hood.pace.tasks[0].estimated_minutes = 300;
+  assert.equal(computeForecast(hood.pace).work_left_minutes, 300, "the estimate spread over 100 average rows, not 60");
+});
+
+etest("FR2 (a): the craft screen walks the same minutes (no add-on) and never calls a row task 'finishing'", () => {
+  for (const input of [bodyAndTrim(), bodyAndTrim({ trimMinutes: 30 })]) {
+    const f = computeForecast(input.pace);
+    const e = est(input);
+    assert.equal(e.forecast.needed_minutes_per_day, f.needed_minutes_per_day);
+    const left = e.sheet.facts.find((x) => x.key === "left").small;
+    assert.doesNotMatch(left, /finishing/, left);
+    assert.match(left, /40 rows have no stitch count; they share their task's estimate\./);
+  }
+  // Trim rows share Trim's 120 minutes (3 each); body rows are 5: unequal, and the walk uses those minutes.
+  const e = est(bodyAndTrim());
+  assert.equal(e.mode, "unequal");
+  assert.equal(e.rows_needed_per_day, 3, "13.7 min a day ÷ 5-minute body rows, rounded up");
+});
+
+etest("FR2 (b): a whole part of rows with no stitch count and no speed is never free (Codex P2-A)", () => {
+  const input = craft({ finishingMinutes: 0, parts: [{ id: "a", name: "Crochet edge", rows: 40, stitches: () => null, type: "crochet" }, { id: "b", name: "Body", rows: 60, stitches: () => 30, planSec: 10 }] });
+  input.pace.tasks.find((t) => t.id === "t-a").estimated_minutes = 0;
+  const f = computeForecast(input.pace);
+  assert.equal(f.work_left_minutes, null, "the forecast can't price it");
+  assert.deepEqual(f.unpriced_units, [{ work_type: "rows-with-no-stitch-count", units_left: 40 }]);
+  const e = est(input);
+  assert.equal(e.mode, "rows");
+  assert.equal(e.rows_needed_per_day, Math.ceil(100 / 27), "rows ÷ days, not 43 with 40 free rows");
+});
+
+etest("FR2 (c): craft screen, project page and Portfolio agree on On track / Behind and the date (Codex P2-B)", () => {
+  const { buildPaceLine } = paceView;
+  const sessions = ["2026-11-20", "2026-11-21", "2026-11-22"].map((date, i) => session({ session_date: date, minutes: 10, item_ids: [`p1:${i + 1}`] }));
+  const done = { ...ticks("p1", 1, 1, "2026-11-20"), ...ticks("p1", 2, 2, "2026-11-21"), ...ticks("p1", 3, 3, "2026-11-22") };
+  const input = craft({ target: "2027-01-25", finishingMinutes: 0, sessions, done, parts: [{ id: "p1", name: "Scarf", rows: 100, stitches: (r) => (r > 60 ? null : 30), planSec: 10 }] });
+  input.pace.tasks[0].estimated_minutes = 300;
+  const f = computeForecast(input.pace);
+  const e = est(input);
+  assert.equal(f.health, "behind");
+  assert.equal(e.finish.far_late, f.finish_far_late);
+  assert.equal(e.finish.date, f.finish_far_late ? null : f.projected_finish);
+  assert.equal(e.chip.label, f.health === "on_track" ? "On track" : "Behind");
+  // A nearer due date: the same date on both.
+  const near = craft({ target: "2027-03-31", finishingMinutes: 0, sessions, done, parts: [{ id: "p1", name: "Scarf", rows: 100, stitches: (r) => (r > 60 ? null : 30), planSec: 10 }] });
+  near.pace.tasks[0].estimated_minutes = 300;
+  const nf = computeForecast(near.pace), ne = est(near);
+  assert.deepEqual([ne.finish.date, ne.chip.label], [nf.projected_finish, nf.health === "on_track" ? "On track" : "Behind"]);
+  assert.ok(nf.projected_finish);
+  assert.equal(buildPaceLine(f).chip.label, e.chip.label, "the project page's chip");
+  assert.equal(e.forecast.needed_minutes_per_day, f.needed_minutes_per_day);
+});
+
+test("FR2 Behind so far after a break, due soon: needed > the best day ever on this project (Brent 11/23)", () => {
+  // October: best day 150 min. Then a break still going on. Due in 3 days with ~850 min left.
+  const parts = [{ id: "p1", name: "Scarf", rows: 200, stitches: () => 30, planSec: 10 }];
+  const old = [session({ session_date: "2026-10-01", minutes: 150, item_ids: rowIds("p1", 1, 30) }), session({ session_date: "2026-10-02", minutes: 60, item_ids: rowIds("p1", 31, 40) }),
+    session({ session_date: "2026-10-03", minutes: 60, item_ids: rowIds("p1", 41, 50) })];
+  const done = ticks("p1", 1, 50, "2026-10-02");
+  const soon = computeForecast(craft({ target: "2026-11-24", finishingMinutes: 0, sessions: old, done, parts }).pace);
+  assert.equal(soon.health, "insufficient_data", "still no finish date or On track after the break");
+  assert.equal(soon.projected_finish, null);
+  assert.ok(soon.needed_minutes_per_day > 150);
+  assert.equal(soon.longest_day_minutes, 150, "the best day counts from before the break");
+  assert.equal(soon.behind_so_far, true);
+  // Plenty of time: no warning.
+  const later = computeForecast(craft({ target: "2027-03-31", finishingMinutes: 0, sessions: old, done, parts }).pace);
+  assert.equal(later.behind_so_far, false);
+  // No sittings at all: the plan at a 2-hour day decides.
+  const fresh = (target) => computeForecast(craft({ target, finishingMinutes: 0, parts }).pace);
+  assert.equal(fresh("2026-11-24").behind_so_far, true, "1,000 min at plan speed in 3 days > 120 a day");
+  assert.equal(fresh("2026-12-31").behind_so_far, false, "1,000 min over 40 days < 120 a day");
 });
 
 function nextDays(day, n) {

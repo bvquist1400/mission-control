@@ -19,7 +19,7 @@
  */
 import {
   FAR_LATE_DAYS, MIN_DAYS_WITH_ROWS_FOR_FINISH, MIN_SITTINGS_WITH_ROWS_FOR_FINISH, UNTYPED_WORK_TYPE,
-  activeDays, addDays, computeForecast, daysBetween, singularUnit,
+  activeDays, addDays, buildUnitEntries, computeForecast, daysBetween, singularUnit,
   type PaceForecast, type PaceInput, type SpeedSource,
 } from "@/lib/pace";
 import { etDateOf } from "@/lib/work-sessions/parse";
@@ -157,24 +157,34 @@ export function buildCraftEstimate(input: CraftEstimateInput): CraftEstimate {
     const units = itemById.get(row.item_id)?.unit_count;
     return typeof units === "number" && units > 0 ? units : 0;
   };
-  // FR1 (P2-3): a row with no stitch count is never free: it counts as the part's average counted row (else the part's
-  // planned stitches, else the project's average row), at its stitch type's speed (else the part's usual type).
-  const counted = rows.filter((row) => unitsOf(row) > 0);
-  const average = (list: EstimateRow[]) => (list.length ? list.reduce((sum, row) => sum + unitsOf(row), 0) / list.length : null);
-  const projectAverage = average(counted);
-  const partAverage = new Map(parts.map((part) => [part.id, average(counted.filter((row) => row.part_id === part.id))]));
-  const partType = new Map(parts.map((part) => {
-    const types = counted.filter((row) => row.part_id === part.id).map(typeOf);
-    return [part.id, types.sort((a, b) => types.filter((t) => t === b).length - types.filter((t) => t === a).length)[0] ?? null];
-  }));
-  const estimatedUnits = (row: EstimateRow) => partAverage.get(row.part_id)
-    ?? (Number(partById.get(row.part_id)?.stitch_count) > 0 ? Number(partById.get(row.part_id)?.stitch_count) : null) ?? projectAverage;
-  const costWith = (f: PaceForecast) => (row: EstimateRow): number | null => {
-    const own = unitsOf(row);
-    const units = own > 0 ? own : estimatedUnits(row);
-    const partFallback = partType.get(row.part_id);
-    const seconds = secondsFor(f, typeOf(row)) ?? (partFallback ? secondsFor(f, partFallback) : null);
-    return units !== null && units > 0 && seconds !== null && seconds > 0 ? (units * seconds) / 60 : null;
+  // FR2: the minutes of each row come from the shared forecast's own pricing (pace.ts), so the craft screen, the project
+  // page and Portfolio agree. A row with a stitch count, or a craft row with none that the forecast counts as an average
+  // row (an estimated entry), costs its units × its type's speed. A row of a task with no counted rows shares that
+  // task's minutes (task units × speed, or its estimate) with the task's other open items. Nothing is ever free: a row
+  // the forecast can't price leaves the forecast unpriced, and the screen goes by rows.
+  const unitEntries = buildUnitEntries(pace.tasks, pace.items);
+  const entryByItem = new Map(unitEntries.filter((entry) => entry.item_id).map((entry) => [entry.item_id as string, entry]));
+  const taskEntry = new Map(unitEntries.filter((entry) => !entry.item_id).map((entry) => [entry.task_id, entry]));
+  const itemsOfTask = new Map<string, typeof pace.items>();
+  for (const item of pace.items) itemsOfTask.set(item.task_id, [...(itemsOfTask.get(item.task_id) ?? []), item]);
+  const costWith = (f: PaceForecast, isDone: (itemId: string, done: boolean) => boolean) => (row: EstimateRow): number | null => {
+    const entry = entryByItem.get(row.item_id);
+    if (entry) {
+      const seconds = secondsFor(f, entry.work_type);
+      return seconds !== null && seconds > 0 ? (entry.units * seconds) / 60 : null;
+    }
+    const item = itemById.get(row.item_id);
+    const task = item ? taskById.get(item.task_id) : undefined;
+    if (!item || !task) return null;
+    const siblings = itemsOfTask.get(task.id) ?? [];
+    const whole = taskEntry.get(task.id);
+    if (whole) {
+      const seconds = secondsFor(f, whole.work_type);
+      const open = siblings.filter((other) => !isDone(other.id, other.is_done)).length;
+      return seconds !== null && seconds > 0 && open > 0 ? (whole.units * seconds) / 60 / open : null;
+    }
+    const estimate = Number(task.estimated_minutes) || 0;
+    return estimate > 0 && siblings.length > 0 ? estimate / siblings.length : null;
   };
 
   // Pattern order: parts by sort order, rows by number. "Now" puts the screen's part first; this morning's walk
@@ -188,8 +198,8 @@ export function buildCraftEstimate(input: CraftEstimateInput): CraftEstimate {
     return partOrder.flatMap((part) => undone.filter((row) => row.part_id === part.id).sort((a, b) => a.row - b.row)
       .map((row) => ({ row, part, cost: cost(row) })));
   };
-  const nowRows = ordered((row) => row.is_done, costWith(forecast), true);
-  const morningRows = ordered((row) => row.is_done && !doneTodayIds.has(row.item_id), costWith(morning), false);
+  const nowRows = ordered((row) => row.is_done, costWith(forecast, (_id, done) => done), true);
+  const morningRows = ordered((row) => row.is_done && !doneTodayIds.has(row.item_id), costWith(morning, (id, done) => done && !doneTodayIds.has(id)), false);
   const rowsLeft = nowRows.length;
   const anchorPart = nowRows[0]?.part ?? morningRows[0]?.part ?? partById.get(input.active_part_id ?? "") ?? sortedParts[0];
   const rowWord: "row" | "round" = anchorPart?.row_word === "round" ? "round" : "row";
@@ -207,18 +217,16 @@ export function buildCraftEstimate(input: CraftEstimateInput): CraftEstimate {
   const morningMode: CraftEstimate["mode"] = !morningPriced ? "rows"
     : isEqual(morningRows.map((entry) => entry.cost).filter((cost): cost is number => cost !== null)) ? "equal" : "unequal";
   const pricedCost = (entry: OrderedRow) => entry.cost ?? 0;
-  const estimatedRows = nowRows.filter((entry) => unitsOf(entry.row) === 0 && entry.cost !== null);
-  const estimatedNow = estimatedRows.reduce((sum, entry) => sum + pricedCost(entry), 0);
-  const estimatedMorning = morningRows.filter((entry) => unitsOf(entry.row) === 0).reduce((sum, entry) => sum + pricedCost(entry), 0);
+  const estimatedRows = nowRows.filter((entry) => entryByItem.get(entry.row.item_id)?.estimated);
+  const sharedRows = nowRows.filter((entry) => !entryByItem.has(entry.row.item_id) && entry.cost !== null);
 
   const daysLeft = forecast.available_days;
   const pastDue = target !== null && target < today;
   const dueToday = target === today;
-  // Work left and min a day: the shared forecast's, plus the rows with no stitch count it can't price (FR1 P2-3).
-  const workLeft = forecast.work_left_minutes === null ? null : forecast.work_left_minutes + estimatedNow;
-  const needed = estimatedNow > 0 && workLeft !== null && daysLeft ? Math.round((workLeft / daysLeft) * 10) / 10 : forecast.needed_minutes_per_day;
-  const morningNeeded = estimatedMorning > 0 && morning.work_left_minutes !== null && morning.available_days
-    ? (morning.work_left_minutes + estimatedMorning) / morning.available_days : morning.needed_minutes_per_day;
+  // Work left and min a day: the shared forecast's (FR2: rows with no stitch count are priced there, once).
+  const workLeft = forecast.work_left_minutes;
+  const needed = forecast.needed_minutes_per_day;
+  const morningNeeded = morning.needed_minutes_per_day;
   const nowWalk = priced && needed !== null ? walk(nowRows, needed, pricedCost) : null;
   const rowsNeededPerDay = rowsLeft === 0 || pastDue || !target || !daysLeft ? null
     : priced ? (nowWalk ? nowWalk.count : null) : Math.ceil(rowsLeft / daysLeft);
@@ -268,14 +276,9 @@ export function buildCraftEstimate(input: CraftEstimateInput): CraftEstimate {
 
   // Finish and health. Rows only: no date; On track / Behind from rows a day once there is enough.
   const ready = forecast.finish_ready;
-  const cadence = forecast.cadence_minutes_per_day;
-  // With rows that have no stitch count the finish is worked out here, from the same work left as the target.
-  const finishDate = !priced ? null : estimatedNow > 0
-    ? (ready && workLeft !== null && cadence > 0 ? addDays(today, Math.max(0, Math.ceil(workLeft / cadence - 1e-9))) : null)
-    : forecast.projected_finish;
-  const health = estimatedNow > 0 && ready && target ? (finishDate !== null && finishDate <= target ? "on_track" : "behind") : forecast.health;
-  const behindSoFar = estimatedNow > 0
-    ? !ready && forecast.sittings_with_rows > 0 && needed !== null && needed > forecast.longest_day_minutes + 1e-9 : forecast.behind_so_far;
+  const finishDate = priced ? forecast.projected_finish : null;
+  const health = forecast.health;
+  const behindSoFar = forecast.behind_so_far;
   const farLate = Boolean(finishDate && target && daysBetween(target, finishDate) > FAR_LATE_DAYS);
   // FR1 (P2-2): every row ticked is not "done" while finishing (or any other open work) is left.
   const otherLeft = workLeft === null ? null : Math.max(0, workLeft - nowRows.reduce((sum, entry) => sum + pricedCost(entry), 0));
@@ -431,11 +434,22 @@ export function buildCraftEstimate(input: CraftEstimateInput): CraftEstimate {
     }
   }
   const partsLeft = new Set(nowRows.map((entry) => entry.part.id)).size;
+  // FR2: "finishing" is the unit-less work of tasks that hold no craft rows (a row task's estimate is its rows' time).
+  const rowTaskIds = new Set(rows.map((row) => itemById.get(row.item_id)?.task_id).filter((id): id is string => Boolean(id)));
+  const sharedTasks = new Set(sharedRows.map((entry) => itemById.get(entry.row.item_id)?.task_id)).size;
+  const rowTaskUnitless = pace.tasks.filter((task) => rowTaskIds.has(task.id) && !taskEntry.has(task.id) && !unitEntries.some((entry) => entry.task_id === task.id)
+    && !["Done", "Missed", "Parked"].includes(task.status)).reduce((sum, task) => {
+    const list = itemsOfTask.get(task.id) ?? [];
+    const share = list.length ? list.filter((item) => item.is_done).length / list.length : 0;
+    return sum + (Number(task.estimated_minutes) || 0) * (1 - share);
+  }, 0);
+  const finishingMinutes = Math.max(0, forecast.unitless_minutes_left - rowTaskUnitless);
   const unitsLeft = nowRows.reduce((sum, entry) => sum + unitsOf(entry.row), 0);
   const leftSmall = [
     unitsLeft > 0 ? `${whole(unitsLeft)} ${unitsLeft === 1 ? unit : pace.project.unit_label?.trim() || "stitches"}.` : null,
     estimatedRows.length > 0 ? `${plural(estimatedRows.length, rowWord)} ${estimatedRows.length === 1 ? "has" : "have"} no stitch count; ${estimatedRows.length === 1 ? "it counts" : "each counts"} as an average ${rowWord}.` : null,
-    forecast.unitless_minutes_left > 0 ? `Plus about ${whole(forecast.unitless_minutes_left)} min of finishing.` : null,
+    sharedRows.length > 0 ? `${plural(sharedRows.length, rowWord)} ${sharedRows.length === 1 ? "has" : "have"} no stitch count; ${sharedRows.length === 1 ? "it shares its task's estimate" : sharedTasks === 1 ? "they share their task's estimate" : "they share their tasks' estimates"}.` : null,
+    finishingMinutes > 0 ? `Plus about ${whole(finishingMinutes)} min of finishing.` : null,
     target ? `Due ${wd(target)}.` : "No due date.",
   ].filter(Boolean).join(" ");
   facts.push({ key: "left", label: "Left", strong: `${whole(rowsLeft)} ${rowsWord(rowsLeft)}${partsLeft > 1 ? ` in ${partsLeft} parts` : ""}`, small: leftSmall });

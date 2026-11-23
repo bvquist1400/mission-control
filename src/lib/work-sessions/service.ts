@@ -132,20 +132,33 @@ async function loadProjectTasks(supabase: SupabaseClient, userId: string, projec
   ).then((rows) => rows.map((row) => ({ ...row, unit_count: row.unit_count === null ? null : Number(row.unit_count) })));
 }
 
+let warnedNoCraftColumns = false;
+
+/**
+ * FR2 (craft estimates): the items carry their craft part and row (071), so the forecast can price a craft row with no
+ * stitch count once. Before 071 (no such columns, 42703) every item reads as a plain item, as it did.
+ */
 async function loadItems(supabase: SupabaseClient, userId: string, taskIds: string[]): Promise<ItemRow[]> {
   const out: ItemRow[] = [];
+  const base = "id, task_id, text, is_done, sort_order, unit_count, work_type, completed_at";
+  const read = (ids: string[], columns: string) => pagedSelect<ItemRow>((from, to) =>
+    supabase
+      .from("task_checklist_items")
+      .select(columns)
+      .eq("user_id", userId)
+      .in("task_id", ids)
+      .order("id", { ascending: true })
+      .range(from, to)
+  );
   for (const ids of chunks(taskIds)) {
-    out.push(
-      ...(await pagedSelect<ItemRow>((from, to) =>
-        supabase
-          .from("task_checklist_items")
-          .select("id, task_id, text, is_done, sort_order, unit_count, work_type, completed_at")
-          .eq("user_id", userId)
-          .in("task_id", ids)
-          .order("id", { ascending: true })
-          .range(from, to)
-      ))
-    );
+    try {
+      out.push(...(await read(ids, `${base}, craft_part_id, craft_row`)));
+    } catch (error) {
+      if ((error as { code?: string } | null)?.code !== "42703") throw error;
+      if (!warnedNoCraftColumns) console.error("task_checklist_items has no craft columns (migration 071 not applied); reading plain items");
+      warnedNoCraftColumns = true;
+      out.push(...(await read(ids, base)));
+    }
   }
   return out.map((row) => ({ ...row, unit_count: row.unit_count === null ? null : Number(row.unit_count) }));
 }
