@@ -29,6 +29,7 @@ import { normalizeBriefContent, normalizeStoredWorkDigestRef } from "@/lib/brief
 import type { SaveWarning } from "@/lib/briefs/text-cut";
 import { checkWorkDigestBody, parseWorkDigestTitle, workDigestEditionsForMode, workDigestTitle } from "@/lib/briefing/work-digest";
 import { buildBriefStatus, type BriefStatus, type BriefStatusNoteRow } from "@/lib/briefs/refresh-status";
+import { briefLastBuiltAt, noteUpdatedAfter } from "@/lib/briefs/note-version";
 import { countBriefItems } from "@/lib/briefs/counts";
 import {
   isUnblockedRow,
@@ -288,6 +289,8 @@ export interface SaveBriefResult {
   };
   /** "refresh" when this save rewrote an existing brief's content; "append" otherwise (a refresh before the brief existed is a first save). */
   mode: "append" | "refresh";
+  /** true when the save was a forced rebuild (`force: true`); absent otherwise. */
+  forced?: true;
   /** mode "refresh": the brief_revisions row holding the content this save replaced. */
   revision_id: string | null;
   /** Text cut to fit its cap at a sentence or word boundary (field and original length). Empty when nothing was cut. */
@@ -420,19 +423,21 @@ async function resolveWorkDigestCitations(
   supabase: AnySupabase,
   userId: string,
   input: Pick<SaveBriefInput, "edition" | "brief_date" | "items">
-): Promise<SaveBriefInput["items"]> {
+): Promise<{ items: SaveBriefInput["items"]; noteUpdatedAt: Map<string, string | null> }> {
   const items = input.items;
   const citable = workDigestEditionsForMode(input.edition === "eod" ? "eod" : "morning");
   const noteIds = [...new Set(items.map((item) => item.source.work_digest?.note_id).filter((id): id is string => Boolean(id)))];
-  if (noteIds.length === 0) return items;
+  if (noteIds.length === 0) return { items, noteUpdatedAt: new Map() };
 
   const { data, error } = await supabase
     .from("notes")
-    .select("id, title, body_markdown, status")
+    .select("id, title, body_markdown, status, updated_at")
     .eq("user_id", userId)
     .in("id", noteIds);
   if (error) throw error;
-  const notes = new Map(((data ?? []) as Array<{ id: string; title: string; body_markdown: string | null; status: string | null }>).map((note) => [note.id, note]));
+  const notes = new Map(
+    ((data ?? []) as Array<{ id: string; title: string; body_markdown: string | null; status: string | null; updated_at?: string | null }>).map((note) => [note.id, note])
+  );
 
   const errors: string[] = [];
   const resolved = items.map((item, index) => {
@@ -490,7 +495,7 @@ async function resolveWorkDigestCitations(
     return { ...item, payload, source: { ...item.source, work_digest: citation } };
   });
   if (errors.length) throw new BriefServiceError(400, errors[0], { errors });
-  return resolved;
+  return { items: resolved, noteUpdatedAt: new Map([...notes.values()].map((note) => [note.id, note.updated_at ?? null])) };
 }
 
 /**
@@ -526,6 +531,9 @@ function withStuckCount(content: BriefContent, stuck: number | null): BriefConte
   return stuck ? { ...rest, unblock_stuck: stuck } : rest;
 }
 
+/** The refresh reason a forced rebuild records when the caller gives none. */
+export const FORCED_REBUILD_REASON = "Rebuilt on request";
+
 export async function saveBrief(
   supabase: AnySupabase,
   userId: string,
@@ -538,7 +546,8 @@ export async function saveBrief(
     ...(item.payload.maybe_tracked ? [item.payload.maybe_tracked.task_id] : []),
   ]);
   await assertTasksOwned(supabase, userId, referencedTaskIds);
-  input = { ...input, items: await resolveWorkDigestCitations(supabase, userId, input) };
+  const citations = await resolveWorkDigestCitations(supabase, userId, input);
+  input = { ...input, items: citations.items };
 
   const unblocked = await readUnblockedForSave(supabase, userId);
   input = {
@@ -549,6 +558,14 @@ export async function saveBrief(
 
   let brief = await loadBriefByDate(supabase, userId, input.edition, input.brief_date);
   let created = false;
+  // A forced rebuild ("rebuild am") only ever rewrites a brief that exists: it
+  // never creates one, so it can never send the brief's one notice.
+  if (!brief && input.force) {
+    throw new BriefServiceError(
+      409,
+      `There is no ${input.edition.toUpperCase()} brief for ${input.brief_date} to rebuild yet. Build it with a normal save (no mode, no force).`
+    );
+  }
   if (!brief) {
     brief = await createBrief(supabase, userId, input);
     created = brief !== null;
@@ -563,6 +580,13 @@ export async function saveBrief(
 
   const covered = new Set(created ? [] : brief.covered_meeting_ids);
   const coveredNotes = new Set(created ? [] : brief.content.work_digest_note_ids ?? []);
+  // A refresh also takes in a recorded note that was re-filed (updated) after
+  // this brief was last built or refreshed: the brief has its old text. Keys
+  // still dedupe, so an item it already has is kept_on_refresh, not doubled.
+  const builtAt = briefLastBuiltAt(brief.created_at, brief.content.refreshes);
+  const refiledNotes = new Set(
+    refresh ? [...coveredNotes].filter((noteId) => noteUpdatedAfter(citations.noteUpdatedAt.get(noteId), builtAt)) : []
+  );
   const skipped: SaveBriefSkip[] = [];
   const candidates: Array<{ index: number; key: string; item: SaveBriefInput["items"][number] }> = [];
   const keysInRequest = new Set<string>();
@@ -590,7 +614,7 @@ export async function saveBrief(
         return;
       }
       const newMeeting = meetingIds.some((id) => !covered.has(id));
-      const newNote = digestNoteId !== null && !coveredNotes.has(digestNoteId);
+      const newNote = digestNoteId !== null && (!coveredNotes.has(digestNoteId) || refiledNotes.has(digestNoteId));
       if (!newMeeting && !newNote) {
         skipped.push({ index, reason: meetingIds.length ? "meeting_already_covered" : "work_digest_already_covered", item_key: key });
         return;
@@ -682,11 +706,13 @@ export async function saveBrief(
 
   let revisionId: string | null = null;
   const briefUpdates: Record<string, unknown> = {};
+  // The page's "Refreshed 10:30 AM: <reason>" line says a forced rebuild was one when no reason was given.
+  const refreshReason = input.refresh_reason || (input.force ? FORCED_REBUILD_REASON : null);
   if (refresh) {
     const refreshed = await refreshBriefContent(supabase, userId, brief, {
       content: refreshContent(input.content, brief.content, unblocked.stuck, nByIndex, candidates),
       covered: [...input.covered_meeting_ids, ...candidates.flatMap((candidate) => candidate.item.source.meetings.map((meeting) => meeting.id))],
-      refresh: { at: now.toISOString(), ...(input.refresh_reason ? { reason: input.refresh_reason } : {}) },
+      refresh: { at: now.toISOString(), ...(refreshReason ? { reason: refreshReason } : {}) },
     });
     brief = refreshed.brief;
     revisionId = refreshed.revisionId;
@@ -751,6 +777,7 @@ export async function saveBrief(
     unblocked: { added, stuck: unblocked.stuck, read_failed: unblocked.readFailed },
     notify,
     mode: refresh ? "refresh" : "append",
+    ...(input.force ? { forced: true as const } : {}),
     revision_id: revisionId,
     warnings: input.warnings ?? [],
   };
@@ -1017,6 +1044,7 @@ export async function getBriefStatus(
     date,
     brief: own ? { code: own.code, created_at: own.created_at, content: normalizeBriefContent(own.content), covered_meeting_ids: own.covered_meeting_ids ?? [] } : null,
     morningNoteIds: morning ? (normalizeBriefContent(morning.content).work_digest_note_ids ?? []) : null,
+    morningBuiltAt: morning ? briefLastBuiltAt(morning.created_at, normalizeBriefContent(morning.content).refreshes) : null,
     notes: (notes.data ?? []) as BriefStatusNoteRow[],
   });
 }

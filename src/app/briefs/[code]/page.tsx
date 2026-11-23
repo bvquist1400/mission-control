@@ -86,7 +86,9 @@ async function readLateDigestBanner(
       edition,
       briefDate: brief.brief_date,
       builtAt: brief.created_at,
-      notes: status.digest_notes.filter((note) => note.needs_refresh).map((note) => ({ edition: note.edition, filed_at: note.filed_at })),
+      notes: status.digest_notes
+        .filter((note) => note.needs_refresh)
+        .map((note) => ({ edition: note.edition, filed_at: note.filed_at, updated_at: note.updated_at, updated: note.reason?.endsWith("_updated") ?? false })),
       now: new Date(),
     });
   } catch (error) {

@@ -512,6 +512,13 @@ function parseSaveBriefInputFields(raw: unknown, now: Date): ParseResult<SaveBri
     else if (mode !== "refresh") errors.push(`refresh_reason only applies with mode "refresh"`);
     else refreshReason = str(raw.refresh_reason, REFRESH_REASON_MAX, "refresh_reason");
   }
+  // force: a rebuild on command (mode "refresh" only). false / absent = no force.
+  let force = false;
+  if (raw.force !== undefined && raw.force !== null) {
+    if (typeof raw.force !== "boolean") errors.push("force must be true or false");
+    else if (raw.force && mode !== "refresh") errors.push(`force only applies with mode "refresh"`);
+    else force = raw.force;
+  }
 
   if (raw.content !== undefined && !isObject(raw.content)) errors.push("content must be an object");
   if (isObject(raw.content) && JSON.stringify(raw.content).length > MAX_CONTENT_CHARS) {
@@ -542,6 +549,7 @@ function parseSaveBriefInputFields(raw: unknown, now: Date): ParseResult<SaveBri
       items,
       ...(mode ? { mode } : {}),
       ...(mode === "refresh" ? { refresh_reason: refreshReason } : {}),
+      ...(force ? { force: true as const } : {}),
     },
   };
 }
