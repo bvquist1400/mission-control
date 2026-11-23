@@ -196,6 +196,8 @@ export interface TimelineProjected {
   /** 0–100; 100 when it is off the edge. */
   left: number;
   offEdge: boolean;
+  /** E1: more than a month past the target: the label says so and the date is never shown. */
+  farLate?: boolean;
 }
 
 /** A section kept off the chart: finished, or with no planned window. Listed under the chart. */
@@ -778,6 +780,9 @@ export function buildTimeline(
       summary.health = decided.some((forecast) => forecast.health === "behind")
         ? { kind: "behind", label: "Behind" }
         : { kind: "ok", label: "On track" };
+    } else if (forecasts.some((forecast) => forecast.behind_so_far)) {
+      // Craft estimates E1 (Brent 11/23, pick 2): warn early, never say On track early.
+      summary.health = { kind: "behind", label: "Behind so far" };
     }
   }
 
@@ -799,16 +804,21 @@ export function buildTimeline(
   // The projected-finish tag (a paced project's forecast): at its date, or pinned to the edge with an arrow.
   let projected: TimelineProjected | null = null;
   if (lanes.length > 0) {
-    const finish = [...projectIds]
-      .map((id) => (id ? pace[id]?.projected_finish ?? null : null))
-      .find((date): date is string => Boolean(date));
+    const forecast = [...projectIds]
+      .map((id) => (id ? pace[id] : undefined))
+      .find((entry): entry is PaceForecast => Boolean(entry?.projected_finish));
+    const finish = forecast?.projected_finish ?? null;
     if (finish) {
       const offEdge = finish > end;
+      // E1: more than a month past the target is never shown as a far date.
+      const farLate = Boolean(forecast?.finish_far_late && forecast.target_date);
       projected = {
         date: finish,
-        label: offEdge ? `Projected ${formatMonthYear(finish)} →` : `Projected ${formatShortDate(finish)}`,
-        left: offEdge ? 100 : timelinePosition(chartWindow, finish, 0.5),
-        offEdge,
+        label: farLate ? `Projected over a month after ${formatShortDate(forecast!.target_date as string)} →`
+          : offEdge ? `Projected ${formatMonthYear(finish)} →` : `Projected ${formatShortDate(finish)}`,
+        left: offEdge || farLate ? 100 : timelinePosition(chartWindow, finish, 0.5),
+        offEdge: offEdge || farLate,
+        ...(farLate ? { farLate: true } : {}),
       };
     }
   }

@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { Input, Select } from "@/components/ui/Field";
 import type { CraftView } from "@/lib/craft";
+import type { CraftEstimate } from "@/lib/craft/estimate";
 import { RIP_CHOICES, checkBeforeText, earlierStepsText, partRowsOf, trailingStepsOf } from "@/lib/craft";
 import {
   CRAFT_MAX_ROWS, SITTING_MAX_MINUTES, clockText, fixCountPlan, frogBody, frogPlan, keepsText, logSittingBody, logSittingDefaults, minutesText,
@@ -544,7 +545,7 @@ export function ChangeTotalSheet({ open, onClose, view: live, part: livePart, se
 }
 
 // ── Parts (FR3): work on another part, change any part's total ──────────────
-export function PartsSheet({ open, onClose, view, send, onChangeTotal }: { open: boolean; onClose: () => void; view: CraftView; send: Send; onChangeTotal: (partId: string) => void }) {
+export function PartsSheet({ open, onClose, view, send, onChangeTotal, estimate }: { open: boolean; onClose: () => void; view: CraftView; send: Send; onChangeTotal: (partId: string) => void; estimate?: CraftEstimate | null }) {
   const [state, setState] = useState<{ busy: string | null; error: string | null }>({ busy: null, error: null });
   async function pick(partId: string) {
     setState({ busy: partId, error: null });
@@ -555,19 +556,24 @@ export function PartsSheet({ open, onClose, view, send, onChangeTotal }: { open:
   }
   return (
     <Sheet open={open} onClose={onClose} title="Parts">
-      <PartsList view={view} busy={state.busy} onPick={pick} onChangeTotal={onChangeTotal} />
+      <PartsList view={view} busy={state.busy} onPick={pick} onChangeTotal={onChangeTotal} estimate={estimate} />
       <ErrorLine text={state.error} />
       <div className="craft-sheet-actions craft-sheet-actions-one"><Button type="button" variant="secondary" size="lg" onClick={onClose}>Close</Button></div>
     </Sheet>
   );
 }
-/** The parts with "Work on this part" and "Change total…" (the Parts sheet and the inside screen's Parts list). */
-export function PartsList({ view, busy, onPick, onChangeTotal }: { view: CraftView; busy: string | null; onPick: (partId: string) => void; onChangeTotal: (partId: string) => void }) {
+/**
+ * The parts with "Work on this part" and "Change total…" (the Parts sheet and the inside screen's Parts list).
+ * Craft estimates E2: with the estimate, each part's rows left and, for two or more parts, a "finish by" date.
+ */
+export function PartsList({ view, busy, onPick, onChangeTotal, estimate }: { view: CraftView; busy: string | null; onPick: (partId: string) => void; onChangeTotal: (partId: string) => void; estimate?: CraftEstimate | null }) {
   return (
     <ul className="craft-parts craft-parts-act">{view.parts.map((entry) => {
       const here = entry.id === view.active_part?.id;
+      const line = estimate?.parts.find((part) => part.part_id === entry.id)?.text ?? null;
       return (
         <li key={entry.id} aria-current={here ? "true" : undefined}><strong>{entry.name}</strong><span>{entry.row_label}{here ? " · on the screen" : ""}</span>
+          {line && <span className="cp-partline">{line}</span>}
           <div className="craft-part-buttons">
             {!here && !entry.finished && <Button type="button" variant="secondary" size="sm" disabled={busy !== null} aria-busy={busy === entry.id || undefined}
               aria-label={`Work on this part: ${entry.name}`} onClick={() => onPick(entry.id)}>{busy === entry.id ? "Saving…" : "Work on this part"}</Button>}

@@ -14,6 +14,11 @@
  *   returned labelled as such.
  * - A *counted* session has `exclude_from_stats = false`. Only counted sessions
  *   make speeds; every session (counted or not) is real time for cadence.
+ * - Cadence (craft estimates E1, Brent 11/23): the minutes of the last 14 days ÷ the days
+ *   since you started in them (your first sitting after any 14-day gap, today included),
+ *   never ÷ 14 when you only started this week (the Aug 2027 bug: 105 min over 2 days
+ *   read as 7.5 a day). A finish date and On track / Behind need 3 counted sittings WITH
+ *   rows on 3 different days; before that only an early "Behind so far" warning.
  */
 
 export const UNTYPED_WORK_TYPE = "untyped";
@@ -21,6 +26,11 @@ export const WORK_TYPE_PATTERN = /^[a-z0-9][a-z0-9-]{0,39}$/;
 export const CADENCE_WINDOW_DAYS = 14;
 export const MEASURED_WINDOW_SESSIONS = 8;
 export const MIN_COUNTED_SESSIONS_FOR_HEALTH = 3;
+/** E1: counted sittings with rows, and the different days they fall on, before a finish date (both 3). */
+export const MIN_SITTINGS_WITH_ROWS_FOR_FINISH = 3;
+export const MIN_DAYS_WITH_ROWS_FOR_FINISH = 3;
+/** E1: a finish more than this many days after the due date is never shown as a date ("more than a month after Dec 18"). */
+export const FAR_LATE_DAYS = 30;
 export const SIZE_FIT_FIXED_CADENCES = [60, 90, 120] as const;
 export const SAMPLE_SPEED_LABEL =
   "from the swatch/sample — rows are narrower, so per-row overhead makes this slower than the main work";
@@ -809,16 +819,38 @@ export interface PaceForecast {
   work_left_hours: number | null;
   /** Minutes for the units that do have a speed, plus unit-less tasks (always computed). */
   priced_work_left_minutes: number;
-  /** Minutes per day over the last 14 days, including excluded sessions (it is real time). */
+  /**
+   * Minutes per day over the cadence days (`cadence_days`), including excluded sessions (it is real time).
+   * E1: the days start at your first sitting after any 14-day gap, at most 14 days back, today included.
+   */
   cadence_minutes_per_day: number;
   sessions_in_cadence_window: number;
-  /** Session minutes in the last 14 days (cadence × 14, unrounded). */
+  /** Session minutes in the last 14 days (cadence × cadence_days, unrounded). */
   minutes_in_cadence_window: number;
+  /** E1: the first day the cadence counts (null with no sitting in the last 14 days). */
+  cadence_from: string | null;
+  /** E1: the days the cadence divides by (0 with no sitting in the last 14 days; at most 14). */
+  cadence_days: number;
+  /** E1: the most minutes on one day within the cadence days (all sittings: learning is time too). */
+  longest_day_minutes: number;
+  /** E1: counted sittings with rows (finished rows or extra units), and on how many different days. */
+  sittings_with_rows: number;
+  days_with_rows: number;
+  /** E1: enough to give a finish date and On track / Behind (3 counted sittings with rows on 3 days). */
+  finish_ready: boolean;
+  /**
+   * E1 early warning ("Behind so far"): before `finish_ready`, at least 1 counted sitting with rows and the
+   * minutes a day needed are more than your longest day. Never says On track early.
+   */
+  behind_so_far: boolean;
+  /** E1: the projected finish is more than FAR_LATE_DAYS after the target (shown as words, never a far date). */
+  finish_far_late: boolean;
   /** Work left at plan speeds ÷ available days: the plan's own pace. */
   plan_cadence_minutes_per_day: number | null;
   available_from: string | null;
   available_days: number | null;
   needed_minutes_per_day: number | null;
+  /** Work left ÷ cadence from today. E1: null until `finish_ready` (and while anything is unpriced or cadence is 0). */
   projected_finish: string | null;
   slack_days: number | null;
   health: PaceHealth;
@@ -831,6 +863,25 @@ export interface PaceForecast {
 export function round(value: number, places = 1): number {
   const factor = 10 ** places;
   return Math.round(value * factor) / factor;
+}
+
+/**
+ * E1: the days an average over the last 14 days divides by. They start at your first activity after any
+ * 14-day gap (14 days or more with none), never more than 14 days back, and run to today inclusive; with no
+ * activity in the last 14 days there are none (from null, 0 days). Dates after today are ignored.
+ * The blanket, worked on for weeks, keeps all 14; a scarf started yesterday has 2.
+ */
+export function activeDays(dates: string[], today: string): { from: string | null; days: number } {
+  const sorted = [...new Set(dates.filter((date) => date <= today))].sort();
+  if (sorted.length === 0) return { from: null, days: 0 };
+  let start = sorted[0];
+  for (let i = 1; i < sorted.length; i += 1) {
+    if (daysBetween(sorted[i - 1], sorted[i]) - 1 >= CADENCE_WINDOW_DAYS) start = sorted[i];
+  }
+  const windowStart = addDays(today, -(CADENCE_WINDOW_DAYS - 1));
+  if (sorted[sorted.length - 1] < windowStart) return { from: null, days: 0 };
+  const from = start > windowStart ? start : windowStart;
+  return { from, days: daysBetween(from, today) + 1 };
 }
 
 /** Whole days of work at a cadence; the epsilon keeps an exact multiple (60 min ÷ 6 a day) from rounding up on float dust. */
@@ -946,11 +997,15 @@ export function computeForecast(input: PaceInput): PaceForecast {
       };
     });
 
-  // Cadence: every session minute in the last 14 days (today included) ÷ 14.
+  // Cadence: every session minute in the last 14 days (today included) ÷ the days since you started in them.
   const windowStart = addDays(today, -(CADENCE_WINDOW_DAYS - 1));
   const windowSessions = sessions.filter((session) => session.session_date >= windowStart && session.session_date <= today);
   const windowMinutes = windowSessions.reduce((sum, session) => sum + session.minutes, 0);
-  const cadence = windowMinutes / CADENCE_WINDOW_DAYS;
+  const cadenceDays = activeDays(sessions.map((session) => session.session_date), today);
+  const cadence = cadenceDays.days > 0 ? windowMinutes / cadenceDays.days : 0;
+  const minutesByDay = new Map<string, number>();
+  for (const session of windowSessions) minutesByDay.set(session.session_date, (minutesByDay.get(session.session_date) ?? 0) + session.minutes);
+  const longestDay = Math.max(0, ...minutesByDay.values());
 
   // Available days: from max(today, earliest planned start of a section that
   // still has unit work left) to the target date, inclusive.
@@ -969,7 +1024,15 @@ export function computeForecast(input: PaceInput): PaceForecast {
     ? (planUnitMinutes + unitlessMinutes) / availableDays
     : null;
 
-  const projectedFinish = workLeftMinutes === null
+  const countedSessions = sessions.filter((session) => !session.exclude_from_stats).length;
+  // E1: sittings with rows (finished rows or extra units) are what a finish date rests on; a sitting with
+  // minutes but no rows is time, never speed, and doesn't count toward the 3.
+  const withRows = sessions.filter((session) => !session.exclude_from_stats && session.session_date <= today
+    && (session.item_ids.length > 0 || positive(session.extra_units) > 0));
+  const daysWithRows = new Set(withRows.map((session) => session.session_date)).size;
+  const finishReady = withRows.length >= MIN_SITTINGS_WITH_ROWS_FOR_FINISH && daysWithRows >= MIN_DAYS_WITH_ROWS_FOR_FINISH;
+
+  const projectedFinish = workLeftMinutes === null || !finishReady
     ? null
     : workLeftMinutes <= 0
       ? today
@@ -978,12 +1041,12 @@ export function computeForecast(input: PaceInput): PaceForecast {
         : null;
   const slack = target && projectedFinish ? daysBetween(projectedFinish, target) : null;
 
-  const countedSessions = sessions.filter((session) => !session.exclude_from_stats).length;
   let health: PaceHealth;
-  if (countedSessions < MIN_COUNTED_SESSIONS_FOR_HEALTH) health = "insufficient_data";
+  if (!finishReady) health = "insufficient_data";
   else if (!target) health = "no_target";
   else if (workLeftMinutes === null) health = "unknown";
   else health = projectedFinish !== null && projectedFinish <= target ? "on_track" : "behind";
+  const behindSoFar = !finishReady && withRows.length > 0 && needed !== null && needed > longestDay + 1e-9;
 
   // Lane (section) projections: a running clock from today walks the sections in
   // planned_start order. A section with unit work left starts at max(clock, its
@@ -993,7 +1056,7 @@ export function computeForecast(input: PaceInput): PaceForecast {
     leftEntries,
     entryMinutes,
     unitlessBySection,
-    { today, cadence, countedSessions, anyUnpriced: unpricedUnits.length > 0 }
+    { today, cadence, enoughSittings: finishReady, anyUnpriced: unpricedUnits.length > 0 }
   );
 
   // Size fit.
@@ -1087,6 +1150,14 @@ export function computeForecast(input: PaceInput): PaceForecast {
     cadence_minutes_per_day: round(cadence, 1),
     sessions_in_cadence_window: windowSessions.length,
     minutes_in_cadence_window: windowMinutes,
+    cadence_from: cadenceDays.from,
+    cadence_days: cadenceDays.days,
+    longest_day_minutes: longestDay,
+    sittings_with_rows: withRows.length,
+    days_with_rows: daysWithRows,
+    finish_ready: finishReady,
+    behind_so_far: behindSoFar,
+    finish_far_late: Boolean(target && projectedFinish && daysBetween(target, projectedFinish) > FAR_LATE_DAYS),
     plan_cadence_minutes_per_day: planCadence === null ? null : round(planCadence, 1),
     available_from: target ? availableFrom : null,
     available_days: availableDays,
@@ -1105,10 +1176,9 @@ function projectSections(
   leftEntries: UnitEntry[],
   entryMinutes: (entry: UnitEntry) => number | null,
   unitlessBySection: Map<string, number>,
-  context: { today: string; cadence: number; countedSessions: number; anyUnpriced: boolean }
+  context: { today: string; cadence: number; enoughSittings: boolean; anyUnpriced: boolean }
 ): SectionProjection[] {
-  const { today, cadence, countedSessions, anyUnpriced } = context;
-  const enoughSittings = countedSessions >= MIN_COUNTED_SESSIONS_FOR_HEALTH;
+  const { today, cadence, enoughSittings, anyUnpriced } = context;
   const ordered = [...sections].sort((a, b) => {
     const aStart = a.planned_start ?? "9999-12-31";
     const bStart = b.planned_start ?? "9999-12-31";
@@ -1243,7 +1313,8 @@ export function formatForecastLine(forecast: PaceForecast, focusType?: string | 
     parts.push("size locked (body started)");
   }
   if (forecast.health === "insufficient_data") {
-    parts.push(`${forecast.counted_sessions} of ${MIN_COUNTED_SESSIONS_FOR_HEALTH} counted sessions for a health call`);
+    if (forecast.behind_so_far) parts.push("behind so far (needs more a day than your longest day)");
+    parts.push(`${forecast.sittings_with_rows} of ${MIN_SITTINGS_WITH_ROWS_FOR_FINISH} counted sittings with rows (on ${forecast.days_with_rows} of ${MIN_DAYS_WITH_ROWS_FOR_FINISH} days) for a health call`);
   } else if (forecast.health === "on_track" || forecast.health === "behind") {
     parts.push(forecast.health === "on_track" ? "on track" : "behind");
   }

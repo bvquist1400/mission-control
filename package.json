@@ -78,6 +78,7 @@
     "test:task-page": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-task-page.mjs",
     "test:portfolio-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-portfolio-db.mjs",
     "test:pace": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-pace.mjs",
+    "test:craft-estimate": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-craft-estimate.mjs",
     "test:pace-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-pace-db.mjs && PACE_TEST_ON_074=1 node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-pace-db.mjs",
     "backfill:pace:dry-run": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/pace-backfill.mjs",
     "test:briefs-am-db": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs scripts/test-briefs-am-db.mjs",

@@ -138,7 +138,9 @@ function TimelineChart({ timeline, appId }: { timeline: Timeline; appId: string 
                 className={`pf-ms proj${projected.offEdge ? " off" : edge(projected.left)}`}
                 style={projected.offEdge ? undefined : { left: `${projected.left}%` }}
                 title={
-                  projected.offEdge
+                  projected.farLate
+                    ? `${projected.label.replace(/ →$/, "")} at your pace`
+                    : projected.offEdge
                     ? `Projected finish ${formatTick(projected.date)} at your pace, past the right edge of the chart`
                     : `Projected finish ${formatTick(projected.date)} at your pace`
                 }

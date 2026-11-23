@@ -293,7 +293,7 @@ test("excluded sessions count toward cadence but never toward speed", () => {
   ];
   const forecast = computeForecast(input({ tasks, items, sessions }));
   assert.equal(forecast.measured_speeds[0].seconds_per_unit, 16.8, "only the counted 28 min / 100");
-  assert.equal(forecast.cadence_minutes_per_day, 12, "(140 + 28) ÷ 14");
+  assert.equal(forecast.cadence_minutes_per_day, 168, "E1: (140 + 28) ÷ 1 day (both today, the first day; was ÷ 14)");
   assert.equal(forecast.counted_sessions, 1);
   assert.equal(forecast.excluded_sessions, 1);
 });
@@ -424,16 +424,19 @@ test("available days start at the earliest planned start of a section that still
 test("health: insufficient_data under 3 counted sessions; then on_track / behind by projected finish", () => {
   const tasks = [task("t", { work_type: "sc" })];
   const items = Array.from({ length: 10 }, (_, i) => item(`i${i}`, "t", 60, null, { is_done: i < 3 }));
-  const mk = (n, minutes) => Array.from({ length: n }, (_, i) => session({ task_id: "t", minutes, item_ids: [`i${i}`], session_date: "2026-10-04" }));
+  // E1: the sittings fall on three different days (Oct 2, 3, 4), each with a row.
+  const mk = (n, minutes) => Array.from({ length: n }, (_, i) => session({ task_id: "t", minutes, item_ids: [`i${i}`], session_date: `2026-10-0${4 - (i % 3)}` }));
   const base = { tasks, items, project: { unit_label: "x", target_date: "2026-10-10", pace_settings: null } };
   // 2 counted + many excluded → still insufficient.
   const excluded = mk(5, 60).map((s) => ({ ...s, exclude_from_stats: true, item_ids: [] }));
   assert.equal(computeForecast(input({ ...base, sessions: [...mk(2, 60), ...excluded] })).health, "insufficient_data");
-  // 3 counted at 60 s/unit: 7 rows × 60 units × 60 s = 420 min left; cadence 180/14 ≈ 12.9 → 33 days → behind.
+  // E1: three counted sittings with rows but all on one day → still insufficient (3 days needed).
+  assert.equal(computeForecast(input({ ...base, sessions: mk(3, 60).map((s) => ({ ...s, session_date: "2026-10-04" })) })).health, "insufficient_data");
+  // 3 counted at 60 s/unit: 7 rows × 60 units × 60 s = 420 min left; cadence 180 ÷ 3 days = 60 → 7 days → Oct 11, a day late.
   const behind = computeForecast(input({ ...base, sessions: mk(3, 60) }));
   assert.equal(behind.health, "behind");
-  assert.equal(behind.projected_finish, "2026-11-06");
-  assert.equal(behind.slack_days, -27);
+  assert.equal(behind.projected_finish, "2026-10-11");
+  assert.equal(behind.slack_days, -1);
   // Same but a far target → on track.
   const onTrack = computeForecast(input({ ...base, project: { ...base.project, target_date: "2026-12-31" }, sessions: mk(3, 60) }));
   assert.equal(onTrack.health, "on_track");
@@ -491,7 +494,7 @@ test("size fit includes the measured cadence when there is one", () => {
 
 // ── The blanket (acceptance shape) ─────────────────────────────────────────
 
-test("blanket on Oct 4: 27.1 s/stitch from the swatch, Oct 3 and row 10 excluded, cadence 26.7, ratio ≈ 3.5×", () => {
+test("blanket on Oct 4: 27.1 s/stitch from the swatch, Oct 3 and row 10 excluded, cadence 187 (2 days, E1), ratio ≈ 3.5×", () => {
   const forecast = computeForecast(blanket());
   const colorwork = forecast.work_left.find((row) => row.work_type === "colorwork-dc");
   assert.equal(colorwork.source, "measured_sample");
@@ -499,7 +502,9 @@ test("blanket on Oct 4: 27.1 s/stitch from the swatch, Oct 3 and row 10 excluded
   assert.equal(colorwork.n_sessions, 1);
   assert.equal(forecast.counted_sessions, 1);
   assert.equal(forecast.excluded_sessions, 2);
-  near(forecast.cadence_minutes_per_day, 26.7, 0.05, "374 ÷ 14");
+  // E1 (the Aug 2027 fix): Oct 3 was the first sitting, so 374 min are over 2 days, not 14 (was 26.7).
+  near(forecast.cadence_minutes_per_day, 187, 0.05, "374 ÷ 2");
+  assert.deepEqual([forecast.cadence_from, forecast.cadence_days], ["2026-10-03", 2]);
   near(forecast.plan_ratio.ratio, 3.52, 0.01);
   assert.equal(forecast.plan_ratio.basis, "sample");
   for (const type of ["waffle", "plain-dc", "sc", "chain"]) {
@@ -653,7 +658,8 @@ test("unpriced units: no speed for an unfinished type → time, finish, needed, 
   };
   const tasks = [task("border", { unit_count: 100, work_type: "sc" }), task("other", { estimated_minutes: 30 })];
   const items = ["o1", "o2", "o3", "o4"].map((id) => item(id, "other", 10, "waffle", { is_done: id !== "o4" }));
-  const sessions = ["o1", "o2", "o3"].map((id) => session({ task_id: "other", minutes: 5, item_ids: [id] }));
+  // E1: three sittings with rows on three days (Oct 2–4), so a health call could be made.
+  const sessions = ["o1", "o2", "o3"].map((id, i) => session({ task_id: "other", minutes: 5, item_ids: [id], session_date: `2026-10-0${2 + i}` }));
   const forecast = computeForecast(input({ project, tasks, items, sessions }));
   assert.deepEqual(forecast.unpriced_units, [{ work_type: "sc", units_left: 100 }]);
   assert.deepEqual(forecast.unpriced_types, ["sc"]);
@@ -839,9 +845,13 @@ test("gauge: each width returns its length (w ÷ units × length, 1 decimal) wit
   assert.equal(none.fits[0].widest_length, null);
 });
 
-/** Four lanes priced by plan speed (6 s per unit) with three counted sittings at 6 min a day. */
+/**
+ * Four lanes priced by plan speed (6 s per unit) with three counted sittings at 6 min a day. E1: the sittings
+ * each finish a row (a row with no units, on a done task) on three days, the first 13 days back, so the
+ * cadence still divides by 14 (84 ÷ 14 = 6) and a time call can be made.
+ */
 function lanes(extra = {}) {
-  const sessions = [1, 2, 3].map((n) => session({ id: `ls${n}`, session_date: "2026-10-04", minutes: 28 }));
+  const sessions = ["2026-09-21", "2026-09-28", "2026-10-04"].map((date, n) => session({ id: `ls${n + 1}`, session_date: date, minutes: 28, item_ids: [`lane-row${n + 1}`] }));
   return input({
     project: { unit_label: "stitches", target_date: "2026-12-05", pace_settings: null },
     sections: [
@@ -856,7 +866,9 @@ function lanes(extra = {}) {
       task("tC", { unit_count: 60, work_type: "sc", estimated_minutes: 6, section_id: "sec-c" }),
       task("tU", { estimated_minutes: 6, section_id: "sec-c" }),
       task("tD", { estimated_minutes: 20, section_id: "sec-d" }),
+      task("tRows", { status: "Done" }),
     ],
+    items: [1, 2, 3].map((n) => item(`lane-row${n}`, "tRows", null, null, { is_done: true })),
     sessions,
     ...extra,
   });
@@ -883,7 +895,7 @@ test("sections: a running clock walks planned_start order, leaves gaps between s
 });
 
 test("sections: cadence 0 → behind with no projected end; fewer than 3 counted sittings → row-count basis; unpriced units → unknown", () => {
-  const old = [1, 2, 3].map((n) => session({ id: `old${n}`, session_date: "2026-08-01", minutes: 30 }));
+  const old = [1, 2, 3].map((n) => session({ id: `old${n}`, session_date: `2026-08-0${n}`, minutes: 30, item_ids: [`lane-row${n}`] }));
   const idle = computeForecast(lanes({ sessions: old }));
   assert.equal(idle.cadence_minutes_per_day, 0);
   const idleA = laneOf(idle, "sec-a");
@@ -894,7 +906,7 @@ test("sections: cadence 0 → behind with no projected end; fewer than 3 counted
   const few = computeForecast(lanes({ sessions: [session({ id: "only", session_date: "2026-10-04", minutes: 60 })] }));
   const fewA = laneOf(few, "sec-a");
   assert.deepEqual([fewA.health, fewA.health_basis], [null, "rows"], "1 counted sitting: not enough for a time call");
-  assert.equal(fewA.projected_end, "2026-10-18", "the projection is still returned (60 min ÷ 4.3 a day = 14 days)");
+  assert.equal(fewA.projected_end, "2026-10-05", "the projection is still returned (E1: 60 min ÷ 60 a day over 1 day = 1 day)");
   const excluded = computeForecast(lanes({ sessions: [1, 2, 3].map((n) => session({ id: `x${n}`, session_date: "2026-10-04", minutes: 28, exclude_from_stats: true })) }));
   assert.equal(laneOf(excluded, "sec-a").health_basis, "rows", "excluded sittings are not counted");
 
@@ -1026,7 +1038,10 @@ test("pace line: no target → 'No target' chip and 'projected <Mon YYYY> at N m
 });
 
 test("pace line: fewer than 3 counted sittings reads 'Measuring · n of 3 sittings'; unpriced units say so; none-fit and no-ratio cases", () => {
-  assert.deepEqual(view.buildPaceLine(stubForecast({ health: "insufficient_data", counted_sessions: 1 })).chip, { kind: "measuring", label: "Measuring · 1 of 3 sittings" });
+  // E1: the count is sittings with rows (stubs without the field fall back to counted sittings).
+  assert.deepEqual(view.buildPaceLine(stubForecast({ health: "insufficient_data", counted_sessions: 1 })).chip, { kind: "measuring", label: "Measuring · 1 of 3 sittings with rows" });
+  assert.deepEqual(view.buildPaceLine(stubForecast({ health: "insufficient_data", counted_sessions: 2, sittings_with_rows: 0 })).chip, { kind: "measuring", label: "Measuring · 0 of 3 sittings with rows" });
+  assert.deepEqual(view.buildPaceLine(stubForecast({ health: "insufficient_data", behind_so_far: true })).chip, { kind: "behind", label: "Behind so far" }, "E1: warn early");
   const unknown = view.buildPaceLine(stubForecast({
     health: "unknown", plan_ratio: null, size_fit: null, size_fit_reason: "unpriced_units", needed_minutes_per_day: null, available_from: "2026-10-19",
     unpriced_units: [{ work_type: "mystery", units_left: 40 }],
@@ -1450,7 +1465,8 @@ test("S3: an in-progress-only sitting gives minutes but no speed on its own; it 
   assert.deepEqual(computeMeasuredSpeeds(allocs), [], "no units yet: no measured speed");
   const forecast = computeForecast(input({ tasks, items, sessions }));
   assert.equal(forecast.work_left.find((row) => row.work_type === "border").source, "none");
-  near(forecast.cadence_minutes_per_day, 90 / 14, 0.05);
+  near(forecast.cadence_minutes_per_day, 90, 0.05, "E1: 90 min on the first (and only) day, today");
+  assert.equal(forecast.sittings_with_rows, 0, "a row in progress is not a row yet: it doesn't count toward the 3");
 });
 
 test("S3: mixed finished + in progress: the sitting's minutes are shared by units × plan speed, the in-progress row adding 0 units", () => {
@@ -1483,7 +1499,7 @@ test("S3: a sitting left out of speed (exclude_from_stats, e.g. ripped back) add
   const forecast = computeForecast(input({ tasks, items, sessions }));
   assert.equal(forecast.measured_speeds[0].seconds_per_unit, 12, "20 min / 100 only");
   assert.equal(forecast.measured_speeds[0].n_sessions, 1);
-  assert.equal(forecast.cadence_minutes_per_day, 5, "(50 + 20) ÷ 14");
+  assert.equal(forecast.cadence_minutes_per_day, 35, "E1: (50 + 20) ÷ 2 days (Oct 3 and 4; was ÷ 14)");
 });
 
 test("S3: the 8-sitting window counts in-progress sittings of that type; the plan ratio includes their minutes", () => {

@@ -294,3 +294,56 @@
 .craft-front .craft-earlier, .craft-front .craft-pf, .craft-front .craft-due-checks { scroll-margin-bottom: 196px; scroll-margin-top: 12px; }
 .craft-total-form .craft-field, .craft-total-form .craft-toggle { scroll-margin-bottom: 220px; }
 .craft-total-form .craft-sheet-foot .craft-sheet-preview, .craft-total-form .craft-sheet-foot .craft-sheet-warn { max-height: min(13em, 22dvh); }
+
+/* ── Craft estimates E2 (mockup baseline-plans/craft-estimates): the Today box, Pace (inside + sheet), parts lines. Tokens only; text 12px and up. ── */
+.cp-strip { border: 1px solid var(--stroke); border-top: 0; background: var(--panel); }
+.cp-open { display: block; width: 100%; min-height: 44px; padding: 9px 14px 10px; text-align: left; background: transparent; color: var(--foreground); cursor: pointer; }
+.cp-open:hover { background: var(--panel-muted); }
+.cp-l1 { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.cp-l1 em { display: inline-block; margin-right: 8px; font: 400 12px/1 var(--font-plex-mono); font-style: normal; letter-spacing: .06em; text-transform: uppercase; color: var(--muted-foreground); }
+.cp-l1 strong { font: 700 20px/1.2 var(--font-plex-cond); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cp-meter { display: block; height: 8px; margin: 7px 0 6px; border: 1px solid var(--stroke); background: var(--panel-muted); }
+.cp-meter > i { display: block; height: 100%; background: var(--accent); }
+.cp-meter.short > i { background: var(--warning); }
+.cp-cap { display: block; font: 400 12px/1.4 var(--font-plex-mono); color: var(--muted-foreground); overflow-wrap: anywhere; }
+.cp-link { display: block; width: 100%; min-height: 44px; padding: 8px 14px; border-top: 1px solid var(--stroke); text-align: left; font-size: 14px; font-weight: 600; color: var(--accent-text); text-decoration: underline; text-underline-offset: 3px; background: transparent; }
+.cp-chip { flex-shrink: 0; padding: 1px 8px; border: 1px solid var(--stroke); font-family: var(--font-plex-cond); font-size: 13px; font-weight: 600; line-height: 1.5; white-space: nowrap; color: var(--muted-foreground);
+  background: linear-gradient(color-mix(in srgb, var(--muted-foreground) 12%, transparent) 0 0), var(--panel); }
+.cp-chip.ok { color: var(--success); border-color: var(--success-border); background: linear-gradient(var(--success-soft) 0 0), var(--panel); }
+.cp-chip.behind { color: var(--warning); border-color: var(--warning-border); background: linear-gradient(var(--warning-soft) 0 0), var(--panel); }
+.cp-hd { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.craft-inside .cp-hd h2 { margin: 0; }
+.cp-hd-sheet { justify-content: flex-start; margin-bottom: 10px; }
+.cp-tabs { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--stroke); background: var(--panel); }
+.cp-tabs > button { min-height: 44px; font-family: var(--font-plex-cond); font-size: 15px; }
+.cp-tiles { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); margin-top: 12px; border: 1px solid var(--stroke); background: var(--panel); }
+.cp-tile { min-width: 0; padding: 10px 12px; }
+.cp-tile + .cp-tile { border-left: 1px solid var(--stroke); }
+.cp-tile .craft-eyebrow { display: block; line-height: 1.3; }
+.craft-pace .cp-num { margin-top: 4px; font: 600 15px/1.1 var(--font-plex-cond); overflow-wrap: anywhere; }
+.cp-num strong { font-size: 34px; font-weight: 700; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.craft-pace .cp-sub, .cp-section > .cp-sub { margin-top: 4px; font: 400 12px/1.4 var(--font-plex-mono); color: var(--muted-foreground); overflow-wrap: anywhere; }
+.craft-pace .cp-warn { margin-top: 10px; padding: 8px 10px; border-left: 3px solid var(--warning-border); background: linear-gradient(var(--warning-soft) 0 0), var(--panel); font-size: 14px; line-height: 1.4; }
+.cp-fix { margin-top: 10px; padding: 10px; border-left: 3px solid var(--accent-text); background: var(--panel-muted); }
+.craft-pace .cp-fix p { font-size: 14px; line-height: 1.4; }
+.cp-chart { margin-top: 10px; padding: 10px 12px 8px; border: 1px solid var(--stroke); background: var(--panel); }
+.cp-ct { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
+.cp-ct span { font: 400 12px/1.6 var(--font-plex-mono); color: var(--muted-foreground); }
+.cp-ct i { display: inline-block; width: 16px; margin-right: 6px; border-top: 2px dashed var(--foreground); vertical-align: 4px; }
+.cp-chart svg { display: block; width: 100%; height: auto; margin-top: 4px; overflow: visible; }
+.cp-chart text { font: 400 12px var(--font-plex-mono); fill: var(--muted-foreground); }
+.cp-bar { fill: var(--accent); }
+.cp-need { stroke: var(--foreground); stroke-width: 1.5; stroke-dasharray: 4 3; }
+.cp-axis { stroke: var(--stroke); stroke-width: 1; }
+.cp-facts { margin-top: 8px; }
+.cp-facts > div { display: grid; grid-template-columns: 78px minmax(0, 1fr); gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--stroke); }
+.cp-facts > div:last-child { border-bottom: 0; }
+.cp-facts dt { font: 400 12px/1.6 var(--font-plex-mono); color: var(--muted-foreground); }
+.cp-facts dd { min-width: 0; }
+.cp-facts dd strong { display: block; font-size: 15px; font-weight: 600; line-height: 1.3; }
+.cp-facts dd small { display: block; margin-top: 2px; font-size: 13px; line-height: 1.35; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.cp-all { margin-top: 12px; padding: 12px; border: 1px dashed var(--stroke); background: var(--panel); }
+.cp-all p { font-size: 14px; line-height: 1.45; }
+.craft-parts-act li { row-gap: 4px; }
+.craft-parts li > span.cp-partline { flex-basis: 100%; text-align: left; font-family: var(--font-plex-sans); font-size: 13px; font-weight: 400; color: var(--muted-foreground); }
+.cp-sheet .cp-tiles, .cp-sheet .cp-chart { background: var(--background); }

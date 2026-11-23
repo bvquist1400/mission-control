@@ -777,7 +777,7 @@ try {
     const f = forecast.data.forecast;
     assert.equal(f.counted_sessions, 1);
     assert.equal(f.excluded_sessions, 1);
-    assert.equal(f.cadence_minutes_per_day, 25.8, "(300 + 61) ÷ 14");
+    assert.equal(f.cadence_minutes_per_day, 180.5, "craft estimates E1: (300 + 61) ÷ 2 days (Oct 3–4, the first sittings; was ÷ 14 = 25.8)");
     const colorwork = f.measured_speeds.find((speed) => speed.work_type === "colorwork-dc");
     assert.deepEqual([colorwork.scope, colorwork.seconds_per_unit, colorwork.n_sessions], ["sample", 27.11, 1]);
     assert.match(colorwork.label, /swatch\/sample/);
@@ -1050,8 +1050,12 @@ try {
     const ok = await callTool("update_project", { project_id: lanesProject.id, unit_label: "sts", pace_settings: settings }); // its own unit label: other projects' speeds must not price it
     assert.equal(ok.isError, false, JSON.stringify(ok.data));
     assert.deepEqual(ok.data.pace_settings, settings, "perimeter and gauge are stored, not stripped");
-    for (let n = 0; n < 3; n += 1) {
-      const logged = await callTool("log_work_session", { task_id: bodyTask.id, date: "2026-10-04", minutes: 28 });
+    // Craft estimates E1: a time call needs 3 counted sittings with rows on 3 days, and the cadence divides by the days
+    // since the first sitting (at most 14): three sittings on Sep 21, Sep 28 and Oct 4, each finishing a row with no
+    // units, keep 84 min ÷ 14 days = 6 a day and don't change any speed.
+    for (const [n, date] of ["2026-09-21", "2026-09-28", "2026-10-04"].entries()) {
+      const row = await makeItem(userA, bodyTask.id, `Note ${n + 1}`);
+      const logged = await callTool("log_work_session", { task_id: bodyTask.id, date, minutes: 28, item_ids: [row.id] });
       assert.equal(logged.isError, false, JSON.stringify(logged.data));
     }
     const forecast = await callTool("get_project_forecast", { project_id: lanesProject.id, today: "2026-10-04" });

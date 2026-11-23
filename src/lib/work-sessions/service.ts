@@ -322,6 +322,23 @@ function paceInputFrom(data: LoadedProject, today: string, otherProjectRates: Cr
   };
 }
 
+/**
+ * Craft estimates (E2): the forecast input `getProjectForecast` builds (the project's sections, tasks, rows and
+ * sittings, plus other projects' speeds), for the craft screen's estimate (`src/lib/craft/estimate.ts`).
+ */
+export async function loadProjectPaceInput(
+  supabase: SupabaseClient,
+  userId: string,
+  projectId: string,
+  today: string
+): Promise<{ project: { id: string; name: string }; input: PaceInput }> {
+  requireUuid(projectId, "project_id");
+  if (!isDateOnly(today)) bad("today must be YYYY-MM-DD");
+  const data = await loadProjectData(supabase, userId, projectId);
+  const otherRates = await loadOtherProjectRates(supabase, userId, data.project.unit_label, projectId);
+  return { project: { id: data.project.id, name: data.project.name }, input: paceInputFrom(data, today, otherRates) };
+}
+
 export interface ProjectForecastResult {
   project: { id: string; name: string; unit_label: string | null; target_date: string | null };
   line: string;
