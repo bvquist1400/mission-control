@@ -115,11 +115,27 @@ export function noteRefiledSince(input: {
  * later than the note's current updated_at; otherwise the current updated_at
  * (what the server reads at save time). Null when the note's current version is
  * unknown (nothing is recorded; that note keeps the save-time rule).
+ *
+ * Postgres keeps microseconds; a caller that copies the time cut to
+ * milliseconds ("…50.217Z") or whole seconds ("…50Z") sent the current
+ * version, only shorter. Recording the short value would make the note look
+ * re-filed on every run (each catch-up would refresh). So a sent version that
+ * is exactly the current one cut to the millisecond or to the second counts as
+ * the current one (Baseline 483846c2 F1). A real re-file after the read moves
+ * updated_at past that cut, so it is still caught; only a re-file in the same
+ * millisecond (or, for a caller that sends whole seconds, the same second) as
+ * the read could hide.
  */
 export function versionToRecord(sent: string | null | undefined, current: string | null | undefined): { version: string; as_read: boolean } | null {
   const now = noteVersionMicros(current);
   if (now === null) return null;
   const read = noteVersionMicros(sent);
-  if (read !== null && read <= now) return { version: sent as string, as_read: true };
-  return { version: current as string, as_read: false };
+  if (read === null || read > now) return { version: current as string, as_read: false };
+  if (read === now || read === cutTo(now, 1_000) || read === cutTo(now, 1_000_000)) return { version: current as string, as_read: true };
+  return { version: sent as string, as_read: true };
+}
+
+/** `micros` cut down to a whole `step` (1,000 = the millisecond, 1,000,000 = the second). */
+function cutTo(micros: number, step: number): number {
+  return Math.floor(micros / step) * step;
 }

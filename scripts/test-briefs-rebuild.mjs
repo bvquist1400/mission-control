@@ -610,6 +610,32 @@ await test("V7 the MCP tools ask for the versions: get_brief_digest names update
   }
 });
 
+await test("V8 a version sent cut to the millisecond or the second is the same version (no false re-file, no refresh loop); exact stays exact; a real re-file 1 s after the read is still caught", async () => {
+  need(nv, "versionToRecord");
+  const stored = "2026-10-29T11:41:00.217518+00:00";
+  for (const [label, sent] of [["exact", stored], ["ms", "2026-10-29T11:41:00.217Z"], ["seconds", "2026-10-29T11:41:00Z"], ["ET offset, seconds", "2026-10-29T07:41:00-04:00"]]) {
+    assert.deepEqual(nv.versionToRecord(sent, stored), { version: stored, as_read: true }, label);
+  }
+  // Not a cut of the current version: kept as sent (an older read).
+  assert.deepEqual(nv.versionToRecord("2026-10-29T11:41:00.216Z", stored), { version: "2026-10-29T11:41:00.216Z", as_read: true });
+  // End to end: the routine sends the times cut short; with no re-file, brief_status stays clear run after run.
+  for (const sent of ["2026-10-29T11:41:00.217Z", "2026-10-29T11:41:00Z"]) {
+    const world = makeWorld({ notes: [amRow({ updated_at: stored })] });
+    await save(world, { edition: "am", date: DAY, content: { work_digest_note_ids: [NOTE_AM], work_digest_note_versions: { [NOTE_AM]: sent } }, items: [] }, new Date("2026-10-29T12:00:00Z"));
+    assert.equal(world.tables.briefs[0].content.work_digest_note_versions[NOTE_AM], stored, `${sent} is stored as the note's own version`);
+    assert.deepEqual((await service.getBriefStatus(fakeSupabase(world), USER, "am", DAY)).refresh_needed, { digest: false, reasons: [] }, sent);
+    await save(world, { edition: "am", date: DAY, mode: "refresh", content: { work_digest_note_ids: [NOTE_AM], work_digest_note_versions: { [NOTE_AM]: sent } }, items: [] }, new Date("2026-10-29T12:45:00Z"));
+    assert.equal((await service.getBriefStatus(fakeSupabase(world), USER, "am", DAY)).refresh_needed.digest, false, `${sent}: no refresh loop`);
+  }
+  // A real re-file 1 s after the read, with the read sent at ms or whole-second precision: caught.
+  for (const sent of ["2026-10-29T11:41:00.217Z", "2026-10-29T11:41:00Z", stored]) {
+    const world = makeWorld({ notes: [amRow({ updated_at: "2026-10-29T11:41:01.217518+00:00" })] });
+    const result = await save(world, { edition: "am", date: DAY, content: { work_digest_note_ids: [NOTE_AM], work_digest_note_versions: { [NOTE_AM]: sent } }, items: [] }, new Date("2026-10-29T12:00:00Z"));
+    assert.deepEqual(result.work_digest_versions, [{ note_id: NOTE_AM, version: sent, as_read: true }]);
+    assert.deepEqual((await service.getBriefStatus(fakeSupabase(world), USER, "am", DAY)).refresh_needed.reasons, ["am_digest_updated"], `${sent}: re-filed 1 s after the read`);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // (A) force: rebuild on command
 // ---------------------------------------------------------------------------
