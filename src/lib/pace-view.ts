@@ -5,8 +5,9 @@
  */
 
 import {
-  MIN_COUNTED_SESSIONS_FOR_HEALTH,
+  MIN_SITTINGS_WITH_ROWS_FOR_FINISH,
   SAMPLE_SPEED_LABEL,
+  UNCOUNTED_ROWS_TYPE,
   singularUnit,
   type PaceForecast,
   type PlanRatio,
@@ -59,8 +60,11 @@ export interface PaceChip {
   label: string;
 }
 
-/** The health chip for a project's forecast. */
-export function paceChip(forecast: Pick<PaceForecast, "health" | "counted_sessions">): PaceChip {
+/**
+ * The health chip for a project's forecast. E1: before 3 counted sittings with rows on 3 days it is
+ * "Behind so far" when the minutes a day needed are more than your longest day, else "Measuring".
+ */
+export function paceChip(forecast: Pick<PaceForecast, "health" | "counted_sessions"> & Partial<Pick<PaceForecast, "behind_so_far" | "sittings_with_rows">>): PaceChip {
   switch (forecast.health) {
     case "on_track":
       return { kind: "ok", label: "On track" };
@@ -71,7 +75,8 @@ export function paceChip(forecast: Pick<PaceForecast, "health" | "counted_sessio
     case "unknown":
       return { kind: "none", label: "No speed yet" };
     default:
-      return { kind: "measuring", label: `Measuring · ${forecast.counted_sessions} of ${MIN_COUNTED_SESSIONS_FOR_HEALTH} sittings` };
+      if (forecast.behind_so_far) return { kind: "behind", label: "Behind so far" };
+      return { kind: "measuring", label: `Measuring · ${forecast.sittings_with_rows ?? forecast.counted_sessions} of ${MIN_SITTINGS_WITH_ROWS_FOR_FINISH} sittings with rows` };
   }
 }
 
@@ -86,7 +91,8 @@ export interface PaceLine {
 function unpricedText(forecast: PaceForecast): string | null {
   if (forecast.unpriced_units.length === 0) return null;
   const label = forecast.unit_label?.trim() || "units";
-  const list = forecast.unpriced_units.map((entry) => `${entry.units_left} ${entry.work_type} ${label}`);
+  const list = forecast.unpriced_units.map((entry) => (entry.work_type === UNCOUNTED_ROWS_TYPE
+    ? `${entry.units_left} rows with no stitch count or estimate` : `${entry.units_left} ${entry.work_type} ${label}`));
   const joined = list.length > 1 ? `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}` : list[0];
   return `${joined} ${list.length === 1 && forecast.unpriced_units[0].units_left === 1 ? "has" : "have"} no speed yet`;
 }
@@ -102,7 +108,9 @@ export function buildPaceLine(forecast: PaceForecast): PaceLine {
   if (forecast.health === "no_target") {
     const text = forecast.projected_finish && forecast.cadence_minutes_per_day > 0
       ? `projected ${formatMonthYear(forecast.projected_finish)} at ${minutesText(forecast.cadence_minutes_per_day)} min a day`
-      : "log a sitting to get a projection";
+      : forecast.finish_ready === false && forecast.counted_sessions > 0
+        ? "a projection after 3 sittings with rows on 3 days"
+        : "log a sitting to get a projection";
     return { chip, text, separator: true };
   }
   const parts: string[] = [];
@@ -224,7 +232,7 @@ export function buildTiles(forecast: PaceForecast): PaceTile[] {
     key: "pace",
     label: "Your pace",
     value: `${minutesText(cadence)} min/day`,
-    sub: forecast.excluded_sessions > 0 ? "14-day average, learning included" : "14-day average",
+    sub: `${averageText(forecast)}${forecast.excluded_sessions > 0 ? ", learning included" : ""}`,
     tone: "",
   };
   let third: PaceTile;
@@ -250,16 +258,30 @@ export function buildTiles(forecast: PaceForecast): PaceTile[] {
     };
   }
   const finish = forecast.projected_finish;
+  // E1: more than a month past the target is never a far date.
+  const farLate = Boolean(finish && forecast.finish_far_late && forecast.target_date);
   const finishTile: PaceTile = {
     key: "finish",
     label: "Projected finish",
-    value: finish ? formatFinish(finish, forecast.today) : "—",
-    sub: finish
-      ? `at ${minutesText(cadence)} min/day${fit ? `, ${fit.current} ${adjective ?? fit.unit}` : ""}`
-      : forecast.unpriced_units.length > 0 ? "some work has no speed yet" : "log a sitting to get a projection",
+    value: farLate ? "Over a month late" : finish ? formatFinish(finish, forecast.today) : "—",
+    sub: farLate
+      ? `more than a month after ${formatMonthDay(forecast.target_date as string)} at ${minutesText(cadence)} min/day`
+      : finish
+        ? `at ${minutesText(cadence)} min/day${fit ? `, ${fit.current} ${adjective ?? fit.unit}` : ""}`
+        : forecast.unpriced_units.length > 0 ? "some work has no speed yet"
+          : forecast.finish_ready === false && forecast.counted_sessions > 0 ? "after 3 sittings with rows on 3 days"
+            : "log a sitting to get a projection",
     tone: finish && forecast.target_date && finish > forecast.target_date ? "warn" : "",
   };
   return [workLeft, pace, third, finishTile];
+}
+
+/** "14-day average", or E1's "average over 2 days" while you started less than 14 days ago. */
+function averageText(forecast: Pick<PaceForecast, "cadence_days">): string {
+  const days = forecast.cadence_days;
+  if (days === undefined || days >= 14) return "14-day average";
+  if (days <= 0) return "no sittings in 14 days";
+  return days === 1 ? "today only" : `average over ${days} days`;
 }
 
 /** "5 sittings logged (3 counted) · 436 min in the last 14 days · speeds from the swatch". */

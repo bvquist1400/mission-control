@@ -6,7 +6,7 @@ import {
   type TaskScope,
 } from "@/lib/personal-exclusion";
 import { isDecisionTask } from "@/lib/task-handoff";
-import type { PaceForecast } from "@/lib/pace";
+import { FAR_LATE_DAYS, type PaceForecast } from "@/lib/pace";
 import { buildPaceLine, formatMonthYear, type PaceChip } from "@/lib/pace-view";
 import type { TaskOwner, TaskStatus } from "@/types/database";
 
@@ -186,6 +186,8 @@ export interface LanePace {
   projectedEnd: string | null;
   /** Null when the lane is projected to finish on time. */
   tail: LaneTail | null;
+  /** Craft estimates FR1 (Codex 7): more than a month past the lane's planned end: words, never the far date. */
+  farLate?: boolean;
 }
 
 /** The projected-finish tag on the axis: at its date, or pinned to the right edge with an arrow. */
@@ -196,6 +198,8 @@ export interface TimelineProjected {
   /** 0–100; 100 when it is off the edge. */
   left: number;
   offEdge: boolean;
+  /** E1: more than a month past the target: the label says so and the date is never shown. */
+  farLate?: boolean;
 }
 
 /** A section kept off the chart: finished, or with no planned window. Listed under the chart. */
@@ -723,6 +727,15 @@ export function buildTimeline(
     // The "Starts 10/19" chip is replaced, so a lane that hasn't started says so in its sub-line.
     if (lane.start > today) lane.sub = `${lane.sub} · starts ${formatTick(lane.start)}`;
   });
+  // Craft estimates FR1 (Codex 5, pick 2 "never On track early"): a paced project's lanes on the row-count rule
+  // don't say On track / Ahead before its forecast has enough sittings; Behind and Late still warn.
+  summaries.filter(onChart).forEach((summary, index) => {
+    const lane = lanes[index];
+    if (timedProjection.has(lane.key) || !summary.projectId) return;
+    if (pace[summary.projectId]?.health === "insufficient_data" && (lane.health.kind === "ok" || lane.health.kind === "ahead")) {
+      lane.health = TOO_EARLY;
+    }
+  });
   const earlier: EarlierLane[] = summaries
     .filter((lane) => !onChart(lane))
     .map((lane) => ({
@@ -778,6 +791,12 @@ export function buildTimeline(
       summary.health = decided.some((forecast) => forecast.health === "behind")
         ? { kind: "behind", label: "Behind" }
         : { kind: "ok", label: "On track" };
+    } else if (forecasts.some((forecast) => forecast.behind_so_far)) {
+      // Craft estimates E1 (Brent 11/23, pick 2): warn early, never say On track early.
+      summary.health = { kind: "behind", label: "Behind so far" };
+    } else if (forecasts.some((forecast) => forecast.health === "insufficient_data")
+      && (!summary.health || summary.health.kind === "ok" || summary.health.kind === "ahead")) {
+      summary.health = TOO_EARLY;
     }
   }
 
@@ -793,28 +812,37 @@ export function buildTimeline(
       const right = cut ? 100 : timelinePosition(chartWindow, projection.projected_end, 1);
       tail = { left, width: Math.max(right - left, 0), cut };
     }
-    lane.pace = { projectedEnd: projection.projected_end, tail };
+    const farLate = Boolean(projection.projected_end && daysBetween(lane.end, projection.projected_end) > FAR_LATE_DAYS);
+    lane.pace = { projectedEnd: projection.projected_end, tail, ...(farLate ? { farLate: true } : {}) };
   }
 
   // The projected-finish tag (a paced project's forecast): at its date, or pinned to the edge with an arrow.
   let projected: TimelineProjected | null = null;
   if (lanes.length > 0) {
-    const finish = [...projectIds]
-      .map((id) => (id ? pace[id]?.projected_finish ?? null : null))
-      .find((date): date is string => Boolean(date));
+    const forecast = [...projectIds]
+      .map((id) => (id ? pace[id] : undefined))
+      .find((entry): entry is PaceForecast => Boolean(entry?.projected_finish));
+    const finish = forecast?.projected_finish ?? null;
     if (finish) {
       const offEdge = finish > end;
+      // E1: more than a month past the target is never shown as a far date.
+      const farLate = Boolean(forecast?.finish_far_late && forecast.target_date);
       projected = {
         date: finish,
-        label: offEdge ? `Projected ${formatMonthYear(finish)} →` : `Projected ${formatShortDate(finish)}`,
-        left: offEdge ? 100 : timelinePosition(chartWindow, finish, 0.5),
-        offEdge,
+        label: farLate ? `Projected over a month after ${formatShortDate(forecast!.target_date as string)} →`
+          : offEdge ? `Projected ${formatMonthYear(finish)} →` : `Projected ${formatShortDate(finish)}`,
+        left: offEdge || farLate ? 100 : timelinePosition(chartWindow, finish, 0.5),
+        offEdge: offEdge || farLate,
+        ...(farLate ? { farLate: true } : {}),
       };
     }
   }
 
   return { start, end, today, ticks, lanes, earlier, target, projected, summary };
 }
+
+/** Craft estimates FR1: a paced project that hasn't 3 sittings with rows on 3 days yet. */
+const TOO_EARLY: LaneHealth = { kind: "plan", label: "Too early to tell" };
 
 /** A section's projection from the forecast, when its chip should follow the forecast (time basis, on_track or behind). */
 function findProjection(pace: Record<string, PaceForecast>, projectId: string | null, sectionId: string | null) {

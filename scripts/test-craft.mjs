@@ -288,7 +288,7 @@ await test("SSR switcher: two or more projects make the title a labelled select 
         [scarfId, false, "Personal — Test Scarf · row 119"],
     ]);
     assert.equal((html.match(/<select/g) ?? []).length, 1);
-    assert.equal((html.match(/<h2>/g) ?? []).length, 1 + 4, "one title heading plus the four inside headings");
+    assert.equal((html.match(/<h2>/g) ?? []).length, 1 + 5, "one title heading plus the five inside headings (craft estimates E2 adds Pace first)");
     // S2: the only select is the switcher; Start / Row done are buttons, no fields on the screen itself.
     assert.doesNotMatch(withoutMenu(html), /<input|<textarea|<form/);
 });

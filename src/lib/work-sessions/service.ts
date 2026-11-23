@@ -132,20 +132,33 @@ async function loadProjectTasks(supabase: SupabaseClient, userId: string, projec
   ).then((rows) => rows.map((row) => ({ ...row, unit_count: row.unit_count === null ? null : Number(row.unit_count) })));
 }
 
+let warnedNoCraftColumns = false;
+
+/**
+ * FR2 (craft estimates): the items carry their craft part and row (071), so the forecast can price a craft row with no
+ * stitch count once. Before 071 (no such columns, 42703) every item reads as a plain item, as it did.
+ */
 async function loadItems(supabase: SupabaseClient, userId: string, taskIds: string[]): Promise<ItemRow[]> {
   const out: ItemRow[] = [];
+  const base = "id, task_id, text, is_done, sort_order, unit_count, work_type, completed_at";
+  const read = (ids: string[], columns: string) => pagedSelect<ItemRow>((from, to) =>
+    supabase
+      .from("task_checklist_items")
+      .select(columns)
+      .eq("user_id", userId)
+      .in("task_id", ids)
+      .order("id", { ascending: true })
+      .range(from, to)
+  );
   for (const ids of chunks(taskIds)) {
-    out.push(
-      ...(await pagedSelect<ItemRow>((from, to) =>
-        supabase
-          .from("task_checklist_items")
-          .select("id, task_id, text, is_done, sort_order, unit_count, work_type, completed_at")
-          .eq("user_id", userId)
-          .in("task_id", ids)
-          .order("id", { ascending: true })
-          .range(from, to)
-      ))
-    );
+    try {
+      out.push(...(await read(ids, `${base}, craft_part_id, craft_row`)));
+    } catch (error) {
+      if ((error as { code?: string } | null)?.code !== "42703") throw error;
+      if (!warnedNoCraftColumns) console.error("task_checklist_items has no craft columns (migration 071 not applied); reading plain items");
+      warnedNoCraftColumns = true;
+      out.push(...(await read(ids, base)));
+    }
   }
   return out.map((row) => ({ ...row, unit_count: row.unit_count === null ? null : Number(row.unit_count) }));
 }
@@ -320,6 +333,23 @@ function paceInputFrom(data: LoadedProject, today: string, otherProjectRates: Cr
     today,
     otherProjectRates,
   };
+}
+
+/**
+ * Craft estimates (E2): the forecast input `getProjectForecast` builds (the project's sections, tasks, rows and
+ * sittings, plus other projects' speeds), for the craft screen's estimate (`src/lib/craft/estimate.ts`).
+ */
+export async function loadProjectPaceInput(
+  supabase: SupabaseClient,
+  userId: string,
+  projectId: string,
+  today: string
+): Promise<{ project: { id: string; name: string }; input: PaceInput }> {
+  requireUuid(projectId, "project_id");
+  if (!isDateOnly(today)) bad("today must be YYYY-MM-DD");
+  const data = await loadProjectData(supabase, userId, projectId);
+  const otherRates = await loadOtherProjectRates(supabase, userId, data.project.unit_label, projectId);
+  return { project: { id: data.project.id, name: data.project.name }, input: paceInputFrom(data, today, otherRates) };
 }
 
 export interface ProjectForecastResult {
