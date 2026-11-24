@@ -3925,6 +3925,18 @@ export type Database = {
         Args: { p_reason?: string; p_task_id: string; p_user_id: string }
         Returns: Json
       }
+      craft_add_sitting_rows: {
+        Args: {
+          p_expected_row: number
+          p_from_row: number
+          p_part_id: string
+          p_project_id: string
+          p_session_id: string
+          p_to_row: number
+          p_user_id: string
+        }
+        Returns: Json
+      }
       craft_apply_units: {
         Args: { p_project_id: string; p_units: Json; p_user_id: string }
         Returns: number

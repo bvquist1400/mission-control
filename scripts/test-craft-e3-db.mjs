@@ -3,7 +3,7 @@
 // real route (POST /api/craft/[id]/sitting-rows) as a signed-in user (RLS on): Fix count's craft_rows ticks, then ONE
 // work_session_update links. No migration: nothing is rolled back or re-applied here. Fake data only; local only.
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -14,6 +14,27 @@ if (!url || !anon || !key || container !== "supabase_db_mc-pace" || !["127.0.0.1
 }
 const admin = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
 const psql = (sql) => execFileSync("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"], { input: sql, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** A second psql session that keeps its transaction open (for the lock schedules). */
+function connection(label) {
+  const child = spawn("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"]);
+  let output = "";
+  child.stdout.on("data", (c) => { output += c; });
+  child.stderr.on("data", (c) => { output += c; });
+  const closed = new Promise((resolve) => child.on("close", resolve));
+  return {
+    send: (sql) => child.stdin.write(sql + "\n"),
+    async wait(marker) { for (let i = 0; i < 400; i++) { if (output.includes(marker) || output.includes("ERROR:")) return; await sleep(25); } throw new Error(`${label}: missing ${marker}: ${output}`); },
+    async end() { child.stdin.end(); await closed; },
+  };
+}
+async function someoneWaitsOnALock() {
+  for (let i = 0; i < 200; i++) {
+    if (Number(psql("SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock';")) > 0) return true;
+    await sleep(25);
+  }
+  return false;
+}
 let passed = 0, failed = 0;
 async function test(name, fn) {
   try { await fn(); passed++; console.log(`ok - ${name}`); } catch (e) { failed++; console.error(`FAIL - ${name}`, e.message, e.stderr?.toString() ?? ""); }
@@ -88,7 +109,7 @@ const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i).join(
 
 const A = await user(), B = await user();
 try {
-  await test("E3: rows 6–15 to the sitting with no rows: 11–15 ticked (Fix count), 6–15 linked as finished; its minutes, task, date and the task's actual minutes stay", async () => {
+  await test("E3: rows 6–15 to the sitting with no rows: 11–15 ticked, 6–15 linked as finished; its minutes, task, date and the task's actual minutes stay", async () => {
     const s = seed(A.id, "Fake Scarf E3a");
     const before = sittingRow(s.sessions.S1), actualBefore = actual(s.taskId);
     const forecastBefore = (await getProjectForecast(A.client, A.id, s.projectId)).forecast;
@@ -160,7 +181,7 @@ try {
     assert.equal(state(other), otherBefore);
   });
 
-  await test("E3: the whole part in one go, to the last row (Fix count to total + 1)", async () => {
+  await test("E3: the whole part in one go, to the last row", async () => {
     const s = seed(A.id, "Fake Scarf E3f", { done: 5 });
     psql(`DELETE FROM work_session_items WHERE session_id IN ('${s.sessions.S2}','${s.sessions.S3}');`);
     const res = await post(A, s.projectId, { session_id: s.sessions.S1, part_id: s.partId, expected_row: 6, from_row: 1, to_row: 40 });
@@ -168,6 +189,62 @@ try {
     assert.equal(ticked(s.partId), range(1, 40));
     assert.equal(linksOf(s.sessions.S1), range(1, 40));
     assert.equal(res.body.view.active_part.finished, true, "every row ticked: the part is finished");
+  });
+  await test("E3 (076): one transaction: a failure on the last link (after the ticks) leaves no row ticked and no link", async () => {
+    const s = seed(A.id, "Fake Scarf E3g");
+    const before = state(s);
+    // Fail the insert of row 15's link, the last write the call makes (rows 11–15 are ticked first).
+    psql(`CREATE FUNCTION e3_fail_link() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN
+      IF NEW.checklist_item_id = '${s.items[15]}' THEN RAISE EXCEPTION 'forced failure for the test'; END IF; RETURN NEW; END $f$;
+      CREATE TRIGGER e3_fail_link BEFORE INSERT ON work_session_items FOR EACH ROW EXECUTE FUNCTION e3_fail_link();`);
+    let res;
+    const quiet = console.error; console.error = () => {};
+    try {
+      res = await post(A, s.projectId, { session_id: s.sessions.S1, part_id: s.partId, expected_row: 11, from_row: 6, to_row: 15 });
+    } finally {
+      console.error = quiet;
+      psql("DROP TRIGGER e3_fail_link ON work_session_items; DROP FUNCTION e3_fail_link();");
+    }
+    assert.equal(res.status, 500);
+    assert.equal(state(s), before, "rows 11–15 not ticked, no link, the sitting as it was");
+    assert.equal(ticked(s.partId), range(1, 10));
+    assert.equal(linksOf(s.sessions.S1), "");
+  });
+
+  await test("E3 (076): another sitting finishing one of the rows at the same moment: the call waits for it, then refuses; nothing written", async () => {
+    const s = seed(A.id, "Fake Scarf E3h");
+    const conn = connection("e3-race");
+    // Another writer holds the rows' task (as every session writer does first) and links row 8 to S2, not committed yet.
+    conn.send(`BEGIN; SELECT 1 FROM tasks WHERE id = '${s.taskId}' FOR NO KEY UPDATE;
+      INSERT INTO work_session_items (session_id, checklist_item_id, user_id, in_progress) VALUES ('${s.sessions.S2}','${s.items[8]}','${A.id}',false); SELECT 'held';`);
+    await conn.wait("held");
+    const pending = post(A, s.projectId, { session_id: s.sessions.S1, part_id: s.partId, expected_row: 11, from_row: 6, to_row: 10 });
+    assert.ok(await someoneWaitsOnALock(), "the call waits on the task lock");
+    conn.send("COMMIT; SELECT 'done';");
+    await conn.wait("done");
+    await conn.end();
+    const res = await pending;
+    assert.equal(res.status, 409, JSON.stringify(res.body));
+    assert.equal(res.body.reason, "in_sitting");
+    assert.equal(res.body.error, "Not saved: Row 8 is already in a sitting. A row is finished in one sitting only.");
+    assert.equal(linksOf(s.sessions.S1), "", "row 8 is never in two sittings");
+    assert.equal(linksOf(s.sessions.S2), "1,2,3,4,5,8");
+    assert.equal(ticked(s.partId), range(1, 10));
+  });
+
+  await test("E3 (076): the function is SECURITY INVOKER with the craft RPCs' grants (authenticated + service_role, not anon or PUBLIC)", async () => {
+    const sig = "craft_add_sitting_rows(uuid,uuid,uuid,uuid,integer,integer,integer)";
+    assert.equal(psql(`SELECT prosecdef FROM pg_proc WHERE oid = '${sig}'::regprocedure;`), "f");
+    assert.equal(psql(`SELECT array_to_string(proconfig, ';') FROM pg_proc WHERE oid = '${sig}'::regprocedure;`), "search_path=public;lock_timeout=5s");
+    assert.equal(psql(`SELECT has_function_privilege('authenticated', '${sig}', 'EXECUTE')::text || has_function_privilege('service_role', '${sig}', 'EXECUTE')::text || has_function_privilege('anon', '${sig}', 'EXECUTE')::text;`), "truetruefalse");
+    assert.equal(psql("SELECT has_function_privilege('anon', 'craft_frog(uuid,uuid,integer,integer,integer,text,uuid[],text)', 'EXECUTE')::text;"), "false", "same as craft_frog");
+    // Another user can't write for A (work_sessions_assert_caller) and can't see A's sitting (RLS).
+    const s = seed(A.id, "Fake Scarf E3i");
+    const asOther = await B.client.rpc("craft_add_sitting_rows", { p_user_id: A.id, p_project_id: s.projectId, p_session_id: s.sessions.S1, p_part_id: s.partId, p_expected_row: 11, p_from_row: 6, p_to_row: 7 });
+    assert.equal(asOther.error?.code, "42501");
+    const ownId = await B.client.rpc("craft_add_sitting_rows", { p_user_id: B.id, p_project_id: s.projectId, p_session_id: s.sessions.S1, p_part_id: s.partId, p_expected_row: 11, p_from_row: 6, p_to_row: 7 });
+    assert.equal(ownId.error?.code, "P0002");
+    assert.equal(linksOf(s.sessions.S1), "");
   });
 } finally {
   // Fake users only; the stack is disposable (down.sh deletes its volumes).

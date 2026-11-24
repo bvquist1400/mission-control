@@ -57,8 +57,11 @@ const CRAFT_S2_ROLLBACK = readFileSync(new URL("../supabase/rollbacks/073_craft_
 const CRAFT_S3_MIGRATION = readFileSync(new URL("../supabase/migrations/074_craft_progress.sql", import.meta.url), "utf8");
 const CRAFT_S3_ROLLBACK = readFileSync(new URL("../supabase/rollbacks/074_craft_progress.down.sql", import.meta.url), "utf8");
 // Craft S4 (075) sits on 074: removed first, restored last.
-const CRAFT_S4_MIGRATION = readFileSync(new URL("../supabase/migrations/075_craft_reset.sql", import.meta.url), "utf8");
-const CRAFT_S4_ROLLBACK = readFileSync(new URL("../supabase/rollbacks/075_craft_reset.down.sql", import.meta.url), "utf8");
+// Craft estimates E3: 076 (craft_add_sitting_rows) sits on 073–075: removed with 075, restored with it.
+const CRAFT_E3_MIGRATION = readFileSync(new URL("../supabase/migrations/076_craft_add_sitting_rows.sql", import.meta.url), "utf8");
+const CRAFT_E3_ROLLBACK = readFileSync(new URL("../supabase/rollbacks/076_craft_add_sitting_rows.down.sql", import.meta.url), "utf8").replace("DROP FUNCTION ", "DROP FUNCTION IF EXISTS ");
+const CRAFT_S4_MIGRATION = `${readFileSync(new URL("../supabase/migrations/075_craft_reset.sql", import.meta.url), "utf8")}\n${CRAFT_E3_MIGRATION}`;
+const CRAFT_S4_ROLLBACK = `${CRAFT_E3_ROLLBACK}\n${readFileSync(new URL("../supabase/rollbacks/075_craft_reset.down.sql", import.meta.url), "utf8")}`;
 let craftS4WasRemoved = false;
 // S3 FR1 (Fable 4): PACE_TEST_ON_074=1 runs every test on 074's work_session_create / work_session_update
 // bodies and its work_session_items.in_progress column (the "074 layer"), laid over each 059 apply, since

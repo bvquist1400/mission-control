@@ -462,124 +462,95 @@ await test("E3 sheet plan: the first guess, what Save ticks and adds, and the re
   assert.equal(need(actions, "sittingRowsAddedText")("row", { added: range(1, 30), ticked: [], session_date: "2026-11-21", minutes: 90 }), "Added rows 1–30 to Sat 11/21, 90 min.");
 });
 
-// The write path against a fake client: everything checked before anything is written; Fix count's craft_rows, then ONE work_session_update.
+// The write path against a fake client: ONE call to migration 076's craft_add_sitting_rows (one transaction); its
+// refusals (SQLSTATE MC076, the rows in DETAIL) keep the sheet's words and HTTP codes. The real function runs in
+// scripts/test-craft-e3-db.mjs.
 const S_ID = "00000000-0000-4000-8000-00000000a001";
-const S_OTHER = "00000000-0000-4000-8000-00000000a002";
 const PART = "00000000-0000-4000-8000-00000000c001";
 const OTHER_PROJECT = "00000000-0000-4000-8000-0000000000cc";
-const itemId = (row) => `00000000-0000-4000-8000-${String(100000000000 + row)}`;
-function e3Tables({ done = [], links = [] } = {}) {
-  const t = {
+function e3Tables() {
+  return {
     craft_projects: [own({ project_id: SCARF, active_part_id: PART, craft: "knit", gear: null })],
     projects: [own({ id: SCARF, name: "Mom's One Row Scarf" }), own({ id: OTHER_PROJECT, name: "Other" })],
-    craft_parts: [own({ id: PART, project_id: SCARF, name: "Scarf", sort_order: 0, row_word: "row", total_rows: 40, stitch_count: 30, quarters: false, ridges: false, quarter: 0, quarter_row: null, created_at: "2026-11-20T00:00:00Z", row_numbering: "label" })],
-    tasks: [own({ id: "00000000-0000-4000-8000-00000000d001", project_id: SCARF, title: "Scarf rows", status: "In Progress" })],
-    task_checklist_items: range(1, 40).map((row) => own({ id: itemId(row), task_id: "00000000-0000-4000-8000-00000000d001", text: `Row ${row}`, sort_order: row, craft_part_id: PART, craft_row: row,
-      is_done: done.includes(row), completed_at: done.includes(row) ? "2026-11-22T01:00:00Z" : null, unit_count: 30, work_type: "knit", created_at: "2026-11-19T00:00:00Z" })),
-    work_sessions: [
-      own({ id: S_ID, project_id: SCARF, task_id: null, session_date: "2026-11-21", minutes: 90, exclude_from_stats: false, created_at: "2026-11-21T20:00:00Z" }),
-      own({ id: S_OTHER, project_id: SCARF, task_id: null, session_date: "2026-11-22", minutes: 15, exclude_from_stats: false, created_at: "2026-11-22T20:00:00Z" }),
-    ],
-    work_session_items: links.map(([session, row, inProgress = false]) => own({ session_id: session, checklist_item_id: itemId(row), in_progress: inProgress })),
+    craft_parts: [own({ id: PART, project_id: SCARF, name: "Scarf", sort_order: 0, row_word: "row", total_rows: 40, stitch_count: 30, quarters: false, ridges: false, quarter: 0, quarter_row: null, created_at: "2026-11-20T00:00:00Z", row_numbering: "label" }),
+      own({ id: "00000000-0000-4000-8000-00000000c002", project_id: OTHER_PROJECT, name: "Other", sort_order: 0, row_word: "round", total_rows: 10 })],
+    tasks: [], task_checklist_items: [], work_sessions: [], work_session_items: [],
     craft_segments: [], craft_notes: [], craft_frogs: [], craft_sitting_details: [], craft_timers: [],
   };
-  return t;
 }
-const rpcs = {
-  craft_rows: (args, t) => {
-    const items = t.task_checklist_items.filter((i) => i.craft_part_id === args.p_part_id);
-    const current = Math.min(41, ...items.filter((i) => !i.is_done).map((i) => i.craft_row));
-    if (args.p_expected_row !== current) return { data: { status: "stale", current_row: current }, error: null };
-    const ticked = [];
-    for (const i of items) if (!i.is_done && i.craft_row >= current && i.craft_row < args.p_to_row) { i.is_done = true; ticked.push(i.craft_row); }
-    return { data: { status: "ok", ticked: ticked.sort((a, b) => a - b), current_row: args.p_to_row }, error: null };
-  },
-  work_session_update: (args, t) => {
-    if (Object.keys(args.p_changes).length) return { data: null, error: { code: "22023", message: "unexpected changes" } };
-    t.work_session_items = t.work_session_items.filter((l) => l.session_id !== args.p_session_id || (l.in_progress && !args.p_item_ids.includes(l.checklist_item_id)));
-    t.work_session_items.push(...args.p_item_ids.map((id) => own({ session_id: args.p_session_id, checklist_item_id: id, in_progress: false })));
-    return { data: { session_id: args.p_session_id }, error: null };
-  },
-};
+const OK = { status: "ok", session_id: S_ID, part_id: PART, session_date: "2026-11-21", minutes: 90, current_row: 31, ticked: [11, 12], added: [1, 2, 11, 12], already: [] };
+const refuse = (message, details) => () => ({ data: null, error: { code: "MC076", message, details } });
 const writeService = await load("../src/lib/craft/write-service.ts");
 const call = async (db, body, projectId = SCARF) => {
   try { return { ok: true, reply: await need(writeService, "writeSittingRows")(db, UID, projectId, body) }; } catch (error) {
     if (/not loaded|not exported/.test(error.message)) throw error;
-    return { ok: false, status: error.status, reason: error.reason, message: error.message, code: error.code };
+    return { ok: false, status: error.status, reason: error.reason, message: error.message, code: error.code, extra: error.extra };
   }
 };
 const body = (extra) => ({ session_id: S_ID, part_id: PART, expected_row: 1, from_row: 1, to_row: 30, ...extra });
-const linksOf = (t, session) => t.work_session_items.filter((l) => l.session_id === session).map((l) => [Number(l.checklist_item_id.slice(-3)), l.in_progress]).sort((a, b) => a[0] - b[0]);
+const writes = (db) => db.calls.filter(([n]) => n !== "craft_remove_blockers");
 
-await test("E3 write: ticks the rows not ticked yet (Fix count's craft_rows), then links them in ONE work_session_update; minutes untouched", async () => {
-  const t = e3Tables({ done: range(1, 10), links: [[S_ID, 12, true]] });
-  const db = fakeDb(t, rpcs);
-  const out = await call(db, body({ expected_row: 11, from_row: 1, to_row: 30 }));
+await test("E3 write: ONE call to craft_add_sitting_rows (migration 076, one transaction) with the sheet's values; no other write", async () => {
+  const db = fakeDb(e3Tables(), { craft_add_sitting_rows: () => ({ data: OK, error: null }) });
+  const out = await call(db, body({ expected_row: 11, from_row: 1, to_row: 12 }));
   assert.ok(out.ok, out.message);
-  assert.deepEqual(db.calls.map(([name]) => name).filter((n) => n !== "craft_remove_blockers"), ["craft_rows", "work_session_update"], "two calls, the link in one");
-  const [, rowsArgs] = db.calls[0];
-  assert.deepEqual({ mode: rowsArgs.p_mode, expected: rowsArgs.p_expected_row, to: rowsArgs.p_to_row }, { mode: "fix", expected: 11, to: 31 });
-  const [, updateArgs] = db.calls.find(([n]) => n === "work_session_update");
-  assert.deepEqual(updateArgs.p_changes, {}, "no field of the sitting is sent: minutes, date, task and the left-out flag stay");
-  assert.equal(updateArgs.p_session_id, S_ID);
-  assert.deepEqual(updateArgs.p_item_ids.map((id) => Number(id.slice(-3))).sort((a, b) => a - b), range(1, 30));
-  assert.deepEqual(db.writes, [], "no separate PostgREST writes");
-  assert.deepEqual(linksOf(t, S_ID), range(1, 30).map((r) => [r, false]), "row 12, partway in this sitting, is now finished");
-  assert.deepEqual(out.reply.result.ticked, range(11, 30));
-  assert.deepEqual(out.reply.result.added, range(1, 30));
-  assert.equal(out.reply.result.minutes, 90);
+  assert.deepEqual(writes(db), [["craft_add_sitting_rows", { p_user_id: UID, p_project_id: SCARF, p_session_id: S_ID, p_part_id: PART, p_expected_row: 11, p_from_row: 1, p_to_row: 12 }]]);
+  assert.deepEqual(db.writes, [], "no PostgREST writes");
+  assert.deepEqual(out.reply.result, OK);
   assert.ok(out.reply.view, "the fresh view comes back");
-  // Again: nothing new to add, nothing written.
-  const again = fakeDb(t, rpcs);
-  const second = await call(again, body({ expected_row: 31, from_row: 1, to_row: 30 }));
-  assert.ok(second.ok, second.message);
-  assert.deepEqual(again.calls.map(([n]) => n).filter((n) => n !== "craft_remove_blockers"), []);
-  assert.deepEqual(second.reply.result.added, []);
-  assert.deepEqual(second.reply.result.already, range(1, 30));
+  const src = readFileSync(new URL("../src/lib/craft/write-service.ts", import.meta.url), "utf8").split("export async function writeSittingRows")[1];
+  assert.doesNotMatch(src, /craft_rows|work_session_update|addFinishedRowsToSession/, "no two-step path left");
 });
 
-await test("E3 write: rows another sitting finished are refused before anything is written (a row partway elsewhere is fine)", async () => {
-  const t = e3Tables({ done: range(1, 20), links: [[S_OTHER, 5], [S_OTHER, 21, true]] });
-  const db = fakeDb(t, rpcs);
-  const out = await call(db, body({ expected_row: 21, from_row: 1, to_row: 10 }));
-  assert.deepEqual([out.ok, out.status, out.reason], [false, 409, "in_sitting"]);
-  assert.equal(out.message, "Not saved: Row 5 is already in a sitting. A row is finished in one sitting only.");
-  assert.deepEqual(db.calls, []);
-  const ok = await call(fakeDb(t, rpcs), body({ expected_row: 21, from_row: 21, to_row: 22 }));
-  assert.ok(ok.ok, ok.message);
-  assert.deepEqual(ok.reply.result.added, [21, 22]);
-  assert.deepEqual(linksOf(t, S_OTHER), [[5, false], [21, true]], "the other sitting keeps its own links");
+await test("E3 write: the function's refusals keep the sheet's words and codes (rows in another sitting, earlier rows, stale, none, no sitting)", async () => {
+  const cases = [
+    [refuse("in_sitting", "3,4,5"), 409, "in_sitting", "Not saved: Rows 3–5 are already in a sitting. A row is finished in one sitting only."],
+    [refuse("earlier", "11,12,13"), 409, "earlier", "Not saved: Rows 11–13 before row 1 aren't ticked. Start at row 11."],
+    [refuse("no_rows", ""), 400, "no_rows", "Not saved: There are no rows 1–30 on this part."],
+    [refuse("stale", "11"), 409, "stale", "Not saved: the count changed on another screen. The screen now shows the latest."],
+    [() => ({ data: null, error: { code: "P0002", message: "CRAFT_SITTING_NOT_FOUND" } }), 404, "not_found", "Sitting not found in this project"],
+    [() => ({ data: null, error: { code: "55P03", message: "lock timeout" } }), 409, "busy", "Not saved: the rows were busy. Try again."],
+  ];
+  for (const [fn, status, reason, message] of cases) {
+    const out = await call(fakeDb(e3Tables(), { craft_add_sitting_rows: fn }), body());
+    assert.deepEqual([out.status, out.reason, out.message], [status, reason, message], reason);
+  }
+  const stale = await call(fakeDb(e3Tables(), { craft_add_sitting_rows: refuse("stale", "11") }), body());
+  assert.equal(stale.extra.result.current_row, 11);
+  assert.ok(stale.extra.view, "a stale count comes back with the fresh view");
 });
 
-await test("E3 write: another project's part or sitting is a 404; a stale count or unticked rows before them are refused; nothing written", async () => {
-  const t = e3Tables({ done: range(1, 10) });
-  t.craft_parts.push(own({ id: "00000000-0000-4000-8000-00000000c002", project_id: OTHER_PROJECT, name: "Other", sort_order: 0, row_word: "row", total_rows: 10 }));
-  t.work_sessions.push(own({ id: "00000000-0000-4000-8000-00000000a003", project_id: OTHER_PROJECT, session_date: "2026-11-21", minutes: 30 }));
-  const db = fakeDb(t, rpcs);
-  const otherPart = await call(db, body({ part_id: "00000000-0000-4000-8000-00000000c002", expected_row: 11 }));
-  assert.equal(otherPart.code ?? otherPart.status, "PGRST116", "the part isn't in this project: 404");
-  const otherSitting = await call(db, body({ session_id: "00000000-0000-4000-8000-00000000a003", expected_row: 11 }));
-  assert.deepEqual([otherSitting.status, otherSitting.reason], [404, "not_found"]);
-  const stale = await call(db, body({ expected_row: 9 }));
-  assert.deepEqual([stale.status, stale.reason], [409, "stale"]);
-  const early = await call(db, body({ expected_row: 11, from_row: 15, to_row: 20 }));
-  assert.deepEqual([early.status, early.reason, early.message], [409, "earlier", "Not saved: Rows 11–14 before row 15 aren't ticked. Start at row 11."]);
-  const unknown = await call(db, { ...body({ expected_row: 11 }), minutes: 5 });
-  assert.deepEqual([unknown.status, unknown.message], [400, "Unknown fields: minutes"], "the minutes can't be sent");
-  assert.deepEqual(db.calls.filter(([n]) => n !== "craft_remove_blockers"), [], "no write on any refusal (the fresh view's read-only call aside)");
-  assert.deepEqual(t.task_checklist_items.filter((i) => i.is_done).map((i) => i.craft_row), range(1, 10));
+await test("E3 write: another project's part, bad input and the minutes are refused before the function is called", async () => {
+  const db = fakeDb(e3Tables(), { craft_add_sitting_rows: () => ({ data: OK, error: null }) });
+  const otherPart = await call(db, body({ part_id: "00000000-0000-4000-8000-00000000c002" }));
+  assert.equal(otherPart.code, "PGRST116", "the part isn't in this project: 404");
+  const unknown = await call(db, { ...body(), minutes: 5 });
+  assert.deepEqual([unknown.status, unknown.message], [400, "Unknown fields: minutes"]);
+  const backwards = await call(db, body({ from_row: 5, to_row: 4 }));
+  assert.equal(backwards.status, 400);
+  assert.deepEqual(writes(db), []);
 });
 
-await test("E3 service: addFinishedRowsToSession sends the sitting's own finished rows plus the new ones, in one call, and nothing else", async () => {
-  const service = await load("../src/lib/work-sessions/service.ts");
-  const t = e3Tables({ links: [[S_ID, 3], [S_ID, 9, true]] });
-  const db = fakeDb(t, rpcs);
-  const { added } = await need(service, "addFinishedRowsToSession")(db, UID, S_ID, [itemId(3), itemId(4), itemId(9)]);
-  assert.deepEqual(added.map((id) => Number(id.slice(-3))), [4, 9]);
-  assert.deepEqual(db.calls.map(([n]) => n), ["work_session_update"]);
-  assert.deepEqual(db.calls[0][1].p_changes, {});
-  assert.deepEqual(db.calls[0][1].p_item_ids.map((id) => Number(id.slice(-3))), [3, 4, 9]);
-  assert.deepEqual(db.writes, []);
+await test("E3 migration 076: function only (one new function, SECURITY INVOKER, the craft grants), locks in the craft order, nothing existing replaced; the rollback drops only it", () => {
+  const sql = readFileSync(new URL("../supabase/migrations/076_craft_add_sitting_rows.sql", import.meta.url), "utf8");
+  const down = readFileSync(new URL("../supabase/rollbacks/076_craft_add_sitting_rows.down.sql", import.meta.url), "utf8");
+  const code = sql.replace(/--[^\n]*/g, "");
+  assert.deepEqual([...code.matchAll(/CREATE (OR REPLACE )?FUNCTION (\w+)/g)].map((m) => [m[1] ?? "", m[2]]), [["", "craft_add_sitting_rows"]]);
+  assert.doesNotMatch(code, /CREATE (TABLE|INDEX|POLICY|TRIGGER|UNIQUE)|ALTER |DROP |INSERT INTO|SECURITY DEFINER|GRANT [A-Z, ]+ ON (TABLE )?\w+ TO/i);
+  assert.match(code, /REVOKE ALL ON FUNCTION craft_add_sitting_rows\(UUID, UUID, UUID, UUID, INTEGER, INTEGER, INTEGER\) FROM PUBLIC, anon;/);
+  assert.match(code, /GRANT EXECUTE ON FUNCTION craft_add_sitting_rows\(UUID, UUID, UUID, UUID, INTEGER, INTEGER, INTEGER\) TO authenticated, service_role;/);
+  assert.match(code, /SET search_path = public\s+SET lock_timeout = '5s'/);
+  const at = (needle) => { const i = code.indexOf(needle); assert.ok(i >= 0, needle); return i; };
+  assert.ok(at("PERFORM work_sessions_assert_caller(p_user_id)") < at("FROM work_sessions\n    WHERE id = p_session_id"));
+  assert.ok(at("FOR UPDATE;\n  IF NOT FOUND THEN\n    RAISE EXCEPTION 'CRAFT_SITTING_NOT_FOUND'") < at("PERFORM work_sessions_lock_tasks("), "the sitting first, then the tasks in id order");
+  assert.ok(at("PERFORM work_sessions_lock_tasks(") < at("v_part := craft_part_lock("), "then the part (craft project, part)");
+  assert.ok(at("v_part := craft_part_lock(") < at("ORDER BY id FOR UPDATE"), "then the rows");
+  assert.ok(at("ORDER BY id FOR UPDATE") < at("RAISE EXCEPTION 'in_sitting'"), "links are read under the locks");
+  assert.ok(at("RAISE EXCEPTION 'earlier'") < at("UPDATE task_checklist_items SET is_done = true"), "every refusal before the first write");
+  assert.match(code, /PERFORM work_session_update\(p_user_id, p_session_id, '\{\}'::jsonb, v_have \|\| v_add\)/, "the session write path, no field of the sitting");
+  assert.deepEqual([...down.replace(/--[^\n]*/g, "").matchAll(/DROP (\w+) ([^;]+);/g)].map((m) => `${m[1]} ${m[2]}`), ["FUNCTION craft_add_sitting_rows(UUID, UUID, UUID, UUID, INTEGER, INTEGER, INTEGER)"]);
+  const types = readFileSync(new URL("../src/types/supabase.generated.ts", import.meta.url), "utf8");
+  assert.match(types, /craft_add_sitting_rows: \{\n\s+Args: \{\n\s+p_expected_row: number\n\s+p_from_row: number\n\s+p_part_id: string\n\s+p_project_id: string\n\s+p_session_id: string\n\s+p_to_row: number\n\s+p_user_id: string\n\s+\}\n\s+Returns: Json/);
 });
 
 await test("E3 control: after adding rows the forecast moves the right way (sittings with rows, your speed, the day they count on)", () => {

@@ -20,8 +20,11 @@ if (!url || !anon || !key || container !== "supabase_db_mc-pace" || !["127.0.0.1
 const admin = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
 const psql = (sql) => execFileSync("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"], { input: sql, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const up075 = readFileSync(new URL("../supabase/migrations/075_craft_reset.sql", import.meta.url), "utf8");
-const down075 = readFileSync(new URL("../supabase/rollbacks/075_craft_reset.down.sql", import.meta.url), "utf8");
+// Craft estimates E3: 076 (craft_add_sitting_rows) sits on 073–075, so it comes off with 075 and goes back with it.
+const up076 = readFileSync(new URL("../supabase/migrations/076_craft_add_sitting_rows.sql", import.meta.url), "utf8");
+const down076 = readFileSync(new URL("../supabase/rollbacks/076_craft_add_sitting_rows.down.sql", import.meta.url), "utf8").replace("DROP FUNCTION ", "DROP FUNCTION IF EXISTS ");
+const up075 = `${readFileSync(new URL("../supabase/migrations/075_craft_reset.sql", import.meta.url), "utf8")}\n${up076}`;
+const down075 = `${down076}\n${readFileSync(new URL("../supabase/rollbacks/075_craft_reset.down.sql", import.meta.url), "utf8")}`;
 const has075 = () => psql("SELECT to_regprocedure('craft_reset_project(uuid,uuid,jsonb,text)') IS NOT NULL;") === "t";
 function connection(label) {
   const child = spawn("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"]);

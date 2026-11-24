@@ -22,8 +22,11 @@ const down073 = readFileSync(new URL("../supabase/rollbacks/073_craft_rpcs.down.
 const up074 = readFileSync(new URL("../supabase/migrations/074_craft_progress.sql", import.meta.url), "utf8");
 const down074 = readFileSync(new URL("../supabase/rollbacks/074_craft_progress.down.sql", import.meta.url), "utf8");
 const psql = (sql) => execFileSync("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"], { input: sql, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
-const up075 = readFileSync(new URL("../supabase/migrations/075_craft_reset.sql", import.meta.url), "utf8");
-const down075 = readFileSync(new URL("../supabase/rollbacks/075_craft_reset.down.sql", import.meta.url), "utf8");
+// Craft estimates E3: 076 (craft_add_sitting_rows) sits on 073–075, so it comes off with 075 and goes back with it.
+const up076 = readFileSync(new URL("../supabase/migrations/076_craft_add_sitting_rows.sql", import.meta.url), "utf8");
+const down076 = readFileSync(new URL("../supabase/rollbacks/076_craft_add_sitting_rows.down.sql", import.meta.url), "utf8").replace("DROP FUNCTION ", "DROP FUNCTION IF EXISTS ");
+const up075 = `${readFileSync(new URL("../supabase/migrations/075_craft_reset.sql", import.meta.url), "utf8")}\n${up076}`;
+const down075 = `${down076}\n${readFileSync(new URL("../supabase/rollbacks/075_craft_reset.down.sql", import.meta.url), "utf8")}`;
 // Craft S4: 075 sits on 074, so it comes off before any 074 rollback and goes back right after 074 is re-applied.
 const has075 = () => psql("SELECT to_regprocedure('craft_reset_project(uuid,uuid,jsonb,text)') IS NOT NULL;") === "t";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
