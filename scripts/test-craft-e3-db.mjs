@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Craft estimates E3 on a disposable LOCAL stack (CRAFT_TEST_*): "Add rows to a sitting already logged" through the
-// real route (POST /api/craft/[id]/sitting-rows) as a signed-in user (RLS on): Fix count's craft_rows ticks, then ONE
-// work_session_update links. No migration: nothing is rolled back or re-applied here. Fake data only; local only.
+// real route (POST /api/craft/[id]/sitting-rows) as a signed-in user (RLS on): ONE call to migration 076's
+// craft_add_sitting_rows locks, ticks and links in one transaction. 076 is applied by up.sh and left in place here.
+// Fake data only; local only.
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -161,7 +162,7 @@ try {
     const res = await post(A, s.projectId, { session_id: s.sessions.S1, part_id: s.partId, expected_row: 11, from_row: 3, to_row: 12 });
     assert.equal(res.status, 409);
     assert.equal(res.body.reason, "in_sitting");
-    assert.equal(res.body.error, "Not saved: Rows 3–5 are already in a sitting. A row is finished in one sitting only.");
+    assert.equal(res.body.error, "Not saved: Rows 3–5 are already in another sitting. A row is finished in one sitting only.");
     assert.equal(state(s), before);
   });
 
@@ -190,6 +191,15 @@ try {
     assert.equal(linksOf(s.sessions.S1), range(1, 40));
     assert.equal(res.body.view.active_part.finished, true, "every row ticked: the part is finished");
   });
+  await test("FR1 (Codex P2): a finished part (every row ticked, current row = total + 1) takes rows for its sitting; nothing is ticked again", async () => {
+    const s = seed(A.id, "Fake Cuff E3j", { done: 40 });
+    const res = await post(A, s.projectId, { session_id: s.sessions.S1, part_id: s.partId, expected_row: 41, from_row: 6, to_row: 40 });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.deepEqual(res.body.result.ticked, []);
+    assert.deepEqual(res.body.result.added, Array.from({ length: 35 }, (_, i) => i + 6));
+    assert.equal(linksOf(s.sessions.S1), range(6, 40));
+  });
+
   await test("E3 (076): one transaction: a failure on the last link (after the ticks) leaves no row ticked and no link", async () => {
     const s = seed(A.id, "Fake Scarf E3g");
     const before = state(s);
@@ -226,7 +236,7 @@ try {
     const res = await pending;
     assert.equal(res.status, 409, JSON.stringify(res.body));
     assert.equal(res.body.reason, "in_sitting");
-    assert.equal(res.body.error, "Not saved: Row 8 is already in a sitting. A row is finished in one sitting only.");
+    assert.equal(res.body.error, "Not saved: Row 8 is already in another sitting. A row is finished in one sitting only.");
     assert.equal(linksOf(s.sessions.S1), "", "row 8 is never in two sittings");
     assert.equal(linksOf(s.sessions.S2), "1,2,3,4,5,8");
     assert.equal(ticked(s.partId), range(1, 10));

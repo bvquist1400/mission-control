@@ -386,8 +386,8 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
       {totalPart && sheet === "total" && <ChangeTotalSheet key={totalPart.id} open onClose={() => setSheet(null)} view={view} part={totalPart} send={send} />}
       {sheet === "parts" && <PartsSheet open onClose={() => setSheet(null)} view={view} send={send} onChangeTotal={(partId) => openTotal(partId)} estimate={estimate} />}
       {sheet === "pace" && estimate && <CraftPaceSheet estimate={estimate} onClose={() => setSheet(null)} reload={paceKey} onAddRows={addRows} />}
-      {part && sheet === "add-rows" && <AddRowsSheet open onClose={() => setSheet(null)} view={view} part={part} send={send} sittings={noRowSittings}
-        onSaved={(reply) => { setSheet(null); confirm(sittingRowsAddedText(part.row_word === "round" ? "round" : "row", (reply.body?.result ?? {}) as Parameters<typeof sittingRowsAddedText>[1])); }} />}
+      {part && sheet === "add-rows" && <AddRowsSheet open onClose={() => setSheet(null)} view={view} part={part} send={send} sittings={noRowSittings} sittingParts={estimate?.sitting_parts}
+        onSaved={(reply, target) => { setSheet(null); confirm(sittingRowsAddedText(target.word, (reply.body?.result ?? {}) as Parameters<typeof sittingRowsAddedText>[1], target.parts > 1 ? target.name : null)); }} />}
       {sheet === "check-first" && <CheckFirstSheet checks={dueChecks} onClose={() => setSheet(null)} onYes={checksThenRow} onNotYet={() => { setSheet(null); rowDoneNow(); }} />}
       {sheet === "note" && <NoteSheet open onClose={() => setSheet(null)} part={part} send={send} />}
       {sheet === "timer" && <TimerFixSheet open onClose={() => setSheet(null)} view={view} send={send} />}

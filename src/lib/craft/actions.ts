@@ -736,19 +736,23 @@ export function sittingChoiceText(sitting: SittingChoice): string {
 }
 
 /**
- * The Add rows sheet's first guess: from the lowest row that no sitting finished, to the end of the run of ticked
- * rows that no sitting has (rows ticked with no sitting, e.g. after "Save without rows"); with none ticked, just that row.
+ * The Add rows sheet's first guess: from the lowest row no sitting finished, on through the rows that are ticked and in
+ * no sitting, stopping at the first row that is unticked or already in a sitting (FR1, Codex LOW: never across a row
+ * another sitting has); gaps in the row numbers don't stop it. With that first row unticked, just that row.
  */
 export function addRowsDefaults(rows: RowState[], total: number): { from: number; to: number } {
-  const open = rows.filter((s) => !s.linked && s.row <= total).sort((a, b) => a.row - b.row);
-  const from = open[0]?.row ?? Math.min(total, currentRowOf(rows, total));
+  const sorted = rows.filter((s) => s.row <= total).sort((a, b) => a.row - b.row);
+  const start = sorted.findIndex((s) => !s.linked);
+  if (start < 0) {
+    const row = Math.max(1, Math.min(total, currentRowOf(rows, total)));
+    return { from: row, to: row };
+  }
+  const from = sorted[start].row;
   let to = from;
-  const byRow = new Map(rows.map((s) => [s.row, s]));
-  if (byRow.get(from)?.done) {
-    for (const s of open) {
-      if (s.row < from) continue;
-      if (!s.done) break;
-      to = s.row;
+  if (sorted[start].done) {
+    for (let i = start; i < sorted.length; i += 1) {
+      if (sorted[i].linked || !sorted[i].done) break;
+      to = sorted[i].row;
     }
   }
   return { from, to };
@@ -757,30 +761,41 @@ export function addRowsDefaults(rows: RowState[], total: number): { from: number
 export interface AddRowsPlan {
   /** Rows of from–to that exist on the part. */
   rows: number[];
-  /** Unticked rows Save ticks first (the existing Fix count, guarded by the current row). */
+  /** Unticked rows Save ticks (in the same call that adds them; migration 076). */
   tick: number[];
   /** Rows added to the sitting as finished (a row partway in that sitting becomes finished). */
   add: number[];
-  /** Rows a sitting already finished: nothing is saved while any are picked. */
+  /** Rows the chosen sitting already has (kept, not added again). */
+  already: number[];
+  /** Rows another sitting already finished: nothing is saved while any are picked. */
   in_sitting: number[];
-  /** Unticked rows before `from` when Save would have to tick: Fix count would tick them too, so nothing is saved. */
+  /** Unticked rows before `from` when Save would have to tick: ticking them too would be wrong, so nothing is saved. */
   earlier: number[];
 }
-/** What Save does for rows from–to (pure; the server re-checks every part of it before writing). */
-export function addRowsPlan(rows: RowState[], total: number, from: number, to: number): AddRowsPlan {
+/**
+ * What Save does for rows from–to (pure; the server re-checks every part of it under its locks). `own` = the rows the
+ * chosen sitting already has on this part (FR1, Fable L4: they are "already in that sitting", not another one's).
+ */
+export function addRowsPlan(rows: RowState[], total: number, from: number, to: number, own: number[] = []): AddRowsPlan {
+  const mine = new Set(own);
   const picked = rows.filter((s) => s.row >= from && s.row <= to && s.row <= total).sort((a, b) => a.row - b.row);
   const tick = picked.filter((s) => !s.done).map((s) => s.row);
-  const inSitting = picked.filter((s) => s.linked).map((s) => s.row);
   const earlier = tick.length ? rows.filter((s) => !s.done && s.row < from && s.row <= total).map((s) => s.row).sort((a, b) => a - b) : [];
-  return { rows: picked.map((s) => s.row), tick, add: picked.filter((s) => !s.linked).map((s) => s.row), in_sitting: inSitting, earlier };
+  return {
+    rows: picked.map((s) => s.row), tick,
+    add: picked.filter((s) => !s.linked && !mine.has(s.row)).map((s) => s.row),
+    already: picked.filter((s) => mine.has(s.row)).map((s) => s.row),
+    in_sitting: picked.filter((s) => s.linked && !mine.has(s.row)).map((s) => s.row),
+    earlier,
+  };
 }
 
 /** Why rows from–to can't be added, in plain words (the sheet and the server's refusal), or null when they can. */
-export function addRowsRefusal(word: RowWord, plan: AddRowsPlan, from: number, to: number): string | null {
+export function addRowsRefusal(word: RowWord, plan: Pick<AddRowsPlan, "rows" | "in_sitting" | "earlier">, from: number, to: number): string | null {
   if (!plan.rows.length) return `There ${from === to ? `is no ${word} ${from}` : `are no ${word}s ${from}–${to}`} on this part.`;
   if (plan.in_sitting.length) {
     const n = plan.in_sitting.length;
-    return `${wordTitle(word)}${n === 1 ? "" : "s"} ${rowsText(word, plan.in_sitting).replace(/^\w+ /, "")} ${n === 1 ? "is" : "are"} already in a sitting. A row is finished in one sitting only.`;
+    return `${wordTitle(word)}${n === 1 ? "" : "s"} ${rowsText(word, plan.in_sitting).replace(/^\w+ /, "")} ${n === 1 ? "is" : "are"} already in another sitting. A row is finished in one sitting only.`;
   }
   if (plan.earlier.length) {
     return `${wordTitle(word)}${plan.earlier.length === 1 ? "" : "s"} ${rowsText(word, plan.earlier).replace(/^\w+ /, "")} before ${word} ${from} ${plan.earlier.length === 1 ? "isn't" : "aren't"} ticked. Start at ${word} ${plan.earlier[0]}.`;
@@ -788,17 +803,47 @@ export function addRowsRefusal(word: RowWord, plan: AddRowsPlan, from: number, t
   return null;
 }
 
+/** "Cuff rounds 1–20" with a part name (two or more parts), else "rounds 1–20". */
+const partRowsText = (word: RowWord, rows: number[], partName: string | null) => `${partName ? `${partName} ` : ""}${rowsText(word, rows)}`;
+
 /** What Save will do: "Ticks rows 1–30. Adds rows 1–30 to Sat 11/21, 90 min. Its 90 min stay as they are." */
-export function addRowsSummary(word: RowWord, plan: AddRowsPlan, sitting: SittingChoice): string {
-  if (!plan.add.length) return `Nothing to add: ${rowsText(word, plan.rows)} ${plan.rows.length === 1 ? "is" : "are"} already in that sitting.`;
-  const tick = plan.tick.length ? `Ticks ${rowsText(word, plan.tick)}. ` : "";
-  return `${tick}Adds ${rowsText(word, plan.add)} to ${sittingChoiceText(sitting)}. Its ${sitting.minutes} min stay as they are.`;
+export function addRowsSummary(word: RowWord, plan: AddRowsPlan, sitting: SittingChoice, partName: string | null = null): string {
+  if (!plan.add.length) return `Nothing to add: ${partRowsText(word, plan.rows, partName)} ${plan.rows.length === 1 ? "is" : "are"} already in that sitting.`;
+  const tick = plan.tick.length ? `Ticks ${partRowsText(word, plan.tick, partName)}. ` : "";
+  const kept = plan.already.length ? ` ${wordTitle(word)}${plan.already.length === 1 ? "" : "s"} ${rowsText(word, plan.already).replace(/^\w+ /, "")} ${plan.already.length === 1 ? "is" : "are"} in it already.` : "";
+  return `${tick}Adds ${partRowsText(word, plan.add, partName)} to ${sittingChoiceText(sitting)}.${kept} Its ${sitting.minutes} min stay as they are.`;
 }
 
-/** The line after a save, from the server's reply ("Added rows 1–30 to Sat 11/21, 90 min."). */
-export function sittingRowsAddedText(word: RowWord, result: { added?: number[]; ticked?: number[]; session_date?: string; minutes?: number }): string {
+/**
+ * The part the Add rows sheet works on (FR1, Codex P2: any part, finished ones too, apart from the screen's working
+ * part): its rows, name, word and current row, which is the `expected_row` the save is guarded by.
+ */
+export interface AddRowsTarget { part_id: string; name: string; word: RowWord; total: number; finished: boolean; rows: RowState[]; expected_row: number }
+export function addRowsTarget(
+  view: { parts: Array<{ id: string; name: string; row_word: string; total_rows: number }>; active_part: { id: string } | null; row_states: RowState[]; part_rows: Record<string, RowState[]> },
+  partId: string,
+): AddRowsTarget | null {
+  const part = view.parts.find((entry) => entry.id === partId);
+  if (!part) return null;
+  const rows = (view.active_part?.id === partId ? view.row_states : view.part_rows[partId]) ?? [];
+  const expected = currentRowOf(rows, part.total_rows);
+  return { part_id: part.id, name: part.name, word: part.row_word === "round" ? "round" : "row", total: part.total_rows, finished: expected > part.total_rows, rows, expected_row: expected };
+}
+/** The part a sitting most likely belongs to: the estimate's guess from the sitting's task, else the screen's part. */
+export function addRowsDefaultPart(sittingParts: Record<string, string> | undefined, sessionId: string | null, parts: Array<{ id: string }>, screenPartId: string | null): string | null {
+  const guess = sessionId ? sittingParts?.[sessionId] : undefined;
+  if (guess && parts.some((part) => part.id === guess)) return guess;
+  return screenPartId ?? parts[0]?.id ?? null;
+}
+/** The body POST /api/craft/[id]/sitting-rows gets: the picked part and its own current row. */
+export function addRowsBody(target: AddRowsTarget, sessionId: string, from: number, to: number) {
+  return { session_id: sessionId, part_id: target.part_id, expected_row: target.expected_row, from_row: from, to_row: to };
+}
+
+/** The line after a save, from the server's reply ("Added Cuff rounds 1–20 to Sat 11/21, 40 min."). */
+export function sittingRowsAddedText(word: RowWord, result: { added?: number[]; ticked?: number[]; session_date?: string; minutes?: number }, partName: string | null = null): string {
   const added = result.added ?? [];
   const where = result.session_date ? ` to ${sittingChoiceText({ id: "", date: result.session_date, minutes: result.minutes ?? 0 })}` : "";
   if (!added.length) return `Nothing new to add${where}.`;
-  return `Added ${rowsText(word, added)}${where}.${result.ticked?.length ? ` Ticked ${rowsText(word, result.ticked)}.` : ""}`;
+  return `Added ${partRowsText(word, added, partName)}${where}.${result.ticked?.length ? ` Ticked ${rowsText(word, result.ticked)}.` : ""}`;
 }

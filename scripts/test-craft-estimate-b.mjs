@@ -2,8 +2,8 @@
 //   E4 (All projects): shared time across open craft projects with a due date, soonest due first, in minutes
 //      (src/lib/craft/shared.ts over each project's own estimate; the route's `shared`; the tab).
 //   E3 (Add rows to a sitting already logged): the sheet's plan and words (src/lib/craft/actions.ts), the write path
-//      (writeSittingRows: Fix count's craft_rows, then ONE work_session_update through addFinishedRowsToSession) with
-//      a fake client that records every call, and the screen's wiring.
+//      (writeSittingRows: ONE call to migration 076's craft_add_sitting_rows, its refusals mapped to the sheet's words)
+//      with a fake client that records every call, the part picker (FR1: finished parts too) and the screen's wiring.
 //
 //   npm run test:craft-estimate   (runs scripts/test-craft-estimate.mjs, then this file)
 //
@@ -451,7 +451,7 @@ await test("E3 sheet plan: the first guess, what Save ticks and adds, and the re
   assert.equal(summary("row", p, { id: "a", date: "2026-11-21", minutes: 90 }), "Ticks rows 31–45. Adds rows 1–45 to Sat 11/21, 90 min. Its 90 min stay as they are.");
   const taken = plan(states(385, range(1, 40), range(1, 30)), 385, 25, 40);
   assert.deepEqual(taken.in_sitting, range(25, 30));
-  assert.equal(refusal("row", taken, 25, 40), "Rows 25–30 are already in a sitting. A row is finished in one sitting only.");
+  assert.equal(refusal("row", taken, 25, 40), "Rows 25–30 are already in another sitting. A row is finished in one sitting only.");
   const early = plan(states(385, range(1, 10)), 385, 20, 25);
   assert.deepEqual(early.earlier, range(11, 19));
   assert.equal(refusal("row", early, 20, 25), "Rows 11–19 before row 20 aren't ticked. Start at row 11.");
@@ -460,6 +460,70 @@ await test("E3 sheet plan: the first guess, what Save ticks and adds, and the re
   // A row partway (in progress) is added as finished.
   assert.deepEqual(plan(states(385, range(1, 30), [], [31]), 385, 31, 31).add, [31]);
   assert.equal(need(actions, "sittingRowsAddedText")("row", { added: range(1, 30), ticked: [], session_date: "2026-11-21", minutes: 90 }), "Added rows 1–30 to Sat 11/21, 90 min.");
+});
+
+await test("FR1 (Codex LOW): the first guess stops at a row another sitting has, never across it; gaps in the row numbers don't stop it", () => {
+  const defaults = need(actions, "addRowsDefaults"), plan = need(actions, "addRowsPlan"), refusal = need(actions, "addRowsRefusal");
+  // Rows 1–3 ticked, only row 2 in a sitting: rows 1–1 (was 1–3, which the preview then refused).
+  const one = states(10, range(1, 3), [2]);
+  assert.deepEqual(defaults(one, 10), { from: 1, to: 1 });
+  assert.equal(refusal("row", plan(one, 10, 1, 1), 1, 1), null);
+  // Interleaved: rows 1–8 ticked, rows 1, 2 and 5 in sittings: rows 3–4.
+  assert.deepEqual(defaults(states(10, range(1, 8), [1, 2, 5]), 10), { from: 3, to: 4 });
+  // A real gap in the numbering (no row 6) doesn't stop it; an unticked row does.
+  const gap = states(12, range(1, 9)).filter((s) => s.row !== 6);
+  assert.deepEqual(defaults(gap, 12), { from: 1, to: 9 });
+  assert.deepEqual(defaults(states(10, [1, 2, 4]), 10), { from: 1, to: 2 });
+  // Every row in a sitting: the current row (the preview then says why).
+  assert.deepEqual(defaults(states(3, range(1, 3), range(1, 3)), 3), { from: 3, to: 3 });
+});
+
+await test("FR1 (Fable L4): a row the chosen sitting already has reads 'in it already', never 'another sitting'", () => {
+  const plan = need(actions, "addRowsPlan"), refusal = need(actions, "addRowsRefusal"), summary = need(actions, "addRowsSummary");
+  const p = plan(states(10, range(1, 5), [1, 2]), 10, 1, 5, [1, 2]);
+  assert.deepEqual([p.add, p.already, p.in_sitting], [[3, 4, 5], [1, 2], []]);
+  assert.equal(refusal("row", p, 1, 5), null);
+  assert.equal(summary("row", p, { id: "a", date: "2026-11-21", minutes: 90 }), "Adds rows 3–5 to Sat 11/21, 90 min. Rows 1–2 are in it already. Its 90 min stay as they are.");
+  const all = plan(states(10, range(1, 5), [1, 2]), 10, 1, 2, [1, 2]);
+  assert.equal(summary("row", all, { id: "a", date: "2026-11-21", minutes: 90 }), "Nothing to add: rows 1–2 are already in that sitting.");
+  // Another sitting's rows are still refused.
+  assert.equal(refusal("row", plan(states(10, range(1, 5), [1, 2]), 10, 1, 5, [1]), 1, 5), "Row 2 is already in another sitting. A row is finished in one sitting only.");
+});
+
+await test("FR1 (Codex P2): a no-row sitting on a finished Cuff, screen on the Hand: the sheet opens on the Cuff and saves the Cuff's rows", async () => {
+  // The estimate guesses the sitting's part from its task.
+  const input = craft({ target: "2026-12-20", finishingMinutes: 0, activePart: "hand",
+    parts: [{ id: "cuff", name: "Cuff", rows: 20, stitches: () => 40, planSec: 8, word: "round" }, { id: "hand", name: "Hand", rows: 30, stitches: () => 44, planSec: 8, word: "round" }],
+    done: { ...ticks("cuff", 1, 20, "2026-11-20"), ...ticks("hand", 1, 5, "2026-11-21") },
+    sessions: [session({ id: "cuff-s", task_id: "t-cuff", session_date: "2026-11-21", minutes: 40 }), session({ id: "free-s", session_date: "2026-11-22", minutes: 15 })] });
+  const e = est(input);
+  assert.deepEqual(e.sitting_parts, { "cuff-s": "cuff" }, "a sitting on no task gets no guess");
+  const defaultPart = need(actions, "addRowsDefaultPart"), targetOf = need(actions, "addRowsTarget"), bodyOf = need(actions, "addRowsBody");
+  assert.equal(defaultPart(e.sitting_parts, "cuff-s", [{ id: "cuff" }, { id: "hand" }], "hand"), "cuff");
+  assert.equal(defaultPart(e.sitting_parts, "free-s", [{ id: "cuff" }, { id: "hand" }], "hand"), "hand", "no task: the screen's part");
+  const rowsOf = (id, total, done) => Array.from({ length: total }, (_, i) => ({ row: i + 1, done: i + 1 <= done, linked: false, today: false }));
+  const view = {
+    parts: [{ id: "cuff", name: "Cuff", row_word: "round", total_rows: 20, finished: true, current_row: 21 }, { id: "hand", name: "Hand", row_word: "round", total_rows: 30, finished: false, current_row: 6 }],
+    active_part: { id: "hand", name: "Hand", row_word: "round", total_rows: 30, current_row: 6 }, timer: null,
+    row_states: rowsOf("hand", 30, 5), part_rows: { cuff: rowsOf("cuff", 20, 20) }, recent_sittings: [],
+  };
+  const target = targetOf(view, "cuff");
+  assert.deepEqual([target.finished, target.expected_row, target.word, target.total], [true, 21, "round", 20]);
+  const d = actions.addRowsDefaults(target.rows, target.total);
+  assert.deepEqual(d, { from: 1, to: 20 });
+  assert.deepEqual(bodyOf(target, "cuff-s", d.from, d.to), { session_id: "cuff-s", part_id: "cuff", expected_row: 21, from_row: 1, to_row: 20 });
+  const p = actions.addRowsPlan(target.rows, target.total, 1, 20);
+  assert.equal(actions.addRowsSummary("round", p, { id: "cuff-s", date: "2026-11-21", minutes: 40 }, "Cuff"), "Adds Cuff rounds 1–20 to Sat 11/21, 40 min. Its 40 min stay as they are.");
+  assert.equal(actions.sittingRowsAddedText("round", { added: range(1, 20), ticked: [], session_date: "2026-11-21", minutes: 40 }, "Cuff"), "Added Cuff rounds 1–20 to Sat 11/21, 40 min.");
+  // The sheet itself (rendered): a part picker with the finished Cuff picked, and the Cuff's rounds in the preview.
+  const sheets = await import("../src/components/craft/CraftSheets.tsx");
+  const html = render(need(sheets, "AddRowsForm"), { view, part: view.active_part, send: async () => ({ ok: true }), sittings: e.sittings_without_rows, sittingParts: e.sitting_parts, onSaved: () => {} });
+  assert.match(html, /<legend>Part<\/legend>.*<input type="radio" name="craft-addrows-part" checked="" value="cuff"\/>Cuff<span>finished<\/span>.*value="hand"\/>Hand<span>on the screen<\/span>/);
+  assert.match(html, /<label for="craft-addrows-to">To round<\/label>.*max="20" value="20"/);
+  assert.match(html, /Adds Cuff rounds 1–20 to Sat 11\/21, 40 min\. Its 40 min stay as they are\./);
+  const screen = readFileSync(new URL("../src/components/craft/CraftScreen.tsx", import.meta.url), "utf8");
+  assert.match(screen, /sittingParts=\{estimate\?\.sitting_parts\}/);
+  assert.match(screen, /sittingRowsAddedText\(target\.word, .*target\.parts > 1 \? target\.name : null\)/, "the confirmation names the part");
 });
 
 // The write path against a fake client: ONE call to migration 076's craft_add_sitting_rows (one transaction); its
@@ -504,7 +568,7 @@ await test("E3 write: ONE call to craft_add_sitting_rows (migration 076, one tra
 
 await test("E3 write: the function's refusals keep the sheet's words and codes (rows in another sitting, earlier rows, stale, none, no sitting)", async () => {
   const cases = [
-    [refuse("in_sitting", "3,4,5"), 409, "in_sitting", "Not saved: Rows 3–5 are already in a sitting. A row is finished in one sitting only."],
+    [refuse("in_sitting", "3,4,5"), 409, "in_sitting", "Not saved: Rows 3–5 are already in another sitting. A row is finished in one sitting only."],
     [refuse("earlier", "11,12,13"), 409, "earlier", "Not saved: Rows 11–13 before row 1 aren't ticked. Start at row 11."],
     [refuse("no_rows", ""), 400, "no_rows", "Not saved: There are no rows 1–30 on this part."],
     [refuse("stale", "11"), 409, "stale", "Not saved: the count changed on another screen. The screen now shows the latest."],
@@ -579,7 +643,7 @@ await test("E3 wiring: 'N sittings have no rows. Add rows' and the Pace sheet's 
   assert.match(screen, /const addRows = part && noRowSittings\.length > 0 \? \(\) => setSheet\("add-rows"\) : undefined;/);
   assert.match(screen, /<CraftTodayBox estimate=\{estimate\} onOpen=\{\(\) => setSheet\("pace"\)\} onAddRows=\{addRows\} \/>/);
   assert.match(screen, /sheet === "add-rows" && <AddRowsSheet open/);
-  assert.match(sheets, /send\("sitting-rows", \{ session_id: sitting\.id, part_id: part\.id, expected_row: part\.current_row, from_row: from, to_row: to \}\)/);
+  assert.match(sheets, /send\("sitting-rows", addRowsBody\(target, sitting\.id, from as number, to as number\)\)/, "FR1: the picked part and its own current row");
   assert.ok(readFileSync(new URL("../src/app/api/craft/[projectId]/sitting-rows/route.ts", import.meta.url), "utf8").includes('craftWriteRoute(request, "sitting_rows"'));
   assert.doesNotMatch(screen + sheets, /Claude|Anthropic|inch/i);
 });

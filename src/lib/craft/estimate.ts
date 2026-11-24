@@ -73,6 +73,11 @@ export interface CraftEstimate {
   measured: boolean;
   /** E4: minutes of sittings on each day on this project, up to today, oldest first (the forecast's own cadence input). */
   sitting_days: Array<{ date: string; minutes: number }>;
+  /**
+   * E3 FR1 (Codex P2): for each sitting with time but no rows that is logged on a task, the part holding most of that
+   * task's rows (ties: the part first in pattern order), so Add rows opens on the part the sitting most likely was.
+   */
+  sitting_parts: Record<string, string>;
   front: { head: string; bar: number | null; line: string; no_rows_line: string | null };
   sheet: {
     tiles: [EstimateTile, EstimateTile];
@@ -505,6 +510,7 @@ export function buildCraftEstimate(input: CraftEstimateInput): CraftEstimate {
     walk_minutes: priced && nowWalk && rowsNeededPerDay !== null ? nowWalk.taken.map(pricedCost) : null,
     measured,
     sitting_days: sittingDays(pace.sessions, today),
+    sitting_parts: sittingParts(sittingsWithoutRows.map((entry) => entry.id), pace.sessions, rows, itemById, sortedParts),
     front: { head, bar, line, no_rows_line: noRowsLine },
     sheet: { tiles: [neededTile, youTile], warn, fix, chart, facts },
     parts: partLines,
@@ -524,6 +530,20 @@ function sittingDays(sessions: PaceInput["sessions"], today: string): Array<{ da
     if (session.session_date <= today) byDay.set(session.session_date, (byDay.get(session.session_date) ?? 0) + session.minutes);
   }
   return [...byDay].sort((a, b) => a[0].localeCompare(b[0])).map(([date, minutes]) => ({ date, minutes }));
+}
+
+/** The part holding most of each sitting's task's rows (ties: the earlier part in pattern order); sittings with no task are left out. */
+function sittingParts(ids: string[], sessions: PaceInput["sessions"], rows: EstimateRow[], itemById: Map<string, { task_id: string }>, sortedParts: EstimatePart[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const id of ids) {
+    const taskId = sessions.find((session) => session.id === id)?.task_id;
+    if (!taskId) continue;
+    const counts = new Map<string, number>();
+    for (const row of rows) if (itemById.get(row.item_id)?.task_id === taskId) counts.set(row.part_id, (counts.get(row.part_id) ?? 0) + 1);
+    const best = sortedParts.filter((part) => counts.has(part.id)).sort((a, b) => (counts.get(b.id) as number) - (counts.get(a.id) as number))[0];
+    if (best) out[id] = best.id;
+  }
+  return out;
 }
 
 const isMeasured = (source: SpeedSource | null | undefined) => source === "measured" || source === "measured_sample" || source === "other_projects";
