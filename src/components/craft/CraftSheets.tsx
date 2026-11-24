@@ -786,7 +786,7 @@ export function NewDaySheet({ open, onClose, view, onSaveFirst, onKeepGoing }: {
 export function AddRowsSheet({ open, onClose, view: live, part: livePart, send, sittings, onSaved }: {
   open: boolean; onClose: () => void; view: CraftView; part: Part; send: Send; sittings: SittingChoice[]; onSaved: (reply: SendReply) => void;
 }) {
-  const { snap, changed, notice, retake } = useSheetSnapshot(live, livePart, { timer: false });
+  const { snap, changed, notice, retake } = useSheetSnapshot(live, livePart);
   const { view, part } = snap;
   const word = part.row_word as RowWord;
   const Word = wordTitle(word);
