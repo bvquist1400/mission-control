@@ -63,6 +63,16 @@ export interface CraftEstimate {
   finish: { date: string | null; far_late: boolean; ready: boolean };
   /** Sittings in the forecast's days with minutes but no rows (counted ones only). */
   sittings_without_rows: Array<{ id: string; date: string; minutes: number }>;
+  /**
+   * E4 (All projects): the minutes of each of the next rows the day's need walks through (pattern order, the screen's
+   * part first), so the shared time can say how many rows fit in what is left for this project (`rowsWithin`). Null in
+   * rows-only mode and when there is no daily need (no due date, past due, nothing left).
+   */
+  walk_minutes: number[] | null;
+  /** E4: the speed behind the minutes is yours (measured), not the plan's. */
+  measured: boolean;
+  /** E4: minutes of sittings on each day on this project, up to today, oldest first (the forecast's own cadence input). */
+  sitting_days: Array<{ date: string; minutes: number }>;
   front: { head: string; bar: number | null; line: string; no_rows_line: string | null };
   sheet: {
     tiles: [EstimateTile, EstimateTile];
@@ -90,21 +100,30 @@ const whole = (n: number) => Math.round(n).toLocaleString("en-US");
 /** Rows that differ by no more than this share are "equal". */
 const EQUAL_ROWS_TOLERANCE = 0.02;
 
-interface Walk { count: number; ids: string[]; last: OrderedRow | null; minutes: number }
+interface Walk<T> { count: number; taken: T[]; last: T | null; minutes: number }
 interface OrderedRow { row: EstimateRow; part: EstimatePart; cost: number | null }
 
 /** Walk rows in order, adding each row's cost, until `budget` is used (the row that crosses it counts). */
-function walk(rows: OrderedRow[], budget: number, costOf: (row: OrderedRow) => number): Walk {
-  const out: Walk = { count: 0, ids: [], last: null, minutes: 0 };
+function walk<T>(rows: T[], budget: number, costOf: (row: T) => number): Walk<T> {
+  const out: Walk<T> = { count: 0, taken: [], last: null, minutes: 0 };
   if (!(budget > 0)) return out;
   for (const entry of rows) {
     if (out.minutes >= budget - 1e-9) break;
     out.minutes += costOf(entry);
     out.count += 1;
-    out.ids.push(entry.row.item_id);
+    out.taken.push(entry);
     out.last = entry;
   }
   return out;
+}
+
+/**
+ * E4: how many of the next rows fit in `budget` minutes a day, by the same walk as "rows needed" (the row that crosses
+ * the budget counts). `costs` is the estimate's `walk_minutes` (the next rows' own minutes, in pattern order); a budget
+ * at or above the minutes needed a day gives exactly `rows_needed_per_day`.
+ */
+export function rowsWithin(costs: number[], budget: number): number {
+  return walk(costs, budget, (cost) => cost).count;
 }
 
 export function buildCraftEstimate(input: CraftEstimateInput): CraftEstimate {
@@ -238,7 +257,7 @@ export function buildCraftEstimate(input: CraftEstimateInput): CraftEstimate {
     if (morningPriced && morningNeeded !== null) {
       const w = walk(morningRows, morningNeeded, pricedCost);
       todayTarget = { rows: w.count, part_id: w.last?.part.id ?? null, row: w.last?.row.row ?? null };
-      targetIds = w.ids;
+      targetIds = w.taken.map((entry) => entry.row.item_id);
     } else if (!morningPriced) {
       const n = Math.min(morningRows.length, Math.ceil(morningRows.length / daysLeft));
       const last = morningRows[n - 1];
@@ -483,6 +502,9 @@ export function buildCraftEstimate(input: CraftEstimateInput): CraftEstimate {
     rows_per_day: Math.round(rowsPerDay * 10) / 10,
     finish: { date: farLate ? null : finishDate, far_late: farLate, ready },
     sittings_without_rows: sittingsWithoutRows,
+    walk_minutes: priced && nowWalk && rowsNeededPerDay !== null ? nowWalk.taken.map(pricedCost) : null,
+    measured,
+    sitting_days: sittingDays(pace.sessions, today),
     front: { head, bar, line, no_rows_line: noRowsLine },
     sheet: { tiles: [neededTile, youTile], warn, fix, chart, facts },
     parts: partLines,
@@ -493,6 +515,15 @@ export function buildCraftEstimate(input: CraftEstimateInput): CraftEstimate {
       health, longest_day_minutes: forecast.longest_day_minutes, plan_cadence_minutes_per_day: forecast.plan_cadence_minutes_per_day,
     },
   };
+}
+
+/** Minutes of sittings per day (every sitting, learning included: it is time), up to today, oldest first. */
+function sittingDays(sessions: PaceInput["sessions"], today: string): Array<{ date: string; minutes: number }> {
+  const byDay = new Map<string, number>();
+  for (const session of sessions) {
+    if (session.session_date <= today) byDay.set(session.session_date, (byDay.get(session.session_date) ?? 0) + session.minutes);
+  }
+  return [...byDay].sort((a, b) => a[0].localeCompare(b[0])).map(([date, minutes]) => ({ date, minutes }));
 }
 
 const isMeasured = (source: SpeedSource | null | undefined) => source === "measured" || source === "measured_sample" || source === "other_projects";

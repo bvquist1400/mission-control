@@ -1,17 +1,20 @@
 /**
  * Craft estimates (E2): `GET /api/craft/pace` reads every craft project's estimate in one call (`?project_id=`
- * narrows it to one; the craft screen sends its own until E4's All projects tab needs the rest). Computed, never
- * stored: the project's forecast input (the same reads as the project page's forecast) plus its craft parts and
- * rows, through the pure `buildCraftEstimate`. One project failing leaves the others (and the screen) working.
+ * narrows it to one: the craft screen's own estimate). Computed, never stored: the project's forecast input (the
+ * same reads as the project page's forecast) plus its craft parts and rows, through the pure `buildCraftEstimate`.
+ * One project failing leaves the others (and the screen) working. E4: without `project_id` the reply also carries
+ * `shared`, the All projects tab (`buildSharedTime` over those same estimates and each project's stage).
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/supabase.generated";
 import { buildCraftEstimate, type CraftEstimate, type EstimatePart, type EstimateRow } from "@/lib/craft/estimate";
+import { buildSharedTime, type SharedTime } from "@/lib/craft/shared";
 import { etToday, loadProjectPaceInput } from "@/lib/work-sessions/service";
 import { chunks, pagedSelect } from "@/lib/supabase/batch";
 
 export interface CraftPaceEntry { project_id: string; name: string | null; estimate: CraftEstimate | null; error: string | null }
-export interface CraftPaceReply { today: string; projects: CraftPaceEntry[] }
+/** `shared` only when every craft project was asked for (no `project_id`). */
+export interface CraftPaceReply { today: string; projects: CraftPaceEntry[]; shared?: SharedTime }
 
 export async function getCraftPace(client: SupabaseClient<Database>, userId: string, projectId: string | null, now = new Date()): Promise<CraftPaceReply> {
   const today = etToday(now);
@@ -42,5 +45,14 @@ export async function getCraftPace(client: SupabaseClient<Database>, userId: str
       projects.push({ project_id: craft.project_id, name: null, estimate: null, error: "unavailable" });
     }
   }
-  return { today, projects };
+  if (projectId) return { today, projects };
+  // E4: each project's stage (Done, Cancelled and On Hold projects aren't shared).
+  const stages = new Map<string, string | null>();
+  for (const ids of chunks(crafts.map((craft) => craft.project_id))) {
+    const { data: rows, error: stageError } = await client.from("projects").select("id, stage").eq("user_id", userId).in("id", ids);
+    if (stageError) throw stageError;
+    for (const row of rows ?? []) stages.set(row.id, row.stage ?? null);
+  }
+  const shared = buildSharedTime(projects.map((entry) => ({ ...entry, stage: stages.get(entry.project_id) ?? null })), today);
+  return { today, projects, shared };
 }

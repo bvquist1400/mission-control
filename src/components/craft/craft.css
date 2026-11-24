@@ -347,3 +347,21 @@
 .craft-parts-act li { row-gap: 4px; }
 .craft-parts li > span.cp-partline { flex-basis: 100%; text-align: left; font-family: var(--font-plex-sans); font-size: 13px; font-weight: 400; color: var(--muted-foreground); }
 .cp-sheet .cp-tiles, .cp-sheet .cp-chart { background: var(--background); }
+
+/* ── Craft estimates E3 + E4 (mockup baseline-plans/craft-estimates, "4. together"): All projects' list, Add rows. Tokens only; text 12px and up. ── */
+.cp-projects { margin-top: 12px; list-style: none; padding: 0; }
+.cp-projects > li { padding: 10px 0 12px; border-bottom: 1px solid var(--stroke); }
+.cp-p1, .cp-p2 { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.cp-p1 strong { min-width: 0; font: 600 16px/1.3 var(--font-plex-cond); overflow-wrap: anywhere; }
+.cp-p1 span, .cp-p2 span { flex-shrink: 0; font: 400 12px/1.4 var(--font-plex-mono); color: var(--muted-foreground); white-space: nowrap; }
+.cp-p2 { margin-top: 2px; }
+.cp-p2 strong { font: 700 22px/1.2 var(--font-plex-cond); font-variant-numeric: tabular-nums; }
+.cp-p2 span { font-size: 13px; color: var(--foreground); }
+.cp-projects .cp-meter { margin: 6px 0 5px; }
+.craft-pace .cp-pl { font-size: 14px; line-height: 1.4; color: var(--muted-foreground); }
+.craft-pace .cp-all-wait { margin-top: 12px; }
+.cp-fix .cp-addrows { margin-top: 8px; }
+.craft-addrows-list { display: grid; gap: 6px; margin: 4px 0 10px; padding: 0; list-style: none; }
+.craft-addrows-list label { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 10px; border: 1px solid var(--stroke); background: var(--panel); font-size: 15px; cursor: pointer; }
+.craft-addrows-list input { width: 18px; height: 18px; accent-color: var(--accent); }
+.craft-addrows-list span { font: 400 13px/1.3 var(--font-plex-mono); color: var(--muted-foreground); margin-left: auto; }

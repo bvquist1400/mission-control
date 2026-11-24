@@ -942,6 +942,35 @@ export async function updateWorkSession(
   return { session, forecast_line: forecast.line };
 }
 
+/**
+ * Craft estimates E3: adds finished rows to a sitting already logged, in ONE call to the session write path
+ * (`work_session_update`, 059/074): the sitting's finished links become the ones it has plus `itemIds` (an in-progress
+ * link on one of them becomes finished; its other in-progress links stay). Nothing else changes: minutes, date, times,
+ * task and the left-out flag are not sent. The rows may be in any task of the sitting's project (the RPC re-checks
+ * that every row is in the project, 23503). Rows it already has are not written again; none new = no write.
+ */
+export async function addFinishedRowsToSession(
+  supabase: SupabaseClient,
+  userId: string,
+  id: string,
+  itemIds: string[]
+): Promise<{ session: WorkSessionView; added: string[] }> {
+  requireUuid(id, "id");
+  for (const itemId of itemIds) requireUuid(itemId, "item_ids[]");
+  const current = await readSession(supabase, userId, id);
+  const have = new Set(current.item_ids);
+  const added = [...new Set(itemIds.map((itemId) => itemId.toLowerCase()))].filter((itemId) => !have.has(itemId));
+  if (added.length === 0) return { session: current, added };
+  const { error } = await supabase.rpc("work_session_update", {
+    p_user_id: userId,
+    p_session_id: id,
+    p_changes: {},
+    p_item_ids: [...current.item_ids, ...added],
+  });
+  if (error) throw rpcError(error);
+  return { session: await readSession(supabase, userId, id), added };
+}
+
 /** Deletes a session and its links in one RPC. Checklist rows it ticked stay ticked. */
 export async function deleteWorkSession(supabase: SupabaseClient, userId: string, id: string) {
   requireUuid(id, "id");

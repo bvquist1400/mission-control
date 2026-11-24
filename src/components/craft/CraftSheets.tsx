@@ -3,6 +3,7 @@
  * The craft screen's sheets (S2): Log sitting, Undo rows, Fix count, band close, Change total, a note, the timer's
  * fixes, the timer conflict and the new-day question. Each shows what it will change before saving, saves through
  * the screen's `send` (one 073 call; the reply carries the fresh view), and Enter saves (a form submit).
+ * Craft estimates E3: Add rows, for a sitting saved with time but no rows.
  */
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import Link from "next/link";
@@ -16,10 +17,11 @@ import {
   CRAFT_MAX_ROWS, SITTING_MAX_MINUTES, clockText, fixCountPlan, frogBody, frogPlan, keepsText, logSittingBody, logSittingDefaults, minutesText,
   newIdempotencyKey, partwayDefault, partwayRow, quarterText, retakeLogForm, rowFromRidgesDone, rowsText, setTotalPlan, setTotalRefusalText, sheetChangeText,
   sheetFactsOf, sittingCountText, sittingPlan, sittingSummary, timerMinutes, undoChoices, wordTitle, type LogForm, type RowWord, type SheetFacts,
+  addRowsDefaults, addRowsPlan, addRowsRefusal, addRowsSummary, sittingChoiceText, type SittingChoice,
   estRange, lowerRefusal, raiseDefaults, raiseSummary, renumberText, rowLabelOf, runsText, takeBackPlan, takeBackRowsText, totalForLastEst,
 } from "@/lib/craft/actions";
 
-export type Send = (kind: "row" | "timer" | "sittings" | "total" | "notes" | "frog" | "check" | "part", body: Record<string, unknown>, method?: "POST" | "DELETE") => Promise<SendReply>;
+export type Send = (kind: "row" | "timer" | "sittings" | "total" | "notes" | "frog" | "check" | "part" | "sitting-rows", body: Record<string, unknown>, method?: "POST" | "DELETE") => Promise<SendReply>;
 export interface SendReply { ok: boolean; status: number | null; body: Record<string, unknown> | null; error: string | null }
 type Part = NonNullable<CraftView["active_part"]>;
 
@@ -771,6 +773,63 @@ export function NewDaySheet({ open, onClose, view, onSaveFirst, onKeepGoing }: {
         }}>Keep it as one sitting</Button>
         <Button type="button" variant="primary" size="lg" disabled={state.busy} onClick={onSaveFirst}>Save it, then start today</Button>
       </div>
+    </Sheet>
+  );
+}
+
+// ── Craft estimates E3: Add rows to a sitting already logged ────────────────
+/**
+ * For a sitting saved with time but no rows (the Pace sheet's list): pick the sitting and the rows it finished on the
+ * screen's part. Save ticks any of them not ticked yet (Fix count) and adds them to the sitting; its minutes stay. The
+ * rows count on that sitting's day and give a speed from its minutes.
+ */
+export function AddRowsSheet({ open, onClose, view: live, part: livePart, send, sittings, onSaved }: {
+  open: boolean; onClose: () => void; view: CraftView; part: Part; send: Send; sittings: SittingChoice[]; onSaved: (reply: SendReply) => void;
+}) {
+  const { snap, changed, notice, retake } = useSheetSnapshot(live, livePart, { timer: false });
+  const { view, part } = snap;
+  const word = part.row_word as RowWord;
+  const Word = wordTitle(word);
+  const first = useMemo(() => addRowsDefaults(view.row_states, part.total_rows), [view.row_states, part.total_rows]);
+  const [sessionId, setSessionId] = useState<string | null>(sittings[0]?.id ?? null);
+  const [from, setFrom] = useState<number | null>(first.from);
+  const [to, setTo] = useState<number | null>(first.to);
+  const [state, setState] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
+  const sitting = sittings.find((entry) => entry.id === sessionId) ?? null;
+  const valid = from !== null && to !== null && to >= from;
+  const plan = valid ? addRowsPlan(view.row_states, part.total_rows, from as number, to as number) : null;
+  const refusal = plan ? addRowsRefusal(word, plan, from as number, to as number) : null;
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (retake()) { const d = addRowsDefaults(live.row_states, livePart.total_rows); setFrom(d.from); setTo(d.to); setState({ busy: false, error: null }); return; }
+    if (!plan || refusal || !sitting || !plan.add.length) return;
+    setState({ busy: true, error: null });
+    const reply = await send("sitting-rows", { session_id: sitting.id, part_id: part.id, expected_row: part.current_row, from_row: from, to_row: to });
+    if (!reply.ok) { setState({ busy: false, error: reply.error }); return; }
+    onSaved(reply);
+  }
+  return (
+    <Sheet open={open} onClose={onClose} title={`Add ${word}s to a sitting`}>
+      <form onSubmit={submit}>
+        <p className="craft-sheet-sub">Which {word}s did you finish in it? They count on that day, and its minutes give your speed.</p>
+        {sittings.length > 1 ? (
+          <fieldset className="craft-field">
+            <legend>Sitting</legend>
+            <ul className="craft-addrows-list">{sittings.map((entry) => (
+              <li key={entry.id}><label><input type="radio" name="craft-addrows-sitting" value={entry.id} checked={entry.id === sessionId} onChange={() => setSessionId(entry.id)} />
+                {sittingChoiceText(entry).split(",")[0]}<span>{entry.minutes} min</span></label></li>
+            ))}</ul>
+          </fieldset>
+        ) : sitting ? <p className="craft-sheet-sub"><strong>{sittingChoiceText(sitting)}</strong></p> : null}
+        <Stepper id="craft-addrows-from" label={`From ${word}`} min={1} max={part.total_rows} value={from} onChange={(value) => { setFrom(value); if (value !== null && (to === null || to < value)) setTo(value); }} />
+        <Stepper id="craft-addrows-to" label={`To ${word}`} min={1} max={part.total_rows} value={to} onChange={setTo} />
+        <p className="craft-sheet-hint">{Word}s you haven&apos;t ticked yet are ticked too, as Fix count would.</p>
+        <Foot changed={notice} error={state.error}
+          summary={!sitting ? "No sitting to add rows to." : !plan ? `Pick ${word}s from 1 to ${part.total_rows}.` : refusal ?? addRowsSummary(word, plan, sitting)}
+          summaryWarn={Boolean(refusal)}
+          busy={state.busy} onCancel={onClose} saveLabel={changed ? CHANGED_LABEL : `Add ${word}s`}
+          disabled={!changed && (!sitting || !plan || Boolean(refusal) || !plan.add.length)} />
+      </form>
     </Sheet>
   );
 }

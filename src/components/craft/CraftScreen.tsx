@@ -6,19 +6,19 @@ import { Button, buttonClasses } from "@/components/ui/Button";
 import { CraftProjectSwitcher } from "@/components/craft/CraftProjectSwitcher";
 import { CraftScreenMenu, hiddenPartsText } from "@/components/craft/CraftScreenMenu";
 import {
-  BandCloseSheet, ChangeTotalSheet, CheckFirstSheet, EarlierSteps, FixCountSheet, LogSittingSheet, NewDaySheet, NoteSheet, PartsList, PartsSheet, TimerConflictSheet, TimerFixSheet, UndoRowsSheet,
+  AddRowsSheet, BandCloseSheet, ChangeTotalSheet, CheckFirstSheet, EarlierSteps, FixCountSheet, LogSittingSheet, NewDaySheet, NoteSheet, PartsList, PartsSheet, TimerConflictSheet, TimerFixSheet, UndoRowsSheet,
   type BandCheck, type OtherTimer, type Send, type SendReply,
 } from "@/components/craft/CraftSheets";
 import { useWakeLock } from "@/components/craft/useWakeLock";
 import { CraftPaceSection, CraftPaceSheet, CraftTodayBox, useCraftPace } from "@/components/craft/CraftPace";
 import {
-  UNDO_TOAST_MS, VIEW_REFRESH_MS, checkBatches, clockOffsetMs, clockText, frogReason, minutesText, nextExistingRow, rowsText, savedSittingText, timerElapsedAt, toastUndo,
+  UNDO_TOAST_MS, VIEW_REFRESH_MS, checkBatches, sittingRowsAddedText, clockOffsetMs, clockText, frogReason, minutesText, nextExistingRow, rowsText, savedSittingText, timerElapsedAt, toastUndo,
   writeFailureText,
 } from "@/lib/craft/actions";
 import "./craft.css";
 
 type Screen = CraftView & { projects?: CraftProjectOption[] };
-type SheetName = "log" | "log-then-start" | "undo" | "fix" | "total" | "note" | "timer" | "new-day" | "parts" | "check-first" | "pace";
+type SheetName = "log" | "log-then-start" | "undo" | "fix" | "total" | "note" | "timer" | "new-day" | "parts" | "check-first" | "pace" | "add-rows";
 interface Failure { text: string; retry: (() => void) | null }
 type Act = (label: string, kind: Parameters<Send>[0], body: Record<string, unknown>, onOk?: (reply: SendReply) => void, onNotOk?: (reply: SendReply) => boolean, method?: "POST" | "DELETE") => Promise<SendReply>;
 
@@ -145,6 +145,9 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
   const paceKey = [view.today.date, part?.id ?? "", `w${writes}`, ...view.parts.map((entry) => `${entry.id}:${entry.done_rows}:${entry.row_count}:${entry.total_rows}`),
     ...view.recent_sittings.map((sitting) => `${sitting.id}:${sitting.minutes}:${sitting.rows.length}:${sitting.in_progress_rows.length}:${sitting.excluded_from_stats}`)].join("|");
   const estimate = useCraftPace(projectId, paceKey);
+  // Craft estimates E3: "Add rows" on the sittings saved with time but no rows (the screen's part).
+  const noRowSittings = estimate?.sittings_without_rows ?? [];
+  const addRows = part && noRowSittings.length > 0 ? () => setSheet("add-rows") : undefined;
   function confirm(text: string) {
     if (savedTimer.current) clearTimeout(savedTimer.current);
     const id = Date.now();
@@ -235,7 +238,7 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
           <div className="craft-project"><p className="craft-eyebrow">{view.craft === "knit" ? "Knitting" : view.craft === "crochet" ? "Crochet" : "Craft"}</p>{(view.projects?.length ?? 0) > 1 ? <CraftProjectSwitcher currentId={view.project.id} currentName={view.project.name} projects={view.projects ?? []} /> : <h2>{view.project.name}</h2>}{view.gear && <p>{view.gear}</p>}</div>
           <div className="craft-part"><span className="craft-eyebrow">{allFinished ? "Project progress" : "Active part"}</span><h3>{part?.name ?? (allFinished ? "All parts finished" : "No parts yet")}</h3>{part?.stitch_count !== null && part?.stitch_count !== undefined && <p>{part.stitch_count} stitches</p>}
             {view.parts.length > 0 && <button type="button" className="craft-parts-open" onClick={() => setSheet("parts")} aria-label={`Parts (${view.parts.length}): work on another part or change a total`}>Parts</button>}</div>
-          {estimate && <CraftTodayBox estimate={estimate} onOpen={() => setSheet("pace")} />}
+          {estimate && <CraftTodayBox estimate={estimate} onOpen={() => setSheet("pace")} onAddRows={addRows} />}
           {view.hidden_parts > 0 && <p className="craft-menu-note" role="note">{hiddenPartsText(view.hidden_parts)}</p>}
           {afterLast.length > 0 && (
             <ul className="craft-due-checks" aria-label="After the last row">{afterLast.map((check) => (
@@ -348,7 +351,7 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
           {!estimate && <section className="craft-today" aria-label="Today"><h3>Today</h3><p><strong>{view.today.rows}</strong> rows ticked <span>·</span> <strong>{view.today.minutes}</strong> min</p></section>}
         </section>
         <aside className="craft-inside" aria-label="Project details">
-          <CraftPaceSection estimate={estimate} />
+          <CraftPaceSection estimate={estimate} reload={paceKey} onAddRows={addRows} />
           <section><h2>Parts</h2><PartsList view={view} estimate={estimate} busy={busy?.startsWith("part-") ? busy.slice(5) : null}
             onPick={(partId) => { void act(`part-${partId}`, "part", { part_id: partId, expected_part_id: part?.id ?? null }); }} onChangeTotal={(partId) => openTotal(partId)} />
             {view.frogs.length > 0 && (
@@ -382,7 +385,9 @@ export function CraftScreen({ view: initial }: { view: Screen }) {
       {part && sheet === "fix" && <FixCountSheet open onClose={() => setSheet(null)} view={view} part={part} send={send} />}
       {totalPart && sheet === "total" && <ChangeTotalSheet key={totalPart.id} open onClose={() => setSheet(null)} view={view} part={totalPart} send={send} />}
       {sheet === "parts" && <PartsSheet open onClose={() => setSheet(null)} view={view} send={send} onChangeTotal={(partId) => openTotal(partId)} estimate={estimate} />}
-      {sheet === "pace" && estimate && <CraftPaceSheet estimate={estimate} onClose={() => setSheet(null)} />}
+      {sheet === "pace" && estimate && <CraftPaceSheet estimate={estimate} onClose={() => setSheet(null)} reload={paceKey} onAddRows={addRows} />}
+      {part && sheet === "add-rows" && <AddRowsSheet open onClose={() => setSheet(null)} view={view} part={part} send={send} sittings={noRowSittings}
+        onSaved={(reply) => { setSheet(null); confirm(sittingRowsAddedText(part.row_word === "round" ? "round" : "row", (reply.body?.result ?? {}) as Parameters<typeof sittingRowsAddedText>[1])); }} />}
       {sheet === "check-first" && <CheckFirstSheet checks={dueChecks} onClose={() => setSheet(null)} onYes={checksThenRow} onNotYet={() => { setSheet(null); rowDoneNow(); }} />}
       {sheet === "note" && <NoteSheet open onClose={() => setSheet(null)} part={part} send={send} />}
       {sheet === "timer" && <TimerFixSheet open onClose={() => setSheet(null)} view={view} send={send} />}

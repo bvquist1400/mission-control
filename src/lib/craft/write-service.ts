@@ -8,8 +8,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/supabase.generated";
 import { loadCraftView } from "@/lib/craft/loader";
 import { partRowsOf } from "@/lib/craft";
-import { CRAFT_CHECK_IDS_MAX, lowerRefusal, raiseWhereText, setTotalRefusalText, takeBackRefusalText, type RowWord } from "@/lib/craft/actions";
+import { CRAFT_CHECK_IDS_MAX, CRAFT_MAX_ROWS, addRowsPlan, addRowsRefusal, currentRowOf, lowerRefusal, raiseWhereText, setTotalRefusalText, takeBackRefusalText, type RowState, type RowWord } from "@/lib/craft/actions";
 import { queueTaskStatusTransition } from "@/lib/task-status-transitions";
+import { WorkSessionServiceError, addFinishedRowsToSession } from "@/lib/work-sessions/service";
+import { chunks, pagedSelect } from "@/lib/supabase/batch";
 
 type Client = SupabaseClient<Database>;
 
@@ -337,4 +339,86 @@ export async function deleteNote(client: Client, userId: string, projectId: stri
   const { data, error } = await client.from("craft_notes").delete().eq("user_id", userId).eq("project_id", projectId).eq("id", id).select("id").single();
   if (error) throw error;
   return { deleted: data.id, view: await view(client, userId, projectId) };
+}
+
+// ── Craft estimates E3: add rows to a sitting already logged ─────────────────
+/**
+ * POST /api/craft/[id]/sitting-rows { session_id, part_id, expected_row, from_row, to_row }: rows from–to of the part
+ * become finished rows of a sitting already logged in this project. Everything is checked before anything is written
+ * (the sitting and part are this project's, the rows exist, no other sitting finished them, and no unticked row comes
+ * before them when some must be ticked), then two repeatable steps, the plan's "Add rows":
+ *  1. unticked rows among them are ticked by the existing Fix count (`craft_rows` mode fix, guarded by the current
+ *     row the sheet showed: a changed count is `stale` and nothing is written);
+ *  2. the rows are linked to the sitting in ONE `work_session_update` call (`addFinishedRowsToSession`): its minutes,
+ *     date, task and left-out flag stay as they are; a row partway in that sitting becomes finished.
+ * If step 2 fails after step 1, the rows stay ticked in no sitting (a state the screen already shows) and the same
+ * request adds them. Rows already in this sitting are kept and not written again.
+ */
+export async function writeSittingRows(client: Client, userId: string, projectId: string, raw: unknown) {
+  const body = record(raw);
+  onlyKeys(body, ["session_id", "part_id", "expected_row", "from_row", "to_row"]);
+  const sessionId = uuid(body.session_id, "session_id");
+  const partId = uuid(body.part_id, "part_id");
+  const expected = int(body.expected_row, "expected_row", 1, 100_000);
+  const fromRow = int(body.from_row, "from_row", 1, 100_000);
+  const toRow = int(body.to_row, "to_row", 1, 100_000);
+  if (toRow < fromRow) bad("to_row must be at least from_row");
+  if (toRow - fromRow + 1 > CRAFT_MAX_ROWS) bad(`At most ${CRAFT_MAX_ROWS} rows at a time`);
+  const part = await partIn(client, userId, projectId, partId);
+  const word: RowWord = part.row_word === "round" ? "round" : "row";
+  const { data: session, error: sessionError } = await client.from("work_sessions").select("id, project_id, session_date, minutes")
+    .eq("user_id", userId).eq("id", sessionId).eq("project_id", projectId).maybeSingle();
+  if (sessionError) throw sessionError;
+  if (!session) throw new CraftWriteError(404, "Sitting not found in this project", "not_found");
+
+  const items = await pagedSelect<{ id: string; craft_row: number | null; is_done: boolean }>((from, to) => client.from("task_checklist_items")
+    .select("id, craft_row, is_done").eq("user_id", userId).eq("craft_part_id", partId).order("id").range(from, to));
+  const inRange = items.filter((item) => item.craft_row !== null && item.craft_row >= fromRow && item.craft_row <= toRow && item.craft_row <= part.total_rows);
+  // Which of the picked rows another sitting already finished (a row partway elsewhere doesn't count, as in Log sitting).
+  const finishedElsewhere = new Set<string>();
+  for (const ids of chunks(inRange.map((item) => item.id))) {
+    const links = await pagedSelect<{ session_id: string; checklist_item_id: string; in_progress: boolean }>((from, to) => client.from("work_session_items")
+      .select("session_id, checklist_item_id, in_progress").eq("user_id", userId).in("checklist_item_id", ids).order("session_id").order("checklist_item_id").range(from, to));
+    for (const link of links) if (!link.in_progress && link.session_id !== sessionId) finishedElsewhere.add(link.checklist_item_id);
+  }
+  const rows: RowState[] = items.filter((item) => item.craft_row !== null)
+    .map((item) => ({ row: item.craft_row as number, done: item.is_done, linked: finishedElsewhere.has(item.id), today: false }));
+  const current = currentRowOf(rows, part.total_rows);
+  const fresh = () => view(client, userId, projectId);
+  if (current !== expected) throw new CraftWriteError(409, STALE_ROW, "stale", { result: { status: "stale", current_row: current }, view: await fresh() });
+  const plan = addRowsPlan(rows, part.total_rows, fromRow, toRow);
+  const refusal = addRowsRefusal(word, plan, fromRow, toRow);
+  if (refusal) {
+    const reason = !plan.rows.length ? "no_rows" : plan.in_sitting.length ? "in_sitting" : "earlier";
+    throw new CraftWriteError(plan.rows.length ? 409 : 400, `Not saved: ${refusal}`, reason, { rows: plan.in_sitting.length ? plan.in_sitting : plan.earlier });
+  }
+
+  // 1. Tick the unticked ones with Fix count (they run from the current row up: nothing before `from` is unticked).
+  let ticked: number[] = [];
+  if (plan.tick.length) {
+    const { data, error } = await client.rpc("craft_rows", {
+      p_user_id: userId, p_part_id: partId, p_expected_row: expected, p_to_row: Math.max(...plan.tick) + 1, p_mode: "fix",
+    });
+    if (error) rpcFailure(error);
+    const result = data as RpcResult;
+    if (result.status !== "ok") throw new CraftWriteError(409, STALE_ROW, "stale", { result, view: await fresh() });
+    ticked = (result.ticked as number[] | undefined) ?? [];
+  }
+  // 2. Link them to the sitting: one work_session_update call.
+  const byRow = new Map(inRange.map((item) => [item.craft_row as number, item.id]));
+  let added: string[];
+  try {
+    ({ added } = await addFinishedRowsToSession(client as unknown as SupabaseClient, userId, sessionId, plan.add.map((row) => byRow.get(row) as string)));
+  } catch (failure) {
+    if (failure instanceof WorkSessionServiceError) throw new CraftWriteError(failure.status, `Not saved: ${failure.message}`, "session", { ticked, view: await fresh() });
+    throw failure;
+  }
+  const addedSet = new Set(added);
+  return {
+    result: {
+      status: "ok", session_id: sessionId, part_id: partId, session_date: session.session_date, minutes: session.minutes,
+      ticked, added: plan.add.filter((row) => addedSet.has(byRow.get(row) as string)), already: plan.add.filter((row) => !addedSet.has(byRow.get(row) as string)),
+    },
+    view: await fresh(),
+  };
 }

@@ -723,3 +723,82 @@ export function writeFailureText(status: number | null, body: { error?: string }
   if (status >= 400 && status < 500 && body?.error) return `Not saved: ${body.error}`;
   return "Not saved, retry. The server didn't save it.";
 }
+
+// ── Craft estimates E3: add rows to a sitting already logged ─────────────────
+
+/** A sitting with time but no rows, as the estimate lists it (`sittings_without_rows`). */
+export interface SittingChoice { id: string; date: string; minutes: number }
+/** "Sat 11/21, 90 min" (the Pace sheet's own words for these sittings). */
+export function sittingChoiceText(sitting: SittingChoice): string {
+  const [y, m, d] = sitting.date.split("-").map(Number);
+  const day = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+  return `${day} ${m}/${d}, ${sitting.minutes} min`;
+}
+
+/**
+ * The Add rows sheet's first guess: from the lowest row that no sitting finished, to the end of the run of ticked
+ * rows that no sitting has (rows ticked with no sitting, e.g. after "Save without rows"); with none ticked, just that row.
+ */
+export function addRowsDefaults(rows: RowState[], total: number): { from: number; to: number } {
+  const open = rows.filter((s) => !s.linked && s.row <= total).sort((a, b) => a.row - b.row);
+  const from = open[0]?.row ?? Math.min(total, currentRowOf(rows, total));
+  let to = from;
+  const byRow = new Map(rows.map((s) => [s.row, s]));
+  if (byRow.get(from)?.done) {
+    for (const s of open) {
+      if (s.row < from) continue;
+      if (!s.done) break;
+      to = s.row;
+    }
+  }
+  return { from, to };
+}
+
+export interface AddRowsPlan {
+  /** Rows of from–to that exist on the part. */
+  rows: number[];
+  /** Unticked rows Save ticks first (the existing Fix count, guarded by the current row). */
+  tick: number[];
+  /** Rows added to the sitting as finished (a row partway in that sitting becomes finished). */
+  add: number[];
+  /** Rows a sitting already finished: nothing is saved while any are picked. */
+  in_sitting: number[];
+  /** Unticked rows before `from` when Save would have to tick: Fix count would tick them too, so nothing is saved. */
+  earlier: number[];
+}
+/** What Save does for rows from–to (pure; the server re-checks every part of it before writing). */
+export function addRowsPlan(rows: RowState[], total: number, from: number, to: number): AddRowsPlan {
+  const picked = rows.filter((s) => s.row >= from && s.row <= to && s.row <= total).sort((a, b) => a.row - b.row);
+  const tick = picked.filter((s) => !s.done).map((s) => s.row);
+  const inSitting = picked.filter((s) => s.linked).map((s) => s.row);
+  const earlier = tick.length ? rows.filter((s) => !s.done && s.row < from && s.row <= total).map((s) => s.row).sort((a, b) => a - b) : [];
+  return { rows: picked.map((s) => s.row), tick, add: picked.filter((s) => !s.linked).map((s) => s.row), in_sitting: inSitting, earlier };
+}
+
+/** Why rows from–to can't be added, in plain words (the sheet and the server's refusal), or null when they can. */
+export function addRowsRefusal(word: RowWord, plan: AddRowsPlan, from: number, to: number): string | null {
+  if (!plan.rows.length) return `There ${from === to ? `is no ${word} ${from}` : `are no ${word}s ${from}–${to}`} on this part.`;
+  if (plan.in_sitting.length) {
+    const n = plan.in_sitting.length;
+    return `${wordTitle(word)}${n === 1 ? "" : "s"} ${rowsText(word, plan.in_sitting).replace(/^\w+ /, "")} ${n === 1 ? "is" : "are"} already in a sitting. A row is finished in one sitting only.`;
+  }
+  if (plan.earlier.length) {
+    return `${wordTitle(word)}${plan.earlier.length === 1 ? "" : "s"} ${rowsText(word, plan.earlier).replace(/^\w+ /, "")} before ${word} ${from} ${plan.earlier.length === 1 ? "isn't" : "aren't"} ticked. Start at ${word} ${plan.earlier[0]}.`;
+  }
+  return null;
+}
+
+/** What Save will do: "Ticks rows 1–30. Adds rows 1–30 to Sat 11/21, 90 min. Its 90 min stay as they are." */
+export function addRowsSummary(word: RowWord, plan: AddRowsPlan, sitting: SittingChoice): string {
+  if (!plan.add.length) return `Nothing to add: ${rowsText(word, plan.rows)} ${plan.rows.length === 1 ? "is" : "are"} already in that sitting.`;
+  const tick = plan.tick.length ? `Ticks ${rowsText(word, plan.tick)}. ` : "";
+  return `${tick}Adds ${rowsText(word, plan.add)} to ${sittingChoiceText(sitting)}. Its ${sitting.minutes} min stay as they are.`;
+}
+
+/** The line after a save, from the server's reply ("Added rows 1–30 to Sat 11/21, 90 min."). */
+export function sittingRowsAddedText(word: RowWord, result: { added?: number[]; ticked?: number[]; session_date?: string; minutes?: number }): string {
+  const added = result.added ?? [];
+  const where = result.session_date ? ` to ${sittingChoiceText({ id: "", date: result.session_date, minutes: result.minutes ?? 0 })}` : "";
+  if (!added.length) return `Nothing new to add${where}.`;
+  return `Added ${rowsText(word, added)}${where}.${result.ticked?.length ? ` Ticked ${rowsText(word, result.ticked)}.` : ""}`;
+}

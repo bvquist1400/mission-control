@@ -4,7 +4,7 @@ import { isPostgrestNotFound } from "@/lib/supabase/errors";
 import { withCorsHeaders } from "@/lib/cors";
 import { CraftNotFoundError, loadCraftView } from "@/lib/craft/loader";
 import { CraftSetupRefusal, createCraftSetup, loadCraftResetPreview, loadCraftSetupPreview, removeCraftProject, resetCraftProject } from "@/lib/craft/setup-service";
-import { CraftWriteError, deleteNote, writeCheck, writeFrog, writeNote, writePart, writeRows, writeSitting, writeTimer, writeTotal } from "@/lib/craft/write-service";
+import { CraftWriteError, deleteNote, writeCheck, writeFrog, writeNote, writePart, writeRows, writeSitting, writeSittingRows, writeTimer, writeTotal } from "@/lib/craft/write-service";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const jsonFor = (request: NextRequest) => (body: unknown, status: number) => withCorsHeaders(NextResponse.json(body, {
@@ -53,12 +53,13 @@ export async function craftSetupRoute(request: NextRequest, action: SetupAction,
   }
 }
 
-export type CraftWriteKind = "row" | "timer" | "sittings" | "total" | "note" | "note_delete" | "frog" | "check" | "part";
-const WRITERS = { row: writeRows, timer: writeTimer, sittings: writeSitting, total: writeTotal, note: writeNote, note_delete: deleteNote, frog: writeFrog, check: writeCheck, part: writePart } as const;
+export type CraftWriteKind = "row" | "timer" | "sittings" | "total" | "note" | "note_delete" | "frog" | "check" | "part" | "sitting_rows";
+const WRITERS = { row: writeRows, timer: writeTimer, sittings: writeSitting, total: writeTotal, note: writeNote, note_delete: deleteNote, frog: writeFrog, check: writeCheck, part: writePart, sitting_rows: writeSittingRows } as const;
 
 /**
  * S2 writes: POST /api/craft/[id]/row | timer | sittings | total | notes, DELETE /api/craft/[id]/notes; S3: POST /api/craft/[id]/frog; S3 FR3:
- * POST /api/craft/[id]/check (tick checks) and /part (Work on this part). Same auth path as
+ * POST /api/craft/[id]/check (tick checks) and /part (Work on this part); craft estimates E3: POST /api/craft/[id]/sitting-rows
+ * (add rows to a sitting already logged). Same auth path as
  * every craft route (the FamCal and Actions keys are refused before any read), user filters inside, PGRST116 → 404 only.
  */
 export async function craftWriteRoute(request: NextRequest, kind: CraftWriteKind, projectId: string) {

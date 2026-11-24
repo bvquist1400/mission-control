@@ -502,7 +502,7 @@ if (!onlyPace) {
     assert.doesNotMatch(hoodHtml, /cp-link/, "no sittings without rows → no line");
   });
 
-  test("E2 Pace: This project (tiles, warning, facts) and All projects (a placeholder until E4); tabs are toggle buttons", () => {
+  test("E2 Pace: This project (tiles, warning, facts) and All projects (E4: the shared time, 'Working out…' until it is read); tabs are toggle buttons", () => {
     const hood = est(hoodToday());
     const html = render(ui.CraftPaceBody, { estimate: hood, tab: "this", onTab: () => {} });
     assert.match(html, /<div class="cp-tabs" role="group" aria-label="Pace for"><button[^>]*aria-pressed="true"[^>]*>This project<\/button><button[^>]*aria-pressed="false"[^>]*>All projects<\/button><\/div>/);
@@ -510,14 +510,15 @@ if (!onlyPace) {
     assert.match(html, /<span class="craft-eyebrow">You<\/span><p class="cp-num"><strong>50<\/strong> rows today<\/p><p class="cp-sub">138 min in 3 sittings<\/p>/);
     assert.match(html, /<p class="cp-warn"><strong>Needs \d+ min a day at your speed\. Your longest day is 138\.<\/strong> At plan speed it would need \d+\.<\/p>/);
     assert.match(html, /<dt>From here<\/dt>.*<dt>Finish<\/dt>.*<dt>Speed<\/dt>.*<dt>Left<\/dt>/);
+    // E4 (Baseline f98e79da) replaced the placeholder: before the shared time is read the tab says so; it never shows This project's tiles.
     const all = render(ui.CraftPaceBody, { estimate: hood, tab: "all", onTab: () => {} });
-    assert.match(all, /class="cp-all"/);
+    assert.match(all, /<p class="cp-sub cp-all-wait">Working out the shared time…<\/p>/);
     assert.doesNotMatch(all, /cp-tiles/);
     const section = render(ui.CraftPaceSection, { estimate: null });
     assert.match(section, /<section class="cp-section" aria-label="Pace"><div class="cp-hd"><h2>Pace<\/h2><\/div><p class="cp-sub">Working out the pace…<\/p><\/section>/);
     const scarfHtml = render(ui.CraftPaceBody, { estimate: scarf(), tab: "this", onTab: () => {} });
     assert.match(scarfHtml, /<div class="cp-fix"><p>2 sittings have time but no rows: Sat 11\/21, 90 min; Sun 11\/22, 15 min\./);
-    assert.doesNotMatch(scarfHtml, /Add rows/, "E3 adds the Add rows button");
+    assert.doesNotMatch(scarfHtml, /Add rows/, "E3's Add rows… shows only when the screen can open the sheet (onAddRows)");
   });
 
   test("E2 chart: bars of rows per day after 3 days, with the needed-now dashed line", () => {
@@ -551,9 +552,10 @@ if (!onlyPace) {
     const pace = readFileSync(new URL("../src/components/craft/CraftPace.tsx", import.meta.url), "utf8");
     assert.match(screen, /const estimate = useCraftPace\(projectId, paceKey\);/);
     assert.match(screen, /paceKey = \[view\.today\.date, part\?\.id \?\? "", `w\$\{writes\}`, \.\.\.view\.parts\.map\(\(entry\) => `\$\{entry\.id\}:\$\{entry\.done_rows\}:\$\{entry\.row_count\}:\$\{entry\.total_rows\}`\)/);
-    assert.match(screen, /\{estimate && <CraftTodayBox estimate=\{estimate\} onOpen=\{\(\) => setSheet\("pace"\)\} \/>\}/);
+    // E3 (Baseline f98e79da) adds onAddRows to the Today box and the Pace section; E4 passes the reload key.
+    assert.match(screen, /\{estimate && <CraftTodayBox estimate=\{estimate\} onOpen=\{\(\) => setSheet\("pace"\)\} onAddRows=\{addRows\} \/>\}/);
     assert.match(screen, /\{!estimate && <section className="craft-today"/);
-    assert.match(screen, /<aside className="craft-inside" aria-label="Project details">\s*<CraftPaceSection estimate=\{estimate\} \/>/);
+    assert.match(screen, /<aside className="craft-inside" aria-label="Project details">\s*<CraftPaceSection estimate=\{estimate\} reload=\{paceKey\} onAddRows=\{addRows\} \/>/);
     assert.doesNotMatch(pace, /setInterval|setTimeout/, "no polling");
     assert.match(pace, /fetch\(`\/api\/craft\/pace\?project_id=\$\{encodeURIComponent\(projectId\)\}`, \{ cache: "no-store" \}\)/);
     const css = readFileSync(new URL("../src/components/craft/craft.css", import.meta.url), "utf8").split("Craft estimates E2")[1];
